@@ -819,13 +819,11 @@ async fn soracloud_status_handler_returns_snapshot_sections() {
     let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestSoracloudRuntimeHandle {
-        snapshot: sample_soracloud_runtime_snapshot(
+        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime::snapshot_only(
+        sample_soracloud_runtime_snapshot(
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
         ),
-        state_dir: PathBuf::from("/tmp/soracloud/runtime"),
-        local_peer_id: None,
-    }));
+    )));
     let response = super::handler_soracloud_status(
         State(app),
         HeaderMap::new(),
@@ -835,52 +833,39 @@ async fn soracloud_status_handler_returns_snapshot_sections() {
     .await
     .expect("soracloud status should succeed");
     assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect body");
-    let payload: norito::json::Value =
-        norito::json::from_slice(&body).expect("decode JSON response");
+    let payload = decode_torii_json(response, "collect body", "decode JSON response").await;
     assert_eq!(
         payload
             .get("schema_version")
             .and_then(norito::json::Value::as_u64),
         Some(1)
     );
-    assert!(
-        payload
-            .get("service_health")
-            .and_then(norito::json::Value::as_object)
-            .is_some(),
-        "service_health section should be present"
-    );
-    assert!(
-        payload
-            .get("routing")
-            .and_then(norito::json::Value::as_object)
-            .is_some(),
-        "routing section should be present"
-    );
-    assert!(
-        payload
-            .get("hosted_http_topology")
-            .and_then(norito::json::Value::as_object)
-            .is_some(),
-        "hosted_http_topology section should be present"
-    );
-    assert!(
-        payload
-            .get("resource_pressure")
-            .and_then(norito::json::Value::as_object)
-            .is_some(),
-        "resource_pressure section should be present"
-    );
-    assert!(
-        payload
-            .get("failed_admissions")
-            .and_then(norito::json::Value::as_object)
-            .is_some(),
-        "failed_admissions section should be present"
-    );
+    for (section, diagnostic) in [
+        ("service_health", "service_health section should be present"),
+        ("routing", "routing section should be present"),
+        (
+            "hosted_http_topology",
+            "hosted_http_topology section should be present",
+        ),
+        (
+            "resource_pressure",
+            "resource_pressure section should be present",
+        ),
+        (
+            "failed_admissions",
+            "failed_admissions section should be present",
+        ),
+        ("control_plane", "control_plane section should be present"),
+        ("runtime_manager", "runtime_manager section should be present"),
+    ] {
+        assert!(
+            payload
+                .get(section)
+                .and_then(norito::json::Value::as_object)
+                .is_some(),
+            "{diagnostic}"
+        );
+    }
     assert_eq!(
         payload
             .get("failed_admissions")
@@ -888,13 +873,6 @@ async fn soracloud_status_handler_returns_snapshot_sections() {
             .and_then(|value| value.get("available"))
             .and_then(norito::json::Value::as_bool),
         Some(cfg!(feature = "telemetry"))
-    );
-    assert!(
-        payload
-            .get("control_plane")
-            .and_then(norito::json::Value::as_object)
-            .is_some(),
-        "control_plane section should be present"
     );
     assert_eq!(
         payload
@@ -904,17 +882,61 @@ async fn soracloud_status_handler_returns_snapshot_sections() {
             .and_then(norito::json::Value::as_str),
         Some("embedded_runtime_manager")
     );
-    assert!(
-        payload
-            .get("runtime_manager")
-            .and_then(norito::json::Value::as_object)
-            .is_some(),
-        "runtime_manager section should be present"
-    );
+}
+async fn soracloud_status_routing_for_test(
+    nexus: iroha_config::parameters::actual::Nexus,
+) -> norito::json::Map {
+    let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
+    {
+        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+        let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+        {
+            let mut current = state.nexus.write();
+            *current = nexus;
+        }
+        state.update_latest_block_header_cache_for_tests(BlockHeader::new(
+            NonZeroU64::new(1).expect("nonzero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+    }
+    let response = super::handler_soracloud_status(
+        State(app),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        None,
+    )
+    .await
+    .expect("soracloud status should succeed");
+    assert_eq!(response.status(), StatusCode::OK);
+    decode_torii_json(response, "collect body", "decode JSON response")
+        .await
+        .get("routing")
+        .and_then(norito::json::Value::as_object)
+        .expect("routing section")
+        .clone()
+}
+fn soracloud_routing_count(routing: &norito::json::Map, field: &str) -> Option<u64> {
+    routing
+        .get(field)
+        .and_then(norito::json::Value::as_u64)
+}
+fn soracloud_routing_lane_ids(routing: &norito::json::Map, field: &str) -> Option<Vec<u64>> {
+    routing
+        .get(field)
+        .and_then(norito::json::Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(norito::json::Value::as_u64)
+                .collect()
+        })
 }
 #[tokio::test]
 async fn soracloud_status_routing_counts_only_active_autoscale_capacity_lanes() {
-    let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
     let future_lane = LaneId::new(1);
     let mut future_autoscale_lane = iroha_data_model::nexus::LaneConfig {
         id: future_lane,
@@ -947,97 +969,43 @@ async fn soracloud_status_routing_counts_only_active_autoscale_capacity_lanes() 
     nexus.autoscale.enabled = true;
     nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
     nexus.autoscale.max_lanes = NonZeroU32::new(2).expect("nonzero max lanes");
-    {
-        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-        let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
-        {
-            let mut current = state.nexus.write();
-            *current = nexus;
-        }
-        state.update_latest_block_header_cache_for_tests(BlockHeader::new(
-            NonZeroU64::new(1).expect("nonzero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        ));
-    }
-    let response = super::handler_soracloud_status(
-        State(app),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-    )
-    .await
-    .expect("soracloud status should succeed");
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect body");
-    let payload: norito::json::Value =
-        norito::json::from_slice(&body).expect("decode JSON response");
-    let routing = payload
-        .get("routing")
-        .and_then(norito::json::Value::as_object)
-        .expect("routing section");
+    let routing = soracloud_status_routing_for_test(nexus).await;
     assert_eq!(
-        routing
-            .get("configured_lane_count")
-            .and_then(norito::json::Value::as_u64),
+        soracloud_routing_count(&routing, "configured_lane_count"),
         Some(2)
     );
     assert_eq!(
-        routing
-            .get("lane_count")
-            .and_then(norito::json::Value::as_u64),
+        soracloud_routing_count(&routing, "lane_count"),
         Some(2),
         "legacy lane_count remains the configured lane count"
     );
     assert_eq!(
-        routing
-            .get("declared_lane_count")
-            .and_then(norito::json::Value::as_u64),
+        soracloud_routing_count(&routing, "declared_lane_count"),
         Some(2),
         "declared lane count reports catalog metadata entries"
     );
     assert_eq!(
-        routing
-            .get("active_lane_count")
-            .and_then(norito::json::Value::as_u64),
+        soracloud_routing_count(&routing, "active_lane_count"),
         Some(1),
         "future-created autoscale lanes must not count as active"
     );
     assert_eq!(
-        routing
-            .get("active_lane_ids")
-            .and_then(norito::json::Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(norito::json::Value::as_u64)
-                    .collect::<Vec<_>>()
-            }),
+        soracloud_routing_lane_ids(&routing, "active_lane_ids"),
         Some(vec![0])
     );
     assert_eq!(
-        routing
-            .get("autoscale_capacity_lane_count")
-            .and_then(norito::json::Value::as_u64),
+        soracloud_routing_count(&routing, "autoscale_capacity_lane_count"),
         Some(0),
         "future-created autoscale lanes must not count as live capacity"
     );
     assert!(
-        routing
-            .get("autoscale_capacity_lane_ids")
-            .and_then(norito::json::Value::as_array)
-            .is_some_and(Vec::is_empty),
+        soracloud_routing_lane_ids(&routing, "autoscale_capacity_lane_ids")
+            .is_some_and(|ids| ids.is_empty()),
         "future-created autoscale lanes must be absent from capacity ids"
     );
 }
 #[tokio::test]
 async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
-    let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
     let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
         NonZeroU32::new(4).expect("nonzero lane namespace"),
         vec![iroha_data_model::nexus::LaneConfig::default()],
@@ -1049,90 +1017,37 @@ async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
         lane_catalog,
         ..iroha_config::parameters::actual::Nexus::default()
     };
-    {
-        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-        let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
-        {
-            let mut current = state.nexus.write();
-            *current = nexus;
-        }
-        state.update_latest_block_header_cache_for_tests(BlockHeader::new(
-            NonZeroU64::new(1).expect("nonzero height"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        ));
-    }
-    let response = super::handler_soracloud_status(
-        State(app),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-    )
-    .await
-    .expect("soracloud status should succeed");
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect body");
-    let payload: norito::json::Value =
-        norito::json::from_slice(&body).expect("decode JSON response");
-    let routing = payload
-        .get("routing")
-        .and_then(norito::json::Value::as_object)
-        .expect("routing section");
+    let routing = soracloud_status_routing_for_test(nexus).await;
     assert_eq!(
-        routing
-            .get("configured_lane_count")
-            .and_then(norito::json::Value::as_u64),
+        soracloud_routing_count(&routing, "configured_lane_count"),
         Some(4),
         "configured count must report the lane namespace size"
     );
     assert_eq!(
-        routing
-            .get("lane_count")
-            .and_then(norito::json::Value::as_u64),
+        soracloud_routing_count(&routing, "lane_count"),
         Some(4),
         "legacy lane_count remains the configured namespace count"
     );
     assert_eq!(
-        routing
-            .get("declared_lane_count")
-            .and_then(norito::json::Value::as_u64),
+        soracloud_routing_count(&routing, "declared_lane_count"),
         Some(1),
         "declared count reports only catalog metadata entries"
     );
     assert_eq!(
-        routing
-            .get("active_lane_count")
-            .and_then(norito::json::Value::as_u64),
+        soracloud_routing_count(&routing, "active_lane_count"),
         Some(1)
     );
     assert_eq!(
-        routing
-            .get("active_lane_ids")
-            .and_then(norito::json::Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(norito::json::Value::as_u64)
-                    .collect::<Vec<_>>()
-            }),
+        soracloud_routing_lane_ids(&routing, "active_lane_ids"),
         Some(vec![0])
     );
     assert_eq!(
-        routing
-            .get("autoscale_capacity_lane_count")
-            .and_then(norito::json::Value::as_u64),
+        soracloud_routing_count(&routing, "autoscale_capacity_lane_count"),
         Some(0)
     );
     assert!(
-        routing
-            .get("autoscale_capacity_lane_ids")
-            .and_then(norito::json::Value::as_array)
-            .is_some_and(Vec::is_empty)
+        soracloud_routing_lane_ids(&routing, "autoscale_capacity_lane_ids")
+            .is_some_and(|ids| ids.is_empty())
     );
 }
 #[test]
@@ -1309,13 +1224,11 @@ async fn soracloud_runtime_status_sections_report_degraded_for_hydrating_snapsho
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestSoracloudRuntimeHandle {
-        snapshot: sample_soracloud_runtime_snapshot(
+        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime::snapshot_only(
+        sample_soracloud_runtime_snapshot(
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Hydrating,
         ),
-        state_dir: PathBuf::from("/tmp/soracloud/runtime"),
-        local_peer_id: None,
-    }));
+    )));
     let (service_health, _runtime_pressure, runtime_manager) =
         super::soracloud_runtime_status_sections(&app);
     assert_eq!(
@@ -1560,9 +1473,7 @@ async fn telemetry_handlers_ok() {
     .expect("ok")
     .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("read body");
+    let body = torii_body_bytes(resp, "read body").await;
     let body = String::from_utf8(body.to_vec()).expect("utf8 body");
     let body_json: norito::json::Value = norito::json::from_str(&body).expect("cache status json");
     let entries = body_json
@@ -1768,6 +1679,68 @@ async fn app_api_get_by_id_not_found_returns_404() {
     assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
 }
 #[cfg(feature = "app_api")]
+struct RuntimeApiRouterFixture {
+    router: axum::Router,
+    _kiso_child: iroha_futures::supervisor::Child,
+}
+#[cfg(feature = "app_api")]
+impl RuntimeApiRouterFixture {
+    fn standard(chain_id: &'static str) -> Self {
+        let kura = Kura::blank_kura_for_testing();
+        let state = Arc::new(IrohaState::new_for_testing(
+            World::default(),
+            kura.clone(),
+            LiveQueryStore::start_test(),
+        ));
+        Self::with_runtime(
+            chain_id,
+            kura,
+            state,
+            routing::MaybeTelemetry::disabled(),
+        )
+    }
+
+    fn with_runtime(
+        chain_id: &'static str,
+        kura: Arc<Kura>,
+        state: Arc<IrohaState>,
+        runtime_deps: impl Into<ToriiRuntimeDeps>,
+    ) -> Self {
+        let cfg = crate::test_utils::mk_minimal_root_cfg();
+        let (kiso, child) = KisoHandle::start(cfg.clone());
+        let queue = Arc::new(Queue::from_config(
+            iroha_config::parameters::actual::Queue {
+                capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
+                capacity_per_user: NonZeroUsize::new(100)
+                    .expect("queue per-user capacity non-zero"),
+                transaction_time_to_live: Duration::from_secs(60),
+                ..Default::default()
+            },
+            tokio::sync::broadcast::channel(1).0,
+        ));
+        let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let torii = Torii::new_with_handle(
+            ChainId::from(chain_id),
+            signed_query_test_network_id(),
+            kiso,
+            cfg.torii.clone(),
+            queue,
+            tokio::sync::broadcast::channel(1).0,
+            LiveQueryStore::start_test(),
+            kura,
+            state,
+            cfg.common.key_pair.clone(),
+            OnlinePeersProvider::new(peers_rx),
+            None,
+            runtime_deps,
+        );
+        Self {
+            router: torii.api_router_for_tests(),
+            _kiso_child: child,
+        }
+    }
+}
+#[cfg(feature = "app_api")]
 #[tokio::test]
 async fn retired_server_contract_deploy_routes_are_absent() {
     use axum::{
@@ -1776,40 +1749,7 @@ async fn retired_server_contract_deploy_routes_are_absent() {
         http::{Method, Request, StatusCode},
     };
     use tower::ServiceExt as _;
-    let cfg = crate::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(IrohaState::new_for_testing(
-        World::default(),
-        kura.clone(),
-        query,
-    ));
-    let queue_cfg = iroha_config::parameters::actual::Queue {
-        capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
-        capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
-        transaction_time_to_live: Duration::from_secs(60),
-        ..Default::default()
-    };
-    let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
-    let torii = Torii::new_with_handle(
-        ChainId::from("contracts-router-test"),
-        signed_query_test_network_id(),
-        kiso,
-        cfg.torii.clone(),
-        queue,
-        tokio::sync::broadcast::channel(1).0,
-        LiveQueryStore::start_test(),
-        kura,
-        state,
-        cfg.common.key_pair.clone(),
-        OnlinePeersProvider::new(peers_rx),
-        None,
-        routing::MaybeTelemetry::disabled(),
-    );
+    let fixture = RuntimeApiRouterFixture::standard("contracts-router-test");
     for (method, path) in [
         (Method::POST, "/v1/contracts/deploy"),
         (Method::POST, "/v1/contracts/deploy-bundle"),
@@ -1827,8 +1767,9 @@ async fn retired_server_contract_deploy_routes_are_absent() {
         request
             .extensions_mut()
             .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-        let response = torii
-            .api_router_for_tests()
+        let response = fixture
+            .router
+            .clone()
             .oneshot(request)
             .await
             .expect("response");
@@ -1844,25 +1785,12 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
         http::{Method, Request, StatusCode},
     };
     use tower::ServiceExt as _;
-    let cfg = crate::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
     let state = Arc::new(IrohaState::new_for_testing(
         World::default(),
         kura.clone(),
-        query,
+        LiveQueryStore::start_test(),
     ));
-    let queue_cfg = iroha_config::parameters::actual::Queue {
-        capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
-        capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
-        transaction_time_to_live: Duration::from_secs(60),
-        ..Default::default()
-    };
-    let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
     let storage_dir = tempfile::tempdir().expect("storage tempdir");
     let sorafs_node = sorafs_node::NodeHandle::new(
         sorafs_node::config::StorageConfig::builder()
@@ -1875,19 +1803,10 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
     assert_eq!(state.view().world().pin_manifests().len(), 0);
     let runtime_deps =
         ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled()).with_sorafs_node(sorafs_node);
-    let torii = Torii::new_with_handle(
-        ChainId::from("sorafs-retired-storage-pin-router-test"),
-        signed_query_test_network_id(),
-        kiso,
-        cfg.torii.clone(),
-        queue,
-        tokio::sync::broadcast::channel(1).0,
-        LiveQueryStore::start_test(),
+    let fixture = RuntimeApiRouterFixture::with_runtime(
+        "sorafs-retired-storage-pin-router-test",
         kura,
-        state.clone(),
-        cfg.common.key_pair.clone(),
-        OnlinePeersProvider::new(peers_rx),
-        None,
+        Arc::clone(&state),
         runtime_deps,
     );
     let mut request = Request::builder()
@@ -1901,8 +1820,8 @@ async fn retired_storage_pin_route_cannot_mutate_chain_or_local_storage() {
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-    let response = torii
-        .api_router_for_tests()
+    let response = fixture
+        .router
         .oneshot(request)
         .await
         .expect("retired-route response");
@@ -2108,25 +2027,12 @@ async fn appeal_finance_publication_routes_are_read_only() {
         visit(root, root, &mut snapshot);
         snapshot
     }
-    let cfg = crate::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
     let state = Arc::new(IrohaState::new_for_testing(
         World::default(),
         kura.clone(),
-        query,
+        LiveQueryStore::start_test(),
     ));
-    let queue_cfg = iroha_config::parameters::actual::Queue {
-        capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
-        capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
-        transaction_time_to_live: Duration::from_secs(60),
-        ..Default::default()
-    };
-    let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
     let storage_dir = tempfile::tempdir().expect("appeal publication storage tempdir");
     let storage_root = storage_dir
         .path()
@@ -2163,22 +2069,13 @@ async fn appeal_finance_publication_routes_are_read_only() {
     assert!(sorafs_node.has_governance_publisher());
     let runtime_deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
         .with_sorafs_node(sorafs_node.clone());
-    let torii = Torii::new_with_handle(
-        ChainId::from("sorafs-retired-appeal-publication-router-test"),
-        signed_query_test_network_id(),
-        kiso,
-        cfg.torii.clone(),
-        queue,
-        tokio::sync::broadcast::channel(1).0,
-        LiveQueryStore::start_test(),
+    let fixture = RuntimeApiRouterFixture::with_runtime(
+        "sorafs-retired-appeal-publication-router-test",
         kura,
         state,
-        cfg.common.key_pair.clone(),
-        OnlinePeersProvider::new(peers_rx),
-        None,
         runtime_deps,
     );
-    let router = torii.api_router_for_tests();
+    let router = fixture.router;
     let files_before = snapshot_files(&storage_root);
     let pending_before = sorafs_node.pending_governance_publication_count();
     for path in [
@@ -2221,41 +2118,8 @@ async fn contract_route_mounts_authenticate_mutation_and_compute_before_decode()
         http::{Method, Request, StatusCode},
     };
     use tower::ServiceExt as _;
-    let cfg = crate::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(IrohaState::new_for_testing(
-        World::default(),
-        kura.clone(),
-        query,
-    ));
-    let queue_cfg = iroha_config::parameters::actual::Queue {
-        capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
-        capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
-        transaction_time_to_live: Duration::from_secs(60),
-        ..Default::default()
-    };
-    let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
-    let torii = Torii::new_with_handle(
-        ChainId::from("contracts-aliases-router-test"),
-        signed_query_test_network_id(),
-        kiso,
-        cfg.torii.clone(),
-        queue,
-        tokio::sync::broadcast::channel(1).0,
-        LiveQueryStore::start_test(),
-        kura,
-        state,
-        cfg.common.key_pair.clone(),
-        OnlinePeersProvider::new(peers_rx),
-        None,
-        routing::MaybeTelemetry::disabled(),
-    );
-    let router = torii.api_router_for_tests();
+    let fixture = RuntimeApiRouterFixture::standard("contracts-aliases-router-test");
+    let router = fixture.router;
     for path in ["/v1/contracts/aliases", "/v1/contracts/call/simulate"] {
         let mut request = Request::builder()
             .method(Method::POST)
@@ -2301,40 +2165,7 @@ async fn sorafs_capacity_declare_route_is_mounted_in_api_router() {
         http::{Method, Request, StatusCode},
     };
     use tower::ServiceExt as _;
-    let cfg = crate::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(IrohaState::new_for_testing(
-        World::default(),
-        kura.clone(),
-        query,
-    ));
-    let queue_cfg = iroha_config::parameters::actual::Queue {
-        capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
-        capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
-        transaction_time_to_live: Duration::from_secs(60),
-        ..Default::default()
-    };
-    let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
-    let torii = Torii::new_with_handle(
-        ChainId::from("sorafs-capacity-declare-router-test"),
-        signed_query_test_network_id(),
-        kiso,
-        cfg.torii.clone(),
-        queue,
-        tokio::sync::broadcast::channel(1).0,
-        LiveQueryStore::start_test(),
-        kura,
-        state,
-        cfg.common.key_pair.clone(),
-        OnlinePeersProvider::new(peers_rx),
-        None,
-        routing::MaybeTelemetry::disabled(),
-    );
+    let fixture = RuntimeApiRouterFixture::standard("sorafs-capacity-declare-router-test");
     let mut request = Request::builder()
         .method(Method::POST)
         .uri("/v1/sorafs/capacity/declare")
@@ -2344,8 +2175,8 @@ async fn sorafs_capacity_declare_route_is_mounted_in_api_router() {
     request
         .extensions_mut()
         .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
-    let response = torii
-        .api_router_for_tests()
+    let response = fixture
+        .router
         .oneshot(request)
         .await
         .expect("response");
@@ -2360,41 +2191,8 @@ async fn retired_sorafs_mutation_routes_are_absent() {
         http::{Method, Request, StatusCode},
     };
     use tower::ServiceExt as _;
-    let cfg = crate::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(IrohaState::new_for_testing(
-        World::default(),
-        kura.clone(),
-        query,
-    ));
-    let queue_cfg = iroha_config::parameters::actual::Queue {
-        capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
-        capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
-        transaction_time_to_live: Duration::from_secs(60),
-        ..Default::default()
-    };
-    let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
-    let torii = Torii::new_with_handle(
-        ChainId::from("sorafs-retired-por-router-test"),
-        signed_query_test_network_id(),
-        kiso,
-        cfg.torii.clone(),
-        queue,
-        tokio::sync::broadcast::channel(1).0,
-        LiveQueryStore::start_test(),
-        kura,
-        state,
-        cfg.common.key_pair.clone(),
-        OnlinePeersProvider::new(peers_rx),
-        None,
-        routing::MaybeTelemetry::disabled(),
-    );
-    let router = torii.api_router_for_tests();
+    let fixture = RuntimeApiRouterFixture::standard("sorafs-retired-por-router-test");
+    let router = fixture.router;
     for path in [
         "/v1/sorafs/capacity/dispute",
         "/v1/sorafs/capacity/schedule",
@@ -2460,42 +2258,8 @@ async fn retired_sorafs_mutation_routes_are_absent() {
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn sccp_recent_messages_route_survives_soracloud_fallback() {
-    use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
-    let cfg = crate::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(IrohaState::new_for_testing(
-        World::default(),
-        kura.clone(),
-        query,
-    ));
-    let queue_cfg = iroha_config::parameters::actual::Queue {
-        capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
-        capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
-        transaction_time_to_live: Duration::from_secs(60),
-        ..Default::default()
-    };
-    let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
-    let torii = Torii::new_with_handle(
-        ChainId::from("sccp-recent-route-test"),
-        signed_query_test_network_id(),
-        kiso,
-        cfg.torii.clone(),
-        queue,
-        tokio::sync::broadcast::channel(1).0,
-        LiveQueryStore::start_test(),
-        kura,
-        state,
-        cfg.common.key_pair.clone(),
-        OnlinePeersProvider::new(peers_rx),
-        None,
-        routing::MaybeTelemetry::disabled(),
-    );
+    let fixture = RuntimeApiRouterFixture::standard("sccp-recent-route-test");
     let mut request = Request::builder()
         .method(Method::GET)
         .uri("/v1/sccp/messages/recent")
@@ -2508,18 +2272,13 @@ async fn sccp_recent_messages_route_survives_soracloud_fallback() {
             [127, 0, 0, 1],
             0,
         ))));
-    let response = torii
-        .api_router_for_tests()
+    let response = fixture
+        .router
         .oneshot(request)
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::OK);
-    let body = response
-        .into_body()
-        .collect()
-        .await
-        .expect("body")
-        .to_bytes();
+    let body = torii_body_bytes(response, "body").await;
     let text = String::from_utf8(body.to_vec()).expect("utf8");
     assert!(
         text.contains("\"items\""),
@@ -2600,10 +2359,7 @@ fn push_into_queue_confidential_policy_rejection_maps_to_forbidden() {
     let response = err.into_response();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-reject-code"),
         Some("PRTRY:CONFIDENTIAL_POLICY_REJECTED")
     );
     let body = executor::block_on(http_body_util::BodyExt::collect(response.into_body()))

@@ -244,6 +244,179 @@ fn scoped_permission_route_remains_coordinator_with_other_private_targets() {
         ))),
     );
 }
+
+#[test]
+fn strict_scoped_permission_decision_apis_match_full_plan_rejection() {
+    let (authority_id, authority_keypair) = gen_account_in("wonderland");
+    let permission_dataspace = DataSpaceId::new(7);
+    let ordinary_dataspace = DataSpaceId::new(8);
+    let dataspace_catalog = dataspace_catalog(&[
+        (permission_dataspace, "permission"),
+        (ordinary_dataspace, "ordinary"),
+    ]);
+    let lane_catalog = catalog_with_lane_dataspaces(&[
+        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        (LaneId::new(2), permission_dataspace),
+        (LaneId::new(3), ordinary_dataspace),
+    ]);
+    let policy = default_routing_policy();
+    let router = ConfigLaneRouter::new(
+        policy.clone(),
+        dataspace_catalog.clone(),
+        lane_catalog.clone(),
+    );
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
+        iroha_primitives::json::Json::new(AMX_POLICY_REJECT_CROSS_DATASPACE),
+    );
+    let tx = sample_transaction_with_metadata(
+        &authority_id,
+        authority_keypair.private_key(),
+        vec![
+            InstructionBox::from(Grant::account_permission(
+                CanPublishSpaceDirectoryManifest {
+                    dataspace: permission_dataspace,
+                },
+                authority_id.clone(),
+            )),
+            InstructionBox::from(Register::domain(Domain::new(
+                DomainId::try_new("merchant", "ordinary").expect("domain id"),
+            ))),
+        ],
+        metadata,
+    );
+    let expected_error = || RoutingResolveError::ConflictingTransactionDataspaceTargets {
+        first_dataspace_id: permission_dataspace,
+        second_dataspace_id: ordinary_dataspace,
+    };
+
+    assert_eq!(router.try_route(&tx), Err(expected_error()));
+    assert_eq!(router.try_route_plan(&tx), Err(expected_error()));
+    assert_eq!(router.try_route_without_state(&tx), Err(expected_error()));
+    assert_eq!(
+        router.try_route_plan_without_state(&tx),
+        Err(expected_error())
+    );
+    assert_eq!(
+        evaluate_policy_with_catalog(&policy, &lane_catalog, &dataspace_catalog, &tx),
+        Err(expected_error())
+    );
+    assert_eq!(
+        evaluate_policy_plan_with_catalog(&policy, &lane_catalog, &dataspace_catalog, &tx),
+        Err(expected_error())
+    );
+
+    let state = blank_state();
+    install_router_nexus(&state, &router);
+    let state_view = state.view();
+    assert_eq!(
+        router.try_route_with_view(&tx, &state_view),
+        Err(expected_error())
+    );
+    assert_eq!(
+        router.try_route_plan_with_view(&tx, &state_view),
+        Err(expected_error())
+    );
+    assert_eq!(
+        evaluate_policy_with_catalog_and_world(
+            &policy,
+            &lane_catalog,
+            &dataspace_catalog,
+            &tx,
+            state_view.world(),
+        ),
+        Err(expected_error())
+    );
+    assert_eq!(
+        evaluate_policy_plan_with_catalog_and_world(
+            &policy,
+            &lane_catalog,
+            &dataspace_catalog,
+            &tx,
+            state_view.world(),
+        ),
+        Err(expected_error())
+    );
+}
+
+#[test]
+fn explicit_universal_target_is_not_rewritten_by_authority_account_rule() {
+    let (authority_id, authority_keypair) = gen_account_in("wonderland");
+    let private_dataspace = DataSpaceId::new(10);
+    let private_lane = LaneId::new(2);
+    let dataspace_catalog = dataspace_catalog(&[(private_dataspace, "paynet")]);
+    let lane_catalog = catalog_with_lane_dataspaces(&[
+        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        (private_lane, private_dataspace),
+    ]);
+    let policy = LaneRoutingPolicy {
+        default_lane: LaneId::SINGLE,
+        default_dataspace: DataSpaceId::UNIVERSAL,
+        rules: vec![LaneRoutingRule {
+            lane: private_lane,
+            dataspace: Some(private_dataspace),
+            matcher: LaneRoutingMatcher {
+                account: Some(authority_id.to_string()),
+                instruction: None,
+                description: None,
+            },
+        }],
+    };
+    let router = ConfigLaneRouter::new(
+        policy.clone(),
+        dataspace_catalog.clone(),
+        lane_catalog.clone(),
+    );
+    let tx = sample_transaction(
+        &authority_id,
+        authority_keypair.private_key(),
+        vec![InstructionBox::from(Register::domain(Domain::new(
+            DomainId::try_new("universal-write", "universal").expect("domain id"),
+        )))],
+    );
+    let state = state_with_account_scope_entries(
+        &[(authority_id, account_scope_entry(private_dataspace))],
+        dataspace_catalog.clone(),
+    );
+    install_router_nexus(&state, &router);
+    let expected_error = RoutingResolveError::LaneDataspaceMismatch {
+        lane_id: private_lane,
+        lane_dataspace_id: private_dataspace,
+        dataspace_id: DataSpaceId::UNIVERSAL,
+    };
+    let state_view = state.view();
+
+    assert_eq!(
+        router.try_route_plan_with_view(&tx, &state_view),
+        Err(expected_error.clone())
+    );
+    assert_eq!(
+        router.try_route_with_view(&tx, &state_view),
+        Err(expected_error.clone())
+    );
+    assert_eq!(
+        evaluate_policy_plan_with_catalog_and_world(
+            &policy,
+            &lane_catalog,
+            &dataspace_catalog,
+            &tx,
+            state_view.world(),
+        ),
+        Err(expected_error.clone())
+    );
+    assert_eq!(
+        evaluate_policy_with_catalog_and_world(
+            &policy,
+            &lane_catalog,
+            &dataspace_catalog,
+            &tx,
+            state_view.world(),
+        ),
+        Err(expected_error)
+    );
+}
+
 #[test]
 fn opaque_asset_transfer_with_multiple_private_account_bindings_uses_default_route() {
     let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -1265,16 +1438,18 @@ fn matches_dataspace_root_account_alias_scope_rule() {
     let dataspace_tx = sample_transaction(
         &dataspace_id,
         dataspace_keypair.private_key(),
-        vec![InstructionBox::from(Register::domain(Domain::new(
-            DomainId::try_new("paynet-match", "universal").expect("domain id"),
-        )))],
+        vec![role_registration_instruction(
+            &dataspace_id,
+            "paynet_alias_match",
+        )],
     );
     let domain_tx = sample_transaction(
         &domain_id,
         domain_keypair.private_key(),
-        vec![InstructionBox::from(Register::domain(Domain::new(
-            DomainId::try_new("banka-no-match", "universal").expect("domain id"),
-        )))],
+        vec![role_registration_instruction(
+            &domain_id,
+            "paynet_domain_alias_match",
+        )],
     );
     let state = state_with_account_aliases(
         &[
@@ -1332,9 +1507,10 @@ fn try_route_with_view_resolves_against_same_state_catalog_snapshot() {
     let tx = sample_transaction(
         &authority_id,
         authority_keypair.private_key(),
-        vec![InstructionBox::from(Register::domain(Domain::new(
-            DomainId::try_new("state-catalog-route", "universal").expect("domain id"),
-        )))],
+        vec![role_registration_instruction(
+            &authority_id,
+            "state_catalog_route",
+        )],
     );
     let state = state_with_account_aliases(
         &[(
@@ -1875,16 +2051,11 @@ fn asset_definition_permission_grant_routes_by_named_dataspace_alias() {
             alice_id.clone(),
         ))],
     );
-    let state = state_with_asset_definitions(
-        vec![
-            AssetDefinition::numeric(
-                asset_definition,
-                "voucher".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-            .build(&bob_id),
-        ],
+    let state = state_with_bound_numeric_asset_definition(
+        &asset_definition,
+        "voucher#bob",
+        "voucher",
+        &bob_id,
         router.dataspace_catalog.as_ref().clone(),
         router.lane_catalog.as_ref().clone(),
     );

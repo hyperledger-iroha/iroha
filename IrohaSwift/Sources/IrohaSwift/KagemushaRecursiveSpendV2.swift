@@ -438,6 +438,11 @@ public enum KagemushaRecursiveSpend {
     public static let maximumPeerArchiveBytesV2 = 32 * 1024
     /// Exact bridge ceiling for the CBOR object returned by App Attest.
     public static let maximumIosAppAttestAssertionObjectBytesV2 = 8 * 1024
+    /// Fixed App Attest assertion header before the mandatory extension CBOR.
+    public static let iosAppAttestAuthenticatorDataFixedHeaderBytesV2 = 37
+    /// Minimum current App Attest assertion size, including extension CBOR.
+    public static let minimumIosAppAttestAuthenticatorDataBytesV2 =
+        iosAppAttestAuthenticatorDataFixedHeaderBytesV2 + 1
     /// Exact protocol ceiling for App Attest authenticator data.
     public static let maximumIosAppAttestAuthenticatorDataBytesV2 = 4 * 1024
     /// Consensus ceiling for one canonical recipient-only ABI-21 peer archive.
@@ -1779,20 +1784,18 @@ public struct KagemushaRequestAuthorizationPreparation: Equatable, Sendable {
     }
 
     private static func validateIosAuthenticatorData(_ authenticatorData: Data) throws {
-        let legacyLength = 37
+        let minimumLength =
+            KagemushaRecursiveSpend.minimumIosAppAttestAuthenticatorDataBytesV2
         let maximumLength =
             KagemushaRecursiveSpend.maximumIosAppAttestAuthenticatorDataBytesV2
-        guard (legacyLength...maximumLength).contains(authenticatorData.count) else {
+        guard (minimumLength...maximumLength).contains(authenticatorData.count) else {
             throw KagemushaRecursiveSpendError.invalidField(
                 "authorization.authenticatorData"
             )
         }
         let flags = authenticatorData[authenticatorData.startIndex + 32]
         let extensionDataFlag: UInt8 = 0x80
-        guard flags & ~extensionDataFlag == 0,
-              flags & extensionDataFlag == 0
-                ? authenticatorData.count == legacyLength
-                : authenticatorData.count > legacyLength else {
+        guard flags == extensionDataFlag else {
             throw KagemushaRecursiveSpendError.invalidField(
                 "authorization.authenticatorData.flags"
             )

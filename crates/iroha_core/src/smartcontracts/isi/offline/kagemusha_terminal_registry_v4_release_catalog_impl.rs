@@ -1,3 +1,48 @@
+const KAGEMUSHA_CATALOG_CONSENSUS_IDENTITY_DOMAIN_V1: &[u8] =
+    b"iroha:kagemusha:release-catalog-consensus:v1\0";
+const KAGEMUSHA_CATALOG_CONSENSUS_IDENTITY_VERSION_V1: u16 = 1;
+
+fn kagemusha_catalog_consensus_policy_digest_from_identities_v1(
+    configured_policy_sha256: [u8; 32],
+    mut releases: Vec<KagemushaCatalogReleaseConsensusIdentityV1>,
+) -> [u8; 32] {
+    releases.sort_by_key(|release| release.manifest_sha256);
+    let identity = KagemushaCatalogConsensusIdentityV1 {
+        version: KAGEMUSHA_CATALOG_CONSENSUS_IDENTITY_VERSION_V1,
+        configured_policy_sha256,
+        releases,
+    };
+    let encoded = norito::encode_canonical(&identity)
+        .expect("fixed Kagemusha catalog consensus identity must encode");
+    let mut hasher = Sha256::new();
+    hasher.update(KAGEMUSHA_CATALOG_CONSENSUS_IDENTITY_DOMAIN_V1);
+    hasher.update(encoded);
+    hasher.finalize().into()
+}
+
+fn kagemusha_catalog_consensus_policy_digest_v1(
+    configured_policy_sha256: [u8; 32],
+    releases: &BTreeMap<[u8; 32], Arc<KagemushaCachedReleaseV4>>,
+) -> [u8; 32] {
+    let identities = releases
+        .iter()
+        .map(|(manifest_sha256, cached)| {
+            let release_record = norito::encode_canonical(cached.release_record())
+                .expect("authenticated Kagemusha release record must encode");
+            KagemushaCatalogReleaseConsensusIdentityV1 {
+                manifest_sha256: *manifest_sha256,
+                release_record_sha256: Sha256::digest(release_record).into(),
+                qualification_receipt_sha256: cached.qualification_receipt_sha256,
+                qualified_candidate_sha256: cached.qualified_candidate_sha256,
+            }
+        })
+        .collect();
+    kagemusha_catalog_consensus_policy_digest_from_identities_v1(
+        configured_policy_sha256,
+        identities,
+    )
+}
+
 impl KagemushaReleaseCatalogV4 {
     /// Return an unconfigured, always-unready catalog.
     #[must_use]
@@ -13,6 +58,11 @@ impl KagemushaReleaseCatalogV4 {
     #[must_use]
     pub const fn configured_policy_sha256(&self) -> Option<[u8; 32]> {
         self.configured_policy_sha256
+    }
+    /// Canonical identity of the configured signer policy and authenticated release inventory.
+    #[must_use]
+    pub const fn consensus_policy_digest(&self) -> Option<[u8; 32]> {
+        self.consensus_policy_digest
     }
     /// Load an optional immutable verifier cache.
     ///
@@ -61,10 +111,10 @@ impl KagemushaReleaseCatalogV4 {
     /// A Kagemusha release is bound to the genesis-derived `NetworkId`, so its artifact
     /// directory and qualification seal cannot exist while genesis is being signed. This
     /// constructor pins, canonically decodes, and hashes the configured policy while deliberately
-    /// leaving the release map empty. The resulting catalog exists only to contribute the same
-    /// configured-policy digest that the later fully qualified runtime catalog contributes to the
-    /// signed execution-policy identity. Production staging requires a root-owned, non-writable,
-    /// ACL-free policy path chain and requires the future artifact directory not to exist yet.
+    /// leaving the release map empty. Its consensus identity therefore binds an explicitly empty
+    /// inventory and cannot be confused with a later populated runtime catalog. Production staging
+    /// requires a root-owned, non-writable, ACL-free policy path chain and requires the future
+    /// artifact directory not to exist yet.
     ///
     /// Runtime startup must use [`Self::from_offline_config`], which still requires every
     /// explicitly configured artifact directory to authenticate as a nonempty catalog and, when
@@ -289,6 +339,10 @@ impl KagemushaReleaseCatalogV4 {
         policy_parent.verify_trusted_path_chain(trusted_uid, "release policy parent")?;
         Ok(Self {
             configured_policy_sha256: Some(policy_sha256),
+            consensus_policy_digest: Some(kagemusha_catalog_consensus_policy_digest_v1(
+                policy_sha256,
+                &BTreeMap::new(),
+            )),
             releases: BTreeMap::new(),
         })
     }
@@ -406,8 +460,11 @@ impl KagemushaReleaseCatalogV4 {
                 "configured Kagemusha V4 artifact directory contains no releases".to_owned(),
             );
         }
+        let consensus_policy_digest =
+            kagemusha_catalog_consensus_policy_digest_v1(policy_sha256, &releases);
         Ok(Self {
             configured_policy_sha256: Some(policy_sha256),
+            consensus_policy_digest: Some(consensus_policy_digest),
             releases,
         })
     }

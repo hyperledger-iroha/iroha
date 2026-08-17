@@ -799,6 +799,46 @@ mod protocol {
                 ),
             ),
         );
+
+    // Keep secret-bearing wire hygiene and redacted formatting in one auditable
+    // implementation. Call sites still name every exposed debug field and every
+    // byte container scrubbed on drop; the macros only remove identical wrappers.
+    macro_rules! impl_broker_debug_fields {
+        (
+            $type:ident as $value:ident {
+                $($label:literal => $expression:expr,)*
+            } => $finish:ident
+        ) => {
+            impl fmt::Debug for $type {
+                fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    let $value = self;
+                    let mut debug = formatter.debug_struct(stringify!($type));
+                    $(debug.field($label, &$expression);)*
+                    debug.$finish()
+                }
+            }
+        };
+    }
+    macro_rules! impl_scrub_fields_on_drop {
+        ($type:ident { $field:ident }) => {
+            impl Drop for $type {
+                fn drop(&mut self) {
+                    self.$field.fill(0);
+                    let _ = std::hint::black_box(&self.$field);
+                }
+            }
+        };
+        ($type:ident { $first:ident, $($field:ident),+ $(,)? }) => {
+            impl Drop for $type {
+                fn drop(&mut self) {
+                    self.$first.fill(0);
+                    $(self.$field.fill(0);)+
+                    let _ = std::hint::black_box((&self.$first, $(&self.$field),+));
+                }
+            }
+        };
+    }
+
     /// Exact operation identifiers and foundational canonical wire containers.
     mod primitives {
         use super::*;
@@ -2090,23 +2130,13 @@ mod protocol {
         payload: Vec<u8>,
         request_digest: [u8; 32],
     }
-    impl fmt::Debug for OperationRequestV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("OperationRequestV1")
-                .field("request_id", &self.request_id)
-                .field("slot", &self.binding.slot)
-                .field("operation", &self.operation)
-                .field("payload_len", &self.payload.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for OperationRequestV1 {
-        fn drop(&mut self) {
-            self.payload.fill(0);
-            let _ = std::hint::black_box(&self.payload);
-        }
-    }
+    impl_broker_debug_fields!(OperationRequestV1 as value {
+        "request_id" => value.request_id,
+        "slot" => value.binding.slot,
+        "operation" => value.operation,
+        "payload_len" => value.payload.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(OperationRequestV1 { payload });
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct OperationResponseFieldsV1 {
         session_id: [u8; 32],
@@ -2134,24 +2164,14 @@ mod protocol {
         result: Vec<u8>,
         response_digest: [u8; 32],
     }
-    impl fmt::Debug for OperationResponseV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("OperationResponseV1")
-                .field("request_id", &self.request_id)
-                .field("slot", &self.observed_binding.slot)
-                .field("operation", &self.operation)
-                .field("status", &self.status)
-                .field("result_len", &self.result.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for OperationResponseV1 {
-        fn drop(&mut self) {
-            self.result.fill(0);
-            let _ = std::hint::black_box(&self.result);
-        }
-    }
+    impl_broker_debug_fields!(OperationResponseV1 as value {
+        "request_id" => value.request_id,
+        "slot" => value.observed_binding.slot,
+        "operation" => value.operation,
+        "status" => value.status,
+        "result_len" => value.result.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(OperationResponseV1 { result });
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct QualificationResultWireV1 {
         revision: u64,
@@ -2172,22 +2192,12 @@ mod protocol {
         request_binding: [u8; 32],
         committed_height: u64,
     }
-    impl fmt::Debug for BootleLanternAuthenticateRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("BootleLanternAuthenticateRequestWireV1")
-                .field("credential_len", &self.opaque_credential.len())
-                .field("action", &self.action)
-                .field("committed_height", &self.committed_height)
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for BootleLanternAuthenticateRequestWireV1 {
-        fn drop(&mut self) {
-            self.opaque_credential.fill(0);
-            let _ = std::hint::black_box(&self.opaque_credential);
-        }
-    }
+    impl_broker_debug_fields!(BootleLanternAuthenticateRequestWireV1 as value {
+        "credential_len" => value.opaque_credential.len(),
+        "action" => value.action,
+        "committed_height" => value.committed_height,
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(BootleLanternAuthenticateRequestWireV1 { opaque_credential });
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct BootleLanternAuthenticatedPrincipalWireV1 {
         principal_digest: [u8; 32],
@@ -2207,20 +2217,10 @@ mod protocol {
     struct BootleLanternAuthorizationWireV1 {
         authorization: Vec<u8>,
     }
-    impl fmt::Debug for BootleLanternAuthorizationWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("BootleLanternAuthorizationWireV1")
-                .field("authorization_len", &self.authorization.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for BootleLanternAuthorizationWireV1 {
-        fn drop(&mut self) {
-            self.authorization.fill(0);
-            let _ = std::hint::black_box(&self.authorization);
-        }
-    }
+    impl_broker_debug_fields!(BootleLanternAuthorizationWireV1 as value {
+        "authorization_len" => value.authorization.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(BootleLanternAuthorizationWireV1 { authorization });
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct BootleLanternIssueRequestWireV1 {
         context: iroha_data_model::privacy::PrivacyStatementContextV1,
@@ -2230,41 +2230,23 @@ mod protocol {
         request: Vec<u8>,
         current_height: u64,
     }
-    impl fmt::Debug for BootleLanternIssueRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("BootleLanternIssueRequestWireV1")
-                .field("authorization_len", &self.authorization.len())
-                .field("request_len", &self.request.len())
-                .field("current_height", &self.current_height)
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for BootleLanternIssueRequestWireV1 {
-        fn drop(&mut self) {
-            self.authorization.fill(0);
-            self.request.fill(0);
-            let _ = std::hint::black_box((&self.authorization, &self.request));
-        }
-    }
+    impl_broker_debug_fields!(BootleLanternIssueRequestWireV1 as value {
+        "authorization_len" => value.authorization.len(),
+        "request_len" => value.request.len(),
+        "current_height" => value.current_height,
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(BootleLanternIssueRequestWireV1 {
+        authorization,
+        request
+    });
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct BootleLanternIssuanceResponseWireV1 {
         response: Vec<u8>,
     }
-    impl fmt::Debug for BootleLanternIssuanceResponseWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("BootleLanternIssuanceResponseWireV1")
-                .field("response_len", &self.response.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for BootleLanternIssuanceResponseWireV1 {
-        fn drop(&mut self) {
-            self.response.fill(0);
-            let _ = std::hint::black_box(&self.response);
-        }
-    }
+    impl_broker_debug_fields!(BootleLanternIssuanceResponseWireV1 as value {
+        "response_len" => value.response.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(BootleLanternIssuanceResponseWireV1 { response });
     fn bootle_lantern_action_to_wire(
         action: iroha_torii::privacy_issuance_api::BootleLanternIssuanceActionV1,
     ) -> u8 {
@@ -2418,24 +2400,14 @@ mod protocol {
         body: Vec<u8>,
         maximum_response_bytes: u64,
     }
-    impl fmt::Debug for SoracloudHfAuthenticatedInferenceRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("SoracloudHfAuthenticatedInferenceRequestWireV1")
-                .field("url_len", &self.url.len())
-                .field("content_type_len", &self.content_type.len())
-                .field("has_accept", &self.accept.is_some())
-                .field("body_len", &self.body.len())
-                .field("maximum_response_bytes", &self.maximum_response_bytes)
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for SoracloudHfAuthenticatedInferenceRequestWireV1 {
-        fn drop(&mut self) {
-            self.body.fill(0);
-            let _ = std::hint::black_box(&self.body);
-        }
-    }
+    impl_broker_debug_fields!(SoracloudHfAuthenticatedInferenceRequestWireV1 as value {
+        "url_len" => value.url.len(),
+        "content_type_len" => value.content_type.len(),
+        "has_accept" => value.accept.is_some(),
+        "body_len" => value.body.len(),
+        "maximum_response_bytes" => value.maximum_response_bytes,
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(SoracloudHfAuthenticatedInferenceRequestWireV1 { body });
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct SoracloudHfAuthenticatedInferenceResponseWireV1 {
         status: u16,
@@ -2443,23 +2415,13 @@ mod protocol {
         content_encoding: Option<String>,
         body: Vec<u8>,
     }
-    impl fmt::Debug for SoracloudHfAuthenticatedInferenceResponseWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("SoracloudHfAuthenticatedInferenceResponseWireV1")
-                .field("status", &self.status)
-                .field("has_content_type", &self.content_type.is_some())
-                .field("has_content_encoding", &self.content_encoding.is_some())
-                .field("body_len", &self.body.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for SoracloudHfAuthenticatedInferenceResponseWireV1 {
-        fn drop(&mut self) {
-            self.body.fill(0);
-            let _ = std::hint::black_box(&self.body);
-        }
-    }
+    impl_broker_debug_fields!(SoracloudHfAuthenticatedInferenceResponseWireV1 as value {
+        "status" => value.status,
+        "has_content_type" => value.content_type.is_some(),
+        "has_content_encoding" => value.content_encoding.is_some(),
+        "body_len" => value.body.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(SoracloudHfAuthenticatedInferenceResponseWireV1 { body });
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct PrivacyCyclePrfRequestWireV1 {
         version: u16,
@@ -2512,20 +2474,10 @@ mod protocol {
     struct PrivacyCyclePrfOutputWireV1 {
         output: [u8; 32],
     }
-    impl fmt::Debug for PrivacyCyclePrfOutputWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("PrivacyCyclePrfOutputWireV1")
-                .field("output", &"<redacted>")
-                .finish()
-        }
-    }
-    impl Drop for PrivacyCyclePrfOutputWireV1 {
-        fn drop(&mut self) {
-            self.output.fill(0);
-            let _ = std::hint::black_box(&self.output);
-        }
-    }
+    impl_broker_debug_fields!(PrivacyCyclePrfOutputWireV1 as value {
+        "output" => "<redacted>",
+    } => finish);
+    impl_scrub_fields_on_drop!(PrivacyCyclePrfOutputWireV1 { output });
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct TransparencyRuntimeProviderBindingWireV1 {
         handle: String,
@@ -2897,29 +2849,18 @@ mod protocol {
         fencing_floor: u64,
         request_digest: [u8; 32],
     }
-    impl fmt::Debug for FencedPrivacyPublicationRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("FencedPrivacyPublicationRequestWireV1")
-                .field("version", &self.version)
-                .field("authorization", &self.authorization)
-                .field("authorization_digest", &self.authorization_digest)
-                .field(
-                    "publication_idempotency_digest",
-                    &self.publication_idempotency_digest,
-                )
-                .field("canonical_payload_len", &self.canonical_payload.len())
-                .field("payload_digest", &self.payload_digest)
-                .field(
-                    "expected_authoritative_head",
-                    &self.expected_authoritative_head,
-                )
-                .field("fencing_token", &self.fencing_token)
-                .field("fencing_floor", &self.fencing_floor)
-                .field("request_digest", &self.request_digest)
-                .finish()
-        }
-    }
+    impl_broker_debug_fields!(FencedPrivacyPublicationRequestWireV1 as value {
+        "version" => value.version,
+        "authorization" => value.authorization,
+        "authorization_digest" => value.authorization_digest,
+        "publication_idempotency_digest" => value.publication_idempotency_digest,
+        "canonical_payload_len" => value.canonical_payload.len(),
+        "payload_digest" => value.payload_digest,
+        "expected_authoritative_head" => value.expected_authoritative_head,
+        "fencing_token" => value.fencing_token,
+        "fencing_floor" => value.fencing_floor,
+        "request_digest" => value.request_digest,
+    } => finish);
     impl FencedPrivacyPublicationRequestWireV1 {
         fn from_request(request: &sorafs_node::FencedPrivacyPublicationRequestV1) -> Self {
             Self {
@@ -3505,28 +3446,15 @@ mod protocol {
         payload: Vec<u8>,
         expected_public_key: Vec<u8>,
     }
-    impl fmt::Debug for PotrSignRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("PotrSignRequestWireV1")
-                .field("payload_len", &self.payload.len())
-                .field("public_key_len", &self.expected_public_key.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for PotrSignRequestWireV1 {
-        fn drop(&mut self) {
-            self.payload.fill(0);
-            self.expected_public_key.fill(0);
-            let _ = std::hint::black_box((&self.payload, &self.expected_public_key));
-        }
-    }
-    impl Drop for VariableSignatureResultWireV1 {
-        fn drop(&mut self) {
-            self.signature.fill(0);
-            let _ = std::hint::black_box(&self.signature);
-        }
-    }
+    impl_broker_debug_fields!(PotrSignRequestWireV1 as value {
+        "payload_len" => value.payload.len(),
+        "public_key_len" => value.expected_public_key.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(PotrSignRequestWireV1 {
+        payload,
+        expected_public_key
+    });
+    impl_scrub_fields_on_drop!(VariableSignatureResultWireV1 { signature });
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct DurationWireV1 {
         secs: u64,
@@ -3637,17 +3565,12 @@ mod protocol {
         bytes.fill(0);
         let _ = std::hint::black_box(&bytes);
     }
-    impl fmt::Debug for GatewayAcmeOrderOutcomeWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("GatewayAcmeOrderOutcomeWireV1")
-                .field("outcome", &self.outcome)
-                .field("certificate_pem_bytes", &self.certificate_pem.len())
-                .field("private_key_pem", &"[REDACTED]")
-                .field("ech_config_bytes", &self.ech_config.as_ref().map(Vec::len))
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(GatewayAcmeOrderOutcomeWireV1 as value {
+        "outcome" => value.outcome,
+        "certificate_pem_bytes" => value.certificate_pem.len(),
+        "private_key_pem" => "[REDACTED]",
+        "ech_config_bytes" => value.ech_config.as_ref().map(Vec::len),
+    } => finish_non_exhaustive);
     impl Drop for GatewayAcmeOrderOutcomeWireV1 {
         fn drop(&mut self) {
             scrub_secret_string(&mut self.private_key_pem);
@@ -3690,22 +3613,12 @@ mod protocol {
         found: u64,
         maximum: u64,
     }
-    impl fmt::Debug for GatewayComplianceFetchOutcomeWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("GatewayComplianceFetchOutcomeWireV1")
-                .field("outcome", &self.outcome)
-                .field("status", &self.status)
-                .field("body_len", &self.body.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for GatewayComplianceFetchOutcomeWireV1 {
-        fn drop(&mut self) {
-            self.body.fill(0);
-            let _ = std::hint::black_box(&self.body);
-        }
-    }
+    impl_broker_debug_fields!(GatewayComplianceFetchOutcomeWireV1 as value {
+        "outcome" => value.outcome,
+        "status" => value.status,
+        "body_len" => value.body.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(GatewayComplianceFetchOutcomeWireV1 { body });
     #[derive(PartialEq, Eq, Decode, Encode)]
     struct PopAuthenticateRequestWireV1 {
         opaque_credential: Vec<u8>,
@@ -3713,22 +3626,12 @@ mod protocol {
         request_binding: [u8; 32],
         now_epoch: u64,
     }
-    impl fmt::Debug for PopAuthenticateRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("PopAuthenticateRequestWireV1")
-                .field("opaque_credential", &"[REDACTED]")
-                .field("action", &self.action)
-                .field("now_epoch", &self.now_epoch)
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for PopAuthenticateRequestWireV1 {
-        fn drop(&mut self) {
-            self.opaque_credential.fill(0);
-            let _ = std::hint::black_box(&self.opaque_credential);
-        }
-    }
+    impl_broker_debug_fields!(PopAuthenticateRequestWireV1 as value {
+        "opaque_credential" => "[REDACTED]",
+        "action" => value.action,
+        "now_epoch" => value.now_epoch,
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(PopAuthenticateRequestWireV1 { opaque_credential });
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct PopAuthenticatedPrincipalWireV1 {
         principal_digest: [u8; 32],
@@ -3755,14 +3658,9 @@ mod protocol {
         credential_directions: Vec<bool>,
         revocation_siblings: Vec<[u8; 32]>,
     }
-    impl fmt::Debug for PopMembershipWitnessWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("PopMembershipWitnessWireV1")
-                .field("private_witness", &"[REDACTED]")
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(PopMembershipWitnessWireV1 as value {
+        "private_witness" => "[REDACTED]",
+    } => finish_non_exhaustive);
     impl Drop for PopMembershipWitnessWireV1 {
         fn drop(&mut self) {
             self.holder_secret.fill(0);
@@ -3821,91 +3719,46 @@ mod protocol {
         revocation_list: sorafs_manifest::pop_credentials::PopRevocationListV1,
         witness: PopMembershipWitnessWireV1,
     }
-    impl fmt::Debug for PopIssuanceDraftResultWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("PopIssuanceDraftResultWireV1")
-                .field("request_id", &self.request_id)
-                .field("private_issuance_material", &"[REDACTED]")
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(PopIssuanceDraftResultWireV1 as value {
+        "request_id" => value.request_id,
+        "private_issuance_material" => "[REDACTED]",
+    } => finish_non_exhaustive);
     #[derive(PartialEq, Eq, Decode, Encode)]
     struct PopWalletWrapDekRequestWireV1 {
         context: [u8; 32],
         dek: [u8; 32],
     }
-    impl fmt::Debug for PopWalletWrapDekRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("PopWalletWrapDekRequestWireV1")
-                .field("dek", &"[REDACTED]")
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for PopWalletWrapDekRequestWireV1 {
-        fn drop(&mut self) {
-            self.dek.fill(0);
-            let _ = std::hint::black_box(&self.dek);
-        }
-    }
+    impl_broker_debug_fields!(PopWalletWrapDekRequestWireV1 as value {
+        "dek" => "[REDACTED]",
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(PopWalletWrapDekRequestWireV1 { dek });
     #[derive(PartialEq, Eq, Decode, Encode)]
     struct PopWalletWrapDekResultWireV1 {
         wrapped_dek: Vec<u8>,
     }
-    impl fmt::Debug for PopWalletWrapDekResultWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("PopWalletWrapDekResultWireV1")
-                .field("wrapped_dek_len", &self.wrapped_dek.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for PopWalletWrapDekResultWireV1 {
-        fn drop(&mut self) {
-            self.wrapped_dek.fill(0);
-            let _ = std::hint::black_box(&self.wrapped_dek);
-        }
-    }
+    impl_broker_debug_fields!(PopWalletWrapDekResultWireV1 as value {
+        "wrapped_dek_len" => value.wrapped_dek.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(PopWalletWrapDekResultWireV1 { wrapped_dek });
     #[derive(PartialEq, Eq, Decode, Encode)]
     struct PopWalletUnwrapDekRequestWireV1 {
         key_id: String,
         context: [u8; 32],
         wrapped_dek: Vec<u8>,
     }
-    impl fmt::Debug for PopWalletUnwrapDekRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("PopWalletUnwrapDekRequestWireV1")
-                .field("key_id", &self.key_id)
-                .field("wrapped_dek_len", &self.wrapped_dek.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for PopWalletUnwrapDekRequestWireV1 {
-        fn drop(&mut self) {
-            self.wrapped_dek.fill(0);
-            let _ = std::hint::black_box(&self.wrapped_dek);
-        }
-    }
+    impl_broker_debug_fields!(PopWalletUnwrapDekRequestWireV1 as value {
+        "key_id" => value.key_id,
+        "wrapped_dek_len" => value.wrapped_dek.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(PopWalletUnwrapDekRequestWireV1 { wrapped_dek });
     #[derive(PartialEq, Eq, Decode, Encode)]
     struct PopWalletUnwrapDekResultWireV1 {
         dek: [u8; 32],
     }
-    impl fmt::Debug for PopWalletUnwrapDekResultWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("PopWalletUnwrapDekResultWireV1")
-                .field("dek", &"[REDACTED]")
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for PopWalletUnwrapDekResultWireV1 {
-        fn drop(&mut self) {
-            self.dek.fill(0);
-            let _ = std::hint::black_box(&self.dek);
-        }
-    }
+    impl_broker_debug_fields!(PopWalletUnwrapDekResultWireV1 as value {
+        "dek" => "[REDACTED]",
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(PopWalletUnwrapDekResultWireV1 { dek });
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct PopWalletWitnessRequestWireV1 {
         credential_commitment: [u8; 32],
@@ -3955,20 +3808,10 @@ mod protocol {
     struct EvidenceViewerSecretResultWireV1 {
         secret: Vec<u8>,
     }
-    impl fmt::Debug for EvidenceViewerSecretResultWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("EvidenceViewerSecretResultWireV1")
-                .field("secret_len", &self.secret.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for EvidenceViewerSecretResultWireV1 {
-        fn drop(&mut self) {
-            self.secret.fill(0);
-            let _ = std::hint::black_box(&self.secret);
-        }
-    }
+    impl_broker_debug_fields!(EvidenceViewerSecretResultWireV1 as value {
+        "secret_len" => value.secret.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(EvidenceViewerSecretResultWireV1 { secret });
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerVerifyAndConsumeRequestWireV1 {
         challenge: Vec<u8>,
@@ -3978,22 +3821,14 @@ mod protocol {
         allowed_origins: Vec<String>,
         now_unix_ms: u64,
     }
-    impl fmt::Debug for EvidenceViewerVerifyAndConsumeRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("EvidenceViewerVerifyAndConsumeRequestWireV1")
-                .field("challenge_len", &self.challenge.len())
-                .field("assertion_len", &self.assertion.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for EvidenceViewerVerifyAndConsumeRequestWireV1 {
-        fn drop(&mut self) {
-            self.challenge.fill(0);
-            self.assertion.fill(0);
-            let _ = std::hint::black_box((&self.challenge, &self.assertion));
-        }
-    }
+    impl_broker_debug_fields!(EvidenceViewerVerifyAndConsumeRequestWireV1 as value {
+        "challenge_len" => value.challenge.len(),
+        "assertion_len" => value.assertion.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(EvidenceViewerVerifyAndConsumeRequestWireV1 {
+        challenge,
+        assertion
+    });
     fn validate_evidence_viewer_verify_and_consume_wire(
         request: &EvidenceViewerVerifyAndConsumeRequestWireV1,
         configured: &EvidenceViewerWebAuthnBindingWireV1,
@@ -4028,13 +3863,7 @@ mod protocol {
     struct EvidenceViewerGrantIssueRequestWireV1 {
         claims: sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1,
     }
-    impl fmt::Debug for EvidenceViewerGrantIssueRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("EvidenceViewerGrantIssueRequestWireV1")
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(EvidenceViewerGrantIssueRequestWireV1 as value {} => finish_non_exhaustive);
     impl Drop for EvidenceViewerGrantIssueRequestWireV1 {
         fn drop(&mut self) {
             scrub_evidence_viewer_grant_claims(&mut self.claims);
@@ -4046,14 +3875,9 @@ mod protocol {
         claims: sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1,
         now_unix_ms: u64,
     }
-    impl fmt::Debug for EvidenceViewerGrantVerifyRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("EvidenceViewerGrantVerifyRequestWireV1")
-                .field("token_len", &self.token.len())
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(EvidenceViewerGrantVerifyRequestWireV1 as value {
+        "token_len" => value.token.len(),
+    } => finish_non_exhaustive);
     impl Drop for EvidenceViewerGrantVerifyRequestWireV1 {
         fn drop(&mut self) {
             self.token.fill(0);
@@ -4065,19 +3889,8 @@ mod protocol {
     struct EvidenceViewerGrantRevokeRequestWireV1 {
         token_digest: [u8; 32],
     }
-    impl fmt::Debug for EvidenceViewerGrantRevokeRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("EvidenceViewerGrantRevokeRequestWireV1")
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for EvidenceViewerGrantRevokeRequestWireV1 {
-        fn drop(&mut self) {
-            self.token_digest.fill(0);
-            let _ = std::hint::black_box(&self.token_digest);
-        }
-    }
+    impl_broker_debug_fields!(EvidenceViewerGrantRevokeRequestWireV1 as value {} => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(EvidenceViewerGrantRevokeRequestWireV1 { token_digest });
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerEraseRequestWireV1 {
         operation_id: [u8; 32],
@@ -4085,13 +3898,7 @@ mod protocol {
         object_id: [u8; 16],
         evidence_digest: [u8; 32],
     }
-    impl fmt::Debug for EvidenceViewerEraseRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("EvidenceViewerEraseRequestWireV1")
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(EvidenceViewerEraseRequestWireV1 as value {} => finish_non_exhaustive);
     impl Drop for EvidenceViewerEraseRequestWireV1 {
         fn drop(&mut self) {
             self.operation_id.fill(0);
@@ -4115,15 +3922,10 @@ mod protocol {
         expected_revision: Option<[u8; 32]>,
         next_record: Vec<u8>,
     }
-    impl fmt::Debug for EvidenceViewerCheckpointCompareAndSwapRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("EvidenceViewerCheckpointCompareAndSwapRequestWireV1")
-                .field("expected_revision", &self.expected_revision)
-                .field("next_record_len", &self.next_record.len())
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(EvidenceViewerCheckpointCompareAndSwapRequestWireV1 as value {
+        "expected_revision" => value.expected_revision,
+        "next_record_len" => value.next_record.len(),
+    } => finish_non_exhaustive);
     impl Drop for EvidenceViewerCheckpointCompareAndSwapRequestWireV1 {
         fn drop(&mut self) {
             if let Some(expected_revision) = self.expected_revision.as_mut() {
@@ -4139,14 +3941,9 @@ mod protocol {
         receipt_message: [u8; 32],
         canonical_artifact: Vec<u8>,
     }
-    impl fmt::Debug for EvidenceViewerArchiveInstallRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("EvidenceViewerArchiveInstallRequestWireV1")
-                .field("canonical_artifact_len", &self.canonical_artifact.len())
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(EvidenceViewerArchiveInstallRequestWireV1 as value {
+        "canonical_artifact_len" => value.canonical_artifact.len(),
+    } => finish_non_exhaustive);
     impl Drop for EvidenceViewerArchiveInstallRequestWireV1 {
         fn drop(&mut self) {
             self.operation_id.fill(0);
@@ -4163,38 +3960,17 @@ mod protocol {
     struct EvidenceViewerArchiveReadRequestWireV1 {
         operation_id: [u8; 32],
     }
-    impl fmt::Debug for EvidenceViewerArchiveReadRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("EvidenceViewerArchiveReadRequestWireV1")
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for EvidenceViewerArchiveReadRequestWireV1 {
-        fn drop(&mut self) {
-            self.operation_id.fill(0);
-            let _ = std::hint::black_box(&self.operation_id);
-        }
-    }
+    impl_broker_debug_fields!(EvidenceViewerArchiveReadRequestWireV1 as value {} => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(EvidenceViewerArchiveReadRequestWireV1 { operation_id });
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerArchiveReadbackWireV1 {
         canonical_artifact: Vec<u8>,
         signature: [u8; 64],
     }
-    impl fmt::Debug for EvidenceViewerArchiveReadbackWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("EvidenceViewerArchiveReadbackWireV1")
-                .field("canonical_artifact_len", &self.canonical_artifact.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for EvidenceViewerArchiveReadbackWireV1 {
-        fn drop(&mut self) {
-            self.canonical_artifact.fill(0);
-            let _ = std::hint::black_box(&self.canonical_artifact);
-        }
-    }
+    impl_broker_debug_fields!(EvidenceViewerArchiveReadbackWireV1 as value {
+        "canonical_artifact_len" => value.canonical_artifact.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(EvidenceViewerArchiveReadbackWireV1 { canonical_artifact });
     const MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1: u16 = 1;
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationArchiveQualifyRequestWireV1 {
@@ -4202,15 +3978,10 @@ mod protocol {
         slot: u16,
         network_id: NetworkId,
     }
-    impl fmt::Debug for ModerationPanelNotificationArchiveQualifyRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("ModerationPanelNotificationArchiveQualifyRequestWireV1")
-                .field("version", &self.version)
-                .field("slot", &self.slot)
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(ModerationPanelNotificationArchiveQualifyRequestWireV1 as value {
+        "version" => value.version,
+        "slot" => value.slot,
+    } => finish_non_exhaustive);
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationArchiveQualificationWireV1 {
         version: u16,
@@ -4229,16 +4000,11 @@ mod protocol {
         receipt_message: [u8; 32],
         canonical_artifact: Vec<u8>,
     }
-    impl fmt::Debug for ModerationPanelNotificationArchiveInstallRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("ModerationPanelNotificationArchiveInstallRequestWireV1")
-                .field("version", &self.version)
-                .field("slot", &self.slot)
-                .field("canonical_artifact_len", &self.canonical_artifact.len())
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(ModerationPanelNotificationArchiveInstallRequestWireV1 as value {
+        "version" => value.version,
+        "slot" => value.slot,
+        "canonical_artifact_len" => value.canonical_artifact.len(),
+    } => finish_non_exhaustive);
     impl Drop for ModerationPanelNotificationArchiveInstallRequestWireV1 {
         fn drop(&mut self) {
             self.operation_id.fill(0);
@@ -4264,21 +4030,13 @@ mod protocol {
         network_id: NetworkId,
         operation_id: [u8; 32],
     }
-    impl fmt::Debug for ModerationPanelNotificationArchiveReadRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("ModerationPanelNotificationArchiveReadRequestWireV1")
-                .field("version", &self.version)
-                .field("slot", &self.slot)
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for ModerationPanelNotificationArchiveReadRequestWireV1 {
-        fn drop(&mut self) {
-            self.operation_id.fill(0);
-            let _ = std::hint::black_box(&self.operation_id);
-        }
-    }
+    impl_broker_debug_fields!(ModerationPanelNotificationArchiveReadRequestWireV1 as value {
+        "version" => value.version,
+        "slot" => value.slot,
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(ModerationPanelNotificationArchiveReadRequestWireV1 {
+        operation_id
+    });
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationArchiveReadbackWireV1 {
         version: u16,
@@ -4286,22 +4044,14 @@ mod protocol {
         canonical_artifact: Vec<u8>,
         signature: [u8; 64],
     }
-    impl fmt::Debug for ModerationPanelNotificationArchiveReadbackWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("ModerationPanelNotificationArchiveReadbackWireV1")
-                .field("version", &self.version)
-                .field("slot", &self.slot)
-                .field("canonical_artifact_len", &self.canonical_artifact.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for ModerationPanelNotificationArchiveReadbackWireV1 {
-        fn drop(&mut self) {
-            self.canonical_artifact.fill(0);
-            let _ = std::hint::black_box(&self.canonical_artifact);
-        }
-    }
+    impl_broker_debug_fields!(ModerationPanelNotificationArchiveReadbackWireV1 as value {
+        "version" => value.version,
+        "slot" => value.slot,
+        "canonical_artifact_len" => value.canonical_artifact.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(ModerationPanelNotificationArchiveReadbackWireV1 {
+        canonical_artifact
+    });
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationSourceAttestRequestWireV1 {
         version: u16,
@@ -4325,23 +4075,15 @@ mod protocol {
         head: sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1,
         canonical_head: Vec<u8>,
     }
-    impl fmt::Debug for ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("ModerationPanelNotificationArchiveHeadPublishRequestWireV1")
-                .field("version", &self.version)
-                .field("slot", &self.slot)
-                .field("generation", &self.head.generation)
-                .field("canonical_head_len", &self.canonical_head.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
-        fn drop(&mut self) {
-            self.canonical_head.fill(0);
-            let _ = std::hint::black_box(&self.canonical_head);
-        }
-    }
+    impl_broker_debug_fields!(ModerationPanelNotificationArchiveHeadPublishRequestWireV1 as value {
+        "version" => value.version,
+        "slot" => value.slot,
+        "generation" => value.head.generation,
+        "canonical_head_len" => value.canonical_head.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
+        canonical_head
+    });
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationArchiveHeadPublishResultWireV1 {
         version: u16,
@@ -4357,19 +4099,11 @@ mod protocol {
         slot: u16,
         canonical_head: Option<Vec<u8>>,
     }
-    impl fmt::Debug for ModerationPanelNotificationArchiveHeadReadResultWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("ModerationPanelNotificationArchiveHeadReadResultWireV1")
-                .field("version", &self.version)
-                .field("slot", &self.slot)
-                .field(
-                    "canonical_head_len",
-                    &self.canonical_head.as_ref().map_or(0, Vec::len),
-                )
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(ModerationPanelNotificationArchiveHeadReadResultWireV1 as value {
+        "version" => value.version,
+        "slot" => value.slot,
+        "canonical_head_len" => value.canonical_head.as_ref().map_or(0, Vec::len),
+    } => finish_non_exhaustive);
     impl Drop for ModerationPanelNotificationArchiveHeadReadResultWireV1 {
         fn drop(&mut self) {
             if let Some(bytes) = self.canonical_head.as_mut() {
@@ -4383,87 +4117,40 @@ mod protocol {
         context_digest: [u8; 32],
         dek: [u8; 32],
     }
-    impl fmt::Debug for ModerationQuarantineWrapDekRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("ModerationQuarantineWrapDekRequestWireV1")
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for ModerationQuarantineWrapDekRequestWireV1 {
-        fn drop(&mut self) {
-            self.dek.fill(0);
-            let _ = std::hint::black_box(&self.dek);
-        }
-    }
+    impl_broker_debug_fields!(ModerationQuarantineWrapDekRequestWireV1 as value {} => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(ModerationQuarantineWrapDekRequestWireV1 { dek });
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationQuarantineWrapDekResultWireV1 {
         wrapped_dek: Vec<u8>,
     }
-    impl fmt::Debug for ModerationQuarantineWrapDekResultWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("ModerationQuarantineWrapDekResultWireV1")
-                .field("wrapped_dek_len", &self.wrapped_dek.len())
-                .finish()
-        }
-    }
-    impl Drop for ModerationQuarantineWrapDekResultWireV1 {
-        fn drop(&mut self) {
-            self.wrapped_dek.fill(0);
-            let _ = std::hint::black_box(&self.wrapped_dek);
-        }
-    }
+    impl_broker_debug_fields!(ModerationQuarantineWrapDekResultWireV1 as value {
+        "wrapped_dek_len" => value.wrapped_dek.len(),
+    } => finish);
+    impl_scrub_fields_on_drop!(ModerationQuarantineWrapDekResultWireV1 { wrapped_dek });
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationQuarantineUnwrapDekRequestWireV1 {
         key_id: String,
         context_digest: [u8; 32],
         wrapped_dek: Vec<u8>,
     }
-    impl fmt::Debug for ModerationQuarantineUnwrapDekRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("ModerationQuarantineUnwrapDekRequestWireV1")
-                .field("wrapped_dek_len", &self.wrapped_dek.len())
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for ModerationQuarantineUnwrapDekRequestWireV1 {
-        fn drop(&mut self) {
-            self.wrapped_dek.fill(0);
-            let _ = std::hint::black_box(&self.wrapped_dek);
-        }
-    }
+    impl_broker_debug_fields!(ModerationQuarantineUnwrapDekRequestWireV1 as value {
+        "wrapped_dek_len" => value.wrapped_dek.len(),
+    } => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(ModerationQuarantineUnwrapDekRequestWireV1 { wrapped_dek });
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationQuarantineUnwrapDekResultWireV1 {
         dek: [u8; 32],
     }
-    impl fmt::Debug for ModerationQuarantineUnwrapDekResultWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("ModerationQuarantineUnwrapDekResultWireV1")
-                .finish_non_exhaustive()
-        }
-    }
-    impl Drop for ModerationQuarantineUnwrapDekResultWireV1 {
-        fn drop(&mut self) {
-            self.dek.fill(0);
-            let _ = std::hint::black_box(&self.dek);
-        }
-    }
+    impl_broker_debug_fields!(ModerationQuarantineUnwrapDekResultWireV1 as value {} => finish_non_exhaustive);
+    impl_scrub_fields_on_drop!(ModerationQuarantineUnwrapDekResultWireV1 { dek });
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationDurableHandoffRequestWireV1 {
         handoff: sorafs_node::moderation_orchestrator::ModerationTerminalHandoffV1,
         canonical_handoff: Vec<u8>,
     }
-    impl fmt::Debug for ModerationDurableHandoffRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("ModerationDurableHandoffRequestWireV1")
-                .field("canonical_handoff_len", &self.canonical_handoff.len())
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(ModerationDurableHandoffRequestWireV1 as value {
+        "canonical_handoff_len" => value.canonical_handoff.len(),
+    } => finish_non_exhaustive);
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct ModerationDurableHandoffOutcomeWireV1 {
         outcome: u8,
@@ -4476,32 +4163,18 @@ mod protocol {
         attempt: u32,
         attempt_limit: u32,
     }
-    impl fmt::Debug for ModerationDurablePanelNotificationRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("ModerationDurablePanelNotificationRequestWireV1")
-                .field(
-                    "canonical_notification_len",
-                    &self.canonical_notification.len(),
-                )
-                .field("attempt", &self.attempt)
-                .field("attempt_limit", &self.attempt_limit)
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(ModerationDurablePanelNotificationRequestWireV1 as value {
+        "canonical_notification_len" => value.canonical_notification.len(),
+        "attempt" => value.attempt,
+        "attempt_limit" => value.attempt_limit,
+    } => finish_non_exhaustive);
     #[derive(Clone, Copy, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationReceiptWireV1 {
         notification_id: [u8; 32],
         receipt_digest: [u8; 32],
         delivered_at_unix_ms: u64,
     }
-    impl fmt::Debug for ModerationPanelNotificationReceiptWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("ModerationPanelNotificationReceiptWireV1")
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(ModerationPanelNotificationReceiptWireV1 as value {} => finish_non_exhaustive);
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct SealedLoadRequestWireV1 {
         slot: u8,
@@ -4677,23 +4350,13 @@ mod protocol {
         previous: Option<sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1>,
         page: sorafs_node::hedging_billing_service::HedgingBillingFinalizedEventPageV1,
     }
-    impl fmt::Debug for BillingVerifyPageRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("BillingVerifyPageRequestWireV1")
-                .field("network_id", &self.network_id)
-                .field(
-                    "previous_next_sequence",
-                    &self
-                        .previous
-                        .map(|commitment| commitment.journal_next_sequence),
-                )
-                .field("page_start_sequence", &self.page.start_sequence)
-                .field("page_next_sequence", &self.page.next_sequence)
-                .field("event_count", &self.page.events.len())
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(BillingVerifyPageRequestWireV1 as value {
+        "network_id" => value.network_id,
+        "previous_next_sequence" => value .previous .map(|commitment| commitment.journal_next_sequence),
+        "page_start_sequence" => value.page.start_sequence,
+        "page_next_sequence" => value.page.next_sequence,
+        "event_count" => value.page.events.len(),
+    } => finish_non_exhaustive);
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingVerifyPeriodCloseRequestWireV1 {
         network_id: iroha_data_model::NetworkId,
@@ -4718,15 +4381,10 @@ mod protocol {
         signed_statement_digest: [u8; 32],
         statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1,
     }
-    impl fmt::Debug for BillingPublishStatementRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("BillingPublishStatementRequestWireV1")
-                .field("idempotency_key", &self.idempotency_key)
-                .field("signed_statement_digest", &self.signed_statement_digest)
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(BillingPublishStatementRequestWireV1 as value {
+        "idempotency_key" => value.idempotency_key,
+        "signed_statement_digest" => value.signed_statement_digest,
+    } => finish_non_exhaustive);
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingLookupRequestWireV1 {
         record_id: [u8; 32],
@@ -4736,38 +4394,18 @@ mod protocol {
         signed_statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1,
         receipt: sorafs_node::hedging_billing_service::BillingStatementPublicationReceiptV1,
     }
-    impl fmt::Debug for BillingAuthoritativePublicationWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("BillingAuthoritativePublicationWireV1")
-                .field(
-                    "statement_id",
-                    &self
-                        .signed_statement
-                        .governed_statement
-                        .statement
-                        .statement_id,
-                )
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(BillingAuthoritativePublicationWireV1 as value {
+        "statement_id" => value .signed_statement .governed_statement .statement .statement_id,
+    } => finish_non_exhaustive);
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct BillingAcknowledgementRequestWireV1 {
         statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1,
         acknowledgement: sorafs_node::hedging_billing_service::BillingStatementAcknowledgementV1,
     }
-    impl fmt::Debug for BillingAcknowledgementRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("BillingAcknowledgementRequestWireV1")
-                .field("statement_id", &self.acknowledgement.statement_id)
-                .field(
-                    "authentication_proof_len",
-                    &self.acknowledgement.authentication_proof.len(),
-                )
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(BillingAcknowledgementRequestWireV1 as value {
+        "statement_id" => value.acknowledgement.statement_id,
+        "authentication_proof_len" => value.acknowledgement.authentication_proof.len(),
+    } => finish_non_exhaustive);
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingLoadEpochRequestWireV1 {
         epoch_sequence: u64,
@@ -4777,16 +4415,11 @@ mod protocol {
         expected_revision: Option<[u8; 32]>,
         next: sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessRecordV1,
     }
-    impl fmt::Debug for BillingCompareAndSwapEpochRequestWireV1 {
-        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter
-                .debug_struct("BillingCompareAndSwapEpochRequestWireV1")
-                .field("expected_revision", &self.expected_revision)
-                .field("epoch_sequence", &self.next.epoch_sequence)
-                .field("checkpoint_len", &self.next.checkpoint_bytes.len())
-                .finish_non_exhaustive()
-        }
-    }
+    impl_broker_debug_fields!(BillingCompareAndSwapEpochRequestWireV1 as value {
+        "expected_revision" => value.expected_revision,
+        "epoch_sequence" => value.next.epoch_sequence,
+        "checkpoint_len" => value.next.checkpoint_bytes.len(),
+    } => finish_non_exhaustive);
     fn billing_hash_canonical<T: NoritoSerialize>(
         domain: &[u8],
         value: &T,
@@ -20003,13 +19636,7 @@ mod protocol {
                 response.observations,
             ))
         }
-        impl fmt::Debug for BrokerSession {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("BrokerSession")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(BrokerSession as value {} => finish_non_exhaustive);
         impl BrokerSession {
             fn connect(
                 policy: &EndpointPolicy,
@@ -20257,22 +19884,14 @@ mod protocol {
             exact_bindings:
                 iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1,
         }
-        impl fmt::Debug for BootleLanternBrokerProvider {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("BootleLanternBrokerProvider")
-                    .field("handle", &self.binding.handle)
-                    .field("revision", &self.binding.revision)
-                    .field("policy_digest", &self.binding.policy_digest)
-                    .field("issuer_id", &self.exact_bindings.issuer_id())
-                    .field("policy_id", &self.exact_bindings.policy_id())
-                    .field(
-                        "authorization_lifetime_blocks",
-                        &self.exact_bindings.authorization_lifetime_blocks(),
-                    )
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(BootleLanternBrokerProvider as value {
+            "handle" => value.binding.handle,
+            "revision" => value.binding.revision,
+            "policy_digest" => value.binding.policy_digest,
+            "issuer_id" => value.exact_bindings.issuer_id(),
+            "policy_id" => value.exact_bindings.policy_id(),
+            "authorization_lifetime_blocks" => value.exact_bindings.authorization_lifetime_blocks(),
+        } => finish_non_exhaustive);
         impl BootleLanternBrokerProvider {
             fn live_qualification(
                 &self,
@@ -20760,17 +20379,12 @@ mod protocol {
             poisoned: bool,
             _retained_memory: Option<DecodeResourcePoolPermitV1>,
         }
-        impl fmt::Debug for ProviderIngestBrokerSourceReader {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("ProviderIngestBrokerSourceReader")
-                    .field("content_length", &self.content_length)
-                    .field("remaining", &self.remaining)
-                    .field("frame_count", &self.frame_count)
-                    .field("finished", &self.finished)
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(ProviderIngestBrokerSourceReader as value {
+            "content_length" => value.content_length,
+            "remaining" => value.remaining,
+            "frame_count" => value.frame_count,
+            "finished" => value.finished,
+        } => finish_non_exhaustive);
         impl ProviderIngestBrokerSourceReader {
             fn poison(&mut self, kind: std::io::ErrorKind) -> std::io::Error {
                 self.poisoned = true;
@@ -20948,14 +20562,9 @@ mod protocol {
             metadata_digest: [u8; 32],
             source_provider_ids: Vec<[u8; 32]>,
         }
-        impl fmt::Debug for ProviderIngestBrokerAuthenticatedSource {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("ProviderIngestBrokerAuthenticatedSource")
-                    .field("source_provider_count", &self.source_provider_ids.len())
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(ProviderIngestBrokerAuthenticatedSource as value {
+            "source_provider_count" => value.source_provider_ids.len(),
+        } => finish_non_exhaustive);
         impl ProviderIngestBrokerAuthenticatedSource {
             fn live_qualification(
                 &self,
@@ -21232,13 +20841,7 @@ mod protocol {
             metadata_digest: [u8; 32],
             active_key_id: String,
         }
-        impl fmt::Debug for ModerationQuarantineBrokerKeyWrapper {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("ModerationQuarantineBrokerKeyWrapper")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(ModerationQuarantineBrokerKeyWrapper as value {} => finish_non_exhaustive);
         impl ModerationQuarantineBrokerKeyWrapper {
             fn live_qualification(
                 &self,
@@ -21676,13 +21279,7 @@ mod protocol {
             public_key: [u8; 32],
             checkpoint_max_bytes: u64,
         }
-        impl fmt::Debug for AppealFinanceBrokerCheckpoint {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("AppealFinanceBrokerCheckpoint")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(AppealFinanceBrokerCheckpoint as value {} => finish_non_exhaustive);
         impl AppealFinanceBrokerCheckpoint {
             fn live_identity(
                 &self,
@@ -22098,15 +21695,10 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for PopBrokerProvider {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("PopBrokerProvider")
-                    .field("handle", &self.binding.handle)
-                    .field("private_provider", &"[REDACTED]")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(PopBrokerProvider as value {
+            "handle" => value.binding.handle,
+            "private_provider" => "[REDACTED]",
+        } => finish_non_exhaustive);
         impl PopBrokerProvider {
             fn live_qualification(
                 &self,
@@ -22187,15 +21779,10 @@ mod protocol {
         struct PopCredentialBrokerRegistry {
             provider: PopBrokerProvider,
         }
-        impl fmt::Debug for PopCredentialBrokerRegistry {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("PopCredentialBrokerRegistry")
-                    .field("handle", &self.provider.binding.handle)
-                    .field("private_registry", &"[REDACTED]")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(PopCredentialBrokerRegistry as value {
+            "handle" => value.provider.binding.handle,
+            "private_registry" => "[REDACTED]",
+        } => finish_non_exhaustive);
         impl iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1
             for PopCredentialBrokerRegistry
         {
@@ -22295,15 +21882,10 @@ mod protocol {
             key_id: String,
             public_key: [u8; 32],
         }
-        impl fmt::Debug for PopBrokerIssuerSigner {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("PopBrokerIssuerSigner")
-                    .field("key_id", &self.key_id)
-                    .field("private_signer", &"[REDACTED]")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(PopBrokerIssuerSigner as value {
+            "key_id" => value.key_id,
+            "private_signer" => "[REDACTED]",
+        } => finish_non_exhaustive);
         impl sorafs_node::pop_credentials::PopIssuerSigner for PopBrokerIssuerSigner {
             fn key_id(&self) -> &str {
                 &self.key_id
@@ -22536,15 +22118,10 @@ mod protocol {
             provider: PopBrokerProvider,
             active_key_id: String,
         }
-        impl fmt::Debug for PopBrokerWalletKeyWrapper {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("PopBrokerWalletKeyWrapper")
-                    .field("active_key_id", &self.active_key_id)
-                    .field("private_wrapper", &"[REDACTED]")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(PopBrokerWalletKeyWrapper as value {
+            "active_key_id" => value.active_key_id,
+            "private_wrapper" => "[REDACTED]",
+        } => finish_non_exhaustive);
         impl sorafs_node::pop_credentials::PopWalletKeyWrapper for PopBrokerWalletKeyWrapper {
             fn active_key_id(&self) -> &str {
                 &self.active_key_id
@@ -22731,14 +22308,9 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for PrivacyCyclePrfBrokerProvider {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("PrivacyCyclePrfBrokerProvider")
-                    .field("handle", &self.binding.handle)
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(PrivacyCyclePrfBrokerProvider as value {
+            "handle" => value.binding.handle,
+        } => finish_non_exhaustive);
         impl PrivacyCyclePrfBrokerProvider {
             fn live_qualification(
                 &self,
@@ -22829,14 +22401,9 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for PrivacyReleaseAnchorBroker {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("PrivacyReleaseAnchorBroker")
-                    .field("handle", &self.binding.handle)
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(PrivacyReleaseAnchorBroker as value {
+            "handle" => value.binding.handle,
+        } => finish_non_exhaustive);
         impl PrivacyReleaseAnchorBroker {
             fn live_qualification(
                 &self,
@@ -22983,14 +22550,9 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for TransparencyLeaderLeaseBroker {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("TransparencyLeaderLeaseBroker")
-                    .field("handle", &self.binding.handle)
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(TransparencyLeaderLeaseBroker as value {
+            "handle" => value.binding.handle,
+        } => finish_non_exhaustive);
         impl TransparencyLeaderLeaseBroker {
             fn exact_binding(
                 &self,
@@ -23173,14 +22735,9 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for FencedPrivacyPublisherBroker {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("FencedPrivacyPublisherBroker")
-                    .field("handle", &self.binding.handle)
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(FencedPrivacyPublisherBroker as value {
+            "handle" => value.binding.handle,
+        } => finish_non_exhaustive);
         impl FencedPrivacyPublisherBroker {
             fn expected_qualification(
                 &self,
@@ -23270,14 +22827,9 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for FencedPrivacyHeadReaderBroker {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("FencedPrivacyHeadReaderBroker")
-                    .field("handle", &self.binding.handle)
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(FencedPrivacyHeadReaderBroker as value {
+            "handle" => value.binding.handle,
+        } => finish_non_exhaustive);
         impl FencedPrivacyHeadReaderBroker {
             fn expected_qualification(
                 &self,
@@ -23357,14 +22909,9 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for PorReplayArchiveBroker {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("PorReplayArchiveBroker")
-                    .field("handle", &self.binding.handle)
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(PorReplayArchiveBroker as value {
+            "handle" => value.binding.handle,
+        } => finish_non_exhaustive);
         impl PorReplayArchiveBroker {
             fn exact(
                 &self,
@@ -23549,14 +23096,9 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for GatewayAcmeBrokerClient {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("GatewayAcmeBrokerClient")
-                    .field("handle", &self.binding.handle)
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(GatewayAcmeBrokerClient as value {
+            "handle" => value.binding.handle,
+        } => finish_non_exhaustive);
         impl GatewayAcmeBrokerClient {
             fn live_identity(
                 &self,
@@ -23663,14 +23205,9 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for GatewayComplianceBrokerFeedTransport {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("GatewayComplianceBrokerFeedTransport")
-                    .field("handle", &self.binding.handle)
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(GatewayComplianceBrokerFeedTransport as value {
+            "handle" => value.binding.handle,
+        } => finish_non_exhaustive);
         impl GatewayComplianceBrokerFeedTransport {
             fn live_identity(
                 &self,
@@ -23907,13 +23444,7 @@ mod protocol {
                 )
             }
         }
-        impl fmt::Debug for ModerationTransactionBrokerSigner {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("ModerationTransactionBrokerSigner")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(ModerationTransactionBrokerSigner as value {} => finish_non_exhaustive);
         impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
             for ModerationTransactionBrokerSigner
         {
@@ -24048,24 +23579,12 @@ mod protocol {
                 )
             }
         }
-        impl fmt::Debug for ModerationDeliveryBrokerProvider {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("ModerationDeliveryBrokerProvider")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(ModerationDeliveryBrokerProvider as value {} => finish_non_exhaustive);
         #[derive(Clone)]
         struct ModerationHandoffBrokerBoundary {
             provider: ModerationDeliveryBrokerProvider,
         }
-        impl fmt::Debug for ModerationHandoffBrokerBoundary {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("ModerationHandoffBrokerBoundary")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(ModerationHandoffBrokerBoundary as value {} => finish_non_exhaustive);
         impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
             for ModerationHandoffBrokerBoundary
         {
@@ -24285,13 +23804,7 @@ mod protocol {
         struct ModerationPanelNotificationBrokerBoundary {
             provider: ModerationDeliveryBrokerProvider,
         }
-        impl fmt::Debug for ModerationPanelNotificationBrokerBoundary {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("ModerationPanelNotificationBrokerBoundary")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(ModerationPanelNotificationBrokerBoundary as value {} => finish_non_exhaustive);
         impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
             for ModerationPanelNotificationBrokerBoundary
         {
@@ -24811,14 +24324,9 @@ mod protocol {
             metadata_digest: [u8; 32],
             exact_binding: crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1,
         }
-        impl fmt::Debug for SoracloudHfCredentialBrokerProvider {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("SoracloudHfCredentialBrokerProvider")
-                    .field("handle", &self.exact_binding.handle())
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(SoracloudHfCredentialBrokerProvider as value {
+            "handle" => value.exact_binding.handle(),
+        } => finish_non_exhaustive);
         impl SoracloudHfCredentialBrokerProvider {
             fn live_qualification(
                 &self,
@@ -24977,13 +24485,7 @@ mod protocol {
             publisher_peer_id: Vec<u8>,
             public_key: [u8; 32],
         }
-        impl fmt::Debug for GovernanceDagBrokerSigner {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("GovernanceDagBrokerSigner")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(GovernanceDagBrokerSigner as value {} => finish_non_exhaustive);
         impl GovernanceDagBrokerSigner {
             fn live_qualification(
                 &self,
@@ -25069,18 +24571,10 @@ mod protocol {
             ingress_binding: sorafs_node::GovernanceDagRequestIngressBindingV1,
             ingress_qualification: sorafs_node::GovernanceDagRequestIngressQualificationV1,
         }
-        impl fmt::Debug for GovernanceDagBrokerRequestAuthenticator {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("GovernanceDagBrokerRequestAuthenticator")
-                    .field("slot", &self.binding.slot)
-                    .field(
-                        "endpoint_binding",
-                        &hex::encode(self.ingress_binding.endpoint_binding()),
-                    )
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(GovernanceDagBrokerRequestAuthenticator as value {
+            "slot" => value.binding.slot,
+            "endpoint_binding" => hex::encode(value.ingress_binding.endpoint_binding()),
+        } => finish_non_exhaustive);
         impl GovernanceDagBrokerRequestAuthenticator {
             fn live_ingress_qualification(
                 &self,
@@ -25193,13 +24687,7 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for GovernanceDagBrokerCheckpointStore {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("GovernanceDagBrokerCheckpointStore")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(GovernanceDagBrokerCheckpointStore as value {} => finish_non_exhaustive);
         impl GovernanceDagBrokerCheckpointStore {
             fn live_qualification(
                 &self,
@@ -25443,14 +24931,9 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for EvidenceViewerBrokerProvider {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("EvidenceViewerBrokerProvider")
-                    .field("slot", &self.binding.slot)
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(EvidenceViewerBrokerProvider as value {
+            "slot" => value.binding.slot,
+        } => finish_non_exhaustive);
         impl EvidenceViewerBrokerProvider {
             fn handle(&self) -> &str {
                 &self.binding.handle
@@ -26535,13 +26018,7 @@ mod protocol {
             signer_metadata_digest: [u8; 32],
             expected_signer_binding: sorafs_node::ProviderIngestCompletionSignerBindingV1,
         }
-        impl fmt::Debug for ProviderIngestBrokerSignerResolver {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("ProviderIngestBrokerSignerResolver")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(ProviderIngestBrokerSignerResolver as value {} => finish_non_exhaustive);
         impl ProviderIngestBrokerSignerResolver {
             fn live_state(
                 &self,
@@ -26868,13 +26345,7 @@ mod protocol {
             metadata_digest: [u8; 32],
             checkpoint_max_bytes: u64,
         }
-        impl fmt::Debug for ProviderIngestBrokerCheckpointStore {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("ProviderIngestBrokerCheckpointStore")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(ProviderIngestBrokerCheckpointStore as value {} => finish_non_exhaustive);
         impl ProviderIngestBrokerCheckpointStore {
             fn live_qualification(
                 &self,
@@ -27058,13 +26529,7 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for ProviderIngestBrokerRetentionAuthority {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("ProviderIngestBrokerRetentionAuthority")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(ProviderIngestBrokerRetentionAuthority as value {} => finish_non_exhaustive);
         impl ProviderIngestBrokerRetentionAuthority {
             fn expected_qualification(
                 &self,
@@ -27315,13 +26780,7 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for ReputationBrokerRetentionAuthority {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("ReputationBrokerRetentionAuthority")
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(ReputationBrokerRetentionAuthority as value {} => finish_non_exhaustive);
         impl ReputationBrokerRetentionAuthority {
             fn expected_qualification(
                 &self,
@@ -27573,14 +27032,9 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for ReputationBrokerProvider {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("ReputationBrokerProvider")
-                    .field("slot", &self.binding.slot)
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(ReputationBrokerProvider as value {
+            "slot" => value.binding.slot,
+        } => finish_non_exhaustive);
         impl ReputationBrokerProvider {
             fn live_qualification(
                 &self,
@@ -28146,14 +27600,9 @@ mod protocol {
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-        impl fmt::Debug for BillingBrokerProvider {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter
-                    .debug_struct("BillingBrokerProvider")
-                    .field("slot", &self.binding.slot)
-                    .finish_non_exhaustive()
-            }
-        }
+        impl_broker_debug_fields!(BillingBrokerProvider as value {
+            "slot" => value.binding.slot,
+        } => finish_non_exhaustive);
         impl BillingBrokerProvider {
             fn expected_qualification(
                 &self,
@@ -30637,6 +30086,7 @@ mod protocol {
         }
         #[cfg(test)]
         mod tests {
+            use super::*;
             use std::{
                 io::Cursor,
                 os::unix::{
@@ -30650,7 +30100,6 @@ mod protocol {
                 },
                 thread,
             };
-            use super::*;
             const TEST_SESSION_ID: [u8; 32] = [0xA5; 32];
             const TEST_POLICY_DIGEST: [u8; 32] = [0x71; 32];
             const TEST_SIGNER_KEY: [u8; 32] = [
@@ -33788,14 +33237,9 @@ mod protocol {
                 observed_request:
                     Option<Arc<Mutex<Option<sorafs_node::ProviderIngestSourceRequestV1>>>>,
             }
-            impl fmt::Debug for ServerTestProviderSource {
-                fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    formatter
-                        .debug_struct("ServerTestProviderSource")
-                        .field("payload_len", &self.payload.len())
-                        .finish_non_exhaustive()
-                }
-            }
+            impl_broker_debug_fields!(ServerTestProviderSource as value {
+                "payload_len" => value.payload.len(),
+            } => finish_non_exhaustive);
             impl sorafs_node::ProviderIngestAuthenticatedSourceFetchV1 for ServerTestProviderSource {
                 type Fetched =
                     crate::sorafs_provider_ingest_runtime::VerifiedProviderIngestPayloadV1;
@@ -36067,7 +35511,9 @@ mod protocol {
             }
             fn por_replay_archive_record_fixture() -> sorafs_node::PorFinalizedReplayArchiveRecordV1
             {
-                use iroha_data_model::sorafs::reputation::{PorTerminalOutcomeV1, PorTerminalStatusV1};
+                use iroha_data_model::sorafs::reputation::{
+                    PorTerminalOutcomeV1, PorTerminalStatusV1,
+                };
                 use sorafs_manifest::{
                     por::{
                         AUDIT_VERDICT_VERSION_V1, AuditOutcomeV1, AuditVerdictV1,

@@ -1,30 +1,13 @@
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn signed_query_proxy_tries_next_candidate_only_before_dispatch() {
-    let first_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x93, "derive hedged first proxy peer fixture key")
-            .public_key()
-            .clone(),
-    );
-    let second_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x94, "derive hedged second proxy peer fixture key")
-            .public_key()
-            .clone(),
-    );
+    let first_peer_id = checked_torii_test_peer_id(0x93, "derive hedged first proxy peer fixture key");
+    let second_peer_id = checked_torii_test_peer_id(0x94, "derive hedged second proxy peer fixture key");
     let route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2));
-    let request = ToriiProxyRequestV6 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
-        request_id: Hash::new(b"signed-query-pre-dispatch-fallback"),
-        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
-        hop_count: 1,
-        max_hops: 3,
-        visited_peer_ids: Vec::new(),
-        request: ToriiProxyRequestKindV4::SignedQueryRouteScan {
-            query_bytes: Vec::new(),
-            expected_route: ToriiRouteHintV1::from(route),
-            response_format: ToriiProxyResponseFormatV1::Norito,
-        },
-    };
+    let request = signed_query_proxy_request_for_test(
+        Hash::new(b"signed-query-pre-dispatch-fallback"),
+        route,
+    );
     let attempts = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let attempts_ref = attempts.clone();
     let first_peer_id_for_closure = first_peer_id.clone();
@@ -69,8 +52,6 @@ async fn signed_query_proxy_tries_next_candidate_only_before_dispatch() {
         &[first_peer_id, second_peer_id]
     );
     assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body should be readable");
+    let body = torii_body_bytes(response, "response body should be readable").await;
     assert_eq!(body.as_ref(), b"pre-dispatch-fallback-ok");
 }

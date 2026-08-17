@@ -2100,10 +2100,10 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 860
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 88
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5"
+    "4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "846d646b6ca8da66fadc5f8919934c8cecf50810410add1f34108e437d34a402"
+    "97d125f9196963710fd6eb72e98e0b86f6503489f1b1ee492b4cfc628e320d82"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2117,7 +2117,7 @@ _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
 _PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 527
 _PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 528
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d"
+    "4dd855f85b071369ec2457dfa75caacc8f597ce17390b406de8f190dd52c6c18"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -2544,7 +2544,7 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "consensus_message_control::tests::failed_release_clears_in_flight_ownership_and_latches_fatal",
     "consensus_message_control::tests::fatal_controller_rejects_an_unchanged_command_poll",
     "consensus_message_control::tests::retired_release_finishes_drain_without_claiming_delivery",
-    "network_relay_tests::obsolete_sumeragi_relay_message_completes_as_delivered",
+    "network_relay_tests::obsolete_sumeragi_relay_message_fails_closed",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_projection_distinguishes_identical_bytes_from_distinct_origins",
     "merge_sidecar::tests::authenticated_source_limits_are_fixed_at_four_gates_two_sessions_and_sixteen_mibibytes",
     "sumeragi::v2::tests::authenticated_deferred_service_rejects_same_kind_envelope_swap_before_reducer",

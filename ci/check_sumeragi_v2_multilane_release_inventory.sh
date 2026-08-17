@@ -782,6 +782,7 @@ expected_receipt_gate_component_symbols = (
 )
 expected_receipt_publication_component_symbols = (
     "_validate_framework_python_input_records",
+    "_validate_framework_python_macho_closure",
     "_validate_framework_python_relocation_evidence",
     "_require_pruned_build_roots", "build_receipt", "_iter_artifact_records",
     "_capture_path_contract",
@@ -1022,8 +1023,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "d34132eb817e08216180c7db186826f1"
-    "860b6703608d4f8862d956eda258dfd5"
+    "4082945a72bd97c31bc147f9cd7bbcb7"
+    "7fef8c2f70c59f9e0c6b2892ee459329"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "

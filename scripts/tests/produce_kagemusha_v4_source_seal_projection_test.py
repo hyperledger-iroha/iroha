@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from scripts import build_kagemusha_v4_candidate_bundle as builder
 from scripts import kagemusha_source_tree_seal as source_seal
@@ -40,19 +42,25 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
             "schema": source_seal.REVIEWED_SOURCE_CLOSURE_SCHEMA,
             "source_repo_dirty": False,
         }
-        self.closure = self.write("reviewed-source-closure.json", canonical(self.closure_value))
-        self.execution_policy = self.write(
-            "execution-policy.json",
-            canonical(
-                {
-                    "profile": "release",
-                    "schema": "iroha.kagemusha.fixture_execution_policy.v1",
-                    "target": builder.SOURCE_SEAL_TARGET,
-                }
-            ),
+        self.closure = self.write(
+            "reviewed-source-closure.json", canonical(self.closure_value)
         )
         self.graph_value = self.unit_graph()
         self.graph = self.write("unit-graph.json", canonical(self.graph_value))
+        self.raw_graph = self.write(
+            "raw-unit-graph.json",
+            canonical(
+                {
+                    "fixture": "synthetic protocol shape; not Cargo evidence",
+                    "units": 3,
+                    "version": 1,
+                }
+            ),
+        )
+        self.execution_policy_value = self.make_execution_policy()
+        self.execution_policy = self.write(
+            "execution-policy.json", canonical(self.execution_policy_value)
+        )
         self.identity = source_seal.SourceIdentity(
             source_commit="a" * 40,
             source_tree_sha256="b" * 64,
@@ -97,10 +105,15 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
         ).split()
         self.allowed_signers = self.write(
             "controller-allowed-signers",
-            f"projection-controller@example.test {key_fields[0]} {key_fields[1]}\n".encode(),
+            (
+                f"projection-controller@example.test {key_fields[0]} "
+                f"{key_fields[1]}\n"
+            ).encode(),
         )
         self.revocation = self.write("controller-revocation", b"")
-        derived_graph = producer._validate_normalized_unit_graph(self.graph.read_bytes())
+        derived_graph = producer._validate_normalized_unit_graph(
+            self.graph.read_bytes()
+        )
         self.authorization_value = {
             "execution_policy_sha256": digest(self.execution_policy),
             "projection_schema": builder.AUTHENTICATED_SOURCE_SEAL_PROJECTION_SCHEMA,
@@ -132,6 +145,7 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
         """Return the exact normalized release profile shape."""
 
         return {
+            "codegen_backend": None,
             "codegen_units": None,
             "debug_assertions": False,
             "debuginfo": 0,
@@ -139,9 +153,11 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
             "lto": "false",
             "name": "release",
             "opt_level": "3",
-            "overflow_checks": True,
+            "overflow_checks": False,
             "panic": "unwind",
             "rpath": False,
+            "split_debuginfo": None,
+            "strip": {"resolved": {"Named": "debuginfo"}},
         }
 
     @staticmethod
@@ -150,16 +166,59 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
 
         return {
             "crate_types": ["bin" if kind != "lib" else "lib"],
+            "doc": True,
             "doctest": False,
             "edition": "2024",
             "kind": [kind],
             "name": name,
             "src_path": source,
-            "test": False,
+            "test": True,
+        }
+
+    def make_execution_policy(self) -> dict[str, object]:
+        """Return the exact V1 controller policy for the synthetic fixtures."""
+
+        return {
+            "cargo": {
+                "binary_sha256": "4" * 64,
+                "binary_size_bytes": 12_345_678,
+                "version_argv": ["<DIRECT_CARGO>", "-Vv"],
+                "version_stdout_lines": [
+                    "cargo 1.93.1 (fixture 2026-01-01)",
+                    "release: 1.93.1",
+                    "host: aarch64-apple-darwin",
+                ],
+            },
+            "rustc": {
+                "binary_sha256": "5" * 64,
+                "binary_size_bytes": 23_456_789,
+                "version_argv": ["<DIRECT_RUSTC>", "-Vv"],
+                "version_stdout_lines": [
+                    "rustc 1.93.1 (fixture 2026-01-01)",
+                    "release: 1.93.1",
+                    "host: aarch64-apple-darwin",
+                ],
+            },
+            "schema": producer.EXECUTION_POLICY_SCHEMA,
+            "unit_graph": {
+                "capture_argv": list(producer.UNIT_GRAPH_CAPTURE_ARGV),
+                "capture_environment": dict(
+                    producer.UNIT_GRAPH_CAPTURE_ENVIRONMENT
+                ),
+                "normalization": builder.SOURCE_SEAL_UNIT_GRAPH_NORMALIZATION,
+                "normalized_sha256": digest(self.graph),
+                "normalized_size_bytes": self.graph.stat().st_size,
+                "raw_sha256": digest(self.raw_graph),
+                "raw_size_bytes": self.raw_graph.stat().st_size,
+            },
         }
 
     def unit_graph(self) -> dict[str, object]:
-        """Return a small genuine-shape normalized unit graph."""
+        """Return a small synthetic graph with the Cargo 1.93 protocol shape.
+
+        This is deliberately a protocol fixture, not Cargo evidence. It keeps
+        only three structurally representative units for adversarial tests.
+        """
 
         return {
             "roots": [2],
@@ -186,17 +245,32 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
                 },
                 {
                     "dependencies": [
-                        {"extern_crate_name": "dependency", "index": 0},
-                        {"extern_crate_name": "dependency_build_script", "index": 1},
+                        {
+                            "extern_crate_name": "dependency",
+                            "index": 0,
+                            "noprelude": False,
+                            "public": False,
+                        },
+                        {
+                            "extern_crate_name": "dependency_build_script",
+                            "index": 1,
+                            "noprelude": False,
+                            "public": False,
+                        },
                     ],
                     "features": list(builder.SOURCE_SEAL_RESOLVED_FEATURES),
                     "mode": "build",
                     "pkg_id": "iroha_core 3.0.0 (path+file://<PACKAGE_ROOT>)",
                     "platform": builder.SOURCE_SEAL_TARGET,
                     "profile": self.profile(),
-                    "target": self.target(
-                        "bin", builder.BINARY_NAME, "src/bin/kagemusha_recursive_spend_v4_bundle.rs"
-                    ),
+                    "target": {
+                        **self.target(
+                            "bin",
+                            builder.BINARY_NAME,
+                            "src/bin/kagemusha_recursive_spend_v4_bundle.rs",
+                        ),
+                        "required-features": list(producer.ROOT_REQUIRED_FEATURES),
+                    },
                 },
             ],
             "version": 1,
@@ -229,7 +303,9 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
     def construct(self) -> producer.ProjectionProduction:
         """Run production with all input pins and a locally derived identity."""
 
-        def identity_reader(root: Path, closure: str, closure_sha256: str) -> source_seal.SourceIdentity:
+        def identity_reader(
+            root: Path, closure: str, closure_sha256: str
+        ) -> source_seal.SourceIdentity:
             self.assertEqual(root, self.root)
             self.assertEqual(Path(closure), self.closure)
             self.assertEqual(closure_sha256, digest(self.closure))
@@ -249,6 +325,8 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
             controller_revocation_sha256=digest(self.revocation),
             execution_policy_path=self.execution_policy,
             execution_policy_sha256=digest(self.execution_policy),
+            raw_unit_graph_path=self.raw_graph,
+            raw_unit_graph_sha256=digest(self.raw_graph),
             unit_graph_path=self.graph,
             unit_graph_sha256=digest(self.graph),
             identity_reader=identity_reader,
@@ -268,6 +346,15 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
         self.assertEqual(
             production.receipt["projection_hex"], production.projection_bytes.hex()
         )
+        self.assertEqual(production.receipt["cargo_binary_sha256"], "4" * 64)
+        self.assertEqual(production.receipt["rustc_binary_sha256"], "5" * 64)
+        self.assertEqual(
+            production.receipt["raw_unit_graph_sha256"], digest(self.raw_graph)
+        )
+        self.assertEqual(
+            production.receipt["raw_unit_graph_size_bytes"],
+            self.raw_graph.stat().st_size,
+        )
         environment = builder._projection_build_environment(
             production.projection,
             production.projection_bytes,
@@ -282,6 +369,8 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
         producer._write_new_private_file(output, production.projection_bytes)
         self.assertEqual(output.read_bytes(), production.projection_bytes)
         self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(output.stat().st_nlink, 1)
+        self.assertFalse(any(".tmp-" in path.name for path in self.root.iterdir()))
 
     def test_request_reconstructs_exact_signed_authorization(self) -> None:
         request, request_bytes = producer.construct_authorization_request(
@@ -290,6 +379,8 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
             reviewed_source_closure_sha256=digest(self.closure),
             execution_policy_path=self.execution_policy,
             execution_policy_sha256=digest(self.execution_policy),
+            raw_unit_graph_path=self.raw_graph,
+            raw_unit_graph_sha256=digest(self.raw_graph),
             unit_graph_path=self.graph,
             unit_graph_sha256=digest(self.graph),
             identity_reader=lambda _root, _closure, _digest: self.identity,
@@ -301,14 +392,41 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
 
     def test_modified_graph_is_rejected_even_with_a_fresh_file_pin(self) -> None:
         graph = copy.deepcopy(self.graph_value)
-        graph["units"][0]["pkg_id"] = "substituted 1.0.0 (registry+https://example.test/index)"
+        graph["units"][0]["pkg_id"] = (
+            "substituted 1.0.0 (registry+https://example.test/index)"
+        )
         self.graph.write_bytes(canonical(graph))
 
         with self.assertRaisesRegex(
             producer.ProjectionProductionError,
-            "controller-authorized Cargo unit graph differs",
+            "execution-policy normalized unit graph differs",
         ):
             self.construct()
+
+    def test_modified_raw_graph_is_rejected_even_with_a_fresh_file_pin(self) -> None:
+        self.raw_graph.write_bytes(b'{"substituted":"raw graph"}\n')
+
+        with self.assertRaisesRegex(
+            producer.ProjectionProductionError,
+            "execution-policy raw unit graph differs from the supplied graph",
+        ):
+            self.construct()
+
+    def test_fresh_projection_pin_cannot_authorize_substituted_bytes(self) -> None:
+        production = self.construct()
+        supplied = self.write("supplied-projection.json", production.projection_bytes)
+        producer.verify_reconstructed_projection(
+            production, supplied, digest(supplied)
+        )
+        supplied.write_bytes(production.projection_bytes[:-1] + b" ")
+
+        with self.assertRaisesRegex(
+            producer.ProjectionProductionError,
+            "differs from deterministic reconstruction",
+        ):
+            producer.verify_reconstructed_projection(
+                production, supplied, digest(supplied)
+            )
 
     def test_modified_authorization_is_rejected_without_controller_resign(self) -> None:
         self.authorization_value["source_commit"] = "d" * 40
@@ -330,21 +448,79 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
             self.construct()
 
     def test_modified_execution_policy_is_rejected_with_a_fresh_file_pin(self) -> None:
-        self.execution_policy.write_bytes(
-            canonical(
-                {
-                    "profile": "substituted",
-                    "schema": "iroha.kagemusha.fixture_execution_policy.v1",
-                    "target": builder.SOURCE_SEAL_TARGET,
-                }
-            )
-        )
+        policy = copy.deepcopy(self.execution_policy_value)
+        policy["cargo"]["binary_sha256"] = "6" * 64
+        self.execution_policy.write_bytes(canonical(policy))
 
         with self.assertRaisesRegex(
             producer.ProjectionProductionError,
-            "controller authorization differs from the verified source and policy inputs",
+            "controller authorization differs from the verified source and "
+            "policy inputs",
         ):
             self.construct()
+
+    def test_empty_execution_policy_is_rejected(self) -> None:
+        self.execution_policy.write_bytes(canonical({}))
+
+        with self.assertRaisesRegex(
+            producer.ProjectionProductionError,
+            "projection execution policy JSON members are not exact",
+        ):
+            self.construct()
+
+    def test_execution_policy_field_and_capture_drift_are_rejected(self) -> None:
+        mutations = []
+        extra_field = copy.deepcopy(self.execution_policy_value)
+        extra_field["ignored"] = True
+        mutations.append((extra_field, "JSON members are not exact"))
+        capture_argv = copy.deepcopy(self.execution_policy_value)
+        capture_argv["unit_graph"]["capture_argv"][1] = "metadata"
+        mutations.append((capture_argv, "capture argv is not exact"))
+        capture_environment = copy.deepcopy(self.execution_policy_value)
+        capture_environment["unit_graph"]["capture_environment"]["HOME"] = (
+            "/tmp"
+        )
+        mutations.append((capture_environment, "capture environment is not exact"))
+        normalization = copy.deepcopy(self.execution_policy_value)
+        normalization["unit_graph"]["normalization"] = "substituted"
+        mutations.append((normalization, "unit-graph normalization differs"))
+        cargo_version = copy.deepcopy(self.execution_policy_value)
+        cargo_version["cargo"]["version_stdout_lines"][0] = "cargo 1.92.0"
+        mutations.append((cargo_version, "version is not Cargo toolchain 1.93"))
+
+        for policy, diagnostic in mutations:
+            with self.subTest(diagnostic=diagnostic):
+                self.execution_policy.write_bytes(canonical(policy))
+                with self.assertRaisesRegex(
+                    producer.ProjectionProductionError, diagnostic
+                ):
+                    self.construct()
+
+    def test_execution_policy_graph_digest_and_size_mismatches_are_rejected(
+        self,
+    ) -> None:
+        mutations = []
+        normalized_digest = copy.deepcopy(self.execution_policy_value)
+        normalized_digest["unit_graph"]["normalized_sha256"] = "7" * 64
+        mutations.append(normalized_digest)
+        normalized_size = copy.deepcopy(self.execution_policy_value)
+        normalized_size["unit_graph"]["normalized_size_bytes"] += 1
+        mutations.append(normalized_size)
+        invalid_raw_digest = copy.deepcopy(self.execution_policy_value)
+        invalid_raw_digest["unit_graph"]["raw_sha256"] = "0" * 64
+        mutations.append(invalid_raw_digest)
+        raw_digest = copy.deepcopy(self.execution_policy_value)
+        raw_digest["unit_graph"]["raw_sha256"] = "7" * 64
+        mutations.append(raw_digest)
+        raw_size = copy.deepcopy(self.execution_policy_value)
+        raw_size["unit_graph"]["raw_size_bytes"] += 1
+        mutations.append(raw_size)
+
+        for policy in mutations:
+            with self.subTest(policy=policy["unit_graph"]):
+                self.execution_policy.write_bytes(canonical(policy))
+                with self.assertRaises(producer.ProjectionProductionError):
+                    self.construct()
 
     def test_signed_false_graph_summary_is_rejected(self) -> None:
         self.authorization_value["unit_graph"]["units"] += 1
@@ -370,6 +546,52 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
                 ):
                     producer._validate_normalized_unit_graph(canonical(graph))
 
+    def test_absolute_package_and_source_paths_are_rejected(self) -> None:
+        mutations = (
+            ("pkg_id", "iroha_core 3.0.0 (path+file:///tmp/iroha)"),
+            ("src_path", "/tmp/iroha/src/lib.rs"),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field):
+                graph = copy.deepcopy(self.graph_value)
+                if field == "pkg_id":
+                    graph["units"][2][field] = value
+                else:
+                    graph["units"][2]["target"][field] = value
+                with self.assertRaises(producer.ProjectionProductionError):
+                    producer._validate_normalized_unit_graph(canonical(graph))
+
+    def test_cargo_1_93_protocol_shape_is_fully_bound(self) -> None:
+        root = self.graph_value["units"][2]
+
+        self.assertEqual(
+            producer.UNIT_GRAPH_CAPTURE_ARGV[:5],
+            ("<DIRECT_CARGO>", "-Z", "unstable-options", "build", "--unit-graph"),
+        )
+        self.assertNotIn("--message-format", producer.UNIT_GRAPH_CAPTURE_ARGV)
+        self.assertEqual(set(root), producer.UNIT_KEYS)
+        self.assertEqual(
+            set(root["target"]),
+            producer.TARGET_BASE_KEYS | producer.TARGET_OPTIONAL_KEYS,
+        )
+        self.assertEqual(set(root["profile"]), producer.PROFILE_KEYS)
+        self.assertEqual(
+            root["target"]["required-features"],
+            [
+                "dev-tools",
+                "kagemusha-candidate-evidence-lab",
+                "zk-halo2-ipa",
+            ],
+        )
+        self.assertIs(root["target"]["doc"], True)
+        self.assertIs(root["target"]["test"], True)
+        self.assertIs(root["profile"]["overflow_checks"], False)
+        self.assertEqual(
+            root["profile"]["strip"],
+            {"resolved": {"Named": "debuginfo"}},
+        )
+        producer._validate_normalized_unit_graph(canonical(self.graph_value))
+
     def test_projection_byte_bound_is_exact(self) -> None:
         maximum = builder.MAX_AUTHENTICATED_SOURCE_SEAL_PROJECTION_BYTES
 
@@ -378,6 +600,80 @@ class AuthenticatedProjectionProducerTests(unittest.TestCase):
             producer.ProjectionProductionError, "exceeds its byte bound"
         ):
             producer._require_projection_byte_bound(b"x" * (maximum + 1))
+
+    def test_publication_failure_cleans_temporary_and_retry_succeeds(self) -> None:
+        output = self.root / "retry-projection.json"
+        payload = b"complete projection bytes\n"
+
+        with mock.patch.object(
+            producer.os, "link", side_effect=OSError("injected link failure")
+        ):
+            with self.assertRaisesRegex(
+                producer.ProjectionProductionError,
+                "unavailable or already exists",
+            ):
+                producer._write_new_private_file(output, payload)
+        self.assertFalse(output.exists())
+        self.assertFalse(any(".tmp-" in path.name for path in self.root.iterdir()))
+
+        producer._write_new_private_file(output, payload)
+        self.assertEqual(output.read_bytes(), payload)
+
+    def test_publication_is_no_replace_and_parent_fsynced(self) -> None:
+        output = self.root / "no-replace-projection.json"
+        payload = b"first complete projection\n"
+        fsync_directory_calls = 0
+        fsync_file_calls = 0
+        real_fsync = producer.os.fsync
+
+        def recording_fsync(descriptor: int) -> None:
+            nonlocal fsync_directory_calls, fsync_file_calls
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                fsync_directory_calls += 1
+            else:
+                fsync_file_calls += 1
+            real_fsync(descriptor)
+
+        with mock.patch.object(producer.os, "fsync", side_effect=recording_fsync):
+            producer._write_new_private_file(output, payload)
+        self.assertGreaterEqual(fsync_file_calls, 1)
+        self.assertGreaterEqual(fsync_directory_calls, 2)
+
+        with self.assertRaisesRegex(
+            producer.ProjectionProductionError,
+            "unavailable or already exists",
+        ):
+            producer._write_new_private_file(output, b"replacement bytes\n")
+        self.assertEqual(output.read_bytes(), payload)
+        self.assertFalse(any(".tmp-" in path.name for path in self.root.iterdir()))
+
+    def test_post_link_failure_is_commit_uncertain_with_complete_final_bytes(
+        self,
+    ) -> None:
+        output = self.root / "commit-uncertain-projection.json"
+        payload = b"complete before hard-link publication\n"
+        real_fsync = producer.os.fsync
+        directory_calls = 0
+
+        def fail_first_directory_fsync(descriptor: int) -> None:
+            nonlocal directory_calls
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                directory_calls += 1
+                if directory_calls == 1:
+                    raise OSError("injected directory fsync failure")
+            real_fsync(descriptor)
+
+        with mock.patch.object(
+            producer.os, "fsync", side_effect=fail_first_directory_fsync
+        ):
+            with self.assertRaisesRegex(
+                producer.ProjectionProductionError, "commit-uncertain state"
+            ):
+                producer._write_new_private_file(output, payload)
+        self.assertEqual(output.read_bytes(), payload)
+        self.assertFalse(any(".tmp-" in path.name for path in self.root.iterdir()))
+        with self.assertRaises(producer.ProjectionProductionError):
+            producer._write_new_private_file(output, payload)
 
     def test_promotion_and_producer_projection_caps_are_aligned(self) -> None:
         gate = (

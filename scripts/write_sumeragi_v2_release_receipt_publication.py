@@ -69,6 +69,255 @@ def _validate_framework_python_input_records(
     return records
 
 
+def _validate_framework_python_macho_closure(
+    value: Any,
+    source_by_path: dict[str, dict[str, Any]],
+    output_by_path: dict[str, dict[str, Any]],
+    framework: str,
+) -> None:
+    """Validate and bind the complete path-free Mach-O transcript."""
+
+    if not isinstance(value, dict) or set(value) != {
+        "format", "schema_version", "source_image_count",
+        "external_sources", "transforms", "runtime",
+    }:
+        raise ReceiptError("framework Python Mach-O closure is malformed")
+    runtime = value["runtime"]
+    if (
+        value["format"]
+        != "iroha-sumeragi-v2-framework-python-mach-o-transcript"
+        or type(value["schema_version"]) is not int
+        or value["schema_version"] != 1
+        or type(value["source_image_count"]) is not int
+        or not 3 <= value["source_image_count"] <= 4096
+        or not isinstance(value["external_sources"], list)
+        or not isinstance(value["transforms"], list)
+        or not isinstance(runtime, dict)
+        or set(runtime) != {"format", "schema_version", "image_count", "images"}
+        or runtime["format"] != "iroha-sumeragi-v2-framework-python-mach-o"
+        or type(runtime["schema_version"]) is not int
+        or runtime["schema_version"] != 1
+        or type(runtime["image_count"]) is not int
+        or runtime["image_count"] != value["source_image_count"]
+        or not isinstance(runtime["images"], list)
+        or len(runtime["images"]) != runtime["image_count"]
+    ):
+        raise ReceiptError("framework Python Mach-O closure is not exact")
+
+    def safe_path(path: Any) -> bool:
+        return (
+            isinstance(path, str) and bool(path) and not path.startswith("/")
+            and PurePosixPath(path).as_posix() == path
+            and ".." not in PurePosixPath(path).parts
+        )
+
+    images: list[str] = []
+    for image in runtime["images"]:
+        if not isinstance(image, dict) or set(image) != {
+            "path", "size_bytes", "sha256", "slices",
+        }:
+            raise ReceiptError("framework Python Mach-O image is malformed")
+        output = output_by_path.get(image["path"])
+        if (
+            not safe_path(image["path"])
+            or type(image["size_bytes"]) is not int
+            or not 0 < image["size_bytes"] <= 256 * 1024 * 1024
+            or not isinstance(image["sha256"], str)
+            or _DIGEST_RE.fullmatch(image["sha256"]) is None
+            or not isinstance(output, dict)
+            or output.get("kind") != "file"
+            or (output.get("size"), output.get("sha256"))
+            != (image["size_bytes"], image["sha256"])
+            or not isinstance(image["slices"], list)
+            or not 1 <= len(image["slices"]) <= 64
+        ):
+            raise ReceiptError("framework Python Mach-O image is not bound")
+        for slice_value in image["slices"]:
+            if not isinstance(slice_value, dict) or set(slice_value) != {
+                "cpu_type", "cpu_subtype", "file_type", "dependencies",
+                "id_dylib_sha256", "rpath_sha256", "code_signature",
+            }:
+                raise ReceiptError("framework Python Mach-O slice is malformed")
+            if (
+                slice_value["code_signature"] != "embedded"
+                or any(
+                    type(slice_value[field]) is not int
+                    or slice_value[field] < 0
+                    for field in ("cpu_type", "cpu_subtype", "file_type")
+                )
+                or not isinstance(slice_value["dependencies"], list)
+            ):
+                raise ReceiptError("framework Python Mach-O slice is not exact")
+            for field in ("id_dylib_sha256", "rpath_sha256"):
+                if not isinstance(slice_value[field], list) or any(
+                    not isinstance(digest, str)
+                    or _DIGEST_RE.fullmatch(digest) is None
+                    for digest in slice_value[field]
+                ):
+                    raise ReceiptError("framework Python Mach-O digest is malformed")
+            for dependency in slice_value["dependencies"]:
+                binding = dependency.get("binding") if isinstance(dependency, dict) else None
+                keys = (
+                    {"command", "binding", "install_name_sha256"}
+                    if binding == "system"
+                    else {"command", "binding", "install_name", "target"}
+                    if binding == "archive"
+                    else set()
+                )
+                if (
+                    not isinstance(dependency, dict)
+                    or set(dependency) != keys
+                    or type(dependency.get("command")) is not int
+                    or (
+                        binding == "system"
+                        and (
+                            not isinstance(dependency["install_name_sha256"], str)
+                            or _DIGEST_RE.fullmatch(
+                                dependency["install_name_sha256"]
+                            ) is None
+                        )
+                    )
+                    or (
+                        binding == "archive"
+                        and (
+                            not isinstance(dependency["install_name"], str)
+                            or not dependency["install_name"].startswith(
+                                ("@loader_path/", "@executable_path/")
+                            )
+                            or not safe_path(dependency["target"])
+                        )
+                    )
+                ):
+                    raise ReceiptError("framework Python dependency is malformed")
+        images.append(image["path"])
+    if images != sorted(images) or len(images) != len(set(images)):
+        raise ReceiptError("framework Python Mach-O image order is not exact")
+    image_set = set(images)
+    for image in runtime["images"]:
+        for slice_value in image["slices"]:
+            if any(
+                dependency["binding"] == "archive"
+                and dependency["target"] not in image_set
+                for dependency in slice_value["dependencies"]
+            ):
+                raise ReceiptError("framework Python dependency target is absent")
+
+    external: dict[str, dict[str, Any]] = {}
+    external_paths: list[str] = []
+    for record in value["external_sources"]:
+        if not isinstance(record, dict) or set(record) != {
+            "input_path", "path", "mode", "sha256", "size_bytes",
+        }:
+            raise ReceiptError("external framework dependency is malformed")
+        if (
+            not safe_path(record["input_path"])
+            or not record["input_path"].startswith("mach-o-dependency-sources/")
+            or not safe_path(record["path"])
+            or "/iroha-loader-deps/" not in f"/{record['path']}"
+            or not isinstance(record["mode"], str)
+            or re.fullmatch(r"[0-7]{4}", record["mode"]) is None
+            or int(record["mode"], 8) & 0o022
+            or not int(record["mode"], 8) & 0o444
+            or not isinstance(record["sha256"], str)
+            or _DIGEST_RE.fullmatch(record["sha256"]) is None
+            or type(record["size_bytes"]) is not int
+            or not 0 < record["size_bytes"] <= 256 * 1024 * 1024
+        ):
+            raise ReceiptError("external framework dependency is unsafe")
+        external[record["path"]] = record
+        external_paths.append(record["path"])
+
+    transform_paths: list[str] = []
+    for transform in value["transforms"]:
+        if not isinstance(transform, dict) or set(transform) != {
+            "input_path", "path", "source_mode", "source_sha256",
+            "source_size_bytes", "derived_mode", "derived_sha256",
+            "derived_size_bytes", "operations", "codesign",
+        }:
+            raise ReceiptError("framework Python Mach-O transform is malformed")
+        source = source_by_path.get(transform["input_path"])
+        output = output_by_path.get(transform["path"])
+        if (
+            not safe_path(transform["input_path"])
+            or transform["path"] not in image_set
+            or not isinstance(transform["source_mode"], str)
+            or re.fullmatch(r"[0-7]{4}", transform["source_mode"]) is None
+            or int(transform["source_mode"], 8) & 0o022
+            or not int(transform["source_mode"], 8) & 0o444
+            or transform["derived_mode"] != "0500"
+            or transform["codesign"] != "adhoc"
+            or any(
+                not isinstance(transform[field], str)
+                or _DIGEST_RE.fullmatch(transform[field]) is None
+                for field in ("source_sha256", "derived_sha256")
+            )
+            or any(
+                type(transform[field]) is not int
+                or not 0 < transform[field] <= 256 * 1024 * 1024
+                for field in ("source_size_bytes", "derived_size_bytes")
+            )
+            or not isinstance(source, dict)
+            or source.get("kind") != "file"
+            or (source.get("source_mode"), source.get("sha256"), source.get("size"))
+            != (
+                transform["source_mode"], transform["source_sha256"],
+                transform["source_size_bytes"],
+            )
+            or not isinstance(output, dict)
+            or output.get("kind") != "file"
+            or (output.get("mode"), output.get("sha256"), output.get("size"))
+            != (
+                transform["derived_mode"], transform["derived_sha256"],
+                transform["derived_size_bytes"],
+            )
+            or not isinstance(transform["operations"], list)
+        ):
+            raise ReceiptError("framework Python Mach-O transform is not bound")
+        for operation in transform["operations"]:
+            if (
+                not isinstance(operation, dict)
+                or set(operation) != {
+                    "operation", "source_install_name_sha256", "replacement",
+                }
+                or operation["operation"] != "change"
+                or not isinstance(operation["source_install_name_sha256"], str)
+                or _DIGEST_RE.fullmatch(
+                    operation["source_install_name_sha256"]
+                ) is None
+                or not isinstance(operation["replacement"], str)
+                or not operation["replacement"].startswith(
+                    ("@loader_path/", "@executable_path/")
+                )
+            ):
+                raise ReceiptError("framework Python Mach-O operation is malformed")
+        bound = external.get(transform["path"])
+        if bound is not None and (
+            transform["input_path"], transform["source_mode"],
+            transform["source_sha256"], transform["source_size_bytes"],
+        ) != (
+            bound["input_path"], bound["mode"], bound["sha256"],
+            bound["size_bytes"],
+        ):
+            raise ReceiptError("external framework dependency binding changed")
+        transform_paths.append(transform["path"])
+    if (
+        external_paths != sorted(external_paths)
+        or len(external_paths) != len(external)
+        or transform_paths != sorted(transform_paths)
+        or len(transform_paths) != len(set(transform_paths))
+        or not set(external) <= set(transform_paths)
+        or not {
+            "bin/python3",
+            "Resources/Python.app/Contents/MacOS/Python",
+        } <= set(transform_paths)
+        or not {
+            "bin/python3", framework,
+            "Resources/Python.app/Contents/MacOS/Python",
+        } <= image_set
+    ):
+        raise ReceiptError("framework Python Mach-O closure is incomplete")
+
+
 def _validate_framework_python_relocation_evidence(
     public: Any,
     private: Any,
@@ -80,14 +329,15 @@ def _validate_framework_python_relocation_evidence(
     """Bind authenticated Mach-O sources/tools to the two derived members."""
 
     if public != private or not isinstance(public, dict) or set(public) != {
-        "format", "schema_version", "framework", "tools", "artifacts"
+        "format", "schema_version", "framework", "tools", "artifacts",
+        "closure",
     }:
         raise ReceiptError("framework Python relocation evidence is malformed")
     framework = public["framework"]
     if (
         public["format"] != "iroha-sumeragi-v2-framework-python-relocation"
         or type(public["schema_version"]) is not int
-        or public["schema_version"] != 1
+        or public["schema_version"] != 2
         or not isinstance(framework, str)
         or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", framework) is None
         or not isinstance(public["tools"], dict)
@@ -122,12 +372,21 @@ def _validate_framework_python_relocation_evidence(
         if isinstance(record, dict)
     }
     derived_by_path = {record["path"]: record for record in runtime_records}
+    _validate_framework_python_macho_closure(
+        public["closure"], source_by_path, derived_by_path, framework,
+    )
+    transform_by_path = {
+        transform["path"]: transform
+        for transform in public["closure"]["transforms"]
+    }
     rewrites = {
-        "launcher": ("python3", "bin/python3", "@executable_path/../Python"),
+        "launcher": (
+            "python3", "bin/python3", f"@executable_path/../{framework}",
+        ),
         "trampoline": (
             "Resources/Python.app/Contents/MacOS/Python",
             "Resources/Python.app/Contents/MacOS/Python",
-            "@executable_path/../../../../Python",
+            f"@executable_path/../../../../{framework}",
         ),
     }
     for name, (source_path, derived_path, dependency) in rewrites.items():
@@ -136,6 +395,7 @@ def _validate_framework_python_relocation_evidence(
         derived = artifact.get("derived") if isinstance(artifact, dict) else None
         source_record = source_by_path.get(source_path)
         derived_record = derived_by_path.get(derived_path)
+        transform = transform_by_path.get(derived_path)
         if (
             not isinstance(artifact, dict)
             or set(artifact) != {"path", "source", "derived"}
@@ -175,6 +435,18 @@ def _validate_framework_python_relocation_evidence(
                 derived_record.get("size"),
             )
             != (derived["mode"], derived["sha256"], derived["size_bytes"])
+            or not isinstance(transform, dict)
+            or transform["input_path"] != source_path
+            or (
+                transform["source_mode"], transform["source_sha256"],
+                transform["source_size_bytes"],
+            )
+            != (source["mode"], source["sha256"], source["size_bytes"])
+            or (
+                transform["derived_mode"], transform["derived_sha256"],
+                transform["derived_size_bytes"],
+            )
+            != (derived["mode"], derived["sha256"], derived["size_bytes"])
         ):
             raise ReceiptError(
                 "framework Python relocation artifact binding is wrong"
@@ -187,12 +459,36 @@ def _validate_framework_python_relocation_evidence(
         if any(
             not isinstance(digest, str) or _DIGEST_RE.fullmatch(digest) is None
             for digest in digests
-        ) or (
-            source["sha256"] == derived["sha256"]
-            or source["dependency_vector_sha256"]
-            == derived["dependency_vector_sha256"]
         ):
             raise ReceiptError("framework Python relocation digest binding is wrong")
+        operation_replacements = [
+            operation["replacement"]
+            for operation in transform["operations"]
+        ]
+        already_local = source["framework_dependency_sha256"] == hashlib.sha256(
+            dependency.encode("utf-8", "strict")
+        ).hexdigest()
+        if (
+            operation_replacements not in ([], [dependency])
+            or already_local != (operation_replacements == [])
+            or (
+                operation_replacements
+                and transform["operations"][0][
+                    "source_install_name_sha256"
+                ]
+                != source["framework_dependency_sha256"]
+            )
+            or (
+                operation_replacements
+                and source["sha256"] == derived["sha256"]
+            )
+            or (
+                operation_replacements
+                and source["dependency_vector_sha256"]
+                == derived["dependency_vector_sha256"]
+            )
+        ):
+            raise ReceiptError("framework Python relocation derivation is wrong")
     if derived_by_path.get(framework, {}).get("kind") != "file":
         raise ReceiptError("framework Python relocation framework is absent")
 

@@ -18,7 +18,7 @@ from scripts import taira_peer_supervisor as supervisor
 
 
 VALIDATOR_ID = "taira-validator-1"
-NODE_ID = "taira-node:validator-1"
+NODE_ID = "taira-node:receipt-signer:secp256k1:sha256:" + "1" * 64
 RESTART_GENERATION = "c" * 64
 
 
@@ -467,27 +467,30 @@ def supervisor_argv(tmp_path: Path) -> list[str]:
         str(tmp_path / "terminal" / "peer.json"),
         "--restart-generation",
         RESTART_GENERATION,
+        "--lifecycle-journal-root",
+        str(tmp_path / "lifecycle" / VALIDATOR_ID),
+        "--validator-id",
+        VALIDATOR_ID,
+        "--node-id",
+        NODE_ID,
     ]
 
 
-def test_lifecycle_cli_identity_is_all_or_none(tmp_path: Path) -> None:
-    """A plist cannot accidentally create an unbound lifecycle writer."""
+def test_lifecycle_cli_identity_is_mandatory(tmp_path: Path) -> None:
+    """Every supervisor invocation must carry one complete peer identity."""
 
     argv = supervisor_argv(tmp_path)
+    parsed = supervisor.parse_args(argv)
+    assert parsed.lifecycle_journal_root == str(tmp_path / "lifecycle" / VALIDATOR_ID)
+    for option in ("--lifecycle-journal-root", "--validator-id", "--node-id"):
+        index = argv.index(option)
+        incomplete = [*argv[:index], *argv[index + 2 :]]
+        with pytest.raises(SystemExit):
+            supervisor.parse_args(incomplete)
+    invalid_node_id = list(argv)
+    invalid_node_id[invalid_node_id.index("--node-id") + 1] = "taira-node:validator-1"
     with pytest.raises(SystemExit):
-        supervisor.parse_args(argv + ["--lifecycle-journal-root", str(tmp_path / "j")])
-    parsed = supervisor.parse_args(
-        argv
-        + [
-            "--lifecycle-journal-root",
-            str(tmp_path / "j"),
-            "--validator-id",
-            VALIDATOR_ID,
-            "--node-id",
-            NODE_ID,
-        ]
-    )
-    assert parsed.lifecycle_journal_root == str(tmp_path / "j")
+        supervisor.parse_args(invalid_node_id)
 
 
 def test_supervisor_runtime_emits_periodic_health_without_exit_event(

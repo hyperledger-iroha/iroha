@@ -77,19 +77,17 @@ const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055_424C_4943_5F00;
 const GOSSIP_SEED_RESTRICTED_DOMAIN: u64 = 0x5245_5354_5249_4354;
 const GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS: usize = 8;
 const TX_GOSSIP_FRAME_PROBE_KEY_SEED: &[u8] = b"iroha:tx-gossip-frame-probe:v1";
-fn active_gossip_lane_ids(state: &State, nexus: &Nexus) -> Option<BTreeSet<LaneId>> {
-    nexus.enabled.then(|| {
-        nexus
-            .lane_catalog
-            .lanes()
-            .iter()
-            .filter_map(|lane| {
-                state
-                    .is_lane_active_for_authority(lane.id)
-                    .then_some(lane.id)
-            })
-            .collect()
-    })
+fn active_gossip_lane_ids(state: &State, nexus: &Nexus) -> BTreeSet<LaneId> {
+    nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter_map(|lane| {
+            state
+                .is_lane_active_for_authority(lane.id)
+                .then_some(lane.id)
+        })
+        .collect()
 }
 #[derive(Debug, Clone)]
 struct PeerRecentSuppressionEntry {
@@ -644,12 +642,9 @@ impl TransactionGossiper {
                 lane_id: entry.routing.lane_id,
                 dataspace_id: entry.routing.dataspace_id,
             };
-            if let Err(reason) = validate_route(
-                &lane_catalog,
-                &dataspace_catalog,
-                active_lane_ids.as_ref(),
-                route,
-            ) {
+            if let Err(reason) =
+                validate_route(&lane_catalog, &dataspace_catalog, &active_lane_ids, route)
+            {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
@@ -1558,12 +1553,9 @@ impl TransactionGossiper {
                 );
                 continue;
             }
-            if let Err(reason) = validate_route(
-                &lane_catalog,
-                &dataspace_catalog,
-                active_lane_ids.as_ref(),
-                route,
-            ) {
+            if let Err(reason) =
+                validate_route(&lane_catalog, &dataspace_catalog, &active_lane_ids, route)
+            {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
@@ -1587,7 +1579,7 @@ impl TransactionGossiper {
             if let Err(reason) = validate_advertised_routing_plan(
                 &lane_catalog,
                 &dataspace_catalog,
-                active_lane_ids.as_ref(),
+                &active_lane_ids,
                 &plan,
             ) {
                 iroha_logger::warn!(
@@ -2183,12 +2175,9 @@ impl TransactionGossiper {
                 );
                 continue;
             }
-            if let Err(reason) = validate_route(
-                &lane_catalog,
-                &dataspace_catalog,
-                active_lane_ids.as_ref(),
-                route,
-            ) {
+            if let Err(reason) =
+                validate_route(&lane_catalog, &dataspace_catalog, &active_lane_ids, route)
+            {
                 iroha_logger::warn!(
                     lane_id = %route.lane_id,
                     dataspace_id = %route.dataspace_id,
@@ -2212,7 +2201,7 @@ impl TransactionGossiper {
             if let Err(reason) = validate_advertised_routing_plan(
                 &lane_catalog,
                 &dataspace_catalog,
-                active_lane_ids.as_ref(),
+                &active_lane_ids,
                 &advertised_plan,
             ) {
                 iroha_logger::warn!(
@@ -2572,7 +2561,7 @@ fn decide_restricted_target_plan(
 fn validate_route(
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
-    active_lane_ids: Option<&BTreeSet<LaneId>>,
+    active_lane_ids: &BTreeSet<LaneId>,
     route: GossipRoute,
 ) -> Result<(), &'static str> {
     let resolved = resolve_routing_decision(
@@ -2581,9 +2570,7 @@ fn validate_route(
         dataspace_catalog,
     )
     .map_err(|err| err.as_label())?;
-    if let Some(active_lane_ids) = active_lane_ids
-        && !active_lane_ids.contains(&resolved.lane_id)
-    {
+    if !active_lane_ids.contains(&resolved.lane_id) {
         return Err(DROP_REASON_INACTIVE_LANE);
     }
     Ok(())
@@ -2591,7 +2578,7 @@ fn validate_route(
 fn validate_advertised_routing_plan(
     lane_catalog: &LaneCatalog,
     dataspace_catalog: &DataSpaceCatalog,
-    active_lane_ids: Option<&BTreeSet<LaneId>>,
+    active_lane_ids: &BTreeSet<LaneId>,
     plan: &RoutingPlan,
 ) -> Result<(), &'static str> {
     let resolved =
@@ -2600,11 +2587,9 @@ fn validate_advertised_routing_plan(
     if resolved != *plan {
         return Err(DROP_REASON_NONCANONICAL_ROUTING_PLAN);
     }
-    if let Some(active_lane_ids) = active_lane_ids {
-        for leg in resolved.legs() {
-            if !active_lane_ids.contains(&leg.route.lane_id) {
-                return Err(DROP_REASON_INACTIVE_LANE);
-            }
+    for leg in resolved.legs() {
+        if !active_lane_ids.contains(&leg.route.lane_id) {
+            return Err(DROP_REASON_INACTIVE_LANE);
         }
     }
     Ok(())
@@ -4855,7 +4840,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             dataspace_id: DataSpaceId::new(7),
         };
         assert_eq!(
-            validate_route(&catalog, &dataspace_catalog, None, route),
+            validate_route(&catalog, &dataspace_catalog, &BTreeSet::new(), route),
             Err("unknown_lane")
         );
     }
@@ -4893,7 +4878,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             dataspace_id: DataSpaceId::new(3),
         };
         assert_eq!(
-            validate_route(&catalog, &dataspace_catalog, None, route),
+            validate_route(&catalog, &dataspace_catalog, &BTreeSet::new(), route),
             Err("lane_dataspace_mismatch")
         );
     }
@@ -4917,7 +4902,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             dataspace_id: DataSpaceId::new(9),
         };
         assert_eq!(
-            validate_route(&catalog, &dataspace_catalog, None, route),
+            validate_route(&catalog, &dataspace_catalog, &BTreeSet::new(), route),
             Err("unknown_dataspace")
         );
     }
@@ -4946,9 +4931,24 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             lane_id: LaneId::new(2),
             dataspace_id: DataSpaceId::new(9),
         };
+        let active_lane_ids = BTreeSet::from([route.lane_id]);
         assert_eq!(
-            validate_route(&catalog, &dataspace_catalog, None, route),
+            validate_route(&catalog, &dataspace_catalog, &active_lane_ids, route),
             Ok(())
+        );
+    }
+    #[test]
+    fn disabled_nexus_gossip_activity_contains_only_canonical_single_lane() {
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        state.nexus.write().enabled = false;
+        let nexus = state.nexus_snapshot();
+        assert_eq!(
+            active_gossip_lane_ids(&state, &nexus),
+            BTreeSet::from([LaneId::SINGLE])
         );
     }
     #[test]
@@ -4978,7 +4978,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             dataspace_id: DataSpaceId::new(9),
         };
         assert_eq!(
-            validate_route(&catalog, &dataspace_catalog, Some(&active_lane_ids), route),
+            validate_route(&catalog, &dataspace_catalog, &active_lane_ids, route),
             Err(DROP_REASON_INACTIVE_LANE)
         );
     }
@@ -5019,12 +5019,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         );
         let active_lane_ids = BTreeSet::from([LaneId::SINGLE]);
         assert_eq!(
-            validate_advertised_routing_plan(
-                &catalog,
-                &dataspace_catalog,
-                Some(&active_lane_ids),
-                &plan,
-            ),
+            validate_advertised_routing_plan(&catalog, &dataspace_catalog, &active_lane_ids, &plan,),
             Err(DROP_REASON_INACTIVE_LANE)
         );
     }

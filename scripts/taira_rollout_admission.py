@@ -103,6 +103,8 @@ MACOS_CONTROLLER_FILES = (
     "scripts/close_taira_qualification_handoff.py",
     "scripts/compute_workspace_source_manifest.py",
     "scripts/deploy_taira_v21_reset.py",
+    "scripts/deploy_taira_v21_reset_authority.py",
+    "scripts/deploy_taira_v21_reset_health.py",
     "scripts/extract_authenticated_taira_privacy_release.py",
     "scripts/generate_release_manifest.py",
     "scripts/prepare_taira_empty_reset_bundle.py",
@@ -175,12 +177,21 @@ FINAL_AUTHORITY_FILES = (
     "release_manifest.json.sig",
 )
 LINUX_AUTHORITY_DIRECTORY = "linux/authority"
-LINUX_AUTHORITY_PAYLOAD = "artifacts/taira-exact12-release-authority-v1.json"
+LINUX_AUTHORITY_SUBJECT = "taira-exact12-release-authority-v1.json"
+LINUX_AUTHORITY_PAYLOAD = f"artifacts/{LINUX_AUTHORITY_SUBJECT}"
+LINUX_AUTHORITY_ENVELOPE = (
+    LINUX_AUTHORITY_SUBJECT + taira_release_authority.AUTHORITY_ENVELOPE_SUFFIX
+)
+LINUX_AUTHORITY_DURABLE_RECEIPT = (
+    LINUX_AUTHORITY_SUBJECT + taira_release_authority.DURABLE_RECEIPT_SUFFIX
+)
 LINUX_AUTHORITY_ARTIFACTS = (
     "authority-controller-v1.json",
     "release_artifact_contract.py",
     "sorafs-validate",
-    "taira-exact12-release-authority-v1.json",
+    LINUX_AUTHORITY_SUBJECT,
+    LINUX_AUTHORITY_ENVELOPE,
+    LINUX_AUTHORITY_DURABLE_RECEIPT,
     "taira_release_authority.py",
 )
 LINUX_AUTHORITY_FILES = (
@@ -1277,8 +1288,10 @@ def _validate_admission_manifest(
 
 
 def _artifact_descriptor(path: str) -> tuple[str, str, str, str]:
-    if path == "taira-exact12-release-authority-v1.json":
+    if path == LINUX_AUTHORITY_SUBJECT:
         return ("iroha3", "taira-exact12", "release-evidence", "json")
+    if path in {LINUX_AUTHORITY_ENVELOPE, LINUX_AUTHORITY_DURABLE_RECEIPT}:
+        return ("iroha3", "taira-authority", "release-evidence", "json")
     if path == "sorafs-validate":
         return ("iroha3", "taira-authority", "reference-validator", "binary")
     if path == "authority-controller-v1.json":

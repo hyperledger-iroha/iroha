@@ -282,7 +282,8 @@ pub struct AxtProofEnvelope {
     ///
     /// This is deliberately a fixed-width proof field, not a business-facing
     /// monetary quantity. Callers must convert a clear [`Quantity`] exactly at
-    /// scale zero and reject values outside the `u128` statement domain.
+    /// scale zero and reject values outside the `u128` statement domain. When
+    /// present, the value must exactly match the proof-bound AXT batch metadata.
     #[norito(default)]
     pub committed_amount: Option<u128>,
     /// Optional commitment for hidden-amount intents.

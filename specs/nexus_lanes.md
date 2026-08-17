@@ -80,7 +80,7 @@ LaneConfigEntry {
 - `LaneConfig::from_catalog` recomputes the geometry whenever configuration is loaded (`State::set_nexus`).
 - Aliases are sanitised into lowercase slugs; consecutive non-alphanumeric characters collapse into `_`. If the alias yields an empty slug we fall back to `lane{id}`.
 - Key prefixes ensure the WSV keeps per-lane key ranges disjoint even when the same backend is shared.
-- `shard_id` is derived from the catalog metadata key `da_shard_id` (defaulting to `lane_id`) and drives the persisted shard cursor journal to keep DA replay deterministic across restarts/resharding.
+- `shard_id` is a typed lane-catalog field. When absent it canonically resolves to `lane_id`; an explicit value selects the persisted DA cursor/storage shard used across restarts and resharding.
 - Kura segment names are deterministic across hosts; auditors can cross-check segment directories and manifests without bespoke tooling.
 - Merge segments (`lane_{id:03}_merge`) hold the latest merge-hint roots and global state commitments for that lane.
 - When governance renames a lane alias, nodes automatically relabel the corresponding `blocks/lane_{id:03}_{slug}` directories (and tiered snapshots) so auditors always see the canonical slug without manual cleanup. If the target Kura segment already exists, the config/lifecycle transition fails before catalog or tiered-state changes are committed.

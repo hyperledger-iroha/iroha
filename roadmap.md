@@ -80,10 +80,10 @@ Completed history lives in [`status.md`](./status.md).
 
 - Preserve the reviewed 5,067,263-line first-party Rust baseline, the current
   5,014,603-line active ratchet, the 4,540,000-line hard ceiling, and the
-  4,500,000-line working target. The resolved mutable-tree count is 4,828,338
-  Rust lines across 7,955 checked files and 194 exact exceptions, with zero
-  per-file findings and 186,265 lines of ratchet headroom. The hard aggregate
-  objective is still unmet by 288,338 lines; do not redefine the baseline,
+  4,500,000-line working target. The resolved index contains 4,820,899 Rust
+  lines across 7,964 checked files and 191 exact exceptions, with zero per-file
+  findings and 193,704 lines of ratchet headroom. The hard aggregate objective
+  is still unmet by 280,899 lines; do not redefine the baseline,
   count moved test code as a physical reduction, or weaken required runtime,
   security, consensus, SDK, or release-evidence behavior to close it.
 - Keep every reviewed production module and newly introduced companion source
@@ -1002,9 +1002,9 @@ publication ordered under one lock, leaves process gas/telemetry untouched
 during dry-run validation, and blocks empty-state fallback when either the
 configured-primary durable binding disagrees or its geometry floor was
 compacted. Reset capture now reads native Darwin argv, binds the direct
-root-controlled Python.app runtime for new supervisors, and permits the legacy
-same-framework Homebrew argv0 rewrite only through an explicit testnet-reset
-authorization. Restart proof now binds a bounded same-inode log cursor,
+root-controlled Python.app runtime for new supervisors, and requires every
+loaded supervisor argv to match its launchd `ProgramArguments` exactly. Restart
+proof now binds a bounded same-inode log cursor,
 requires exactly one authenticated snapshot load with no Kura/empty-state
 fallback, rechecks the final process identities and advancing fleet, and emits
 the measured duration under the 45-second ceiling. Controller and public smoke
@@ -1161,9 +1161,9 @@ passes with 88 legs, 860/860 production tests across 40 modules, 527/527 G-UNIT
 rows, and four mandatory four-peer gates. The grouped fixture SHA-256 is
 `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`.
 The grouped SDK closure is 1,399 paths at
-`c85e7f3da98a269e5fa1a3cdc34f70854dbc7ee65cd39752d3586d7bfbfed4c4`,
+`8363bdf95a6c28458059d7b22d58acf09e96540ab34949282e18ef83c826b9ec`,
 and diagnostics is 1,401 paths at
-`e892cb17bb8e9883768dbb47891929af046f2629fce49f4ae80c5f146e6d9d5c`.
+`88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`.
 These are mutable-tree source inventories, not a sealed receipt.
 
 Both reproduced clean-`d24` consensus root causes are closed in source and
@@ -1201,10 +1201,10 @@ The deferred authority-paid receipt-settlement spend lease and generic Verus
 effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
 classified outside the multilane closure ledger.
 
-The current source-file gate is green: 7,940 paths, 193 exact exceptions,
-4,825,646 Rust lines, and zero findings. Its configured baseline is 5,067,263
+The current source-file gate is green: 7,964 paths, 191 exact exceptions,
+4,820,899 Rust lines, and zero findings. Its configured baseline is 5,067,263
 lines, active ratchet 5,014,603, hard aggregate ceiling 4,540,000, and working
-target 4,500,000. The hard objective therefore remains open by 285,646 lines.
+target 4,500,000. The hard objective therefore remains open by 280,899 lines.
 The separate generic lifecycle-coordinator cutover receives no multilane credit
 toward that reduction, and immutable-candidate evidence remains open.
 
@@ -1229,7 +1229,7 @@ TSV has
 SHA-256
 `5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d`.
 The separate canonical production module/test TSV has SHA-256
-`d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5`;
+`4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329`;
 the newest rows bind the proposal-height namespace for exact retired attempts,
 canonical successor acceptance while local sidecars lag, two-link raw
 lane-chain hydration on receipt-free cold restart, and exact noncanonical
@@ -1264,9 +1264,9 @@ hashes to
 `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`;
 its staged grouped and diagnostics suite-source manifests contain 1,399 and
 1,401 records respectively and hash to
-`c85e7f3da98a269e5fa1a3cdc34f70854dbc7ee65cd39752d3586d7bfbfed4c4`
+`8363bdf95a6c28458059d7b22d58acf09e96540ab34949282e18ef83c826b9ec`
 and
-`e892cb17bb8e9883768dbb47891929af046f2629fce49f4ae80c5f146e6d9d5c`;
+`88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`;
 the synchronized 48-line wire TSV hashes to
 `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
 The current grouped harness inventories OpenAPI `7`, Python `63`, JavaScript
@@ -1363,9 +1363,9 @@ The remaining work is evidence-driven and must stay in order:
   `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`,
   staged grouped/diagnostics suite-source manifests at exactly 1,399 and 1,401
   records with SHA-256 values
-  `c85e7f3da98a269e5fa1a3cdc34f70854dbc7ee65cd39752d3586d7bfbfed4c4`
+  `8363bdf95a6c28458059d7b22d58acf09e96540ab34949282e18ef83c826b9ec`
   and
-  `e892cb17bb8e9883768dbb47891929af046f2629fce49f4ae80c5f146e6d9d5c`,
+  `88ec302c22158ef76a6edd1ed404eec273b8276b49cb72bbf8a03d5712dc2c7e`,
   to be regenerated and receipt-bound from the exact immutable candidate, and
   wire-TSV SHA-256
   `79240b3b95d8c40dc8f1129177a88dca3f31fe08027fe9f5372b6a67b05e9a4c`.
@@ -20646,11 +20646,12 @@ operator-provided rollout bundles.
   active-height Nexus predicate, so stale state-free route hints cannot target
   future-created or otherwise inactive autoscale lanes during admission, gossip
   routing, proposal refresh, pending reroute, journal replay, or requeue, while
-  preserving the legacy dynamic-dataspace fallback only for the unreserved
-  default public lane. The queue and transaction-gossip negative fixtures now
-  use canonical autoscale elastic lane shape and assert activation at the
-  declared creation height, so those regressions prove the height gate rather
-  than malformed-lane rejection.
+  requiring every concrete dataspace to have one exact catalog lane. Dynamically
+  discovered SNS dataspaces without an explicit lane now fail closed instead of
+  borrowing the universal lane. The queue and transaction-gossip negative
+  fixtures use canonical autoscale elastic lane shape and assert activation at
+  the declared creation height, so those regressions prove the height gate
+  rather than malformed-lane rejection.
   Lane relay authority applies the same activation-height boundary before
   accepting manifest-bound or commit-topology-derived validator sets for
   autoscale elastic lanes, so relays for not-yet-created lanes cannot be

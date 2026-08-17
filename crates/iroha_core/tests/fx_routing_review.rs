@@ -4,7 +4,8 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     queue::{
-        ConfigLaneRouter, LaneRouter, RoutingPlan, evaluate_policy_plan_with_nexus_and_world_at,
+        ConfigLaneRouter, LaneRouter, RoutingPlan, RoutingResolveError,
+        evaluate_policy_plan_with_nexus_and_world_at,
     },
     smartcontracts::Execute,
     state::{State, StateReadOnly, World, WorldReadOnly},
@@ -405,7 +406,7 @@ fn fx_deployment_preserves_intrinsic_and_private_policy_participants() {
     );
 }
 #[test]
-fn fx_state_view_uses_ledger_time_for_active_sns_only_dataspace() {
+fn fx_state_view_rejects_active_sns_dataspace_without_canonical_lane() {
     const SNS_ALIAS: &str = "alpha";
     let fixture = fixture(Some(SNS_ALIAS));
     let dynamic_dataspace =
@@ -419,15 +420,17 @@ fn fx_state_view_uses_ledger_time_for_active_sns_only_dataspace() {
             settlement_instruction(&fixture.corridor, "fx_sns_boundary"),
         ],
     );
-    let (queue_plan, block_plan) = queue_and_block_plans(&fixture, &transaction);
-    assert_eq!(queue_plan, block_plan);
-    assert_eq!(queue_plan.digest(), block_plan.digest());
-    assert_eq!(
-        participant_routes(&queue_plan),
-        BTreeSet::from([
-            (SOURCE_LANE, SOURCE_DATASPACE),
-            (DESTINATION_LANE, DESTINATION_DATASPACE),
-            (LaneId::SINGLE, dynamic_dataspace),
-        ])
+    let view = fixture.state.view();
+    let queue_plan = fixture.router.try_route_plan_with_view(&transaction, &view);
+    let block_plan = evaluate_policy_plan_with_nexus_and_world_at(
+        view.nexus(),
+        &transaction,
+        view.world(),
+        LEDGER_TIME_MS,
     );
+    let expected = RoutingResolveError::NoLaneForDataspace {
+        dataspace_id: dynamic_dataspace,
+    };
+    assert_eq!(queue_plan, Err(expected.clone()));
+    assert_eq!(block_plan, Err(expected));
 }

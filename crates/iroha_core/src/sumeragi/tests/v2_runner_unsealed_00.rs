@@ -129,54 +129,8 @@ fn canonical_body_recovery_flushes_owned_effects_after_local_completion() {
     );
     assert!(canonical_recovery_source_work_remains(true, 0));
 }
-#[test]
-fn canonical_body_recovery_dispatch_drains_old_output_before_new_reservations() {
-    let source = include_str!("../v2_runner/canonical_recovery_ingress.rs");
-    let dispatch = source
-        .split_once("fn dispatch_canonical_executed_block_recovery_effects(")
-        .expect("canonical recovery dispatch exists")
-        .1;
-    let cancel = dispatch
-        .find("apply_retired_canonical_recovery_requests(recovery, services)")
-        .expect("dispatch cancels superseded service-owned requests");
-    let retry = dispatch
-        .find(".retry_pending_exact_output()")
-        .expect("dispatch retries exact-output ownership");
-    let stale = dispatch
-        .find("if is_request && !is_current_request")
-        .expect("dispatch retires a stale requester effect");
-    let reserve = dispatch
-        .find(".can_retain_lane_work_effect(&effect)")
-        .expect("dispatch reserves current output");
-    assert!(
-        cancel < retry && retry < stale && stale < reserve,
-        "superseded service/source requests must clear before a new exact reservation"
-    );
-}
-#[test]
-fn historical_recovery_cancels_completed_requests_before_exact_output_retry() {
-    let source = include_str!("../v2_runner.rs");
-    let retry = source
-        .split_once("fn retry_exact_output_and_apply_sidecar_admissions(")
-        .expect("exact-output retry helper exists")
-        .1;
-    let cancel = retry
-        .find("apply_retired_historical_recovery_requests(lane_work, services)")
-        .expect("retry applies historical cancellation ownership");
-    let sidecar_cancel = retry
-        .find("apply_retired_merge_sidecar_requests(lane_work, services)")
-        .expect("retry applies sidecar cancellation ownership");
-    let close_cancel = retry
-        .find("apply_acknowledged_merge_sidecar_closes(lane_work, services)")
-        .expect("retry applies cumulative Close cancellation ownership");
-    let drive = retry
-        .find(".retry_pending_exact_output()")
-        .expect("retry drives retained exact output");
-    assert!(
-        cancel < sidecar_cancel && sidecar_cancel < close_cancel && close_cancel < drive,
-        "retired requests and acknowledged Closes must be cancelled before transport retry"
-    );
-}
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(canonical_body_recovery_dispatch_drains_old_output_before_new_reservations);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(historical_recovery_cancels_completed_requests_before_exact_output_retry);
 #[test]
 fn canonical_body_recovery_successor_request_gets_a_fresh_retry_deadline() {
     let started = Instant::now();

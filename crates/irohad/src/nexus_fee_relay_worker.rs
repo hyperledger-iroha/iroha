@@ -10,15 +10,6 @@
 //! verification before any state mutation. Its retry journal is treated as
 //! untrusted startup input: fixed byte, item, key, and proof budgets are
 //! enforced before decoded state is retained.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    fs,
-    io::Read,
-    path::{Path, PathBuf},
-    str::FromStr,
-    sync::Arc,
-    time::Duration,
-};
 use eyre::{Result, WrapErr};
 use iroha_config::parameters::actual::{
     Fastpq, FastpqExecutionMode, FastpqPoseidonMode, NexusRelayWorker as NexusRelayWorkerConfig,
@@ -62,6 +53,15 @@ use mv::storage::StorageReadOnly;
 use norito::{
     DecodeLimits,
     codec::{Decode, Encode},
+};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+    time::Duration,
 };
 const WORKER_STATE_FILE: &str = "nexus_fee_relay_worker_state.norito";
 const FEE_SPONSOR_VAULT_ALLOCATION_EFFECT_TYPE: &str = "fee_sponsor_vault_allocation";
@@ -1575,7 +1575,8 @@ fn prove_fee_sponsor_vault_allocation(
         "entry_hash".to_owned(),
         source_tx_commitment.as_ref().to_vec(),
     );
-    fastpq_prover::bind_axt_batch(&mut batch, &binding)
+    let committed_amount = integer_mantissa(&work.verified_allocation);
+    fastpq_prover::bind_axt_batch_with_committed_amount(&mut batch, &binding, committed_amount)
         .wrap_err("bind fee sponsor vault allocation AXT batch")?;
     let proof = prover_from_config(fastpq)?
         .prove(&batch)
@@ -1588,7 +1589,7 @@ fn prove_fee_sponsor_vault_allocation(
         da_commitment: None,
         proof: payload,
         fastpq_binding: Some(binding),
-        committed_amount: integer_mantissa(&work.verified_allocation),
+        committed_amount,
         amount_commitment: None,
     };
     Ok(ProofBlob {
@@ -1694,7 +1695,6 @@ fn integer_mantissa(value: &Quantity) -> Option<u128> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::num::NonZeroU64;
     use iroha_crypto::{Algorithm, HashOf, MerkleProof};
     use iroha_data_model::{
         Level,
@@ -1704,6 +1704,7 @@ mod tests {
         nexus::{LaneFinalityAuthorityV1, LaneId, LaneRelayEnvelope},
     };
     use iroha_primitives::numeric::Quantity;
+    use std::num::NonZeroU64;
     fn test_fastpq() -> Fastpq {
         Fastpq {
             execution_mode: FastpqExecutionMode::Cpu,

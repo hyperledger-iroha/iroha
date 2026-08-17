@@ -87,6 +87,22 @@ def _production_cli_args(tmp_path: Path) -> list[str]:
     ]
 
 
+def test_neutral_qualification_api_preserves_compatibility_aliases() -> None:
+    assert boi.BoiHandoffError is boi.QualificationHandoffError
+    assert boi.QualifiedBoiSnapshot is boi.QualifiedHandoffSnapshot
+    assert (
+        boi.require_boi_qualification_isolation
+        is boi.require_native_qualification_isolation
+    )
+    assert (
+        boi.validate_candidate_boi_artifact_handoff
+        is boi.validate_candidate_artifact_handoff
+    )
+    assert boi.assemble_boi_handoff is boi.assemble_qualification_handoff
+    assert boi.verify_qualified_boi_handoff is boi.verify_qualified_handoff
+    assert boi.recheck_qualified_boi_handoff is boi.recheck_qualified_handoff
+
+
 def test_production_cli_refuses_before_candidate_authentication_or_native_probe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -102,7 +118,9 @@ def test_production_cli_refuses_before_candidate_authentication_or_native_probe(
         return call
 
     monkeypatch.setattr(boi, "authenticate_candidate", forbidden("authenticate"))
-    monkeypatch.setattr(boi, "assemble_boi_handoff", forbidden("assemble"))
+    monkeypatch.setattr(
+        boi, "assemble_qualification_handoff", forbidden("assemble")
+    )
     monkeypatch.setattr(boi, "_validate_abi_runtime", forbidden("abi-probe"))
     monkeypatch.setattr(boi, "_probe_native_wheel", forbidden("wheel-probe"))
 

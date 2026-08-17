@@ -18,6 +18,9 @@ from scripts import seal_taira_release_controllers as controller_seal
 
 
 ROOT = Path(__file__).resolve().parents[2]
+RUST_GOVERNANCE_REQUEST_FIXTURE = (
+    ROOT / "scripts/tests/fixtures/taira_privacy_governance_request_v1.json"
+)
 HOSTILE_RUNTIME_UID = 501
 UNMARKED_IROHA_HASH = "1" * 62 + "10"
 
@@ -85,6 +88,69 @@ def _request(
     return authority._build_untrusted_governance_authority_request_v1(
         **arguments  # type: ignore[arg-type]
     )
+
+
+def _request_from_rust_fixture() -> tuple[
+    authority.UntrustedGovernanceAuthorityRequestV1, bytes, dict[str, object]
+]:
+    fixture_bytes = RUST_GOVERNANCE_REQUEST_FIXTURE.read_bytes()
+    value = json.loads(fixture_bytes)
+    assert isinstance(value, dict)
+    activation = value["activation"]
+    candidate = value["candidate"]
+    controller = value["controller"]
+    fleet = value["fleet"]
+    genesis = value["genesis"]
+    run = value["run"]
+    transaction = value["transaction"]
+    assert isinstance(activation, dict)
+    assert isinstance(candidate, dict)
+    assert isinstance(controller, dict)
+    assert isinstance(fleet, dict)
+    assert isinstance(genesis, dict)
+    assert isinstance(run, dict)
+    assert isinstance(transaction, dict)
+    request = authority._build_untrusted_governance_authority_request_v1(
+        protocol=activation["protocol"],
+        activation_instruction_norito=base64.b64decode(
+            activation["instruction_norito_base64"], validate=True
+        ),
+        activation_instruction_sha256=activation["instruction_sha256"],
+        compiled_profile_sha256=activation["compiled_profile_sha256"],
+        proposed_at_height=activation["proposed_at_height"],
+        activate_at_height=activation["activate_at_height"],
+        transaction_payload_norito=base64.b64decode(
+            transaction["payload_norito_base64"], validate=True
+        ),
+        transaction_payload_sha256=transaction["payload_sha256"],
+        transaction_payload_hash_hex=transaction["payload_hash_hex"],
+        transaction_creation_time_millis=transaction["creation_time_millis"],
+        transaction_ttl_millis=transaction["time_to_live_millis"],
+        transaction_nonce=transaction["nonce"],
+        candidate_binding_sha256=candidate["candidate_binding_sha256"],
+        source_commit=candidate["source_commit"],
+        dpn_validator_release_commit=candidate["dpn_validator_release_commit"],
+        cargo_lock_sha256=candidate["cargo_lock_sha256"],
+        workspace_source_manifest_sha256=candidate[
+            "workspace_source_manifest_sha256"
+        ],
+        reset_manifest_sha256=genesis["reset_manifest_sha256"],
+        signed_genesis_sha256=genesis["signed_genesis_sha256"],
+        unsigned_genesis_sha256=genesis["unsigned_genesis_sha256"],
+        genesis_expected_hash=genesis["expected_hash"],
+        genesis_public_key=genesis["public_key"],
+        genesis_authority_account_id=genesis["authority_account_id"],
+        network_id_hex=genesis["network_id_hex"],
+        controller_digest=controller["digest"],
+        controller_host_id=controller["host_id"],
+        controller_installation_id=controller["installation_id"],
+        four_peer_binding_sha256=fleet["four_peer_binding_sha256"],
+        supervisor_binding_sha256=fleet["supervisor_binding_sha256"],
+        run_nonce=run["nonce"],
+        issued_at_unix_millis=run["issued_at_unix_millis"],
+        expires_at_unix_millis=run["expires_at_unix_millis"],
+    )
+    return request, fixture_bytes, value
 
 
 def _rebound_request(
@@ -195,6 +261,33 @@ def test_untrusted_request_is_canonical_and_binds_shared_source_closed_contract(
     assert str(authority.FIXED_REQUEST_SOCKET).encode() not in request.canonical_bytes
     for forbidden in (b"credential", b"private_key", b"torii_endpoint"):
         assert forbidden not in request.canonical_bytes
+
+
+def test_python_builder_and_validator_match_real_rust_transaction_fixture() -> None:
+    request, fixture_bytes, fixture_value = _request_from_rust_fixture()
+
+    assert request.canonical_bytes == fixture_bytes
+    assert request.request_id == fixture_value["request_id"]
+    assert request.request_sha256 == hashlib.sha256(fixture_bytes).hexdigest()
+    assert authority._validated_untrusted_request_value_v1(request) == fixture_value
+
+    activation = fixture_value["activation"]
+    transaction = fixture_value["transaction"]
+    assert isinstance(activation, dict)
+    assert isinstance(transaction, dict)
+    activation_bytes = base64.b64decode(
+        activation["instruction_norito_base64"], validate=True
+    )
+    payload_bytes = base64.b64decode(
+        transaction["payload_norito_base64"], validate=True
+    )
+    assert hashlib.sha256(activation_bytes).hexdigest() == activation[
+        "instruction_sha256"
+    ]
+    assert hashlib.sha256(payload_bytes).hexdigest() == transaction["payload_sha256"]
+    assert transaction["instruction_norito_sha256"] == activation[
+        "instruction_sha256"
+    ]
 
 
 def _splice_transaction_payload(arguments: dict[str, object]) -> None:

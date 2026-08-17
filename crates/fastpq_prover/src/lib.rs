@@ -42,11 +42,13 @@ mod poseidon_manifest;
 mod proof;
 pub mod trace;
 pub use axt_binding::{
-    AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, AXT_FASTPQ_BINDING_METADATA_KEY, AxtFastpqProofPayload,
-    AxtVerifiedProof, DEFAULT_PARAMETER as AXT_DEFAULT_PARAMETER, axt_proof_blob_from_bound_batch,
+    AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, AXT_FASTPQ_BINDING_METADATA_KEY,
+    AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY, AxtFastpqProofPayload, AxtVerifiedProof,
+    DEFAULT_PARAMETER as AXT_DEFAULT_PARAMETER, axt_proof_blob_from_bound_batch,
     axt_proof_envelope_from_bound_batch, batch_manifest_sha256, bind_axt_batch,
-    canonicalize_binding, embedded_axt_binding, encode_axt_fastpq_payload,
-    transition_batch_from_model, transition_batch_to_model, verify_axt_proof_envelope,
+    bind_axt_batch_with_committed_amount, canonicalize_binding, embedded_axt_binding,
+    encode_axt_fastpq_payload, transition_batch_from_model, transition_batch_to_model,
+    verify_axt_proof_envelope,
 };
 pub use backend::{
     Backend, BackendConfig, ExecutionMode, PoseidonExecutionMode, clear_execution_mode_observer,

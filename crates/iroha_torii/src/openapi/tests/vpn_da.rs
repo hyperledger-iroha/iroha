@@ -1,71 +1,96 @@
+const OPENAPI_STATIC_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
+const OPENAPI_STATIC_CONTRACT_ASSET_LEN: usize = 117_477;
+const OPENAPI_STATIC_CONTRACT_ASSET_SHA256: &str =
+    "edc42753d9449938cbc00c6f1bc6779e5db70e8618562ab552406ef36363f0b4";
+const OPENAPI_STATIC_CONTRACT_ASSET: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/src/openapi/tests/openapi_static_contracts_v1.txt"
+));
+
+fn openapi_static_contracts() -> &'static std::collections::BTreeMap<String, Vec<Vec<String>>> {
+    use sha2::{Digest as _, Sha256};
+    static CONTRACTS: std::sync::LazyLock<
+        std::collections::BTreeMap<String, Vec<Vec<String>>>,
+    > = std::sync::LazyLock::new(|| {
+        assert_eq!(OPENAPI_STATIC_CONTRACT_ASSET.len(), OPENAPI_STATIC_CONTRACT_ASSET_LEN);
+        assert_eq!(
+            hex::encode(Sha256::digest(OPENAPI_STATIC_CONTRACT_ASSET)),
+            OPENAPI_STATIC_CONTRACT_ASSET_SHA256,
+            "OpenAPI static contract asset digest drift"
+        );
+        let source = std::str::from_utf8(OPENAPI_STATIC_CONTRACT_ASSET)
+            .expect("OpenAPI static contract asset must be UTF-8");
+        let mut lines = source.lines();
+        assert_eq!(lines.next(), Some(OPENAPI_STATIC_CONTRACT_ASSET_VERSION));
+        let mut contracts = std::collections::BTreeMap::<String, Vec<Vec<String>>>::new();
+        let mut closed = std::collections::BTreeSet::new();
+        let mut active = "";
+        for line in lines {
+            let mut fields = line.split('\t');
+            let id = fields.next().expect("contract section id");
+            assert!(!id.is_empty(), "empty contract section id");
+            if id != active {
+                assert!(closed.insert(active), "contract section is not contiguous");
+                assert!(!closed.contains(id), "duplicate contract section {id}");
+                active = id;
+            }
+            let row = fields
+                .map(|encoded| {
+                    assert!(
+                        !encoded.is_empty()
+                            && encoded.bytes().all(|byte| {
+                                byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')
+                            }),
+                        "contract values must use lowercase hexadecimal"
+                    );
+                    String::from_utf8(hex::decode(encoded).expect("contract value hex"))
+                        .expect("contract value UTF-8")
+                })
+                .collect::<Vec<_>>();
+            assert!(!row.is_empty() && row.iter().all(|cell| !cell.is_empty()));
+            contracts.entry(id.to_owned()).or_default().push(row);
+        }
+        assert!(!contracts.is_empty(), "contract asset must not be empty");
+        contracts
+    });
+    std::sync::LazyLock::force(&CONTRACTS)
+}
+
+fn openapi_contract_rows(id: &str) -> &'static [Vec<String>] {
+    openapi_static_contracts()
+        .get(id)
+        .unwrap_or_else(|| panic!("missing OpenAPI static contract section `{id}`"))
+}
+
+fn openapi_contract_fixed_rows<const N: usize>(
+    id: &str,
+) -> impl Iterator<Item = [&'static str; N]> {
+    openapi_contract_rows(id).iter().map(move |row| {
+        assert_eq!(row.len(), N, "OpenAPI contract row width in `{id}`");
+        std::array::from_fn(|index| row[index].as_str())
+    })
+}
+
+fn openapi_contract_strings(id: &str) -> impl Iterator<Item = &'static str> {
+    openapi_contract_fixed_rows::<1>(id).map(|[value]| value)
+}
+
 #[test]
 fn vpn_openapi_paths_are_typed_signed_and_use_runtime_success_statuses() {
     let document = generate_spec();
-    let cases = [
-        (
-            "/v1/vpn/profile",
-            "get",
-            None,
-            "200",
-            "#/components/schemas/VpnProfileResponse",
-            false,
-        ),
-        (
-            "/v1/vpn/quotes",
-            "post",
-            Some("#/components/schemas/VpnQuoteCreateRequest"),
-            "201",
-            "#/components/schemas/VpnQuoteResponse",
-            true,
-        ),
-        (
-            "/v1/vpn/sessions",
-            "post",
-            Some("#/components/schemas/VpnSessionCreateRequest"),
-            "201",
-            "#/components/schemas/VpnSessionResponse",
-            true,
-        ),
-        (
-            "/v1/vpn/sessions/{session_id}",
-            "get",
-            None,
-            "200",
-            "#/components/schemas/VpnSessionResponse",
-            true,
-        ),
-        (
-            "/v1/vpn/sessions/{session_id}",
-            "delete",
-            None,
-            "200",
-            "#/components/schemas/VpnReceiptResponse",
-            true,
-        ),
-        (
-            "/v1/vpn/receipts",
-            "get",
-            None,
-            "200",
-            "#/components/schemas/VpnReceiptListResponse",
-            true,
-        ),
-        (
-            "/v1/vpn/receipts",
-            "post",
-            Some("#/components/schemas/VpnReceiptSubmitRequest"),
-            "201",
-            "#/components/schemas/VpnReceiptResponse",
-            true,
-        ),
-    ];
-    let expected_auth_headers = [
-        "X-Iroha-Account",
-        "X-Iroha-Signature",
-        "X-Iroha-Timestamp-Ms",
-        "X-Iroha-Nonce",
-        "X-Iroha-Witness",
-    ]
+    let cases = openapi_contract_fixed_rows::<6>("vpn.vpn_openapi_paths_are_typed_signed_and_use_runtime_success_statuses.rows.1").map(
+        |[path, method, request_ref, success_status, response_ref, signed]| {
+            (
+                path,
+                method,
+                (request_ref != "-").then_some(request_ref),
+                success_status,
+                response_ref,
+                signed.parse::<bool>().expect("VPN signed-route flag"),
+            )
+        },
+    );
+    let expected_auth_headers = openapi_contract_strings("vpn.vpn_openapi_paths_are_typed_signed_and_use_runtime_success_statuses.strings.1").collect::<Vec<_>>()
     .into_iter()
     .collect::<BTreeSet<_>>();
     for (path, method, request_ref, success_status, response_ref, signed) in cases {
@@ -179,105 +204,13 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         &["relay_receipt_hex", "client_voucher_hex"],
         &["lease_id_hex"],
     );
-    let profile_fields = [
-        "available",
-        "relay_endpoint",
-        "supported_exit_classes",
-        "default_exit_class",
-        "lease_secs",
-        "dns_push_interval_secs",
-        "meter_family",
-        "route_pushes",
-        "excluded_routes",
-        "dns_servers",
-        "tunnel_addresses",
-        "mtu_bytes",
-        "display_billing_label",
-        "operator_account_id",
-        "lease_fee",
-        "settlement_grace_secs",
-        "flow_label_bits",
-        "padding_budget_ms",
-        "relay_id_hex",
-        "descriptor_commit_hex",
-        "tls_server_name",
-        "relay_tls_spki_sha256_hex",
-        "relay_certificate_sha256_hex",
-        "directory_snapshot_digest_hex",
-    ];
+    let profile_fields = openapi_contract_strings("vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.strings.1").collect::<Vec<_>>();
     assert_strict_object_schema(schemas, "VpnProfileResponse", &profile_fields, &[]);
-    let quote_fields = [
-        "quote_id",
-        "lease_id_hex",
-        "session_id_hex",
-        "payment_reference",
-        "account_id",
-        "exit_class",
-        "relay_endpoint",
-        "lease_secs",
-        "quote_expires_at_ms",
-        "fee_asset_id",
-        "escrow_account_id",
-        "operator_account_id",
-        "lease_fee",
-        "route_pushes",
-        "excluded_routes",
-        "dns_servers",
-        "tunnel_addresses",
-        "mtu_bytes",
-        "meter_family",
-        "flow_label_bits",
-        "padding_budget_ms",
-        "relay_id_hex",
-        "descriptor_commit_hex",
-        "tls_server_name",
-        "relay_tls_spki_sha256_hex",
-        "relay_certificate_sha256_hex",
-        "directory_snapshot_digest_hex",
-        "metering_public_key_hex",
-        "open_lease_instruction",
-    ];
+    let quote_fields = openapi_contract_strings("vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.strings.2").collect::<Vec<_>>();
     assert_strict_object_schema(schemas, "VpnQuoteResponse", &quote_fields, &[]);
-    let session_fields = [
-        "session_id",
-        "account_id",
-        "exit_class",
-        "relay_endpoint",
-        "lease_secs",
-        "expires_at_ms",
-        "connected_at_ms",
-        "meter_family",
-        "quote_id",
-        "payment_reference",
-        "payment_tx_hash",
-        "fee_asset_id",
-        "escrow_account_id",
-        "operator_account_id",
-        "lease_fee",
-        "flow_label_bits",
-        "padding_budget_ms",
-        "relay_id_hex",
-        "descriptor_commit_hex",
-        "tls_server_name",
-        "relay_tls_spki_sha256_hex",
-        "relay_certificate_sha256_hex",
-        "directory_snapshot_digest_hex",
-        "route_pushes",
-        "excluded_routes",
-        "dns_servers",
-        "tunnel_addresses",
-        "mtu_bytes",
-        "helper_ticket_hex",
-        "bytes_in",
-        "bytes_out",
-        "status",
-    ];
+    let session_fields = openapi_contract_strings("vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.strings.3").collect::<Vec<_>>();
     assert_strict_object_schema(schemas, "VpnSessionResponse", &session_fields, &[]);
-    for (schema_name, field) in [
-        ("VpnSessionResponse", "payment_tx_hash"),
-        ("VpnReceiptResponse", "payment_tx_hash"),
-        ("VpnReceiptResponse", "lease_id_hex"),
-    ] {
+    for [schema_name, field] in openapi_contract_fixed_rows::<2>("vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.rows.1") {
         let pattern = schemas
             .get(schema_name)
             .and_then(Value::as_object)
@@ -293,18 +226,7 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
             "{schema_name}.{field} must advertise canonical lowercase hex"
         );
     }
-    for (schema_name, field, pattern) in [
-        (
-            "VpnSessionCreateRequest",
-            "payment_tx_hash",
-            "^(?:0[xX])?[0-9A-Fa-f]{64}$",
-        ),
-        (
-            "VpnReceiptSubmitRequest",
-            "lease_id_hex",
-            "^(?:$|(?:0[xX])?[0-9A-Fa-f]{64})$",
-        ),
-    ] {
+    for [schema_name, field, pattern] in openapi_contract_fixed_rows::<3>("vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.rows.2") {
         let actual = schemas
             .get(schema_name)
             .and_then(Value::as_object)
@@ -340,59 +262,10 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         helper_ticket.get("maxLength").and_then(Value::as_u64),
         Some(1328)
     );
-    let receipt_fields = [
-        "session_id",
-        "account_id",
-        "exit_class",
-        "relay_endpoint",
-        "meter_family",
-        "connected_at_ms",
-        "disconnected_at_ms",
-        "duration_ms",
-        "bytes_in",
-        "bytes_out",
-        "status",
-        "receipt_source",
-        "quote_id",
-        "payment_tx_hash",
-        "fee_asset_id",
-        "escrow_account_id",
-        "operator_account_id",
-        "lease_fee",
-        "earned_fee",
-        "refunded_fee",
-        "lease_id_hex",
-        "settle_lease_instruction",
-    ];
+    let receipt_fields = openapi_contract_strings("vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.strings.4").collect::<Vec<_>>();
     assert_strict_object_schema(schemas, "VpnReceiptResponse", &receipt_fields, &[]);
     assert_strict_object_schema(schemas, "VpnReceiptListResponse", &["items", "total"], &[]);
-    for (schema_name, field) in [
-        ("VpnTxInstruction", "wire_id"),
-        ("VpnProfileResponse", "relay_endpoint"),
-        ("VpnProfileResponse", "meter_family"),
-        ("VpnProfileResponse", "display_billing_label"),
-        ("VpnProfileResponse", "operator_account_id"),
-        ("VpnQuoteResponse", "payment_reference"),
-        ("VpnQuoteResponse", "account_id"),
-        ("VpnQuoteResponse", "relay_endpoint"),
-        ("VpnQuoteResponse", "fee_asset_id"),
-        ("VpnQuoteResponse", "escrow_account_id"),
-        ("VpnQuoteResponse", "operator_account_id"),
-        ("VpnQuoteResponse", "meter_family"),
-        ("VpnSessionResponse", "account_id"),
-        ("VpnSessionResponse", "relay_endpoint"),
-        ("VpnSessionResponse", "meter_family"),
-        ("VpnSessionResponse", "payment_reference"),
-        ("VpnSessionResponse", "fee_asset_id"),
-        ("VpnSessionResponse", "escrow_account_id"),
-        ("VpnSessionResponse", "operator_account_id"),
-        ("VpnReceiptResponse", "account_id"),
-        ("VpnReceiptResponse", "relay_endpoint"),
-        ("VpnReceiptResponse", "meter_family"),
-        ("VpnReceiptResponse", "fee_asset_id"),
-        ("VpnReceiptResponse", "escrow_account_id"),
-        ("VpnReceiptResponse", "operator_account_id"),
-    ] {
+    for [schema_name, field] in openapi_contract_fixed_rows::<2>("vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.rows.3") {
         assert_eq!(
             schemas
                 .get(schema_name)
@@ -407,19 +280,7 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
             "{schema_name}.{field} must reject empty runtime identifiers"
         );
     }
-    for (schema_name, field) in [
-        ("VpnQuoteResponse", "quote_expires_at_ms"),
-        ("VpnSessionResponse", "expires_at_ms"),
-        ("VpnSessionResponse", "connected_at_ms"),
-        ("VpnSessionResponse", "bytes_in"),
-        ("VpnSessionResponse", "bytes_out"),
-        ("VpnReceiptResponse", "connected_at_ms"),
-        ("VpnReceiptResponse", "disconnected_at_ms"),
-        ("VpnReceiptResponse", "duration_ms"),
-        ("VpnReceiptResponse", "bytes_in"),
-        ("VpnReceiptResponse", "bytes_out"),
-        ("VpnReceiptListResponse", "total"),
-    ] {
+    for [schema_name, field] in openapi_contract_fixed_rows::<2>("vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.rows.4") {
         assert_eq!(
             schemas
                 .get(schema_name)
@@ -439,15 +300,10 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         .and_then(Value::as_object)
         .expect("Quantity schema");
     assert_eq!(quantity.get("type").and_then(Value::as_str), Some("string"));
-    for (schema_name, fee_fields) in [
-        ("VpnProfileResponse", &["lease_fee"][..]),
-        ("VpnQuoteResponse", &["lease_fee"][..]),
-        ("VpnSessionResponse", &["lease_fee"][..]),
-        (
-            "VpnReceiptResponse",
-            &["lease_fee", "earned_fee", "refunded_fee"][..],
-        ),
-    ] {
+    for row in openapi_contract_rows(
+        "vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.rows.6",
+    ) {
+        let (schema_name, fee_fields) = row.split_first().expect("VPN fee-field contract row");
         let properties = schemas
             .get(schema_name)
             .and_then(Value::as_object)
@@ -457,7 +313,7 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
         for field in fee_fields {
             assert_eq!(
                 properties
-                    .get(*field)
+                    .get(field)
                     .and_then(Value::as_object)
                     .and_then(|property| property.get("$ref"))
                     .and_then(Value::as_str),
@@ -466,17 +322,7 @@ fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
             );
         }
     }
-    for name in [
-        "VpnProfileResponse",
-        "VpnQuoteCreateRequest",
-        "VpnQuoteResponse",
-        "VpnSessionCreateRequest",
-        "VpnSessionResponse",
-        "VpnReceiptSubmitRequest",
-        "VpnReceiptResponse",
-        "VpnReceiptListResponse",
-        "VpnTxInstruction",
-    ] {
+    for name in openapi_contract_strings("vpn.vpn_openapi_schemas_are_strict_and_use_canonical_quantities.strings.5") {
         assert_no_retired_vpn_fee_fields(
             schemas.get(name).unwrap_or_else(|| panic!("{name} schema")),
             name,
@@ -501,15 +347,7 @@ fn sorafs_tag_documents_exact_canonical_quantity_contract() {
         .and_then(|tag| tag.get("description"))
         .and_then(Value::as_str)
         .expect("SoraFS tag description");
-    for required in [
-        "canonical exact decimal JSON strings",
-        "`amount`",
-        "`rent_due`",
-        "`reserve_shortfall`",
-        "`top_up_shortfall`",
-        "JSON numbers",
-        "`_micro`/`_micro_xor`",
-    ] {
+    for required in openapi_contract_strings("vpn.sorafs_tag_documents_exact_canonical_quantity_contract.strings.1") {
         assert!(
             description.contains(required),
             "SoraFS quantity contract must document {required}"
@@ -615,29 +453,10 @@ fn detached_asset_transfer_openapi_is_strict_and_two_phase() {
         .get("properties")
         .and_then(Value::as_object)
         .expect("asset transfer request properties");
-    for field in [
-        "authority",
-        "asset_definition_id",
-        "asset_balance_scope",
-        "amount",
-        "destination",
-        "fee_payment",
-        "creation_time_ms",
-        "transaction_ttl_ms",
-        "public_key_hex",
-        "signature_base64",
-    ] {
+    for field in openapi_contract_strings("vpn.detached_asset_transfer_openapi_is_strict_and_two_phase.strings.1") {
         assert!(properties.contains_key(field), "missing `{field}`");
     }
-    for forbidden in [
-        "private_key",
-        "nonce",
-        "metadata",
-        "signature_b64",
-        "fee_sponsor",
-        "gas_asset_id",
-        "gas_limit",
-    ] {
+    for forbidden in openapi_contract_strings("vpn.detached_asset_transfer_openapi_is_strict_and_two_phase.strings.2") {
         assert!(
             !properties.contains_key(forbidden),
             "legacy signing field `{forbidden}` must not be documented"
@@ -793,11 +612,7 @@ fn zk_ivm_openapi_uses_compact_state_dependent_schemas() {
             .and_then(Value::as_u64),
         Some(11_184_812)
     );
-    for state in [
-        "ZkIvmProveJobPendingOrRunning",
-        "ZkIvmProveJobError",
-        "ZkIvmProveJobDone",
-    ] {
+    for state in openapi_contract_strings("vpn.zk_ivm_openapi_uses_compact_state_dependent_schemas.strings.1") {
         let pattern = schemas
             .get(state)
             .and_then(Value::as_object)
@@ -817,11 +632,7 @@ fn retired_server_contract_deployment_paths_are_absent() {
         .get("paths")
         .and_then(Value::as_object)
         .expect("OpenAPI paths");
-    for retired_path in [
-        "/v1/contracts/deploy",
-        "/v1/contracts/deploy-bundle",
-        "/v1/contracts/deploy-bundles/{bundle_digest}",
-    ] {
+    for retired_path in openapi_contract_strings("vpn.retired_server_contract_deployment_paths_are_absent.strings.1") {
         assert!(
             !paths.contains_key(retired_path),
             "retired server-side contract deployment path leaked into OpenAPI: {retired_path}"
@@ -872,88 +683,19 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
     );
     assert!(!capability_properties.contains_key("chain_id"));
     assert!(!capability_properties.contains_key("genesis_hash"));
-    let cases: [(&str, &str, &[&str]); 9] = [
-        (
-            "/v1/ministry/agenda/proposals/draft",
-            "MinistryAgendaProposalDraftRequestV1",
-            &["authority", "proposal"],
-        ),
-        (
-            "/v1/gov/proposals/deploy-contract",
-            "GovernanceProposeDeployContractRequestV1",
-            &[
-                "abi_hash",
-                "abi_version",
-                "code_hash",
-                "contract_address",
-                "contract_alias",
-                "manifest_provenance",
-                "mode",
-                "window",
-            ],
-        ),
-        (
-            "/v1/gov/ballots/zk-v1",
-            "GovernanceZkBallotEnvelopeRequestV1",
-            &[
-                "amount",
-                "authority",
-                "backend",
-                "direction",
-                "duration_blocks",
-                "election_id",
-                "envelope_b64",
-                "network_id",
-                "nullifier",
-                "owner",
-                "root_hint",
-            ],
-        ),
-        (
-            "/v1/gov/ballots/zk-v1/ballot-proof",
-            "GovernanceZkBallotProofRequestV1",
-            &["authority", "ballot", "election_id", "network_id"],
-        ),
-        (
-            "/v1/gov/ballots/plain",
-            "GovernancePlainBallotRequestV1",
-            &[
-                "amount",
-                "authority",
-                "direction",
-                "duration_blocks",
-                "network_id",
-                "owner",
-                "referendum_id",
-            ],
-        ),
-        (
-            "/v1/gov/parliament/ballots",
-            "GovernanceParliamentBallotRequestV1",
-            &["authority", "body", "decision", "network_id", "proposal_id"],
-        ),
-        (
-            "/v1/gov/finalize",
-            "GovernanceFinalizeRequestV1",
-            &["proposal_id", "referendum_id"],
-        ),
-        (
-            "/v1/gov/enact",
-            "GovernanceEnactRequestV1",
-            &["proposal_id"],
-        ),
-        (
-            "/v1/gov/protected-namespaces",
-            "GovernanceProtectedNamespacesRequestV1",
-            &["authority", "namespaces"],
-        ),
-    ];
-    for path in [
-        "/v1/gov/ballots/zk-v1",
-        "/v1/gov/ballots/zk-v1/ballot-proof",
-        "/v1/gov/ballots/plain",
-        "/v1/gov/parliament/ballots",
-    ] {
+    let cases = openapi_contract_rows("vpn.governance_mutation.request_property_rows")
+        .iter()
+        .map(|row| {
+            let [path, schema_name, expected_properties @ ..] = row.as_slice() else {
+                panic!("governance request-property contract row")
+            };
+            (
+                path.as_str(),
+                schema_name.as_str(),
+                expected_properties.iter().map(String::as_str).collect::<Vec<_>>(),
+            )
+        });
+    for path in openapi_contract_strings("vpn.governance_mutation_openapi_is_typed_closed_and_secret_free.strings.1") {
         let operation = openapi_operation(&document, path, "post");
         assert!(
             operation.get("x-iroha-canonical-auth-v1").is_some(),
@@ -968,13 +710,7 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             "POST {path} must document exact-network authentication"
         );
         let headers = operation_header_requirements(operation);
-        for expected in [
-            "X-Iroha-Account",
-            "X-Iroha-Signature",
-            "X-Iroha-Timestamp-Ms",
-            "X-Iroha-Nonce",
-            "X-Iroha-Witness",
-        ] {
+        for expected in openapi_contract_strings("vpn.governance_mutation_openapi_is_typed_closed_and_secret_free.strings.2") {
             assert!(
                 headers.iter().any(|(name, _required)| name == expected),
                 "POST {path} must document canonical auth header `{expected}`"
@@ -1020,55 +756,12 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
         actual_properties.sort_unstable();
         assert_eq!(actual_properties, expected_properties, "{schema_name}");
     }
-    for (schema_name, expected_required) in [
-        (
-            "GovernanceProposeDeployContractRequestV1",
-            &["abi_hash", "abi_version", "code_hash"][..],
-        ),
-        (
-            "GovernanceZkBallotEnvelopeRequestV1",
-            &[
-                "authority",
-                "backend",
-                "election_id",
-                "envelope_b64",
-                "network_id",
-            ][..],
-        ),
-        (
-            "GovernanceZkBallotProofRequestV1",
-            &["authority", "ballot", "election_id", "network_id"][..],
-        ),
-        (
-            "GovernancePlainBallotRequestV1",
-            &[
-                "amount",
-                "authority",
-                "direction",
-                "duration_blocks",
-                "network_id",
-                "owner",
-                "referendum_id",
-            ][..],
-        ),
-        (
-            "GovernanceParliamentBallotRequestV1",
-            &["authority", "body", "decision", "network_id", "proposal_id"][..],
-        ),
-        (
-            "GovernanceFinalizeRequestV1",
-            &["proposal_id", "referendum_id"][..],
-        ),
-        ("GovernanceEnactRequestV1", &["proposal_id"][..]),
-        (
-            "GovernanceProtectedNamespacesRequestV1",
-            &["namespaces"][..],
-        ),
-        (
-            "MinistryAgendaProposalDraftRequestV1",
-            &["authority", "proposal"][..],
-        ),
-    ] {
+    for (schema_name, expected_required) in openapi_contract_rows("vpn.governance_mutation.required_field_rows")
+        .iter()
+        .map(|row| {
+            let (schema_name, required) = row.split_first().expect("governance required row");
+            (schema_name.as_str(), required.iter().map(String::as_str).collect::<Vec<_>>())
+        }) {
         let schema = schemas
             .get(schema_name)
             .and_then(Value::as_object)
@@ -1203,10 +896,7 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             "window `{field}` must publish the exact u64 maximum"
         );
     }
-    for (schema_name, field) in [
-        ("GovernanceBallotProofV1", "duration_blocks"),
-        ("GovernanceZkBallotEnvelopeRequestV1", "duration_blocks"),
-    ] {
+    for [schema_name, field] in openapi_contract_fixed_rows::<2>("vpn.governance_mutation_openapi_is_typed_closed_and_secret_free.rows.1") {
         assert_eq!(
             schemas
                 .get(schema_name)
@@ -1233,10 +923,7 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
         Some(GOVERNANCE_U64_DECIMAL_PATTERN),
         "plain-ballot duration must publish the exact canonical u64 grammar"
     );
-    for schema_name in [
-        "GovernanceBallotProofV1",
-        "GovernanceZkBallotEnvelopeRequestV1",
-    ] {
+    for schema_name in openapi_contract_strings("vpn.governance_mutation_openapi_is_typed_closed_and_secret_free.strings.3") {
         assert_eq!(
             schemas
                 .get(schema_name)
@@ -1251,12 +938,7 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             "{schema_name}.backend must be an exact nonempty token"
         );
     }
-    for schema_name in [
-        "GovernanceZkBallotEnvelopeRequestV1",
-        "GovernanceZkBallotProofRequestV1",
-        "GovernancePlainBallotRequestV1",
-        "GovernanceParliamentBallotRequestV1",
-    ] {
+    for schema_name in openapi_contract_strings("vpn.governance_mutation_openapi_is_typed_closed_and_secret_free.strings.4") {
         let properties = schemas
             .get(schema_name)
             .and_then(Value::as_object)
@@ -1277,11 +959,7 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
             "{schema_name} must reject the retired chain_id key"
         );
     }
-    for (schema_name, field) in [
-        ("GovernanceZkBallotEnvelopeRequestV1", "election_id"),
-        ("GovernanceZkBallotProofRequestV1", "election_id"),
-        ("GovernancePlainBallotRequestV1", "referendum_id"),
-    ] {
+    for [schema_name, field] in openapi_contract_fixed_rows::<2>("vpn.governance_mutation_openapi_is_typed_closed_and_secret_free.rows.2") {
         assert_eq!(
             schemas
                 .get(schema_name)
@@ -1400,54 +1078,21 @@ fn governance_mutation_openapi_is_typed_closed_and_secret_free() {
         Some(&norito::json!(["Aye", "Nay", "Abstain", null])),
         "ZK-v1 direction must match the closed runtime ballot enum"
     );
-    for schema_name in [
-        "GovernanceProposeDeployContractRequestV1",
-        "GovernanceZkBallotEnvelopeRequestV1",
-        "GovernanceZkBallotProofRequestV1",
-        "GovernanceBallotProofV1",
-        "GovernancePlainBallotRequestV1",
-        "GovernanceParliamentBallotRequestV1",
-        "GovernanceFinalizeRequestV1",
-        "GovernanceEnactRequestV1",
-        "GovernanceProtectedNamespacesRequestV1",
-        "MinistryAgendaProposalDraftRequestV1",
-        "MinistryAgendaProposalV1",
-        "MinistryAgendaProposalSummaryV1",
-        "MinistryAgendaProposalTargetV1",
-        "MinistryAgendaEvidenceAttachmentV1",
-        "MinistryAgendaProposalSubmitterV1",
-    ] {
+    for schema_name in openapi_contract_strings("vpn.governance_mutation_openapi_is_typed_closed_and_secret_free.strings.5") {
         let encoded = norito::json::to_json(
             schemas
                 .get(schema_name)
                 .unwrap_or_else(|| panic!("missing `{schema_name}`")),
         )
         .expect("schema JSON");
-        for forbidden in [
-            "private_key",
-            "privateKey",
-            "private_key_hex",
-            "privateKeyHex",
-            "private_key_bytes",
-            "privateKeyBytes",
-            "private_key_seed",
-            "privateKeySeed",
-            "private_key_multihash",
-            "privateKeyMultihash",
-            "private_key_algorithm",
-            "privateKeyAlgorithm",
-        ] {
+        for forbidden in openapi_contract_strings("vpn.governance_mutation_openapi_is_typed_closed_and_secret_free.strings.6") {
             assert!(
                 !encoded.contains(forbidden),
                 "`{schema_name}` leaked retired signing field `{forbidden}`"
             );
         }
     }
-    for schema_name in [
-        "GovernanceProposeDeployContractRequestV1",
-        "GovernanceFinalizeRequestV1",
-        "GovernanceEnactRequestV1",
-    ] {
+    for schema_name in openapi_contract_strings("vpn.governance_mutation_openapi_is_typed_closed_and_secret_free.strings.7") {
         assert!(
             !schemas
                 .get(schema_name)
@@ -1466,50 +1111,15 @@ fn governance_read_path_parameters_publish_exact_runtime_grammars() {
         .get("paths")
         .and_then(Value::as_object)
         .expect("OpenAPI paths");
-    for (path, method, parameter_name, expected_pattern) in [
-        (
-            "/v1/ministry/agenda/proposals/{proposal_id}",
-            "get",
-            "proposal_id",
-            "^AC-[0-9]{4}-[0-9]{3}$",
-        ),
-        (
-            "/v1/gov/proposals/{id}",
-            "get",
-            "id",
-            GOVERNANCE_LOWER_HEX32_PATTERN,
-        ),
-        (
-            "/v1/validation-fee/proposals/{proposal_id}",
-            "get",
-            "proposal_id",
-            GOVERNANCE_LOWER_HEX32_PATTERN,
-        ),
-        (
-            "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft",
-            "post",
-            "proposal_id",
-            GOVERNANCE_LOWER_HEX32_PATTERN,
-        ),
-        (
-            "/v1/gov/locks/{rid}",
-            "get",
-            "rid",
-            GOVERNANCE_SELECTOR_V1_PATTERN,
-        ),
-        (
-            "/v1/gov/referenda/{id}",
-            "get",
-            "id",
-            GOVERNANCE_SELECTOR_V1_PATTERN,
-        ),
-        (
-            "/v1/gov/tally/{id}",
-            "get",
-            "id",
-            GOVERNANCE_SELECTOR_V1_PATTERN,
-        ),
-    ] {
+    for [path, method, parameter_name, pattern_kind] in openapi_contract_fixed_rows::<4>(
+        "vpn.governance_read_path_parameters_publish_exact_runtime_grammars.rows.1",
+    ) {
+        let expected_pattern = match pattern_kind {
+            "agenda_proposal_id" => "^AC-[0-9]{4}-[0-9]{3}$",
+            "lower_hex32" => GOVERNANCE_LOWER_HEX32_PATTERN,
+            "selector_v1" => GOVERNANCE_SELECTOR_V1_PATTERN,
+            _ => panic!("unknown governance pattern contract `{pattern_kind}`"),
+        };
         let parameters = paths
             .get(path)
             .and_then(Value::as_object)
@@ -1536,14 +1146,7 @@ fn governance_read_path_parameters_publish_exact_runtime_grammars() {
 #[test]
 fn subscription_mutations_publish_exact_unsigned_v1_draft_contract() {
     let paths = subscription_paths();
-    for path in [
-        "/v1/subscriptions",
-        "/v1/subscriptions/{subscription_id}/pause",
-        "/v1/subscriptions/{subscription_id}/resume",
-        "/v1/subscriptions/{subscription_id}/cancel",
-        "/v1/subscriptions/{subscription_id}/keep",
-        "/v1/subscriptions/{subscription_id}/charge-now",
-    ] {
+    for path in openapi_contract_strings("vpn.subscription_mutations_publish_exact_unsigned_v1_draft_contract.strings.1") {
         let post = paths
             .get(path)
             .and_then(Value::as_object)
@@ -1558,12 +1161,7 @@ fn subscription_mutations_publish_exact_unsigned_v1_draft_contract() {
     }
     let mut schemas = Map::new();
     subscription_schemas(&mut schemas);
-    for request in [
-        "SubscriptionCreateDraftRequestV1",
-        "SubscriptionAuthorityDraftRequestV1",
-        "SubscriptionChargeDraftRequestV1",
-        "SubscriptionCancelDraftRequestV1",
-    ] {
+    for request in openapi_contract_strings("vpn.subscription_mutations_publish_exact_unsigned_v1_draft_contract.strings.2") {
         let schema = schemas
             .get(request)
             .and_then(Value::as_object)
@@ -1578,10 +1176,7 @@ fn subscription_mutations_publish_exact_unsigned_v1_draft_contract() {
             .expect("request properties");
         assert!(!properties.contains_key("private_key"));
     }
-    for response in [
-        "SubscriptionCreateDraftResponseV1",
-        "SubscriptionActionDraftResponseV1",
-    ] {
+    for response in openapi_contract_strings("vpn.subscription_mutations_publish_exact_unsigned_v1_draft_contract.strings.3") {
         let schema = schemas
             .get(response)
             .and_then(Value::as_object)
@@ -1616,14 +1211,7 @@ fn local_signing_openapi_contracts_are_closed_and_secret_free() {
         .get("paths")
         .and_then(Value::as_object)
         .expect("OpenAPI paths");
-    for path in [
-        "/v1/contracts/aliases",
-        "/v1/proofs/query",
-        "/v1/space-directory/manifests",
-        "/v1/space-directory/manifests/revoke",
-        "/v1/subscriptions/plans",
-        "/v1/subscriptions/{subscription_id}/usage",
-    ] {
+    for path in openapi_contract_strings("vpn.local_signing_openapi_contracts_are_closed_and_secret_free.strings.1") {
         assert!(
             paths
                 .get(path)
@@ -1639,14 +1227,7 @@ fn local_signing_openapi_contracts_are_closed_and_secret_free() {
         .and_then(|components| components.get("schemas"))
         .and_then(Value::as_object)
         .expect("OpenAPI schemas");
-    for request in [
-        "ProofFindByIdSignedQueryRequestV1",
-        "ContractAliasDraftRequestV1",
-        "SpaceDirectoryManifestPublishDraftRequestV1",
-        "SpaceDirectoryManifestRevokeDraftRequestV1",
-        "SubscriptionPlanDraftRequestV1",
-        "SubscriptionUsageDraftRequestV1",
-    ] {
+    for request in openapi_contract_strings("vpn.local_signing_openapi_contracts_are_closed_and_secret_free.strings.2") {
         let schema = schemas
             .get(request)
             .and_then(Value::as_object)
@@ -1760,17 +1341,7 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
         operation_schema_ref(paths, "/v1/da/pin-intents/verify", true),
         "#/components/schemas/DaPinIntentProof"
     );
-    for (path, method, operation_id) in [
-        ("/v1/da/proof-policies", "get", "daProofPoliciesList"),
-        (
-            "/v1/da/proof-policies/snapshot",
-            "get",
-            "daProofPolicySnapshot",
-        ),
-        ("/v1/da/pin-intents", "post", "daPinIntentsList"),
-        ("/v1/da/pin-intents/prove", "post", "daPinIntentsProve"),
-        ("/v1/da/pin-intents/verify", "post", "daPinIntentsVerify"),
-    ] {
+    for [path, method, operation_id] in openapi_contract_fixed_rows::<3>("vpn.da_proof_openapi_contracts_match_exact_norito_json_wire_shapes.rows.1") {
         assert_eq!(
             paths
                 .get(path)
@@ -1783,14 +1354,7 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             "{path}"
         );
     }
-    for path in [
-        "/v1/da/commitments",
-        "/v1/da/commitments/prove",
-        "/v1/da/commitments/verify",
-        "/v1/da/pin-intents",
-        "/v1/da/pin-intents/prove",
-        "/v1/da/pin-intents/verify",
-    ] {
+    for path in openapi_contract_strings("vpn.da_proof_openapi_contracts_match_exact_norito_json_wire_shapes.strings.1") {
         let responses = operation_responses(paths, path);
         assert!(responses.contains_key("400"), "{path} malformed JSON");
         assert!(responses.contains_key("413"), "{path} 64 KiB body limit");
@@ -1801,12 +1365,7 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             "{path} mid-read snapshot change"
         );
     }
-    for path in [
-        "/v1/da/commitments/prove",
-        "/v1/da/commitments/verify",
-        "/v1/da/pin-intents/prove",
-        "/v1/da/pin-intents/verify",
-    ] {
+    for path in openapi_contract_strings("vpn.da_proof_openapi_contracts_match_exact_norito_json_wire_shapes.strings.2") {
         assert!(
             !operation_responses(paths, path).contains_key("409"),
             "{path} does not issue list snapshots"
@@ -1834,10 +1393,7 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
         !schemas.contains_key("DaPinIntentWithLocationList"),
         "the pin-intent list route uses its cursor-bearing page envelope"
     );
-    for (request, cursor) in [
-        ("DaCommitmentListRequest", "DaCommitmentListCursor"),
-        ("DaPinIntentListRequest", "DaPinIntentListCursor"),
-    ] {
+    for [request, cursor] in openapi_contract_fixed_rows::<2>("vpn.da_proof_openapi_contracts_match_exact_norito_json_wire_shapes.rows.2") {
         let request_schema = schemas
             .get(request)
             .and_then(Value::as_object)
@@ -1881,23 +1437,11 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             "{request}"
         );
     }
-    for (request, expected) in [
-        (
-            "DaCommitmentProofRequest",
-            vec!["epoch", "lane_id", "manifest_hash", "sequence"],
-        ),
-        (
-            "DaPinIntentQueryRequest",
-            vec![
-                "alias",
-                "epoch",
-                "lane_id",
-                "manifest_hash",
-                "sequence",
-                "storage_ticket",
-            ],
-        ),
-    ] {
+    for row in openapi_contract_rows(
+        "vpn.da_proof_openapi_contracts_match_exact_norito_json_wire_shapes.rows.6",
+    ) {
+        let (request, expected) = row.split_first().expect("DA request-property contract row");
+        let expected = expected.iter().map(String::as_str).collect::<Vec<_>>();
         let mut property_names = schema_properties(schemas, request)
             .keys()
             .map(String::as_str)
@@ -1927,10 +1471,7 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
         Some(2),
         "empty and non-empty canonical snapshot shapes"
     );
-    for (cursor, after) in [
-        ("DaCommitmentListCursor", "DaCommitmentKey"),
-        ("DaPinIntentListCursor", "DaCommitmentLocation"),
-    ] {
+    for [cursor, after] in openapi_contract_fixed_rows::<2>("vpn.da_proof_openapi_contracts_match_exact_norito_json_wire_shapes.rows.3") {
         let properties = schema_properties(schemas, cursor);
         assert_eq!(
             properties
@@ -1952,18 +1493,7 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             "{cursor}"
         );
     }
-    for (response, items, cursor) in [
-        (
-            "DaCommitmentListResponse",
-            "commitments",
-            "DaCommitmentListCursor",
-        ),
-        (
-            "DaPinIntentListResponse",
-            "intents",
-            "DaPinIntentListCursor",
-        ),
-    ] {
+    for [response, items, cursor] in openapi_contract_fixed_rows::<3>("vpn.da_proof_openapi_contracts_match_exact_norito_json_wire_shapes.rows.4") {
         let response_schema = schemas
             .get(response)
             .and_then(Value::as_object)
@@ -2125,10 +1655,7 @@ fn da_proof_openapi_contracts_match_exact_norito_json_wire_shapes() {
             Some(32)
         );
     }
-    for (schema, field) in [
-        ("DaPinIntentQueryRequest", "alias"),
-        ("DaPinIntent", "alias"),
-    ] {
+    for [schema, field] in openapi_contract_fixed_rows::<2>("vpn.da_proof_openapi_contracts_match_exact_norito_json_wire_shapes.rows.5") {
         let alias = schemas
             .get(schema)
             .and_then(Value::as_object)

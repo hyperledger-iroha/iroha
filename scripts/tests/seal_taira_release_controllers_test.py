@@ -107,6 +107,12 @@ def test_controller_closures_are_exact_installed_operation_dependencies() -> Non
     assert "scripts/build_taira_public_v2_prerequisite_handoff.py" not in (
         controller.LINUX_FILES
     )
+    for relative in (
+        "scripts/deploy_taira_v21_reset_authority.py",
+        "scripts/deploy_taira_v21_reset_health.py",
+    ):
+        assert relative in controller.MACOS_FILES
+        assert relative not in controller.LINUX_FILES
     for relative in set(controller.LINUX_FILES + controller.MACOS_FILES):
         assert (ROOT / relative).is_file(), relative
         assert controller._validate_relative(relative) == relative

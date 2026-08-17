@@ -46,6 +46,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
         vec![
             LaneConfigMetadata {
                 id: LaneId::new(0),
+                shard_id: None,
                 dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "core".to_owned(),
                 description: Some("Primary execution lane".to_owned()),
@@ -59,6 +60,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
             },
             LaneConfigMetadata {
                 id: LaneId::new(1),
+                shard_id: None,
                 dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "governance".to_owned(),
                 description: Some("Governance & parliament traffic".to_owned()),
@@ -72,6 +74,7 @@ fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {
             },
             LaneConfigMetadata {
                 id: LaneId::new(2),
+                shard_id: None,
                 dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "zk".to_owned(),
                 description: Some("Zero-knowledge attachments".to_owned()),
@@ -130,6 +133,7 @@ fn autoscale_elastic_lane(id: LaneId, created_height: u64) -> LaneConfigMetadata
     );
     LaneConfigMetadata {
         id,
+        shard_id: None,
         dataspace_id: DataSpaceId::UNIVERSAL,
         alias: format!("elastic-lane-{}", id.as_u32()),
         description: Some("Consensus-managed elastic lane".to_owned()),
@@ -448,6 +452,7 @@ fn multilane_router_fails_closed_when_elastic_range_contains_corruption() -> Res
             name: "manual",
             lane: LaneConfigMetadata {
                 id: LaneId::new(4),
+                shard_id: None,
                 dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "manual-elastic-range".to_owned(),
                 description: Some("Manual lane occupying autoscale range".to_owned()),

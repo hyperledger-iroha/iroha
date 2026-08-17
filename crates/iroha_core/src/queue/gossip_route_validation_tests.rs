@@ -199,7 +199,7 @@ fn state_backed_queue_rejects_new_ownership_at_committed_drain_close() {
     assert_eq!(routing_ledger::get_plan(&hash), None);
 }
 #[test]
-fn state_backed_queue_routes_allow_disabled_nexus_legacy_default_public_lane_dynamic_dataspace() {
+fn state_backed_queue_routes_reject_unknown_dataspace_when_nexus_is_disabled() {
     let mut state = State::new(
         world_with_test_domains(),
         Kura::blank_kura_for_testing(),
@@ -218,17 +218,16 @@ fn state_backed_queue_routes_allow_disabled_nexus_legacy_default_public_lane_dyn
     );
     queue.install_test_router_metadata_for_nexus(&state.nexus_snapshot());
     let tx = accepted_tx_by_someone(&time_source);
-    let expected = RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, dynamic_dataspace));
     assert_eq!(
-        queue
-            .route_plan_with_state(&tx, &state)
-            .expect("legacy default public lane route should resolve with state"),
-        expected
+        queue.route_plan_with_state(&tx, &state),
+        Err(RoutingResolveError::UnknownDataspace {
+            dataspace_id: dynamic_dataspace,
+        })
     );
     assert_eq!(
-        queue
-            .route_plan_for_gossip_with_state(&tx, &state)
-            .expect("legacy default public lane gossip route should resolve with state"),
-        expected
+        queue.route_plan_for_gossip_with_state(&tx, &state),
+        Err(RoutingResolveError::UnknownDataspace {
+            dataspace_id: dynamic_dataspace,
+        })
     );
 }

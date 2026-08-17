@@ -47,11 +47,11 @@ SUPERVISOR_SOURCE = Path(__file__).with_name("taira_peer_supervisor.py")
 CANONICAL_GENESIS_RELATIVE_PATH = Path("canonical") / "genesis.signed.nrt"
 KURA_DIRECTORY_NAME = "kura"
 SNAPSHOT_DIRECTORY_NAME = "snapshot"
-LIFECYCLE_NODE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+-]{7,255}")
-LIFECYCLE_IDENTITY_BARRIER = (
-    "legacy supervision capture has no independently authenticated deploy "
-    "receipt-signer node_id; config public keys, labels, and hostnames must not "
-    "be substituted"
+LIFECYCLE_NODE_ID_RE = re.compile(
+    r"taira-node:receipt-signer:secp256k1:sha256:[0-9a-f]{64}"
+)
+LIFECYCLE_VALIDATOR_IDS = tuple(
+    f"taira-validator-{number}" for number in range(1, PEER_COUNT + 1)
 )
 
 
@@ -496,20 +496,52 @@ def require_exact_peer_paths(
     return [normalize_absolute(value) for value in values]
 
 
+def require_authenticated_node_bindings(
+    values: Sequence[str] | None,
+) -> tuple[str, ...]:
+    """Return exact deploy-authenticated node IDs in canonical peer order."""
+
+    if values is None or len(values) != PEER_COUNT:
+        raise MigrationError(
+            "--authenticated-node-binding must be supplied exactly once for each "
+            "taira-validator-1..4 slug"
+        )
+    node_ids_by_validator: dict[str, str] = {}
+    for value in values:
+        validator_id, separator, node_id = value.partition("=")
+        if not separator or validator_id not in LIFECYCLE_VALIDATOR_IDS:
+            raise MigrationError(
+                "authenticated node binding must be "
+                "taira-validator-N=<canonical-receipt-signer-node-id>"
+            )
+        if validator_id in node_ids_by_validator:
+            raise MigrationError(
+                f"authenticated node binding repeats validator slug: {validator_id}"
+            )
+        if LIFECYCLE_NODE_ID_RE.fullmatch(node_id) is None:
+            raise MigrationError("authenticated lifecycle node ID is not canonical")
+        node_ids_by_validator[validator_id] = node_id
+    if set(node_ids_by_validator) != set(LIFECYCLE_VALIDATOR_IDS):
+        raise MigrationError(
+            "authenticated node bindings must cover taira-validator-1..4 exactly"
+        )
+    node_ids = tuple(
+        node_ids_by_validator[validator_id]
+        for validator_id in LIFECYCLE_VALIDATOR_IDS
+    )
+    if len(set(node_ids)) != PEER_COUNT:
+        raise MigrationError("authenticated lifecycle node IDs must be distinct")
+    return node_ids
+
+
 def launchd_plist(
     *,
     peer: dict[str, Any],
     manifest: dict[str, Any],
     installed_supervisor: Path,
     python_path: Path,
-    lifecycle_journal_root: Path | None = None,
-    authenticated_node_id: str | None = None,
 ) -> bytes:
-    """Render one independent validator LaunchDaemon plist.
-
-    Lifecycle arguments are opt-in because the legacy migration manifest has
-    no independent authority for the deployed receipt-signing node ID.
-    """
+    """Render one independent, lifecycle-journaled validator LaunchDaemon plist."""
 
     runtime = manifest["runtime"]
     working_directory = peer["working_directory"]
@@ -555,33 +587,34 @@ def launchd_plist(
         "--rapid-fatal-uptime-seconds",
         str(runtime["rapid_fatal_uptime_seconds"]),
     ]
-    if (lifecycle_journal_root is None) != (authenticated_node_id is None):
-        raise MigrationError("lifecycle journal identity must be provided together")
-    if lifecycle_journal_root is not None:
-        assert authenticated_node_id is not None
-        validator_id = f"taira-validator-{peer['number']}"
-        expected_root = (
-            Path(manifest["install"]["directory"]) / "lifecycle" / validator_id
+    lifecycle = peer.get("lifecycle")
+    validator_id = f"taira-validator-{peer['number']}"
+    expected_root = (
+        Path(manifest["install"]["directory"]) / "lifecycle" / validator_id
+    )
+    if (
+        not isinstance(lifecycle, dict)
+        or set(lifecycle) != {"journal_root", "node_id", "validator_id"}
+        or lifecycle.get("validator_id") != validator_id
+        or lifecycle.get("journal_root") != str(expected_root)
+        or not expected_root.is_absolute()
+        or ".." in expected_root.parts
+        or not isinstance(lifecycle.get("node_id"), str)
+        or LIFECYCLE_NODE_ID_RE.fullmatch(lifecycle["node_id"]) is None
+    ):
+        raise MigrationError(
+            "lifecycle journal path or authenticated node ID is not canonical"
         )
-        if (
-            lifecycle_journal_root != expected_root
-            or not lifecycle_journal_root.is_absolute()
-            or ".." in lifecycle_journal_root.parts
-            or LIFECYCLE_NODE_ID_RE.fullmatch(authenticated_node_id) is None
-        ):
-            raise MigrationError(
-                "lifecycle journal path or authenticated node ID is not canonical"
-            )
-        program_arguments.extend(
-            [
-                "--lifecycle-journal-root",
-                str(lifecycle_journal_root),
-                "--validator-id",
-                validator_id,
-                "--node-id",
-                authenticated_node_id,
-            ]
-        )
+    program_arguments.extend(
+        [
+            "--lifecycle-journal-root",
+            str(expected_root),
+            "--validator-id",
+            validator_id,
+            "--node-id",
+            lifecycle["node_id"],
+        ]
+    )
     if runtime["binary_stat_sealed"]:
         binary = manifest["binary"]
         program_arguments[6:6] = [
@@ -650,6 +683,9 @@ def create_plan(
     pid_files = require_exact_peer_paths(
         args.pid_file, default_peer_paths(base, "pids"), "--pid-file"
     )
+    authenticated_node_ids = require_authenticated_node_bindings(
+        args.authenticated_node_binding
+    )
     allowed_runners = [
         normalize_absolute(path)
         for path in (
@@ -686,8 +722,14 @@ def create_plan(
     peers: list[dict[str, Any]] = []
     parent_pids: set[int] = set()
     seen_ports: set[int] = set()
-    for index, (config, storage_dir, pid_file) in enumerate(
-        zip(configs, storage_dirs, pid_files, strict=True)
+    for index, (config, storage_dir, pid_file, authenticated_node_id) in enumerate(
+        zip(
+            configs,
+            storage_dirs,
+            pid_files,
+            authenticated_node_ids,
+            strict=True,
+        )
     ):
         require_descendant(config, base, "--config")
         require_descendant(storage_dir, base, "--storage")
@@ -761,6 +803,13 @@ def create_plan(
                     / "terminal"
                     / f"validator-{index + 1}-terminal-unhealthy.json"
                 ),
+                "lifecycle": {
+                    "journal_root": str(
+                        lifecycle_journal_root(install_dir, index + 1)
+                    ),
+                    "node_id": authenticated_node_id,
+                    "validator_id": f"taira-validator-{index + 1}",
+                },
             }
         )
     if len(parent_pids) != 1:
@@ -1094,6 +1143,8 @@ def validate_manifest_shape(manifest: object) -> dict[str, Any]:
         peer_pids: set[int] = set()
         storage_identities: set[tuple[str, int, int]] = set()
         config_paths: set[str] = set()
+        lifecycle_roots: set[str] = set()
+        lifecycle_node_ids: set[str] = set()
         ports: set[int] = set()
         controller = validate_manifest_process_identity(
             manifest["legacy"]["controller"]
@@ -1123,6 +1174,24 @@ def validate_manifest_shape(manifest: object) -> dict[str, Any]:
             )
             if Path(peer["terminal_unhealthy_file"]) != expected_terminal_file:
                 raise MigrationError("manifest terminal-unhealthy path is inconsistent")
+            lifecycle = peer["lifecycle"]
+            expected_validator_id = f"taira-validator-{number}"
+            expected_lifecycle_root = lifecycle_journal_root(install_dir, number)
+            if (
+                not isinstance(lifecycle, dict)
+                or set(lifecycle) != {"journal_root", "node_id", "validator_id"}
+                or lifecycle.get("validator_id") != expected_validator_id
+                or lifecycle.get("journal_root") != str(expected_lifecycle_root)
+                or not isinstance(lifecycle.get("node_id"), str)
+                or LIFECYCLE_NODE_ID_RE.fullmatch(lifecycle["node_id"]) is None
+            ):
+                raise MigrationError("manifest lifecycle identity is inconsistent")
+            if lifecycle["journal_root"] in lifecycle_roots:
+                raise MigrationError("manifest contains duplicate lifecycle root")
+            if lifecycle["node_id"] in lifecycle_node_ids:
+                raise MigrationError("manifest contains duplicate lifecycle node ID")
+            lifecycle_roots.add(lifecycle["journal_root"])
+            lifecycle_node_ids.add(lifecycle["node_id"])
             legacy_process = validate_manifest_process_identity(peer["legacy_process"])
             working_directory = validate_manifest_path_identity(
                 peer["working_directory"], expected_kind="directory"
@@ -1534,6 +1603,13 @@ def apply_plan(args: argparse.Namespace) -> None:
     ensure_install_directory(pids_dir, uid=uid, gid=gid, mode=0o700)
     ensure_install_directory(logs_dir, uid=uid, gid=gid, mode=0o700)
     ensure_install_directory(terminal_dir, uid=uid, gid=gid, mode=0o700)
+    lifecycle_roots = ensure_lifecycle_journal_layout(
+        install_dir, uid=uid, gid=gid
+    )
+    if lifecycle_roots != tuple(
+        Path(peer["lifecycle"]["journal_root"]) for peer in manifest["peers"]
+    ):
+        raise MigrationError("installed lifecycle journal layout is not exact")
     installed_supervisor = Path(manifest["install"]["supervisor"])
     copy_new_file(
         authenticated_assets[SUPERVISOR_SOURCE.name],
@@ -1650,6 +1726,15 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument(
         "--pid-file", action="append", help="repeat four times in peer order"
+    )
+    parser.add_argument(
+        "--authenticated-node-binding",
+        action="append",
+        required=True,
+        help=(
+            "taira-validator-N=<deploy-authenticated receipt-signer node ID>; "
+            "repeat exactly once for each validator slug"
+        ),
     )
     parser.add_argument(
         "--legacy-runner",

@@ -1009,6 +1009,36 @@ class IosCandidateEvidenceTest(unittest.TestCase):
                 )
                 self.assertTrue(any(field in error for error in errors), errors)
 
+    def test_production_ios_malformed_policy_stops_before_typed_platform_access(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ProductionFixture(self.fixture(temporary))
+            policy = json.loads(fixture.policy.read_text(encoding="utf-8"))
+            policy["allowed_validation_categories"] = 4
+            write_json(fixture.policy, policy)
+
+            errors = fixture.errors()
+
+            self.assertTrue(
+                any("allowed_validation_categories" in error for error in errors),
+                errors,
+            )
+            self.assertEqual(errors[-1], production_evidence.PLATFORM_TRUST_BLOCKER)
+
+    def test_production_ios_cbor_container_counts_are_bounded(self) -> None:
+        with self.assertRaisesRegex(ValueError, "map exceeds its item-count bound"):
+            production_evidence._decode_cbor(
+                bytes((0xB8, production_evidence.MAX_CBOR_MAP_ITEMS + 1)),
+                "oversized map",
+            )
+        with self.assertRaisesRegex(ValueError, "array exceeds its item-count bound"):
+            production_evidence._decode_cbor(
+                b"\x99"
+                + (production_evidence.MAX_CBOR_ARRAY_ITEMS + 1).to_bytes(2, "big"),
+                "oversized array",
+            )
+
     def test_production_ios_attestation_chain_count_is_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = ProductionFixture(self.fixture(temporary))

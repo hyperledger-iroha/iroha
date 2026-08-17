@@ -6,8 +6,33 @@ from pathlib import Path
 import pytest
 
 from scripts import finalize_taira_rollout_authority as finalizer
+from scripts import taira_authority_client
 
 DPN_COMMIT = "f" * 40
+
+
+def _authorized(
+    subject: dict[str, object], *, sidecar_generation: int = 1
+) -> finalizer.AuthorizedAuthority:
+    result = taira_authority_client.AuthorityResult(
+        role="native-evidence",
+        operation_id="a" * 64,
+        run_id="b" * 64,
+        status="authorized",
+        authority_envelope={
+            "generation": sidecar_generation,
+            "schema": "test-native-evidence-envelope",
+        },
+        durable_receipt={
+            "generation": sidecar_generation,
+            "schema": "test-native-evidence-receipt",
+        },
+    )
+    return finalizer.AuthorizedAuthority(
+        subject=dict(subject),
+        authority_envelope=result.authority_envelope_bytes,
+        durable_receipt=result.durable_receipt_bytes,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -126,7 +151,11 @@ def _install_pure_finalization_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
         "schema": "test-authority",
         "workspace_source_manifest_sha256": "c" * 64,
     }
-    monkeypatch.setattr(finalizer, "build_authority", lambda _args: dict(authority))
+    monkeypatch.setattr(
+        finalizer,
+        "build_authority",
+        lambda _args: _authorized(authority),
+    )
     monkeypatch.setattr(
         finalizer,
         "build_release_manifest",
@@ -172,6 +201,12 @@ def test_finalizer_completes_one_closed_two_phase_authority(
     assert (
         output / "artifacts" / finalizer.CONTROLLER_MANIFEST_NAME
     ).read_bytes() == b'{"sealed":true}\n'
+    assert (output / "artifacts" / finalizer.AUTHORITY_ENVELOPE).read_bytes() == (
+        _authorized({}).authority_envelope
+    )
+    assert (output / "artifacts" / finalizer.DURABLE_RECEIPT).read_bytes() == (
+        _authorized({}).durable_receipt
+    )
 
 
 def test_finalizer_rejects_authority_subject_replay_drift(
@@ -185,16 +220,43 @@ def test_finalizer_rejects_authority_subject_replay_drift(
     def drifting_authority(_args):
         nonlocal calls
         calls += 1
-        return {
-            "dpn_validator_release_commit": DPN_COMMIT,
-            "schema": "test-authority",
-            "workspace_source_manifest_sha256": "c" * 64,
-            "generation": calls,
-        }
+        return _authorized(
+            {
+                "dpn_validator_release_commit": DPN_COMMIT,
+                "schema": "test-authority",
+                "workspace_source_manifest_sha256": "c" * 64,
+                "generation": calls,
+            }
+        )
 
     monkeypatch.setattr(finalizer, "build_authority", drifting_authority)
     with pytest.raises(
         finalizer.FinalizationError, match="subject changed after signing"
+    ):
+        finalizer.finalize(args)
+
+
+def test_finalizer_rejects_authenticated_sidecar_replay_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args, _evidence, _archive, _output, _verifier = _fixture(tmp_path, monkeypatch)
+    _install_pure_finalization_stubs(monkeypatch)
+    calls = 0
+    subject = {
+        "dpn_validator_release_commit": DPN_COMMIT,
+        "schema": "test-authority",
+        "workspace_source_manifest_sha256": "c" * 64,
+    }
+
+    def drifting_sidecars(_args):
+        nonlocal calls
+        calls += 1
+        return _authorized(subject, sidecar_generation=calls)
+
+    monkeypatch.setattr(finalizer, "build_authority", drifting_sidecars)
+    with pytest.raises(
+        finalizer.FinalizationError, match="authenticated sidecars changed"
     ):
         finalizer.finalize(args)
 

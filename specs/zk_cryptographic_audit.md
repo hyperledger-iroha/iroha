@@ -35,8 +35,8 @@ binding, registry limits, batch dispatch, and runtime guardrails.
 
 FASTPQ lane admission binds the proof to the lane envelope and AXT claim metadata:
 dataspace, manifest root, source transaction commitment, effect type, claim digest,
-batch seal, transfer witnesses, public I/O, transcript challenges, AIR openings,
-Merkle paths, FRI query chains, and proof-size limits.
+optional committed amount, batch seal, transfer witnesses, public I/O, transcript
+challenges, AIR openings, Merkle paths, FRI query chains, and proof-size limits.
 
 The principal audit risk is boundary management. Recovery-only trust paths and
 diagnostic endpoints must never be usable as fresh ledger-admission proof. This report

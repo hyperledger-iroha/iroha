@@ -30,7 +30,7 @@ class _ExternalReleasePlan(Protocol):
     manifest_directory_inventory_sha256: str | None
     manifest_files: tuple[Path, ...]
     manifest_digest_sidecars: tuple[Path, ...]
-    verified: bool
+    bounded_material_present: bool
 
 
 class _BundlePlan(Protocol):
@@ -119,8 +119,12 @@ class DeploymentAuthorityProjection:
         self._qualified_handoff_manifest = qualified_handoff_manifest
         self._qualified_handoff_maximum = qualified_handoff_maximum
 
-    @staticmethod
-    def kagemusha_subject(bundle: _BundlePlan) -> dict[str, object]:
+    def kagemusha_subject(
+        self,
+        bundle: _BundlePlan,
+        *,
+        exact_binary_config_verified: bool = False,
+    ) -> dict[str, object]:
         """Return the digest-only Kagemusha deployment authority projection."""
 
         projection_sha256 = getattr(
@@ -129,10 +133,16 @@ class DeploymentAuthorityProjection:
         external = getattr(bundle, "kagemusha_external_release", None)
         if projection_sha256 is None:
             return {"configured": False}
+        material_present = bool(
+            external and getattr(external, "bounded_material_present", False)
+        )
+        semantic_verified = bool(material_present and exact_binary_config_verified)
         return {
             "configured": True,
             "config_projection_sha256": projection_sha256,
-            "external_release_verified": bool(external and external.verified),
+            "bounded_material_present": material_present,
+            "exact_binary_config_verified": semantic_verified,
+            "external_release_verified": semantic_verified,
             "manifest_directory_digests": (
                 list(external.manifest_directory_digests) if external else []
             ),
@@ -189,9 +199,11 @@ class DeploymentAuthorityProjection:
             )
         return tuple(artifacts)
 
-    @staticmethod
     def report_fields(
-        bundle: _BundlePlan, *, exact_binary_config_verified: bool
+        self,
+        bundle: _BundlePlan,
+        *,
+        exact_binary_config_verified: bool,
     ) -> dict[str, object]:
         """Return unambiguous Kagemusha readiness fields for reports."""
 
@@ -200,20 +212,26 @@ class DeploymentAuthorityProjection:
         )
         external = getattr(bundle, "kagemusha_external_release", None)
         configured = projection_sha256 is not None
-        external_verified = bool(external and external.verified)
+        material_present = bool(
+            external and getattr(external, "bounded_material_present", False)
+        )
+        exact_verified = bool(
+            configured and material_present and exact_binary_config_verified
+        )
         if not configured:
             status = "not-configured"
-        elif external_verified:
-            status = "bounded-external-release-verified"
-        else:
+        elif not material_present:
             status = "blocked-external-release-unavailable"
+        elif exact_verified:
+            status = "exact-installed-binary-config-verified"
+        else:
+            status = "blocked-exact-installed-binary-config-pending"
         return {
             "kagemusha_config_projection_sha256": projection_sha256,
-            "kagemusha_exact_binary_config_verified": bool(
-                configured and exact_binary_config_verified
-            ),
+            "kagemusha_exact_binary_config_verified": exact_verified,
+            "kagemusha_external_release_material_present": material_present,
             "kagemusha_external_release_status": status,
-            "kagemusha_external_release_verified": external_verified,
+            "kagemusha_external_release_verified": exact_verified,
             "kagemusha_manifest_directory_inventory_sha256": (
                 external.manifest_directory_inventory_sha256 if external else None
             ),
@@ -227,6 +245,8 @@ class DeploymentAuthorityProjection:
         admission: _AdmissionPlan,
         bundle: _BundlePlan,
         sources: _SourcePlan,
+        *,
+        exact_binary_config_verified: bool = False,
     ) -> dict[str, object]:
         """Build the stable digest-only subject shared by every lease phase."""
 
@@ -242,7 +262,10 @@ class DeploymentAuthorityProjection:
                 "reset_manifest_sha256": admission.reset_manifest_sha256,
             },
             "bundle": {
-                "kagemusha": self.kagemusha_subject(bundle),
+                "kagemusha": self.kagemusha_subject(
+                    bundle,
+                    exact_binary_config_verified=exact_binary_config_verified,
+                ),
                 "manifest_sha256": bundle.manifest_sha256,
                 "peer_config_sha256": {
                     peer.slug: peer.config_sha256 for peer in bundle.peers

@@ -84,6 +84,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         vec![
             LaneConfigMetadata {
                 id: LaneId::new(0),
+                shard_id: None,
                 dataspace_id: DataSpaceId::UNIVERSAL,
                 alias: "core".to_string(),
                 description: Some("Primary execution lane".to_string()),
@@ -97,6 +98,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
             },
             LaneConfigMetadata {
                 id: LaneId::new(1),
+                shard_id: None,
                 dataspace_id: DataSpaceId::new(1),
                 alias: "governance".to_string(),
                 description: Some("Governance & parliament traffic".to_string()),
@@ -110,6 +112,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
             },
             LaneConfigMetadata {
                 id: LaneId::new(2),
+                shard_id: None,
                 dataspace_id: DataSpaceId::new(2),
                 alias: "zk".to_string(),
                 description: Some("Zero-knowledge attachments".to_string()),

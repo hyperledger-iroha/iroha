@@ -10,10 +10,12 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import secrets
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -166,7 +168,7 @@ CLI_COMPONENT_FILES = (
     "copy_sumeragi_v2_release_cargo_cache_cli.py",
 )
 CLI_COMPONENT_SHA256 = (
-    "5bb8bcb8c470e505e663f14734f21a9f0b2b543e3a433fbd2343af34a8ac0e1d"
+    "b7089197ea41d6b809984dae70b60e39536696aeec4b3d4973c53de3c4c0af02"
 )
 CLI_COMPONENT_MAXIMUM_BYTES = 512 * 1024
 
@@ -2574,11 +2576,7 @@ def verify_runtime_sources(
     input_file_bytes = sum(record.get("size", 0) for record in inventory["input_records"] if isinstance(record, dict) and record.get("kind") == "file")
     if type(inventory.get("input_record_count")) is not int or inventory["input_record_count"] != len(inventory["input_records"]) or type(inventory.get("input_file_bytes")) is not int or inventory["input_file_bytes"] != input_file_bytes:
         raise CacheCopyError("runtime source inventory accounting is not exact")
-    _verify_runtime_sources(
-        _runtime_source_roots(resolved),
-        inventory["input_records"],
-        omitted_paths=framework_omitted_paths,
-    )
+    source_roots = _runtime_source_roots(resolved)
     for record in inventory["records"]:
         if not isinstance(record, dict):
             raise CacheCopyError("private runtime record is not an object")
@@ -2599,7 +2597,7 @@ def verify_runtime_sources(
         _validate_framework_python_runtime_records(
             inventory["records"], framework, stdlib_name,
         )
-        _cli_component()[2](
+        source_roots.update(_cli_component()[2](
             version_root=version_root,
             framework=framework,
             source_python=resolved[0],
@@ -2607,7 +2605,11 @@ def verify_runtime_sources(
             contract=inventory["framework_python_relocation"],
             digest_regular=_digest_regular,
             error_type=CacheCopyError,
-        )
+        ))
+    _verify_runtime_sources(
+        source_roots, inventory["input_records"],
+        omitted_paths=framework_omitted_paths,
+    )
     _bind_runtime_destinations(
         inventory["input_records"], inventory["records"], update=False,
         relocation=inventory.get("framework_python_relocation"),
@@ -4245,7 +4247,10 @@ def _populate_runtime(
             os.close(source_fd)
             os.close(destination_parent_fd)
 
-    def copy_stable_file(source: Path, destination: Path, label: str) -> None:
+    def copy_stable_file(
+        source: Path, destination: Path, label: str, *,
+        input_path: str | None = None,
+    ) -> None:
         source_parent_fd, source_parent_identity = _open_directory(source.parent, f"{label} parent")
         destination_parent_fd, destination_parent_identity = _open_directory(destination.parent, f"private {label} parent")
         try:
@@ -4255,7 +4260,7 @@ def _populate_runtime(
             input_budget["records"] += 1
             input_records.append(_copy_regular(
                 source_parent_fd, destination_parent_fd, source.name,
-                destination.name, before, input_budget,
+                input_path or destination.name, before, input_budget,
                 destination_name=destination.name,
             ))
             _revalidate_entry(source_parent_fd, source.name, before, label)
@@ -4355,6 +4360,20 @@ def _populate_runtime(
                 symlink_parts=(name,),
                 omitted_paths=framework_omitted_paths,
             )
+        dependency_root = (
+            runtime_root / "lib" / stdlib_name / "iroha-loader-deps"
+        )
+        os.mkdir(dependency_root, mode=0o700)
+        def copy_external(
+            source: Path, archive_path: str, input_path: str,
+        ) -> None:
+            destination = runtime_root / archive_path
+            if destination.parent != dependency_root:
+                raise CacheCopyError("framework Mach-O destination is not exact")
+            copy_stable_file(
+                source, destination, "external framework Mach-O dependency",
+                input_path=input_path,
+            )
         _validate_framework_python_sources(version_root, framework, stdlib_name)
         framework_relocation = _cli_component()[1](
             version_root=version_root,
@@ -4363,6 +4382,7 @@ def _populate_runtime(
             runtime_root=runtime_root,
             digest_regular=_digest_regular,
             error_type=CacheCopyError,
+            copy_external=copy_external,
         )
     _seal_copied_tree(
         runtime_root,
@@ -4374,7 +4394,7 @@ def _populate_runtime(
         ),
     )
     if framework_python is not None:
-        _cli_component()[2](
+        source_roots.update(_cli_component()[2](
             version_root=version_root,
             framework=framework,
             source_python=resolved[0],
@@ -4382,7 +4402,7 @@ def _populate_runtime(
             contract=framework_relocation,
             digest_regular=_digest_regular,
             error_type=CacheCopyError,
-        )
+        ))
         _probe_framework_python_runtime(runtime_root, stdlib_name)
     runtime_fd, runtime_identity = _open_directory(runtime_root, "private runtime")
     records: list[dict[str, object]] = []
@@ -4562,10 +4582,7 @@ def verify_framework_python_runtime(
         "Resources": version_root / "Resources",
         "lib": version_root / "lib",
     }
-    _verify_runtime_sources(
-        source_roots, input_records, omitted_paths=omitted_paths,
-    )
-    _cli_component()[2](
+    source_roots.update(_cli_component()[2](
         version_root=version_root,
         framework=framework,
         source_python=source_python,
@@ -4573,6 +4590,9 @@ def verify_framework_python_runtime(
         contract=inventory["relocation"],
         digest_regular=_digest_regular,
         error_type=CacheCopyError,
+    ))
+    _verify_runtime_sources(
+        source_roots, input_records, omitted_paths=omitted_paths,
     )
     _bind_runtime_destinations(
         input_records, records, update=False,
@@ -4639,7 +4659,10 @@ def copy_framework_python_runtime(
     input_records: list[dict[str, object]] = []
     input_budget = {"records": 0, "bytes": 0}
 
-    def copy_file(source: Path, destination: Path, label: str) -> None:
+    def copy_file(
+        source: Path, destination: Path, label: str, *,
+        input_path: str | None = None,
+    ) -> None:
         source_parent_fd, source_parent = _open_directory(
             source.parent, f"{label} parent",
         )
@@ -4660,7 +4683,7 @@ def copy_framework_python_runtime(
                     source_parent_fd,
                     destination_parent_fd,
                     source.name,
-                    destination.name,
+                    input_path or destination.name,
                     before,
                     input_budget,
                     destination_name=destination.name,
@@ -4757,6 +4780,20 @@ def copy_framework_python_runtime(
         )
         for name in ("Resources", "lib"):
             copy_tree(version_root / name, runtime_root / name, name)
+        dependency_root = (
+            runtime_root / "lib" / stdlib_name / "iroha-loader-deps"
+        )
+        os.mkdir(dependency_root, mode=0o700)
+        def copy_external(
+            source: Path, archive_path: str, input_path: str,
+        ) -> None:
+            destination = runtime_root / archive_path
+            if destination.parent != dependency_root:
+                raise CacheCopyError("framework Mach-O destination is not exact")
+            copy_file(
+                source, destination, "external framework Mach-O dependency",
+                input_path=input_path,
+            )
         _validate_framework_python_sources(version_root, framework, stdlib_name)
         relocation = _cli_component()[1](
             version_root=version_root,
@@ -4765,13 +4802,14 @@ def copy_framework_python_runtime(
             runtime_root=runtime_root,
             digest_regular=_digest_regular,
             error_type=CacheCopyError,
+            copy_external=copy_external,
         )
         _seal_copied_tree(
             runtime_root,
             "protected framework Python runtime",
             owner_private_directory_roots=(("Resources", "Python.app"),),
         )
-        _cli_component()[2](
+        external_roots = _cli_component()[2](
             version_root=version_root,
             framework=framework,
             source_python=source_python,
@@ -4812,6 +4850,7 @@ def copy_framework_python_runtime(
             "Resources": version_root / "Resources",
             "lib": version_root / "lib",
         }
+        source_roots.update(external_roots)
         _verify_runtime_sources(
             source_roots, input_records, omitted_paths=omitted_paths,
         )

@@ -9,7 +9,7 @@ use iroha_data_model::{
         MergeLaneBinding, MergeLaneExecution, MergeLaneSnapshot, MergeLedgerEntry,
         MergeQuorumCertificate,
     },
-    nexus::{DataSpaceId, LaneConfig, LaneId, LaneStorageProfile, LaneVisibility},
+    nexus::{DataSpaceId, LaneConfig, LaneId, LaneStorageProfile, LaneVisibility, ShardId},
     peer::PeerId,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
@@ -239,6 +239,7 @@ pub fn merge_activation_root(active_lanes: &[MergeLaneBinding]) -> Hash {
 struct MergeLaneConfigConsensusProjection {
     version: u16,
     id: LaneId,
+    shard_id: ShardId,
     dataspace_id: DataSpaceId,
     visibility: LaneVisibility,
     lane_type: Option<String>,
@@ -254,6 +255,7 @@ impl MergeLaneConfigConsensusProjection {
         // requires an explicit decision about whether consensus must bind it.
         let LaneConfig {
             id,
+            shard_id: _,
             dataspace_id,
             alias: _,
             description: _,
@@ -268,6 +270,7 @@ impl MergeLaneConfigConsensusProjection {
         Self {
             version: MERGE_LANE_CONFIG_PROJECTION_VERSION,
             id: *id,
+            shard_id: lane.effective_shard_id(),
             dataspace_id: *dataspace_id,
             visibility: *visibility,
             lane_type: lane_type.clone(),
@@ -597,6 +600,7 @@ mod tests {
     fn merge_lane_config_hash_matches_protocol_golden() {
         let mut lane = LaneConfig {
             id: LaneId::new(3),
+            shard_id: None,
             dataspace_id: DataSpaceId::new(9),
             alias: "operator-display-name".to_owned(),
             description: Some("operator display description".to_owned()),

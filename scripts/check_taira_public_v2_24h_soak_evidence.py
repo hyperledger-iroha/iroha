@@ -5,7 +5,7 @@ This is an offline validator, not a workload runner or observation authority.
 Its public API and CLI refuse before caller-controlled path I/O while the
 independent authority, durable replay broker, and native evidence verifier are
 unprovisioned. The private structural validator defines the closed v1 receipt
-that those independent components must eventually authenticate.
+that those independent components authenticate.
 """
 
 from __future__ import annotations

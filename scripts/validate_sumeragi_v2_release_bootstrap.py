@@ -123,12 +123,12 @@ _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
         "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "b2aef9ccaf054334b10fd2a2ff556af91d29c55c2dee847006ff6bdc0861a50a"
+        "4f351ac1711c88465e76f804c714a8d43ee0fc8d0133739b717f6e31dcf79ae6"
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "783d0eec35169a98663b14be54ba5ada430f8d385ee4142fc7772fe85934e53a"
+        "59bdbde20094d65a855f08dd5aad22e827c985c19f58edf3090a72164cd7cc0e"
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -794,17 +794,278 @@ def _framework_source_records(
     return records
 
 
+def _validate_framework_python_macho_closure(
+    value: Any,
+    source_by_path: dict[str, dict[str, Any]],
+    output_by_path: dict[str, dict[str, Any]],
+    framework: str,
+) -> None:
+    """Validate every recursive Mach-O copy, transform, and runtime binding."""
+
+    closure = _exact_dict(
+        value,
+        {
+            "format", "schema_version", "source_image_count",
+            "external_sources", "transforms", "runtime",
+        },
+        "framework Python Mach-O closure",
+    )
+    runtime = _exact_dict(
+        closure["runtime"],
+        {"format", "schema_version", "image_count", "images"},
+        "framework Python Mach-O runtime",
+    )
+    if (
+        closure["format"]
+        != "iroha-sumeragi-v2-framework-python-mach-o-transcript"
+        or _strict_int(
+            closure["schema_version"], "framework Mach-O closure schema",
+        ) != 1
+        or not 3 <= _strict_int(
+            closure["source_image_count"], "framework Mach-O source count",
+        ) <= 4096
+        or runtime["format"] != "iroha-sumeragi-v2-framework-python-mach-o"
+        or _strict_int(
+            runtime["schema_version"], "framework Mach-O runtime schema",
+        ) != 1
+        or not isinstance(runtime["images"], list)
+        or _strict_int(
+            runtime["image_count"], "framework Mach-O runtime count",
+        ) != len(runtime["images"])
+        or runtime["image_count"] != closure["source_image_count"]
+        or not isinstance(closure["external_sources"], list)
+        or not isinstance(closure["transforms"], list)
+    ):
+        raise ValidationError("framework Python Mach-O closure is not exact")
+
+    def safe_path(value: Any, label: str) -> str:
+        path = _string(value, label)
+        if (
+            path.startswith("/") or PurePosixPath(path).as_posix() != path
+            or ".." in PurePosixPath(path).parts
+        ):
+            raise ValidationError(f"{label} is unsafe")
+        return path
+
+    image_paths: list[str] = []
+    for image_value in runtime["images"]:
+        image = _exact_dict(
+            image_value, {"path", "size_bytes", "sha256", "slices"},
+            "framework Python Mach-O image",
+        )
+        path = safe_path(image["path"], "framework Mach-O image path")
+        output = output_by_path.get(path)
+        if (
+            not 0 < _strict_int(
+                image["size_bytes"], "framework Mach-O image size",
+            ) <= 256 * 1024 * 1024
+            or _digest(image["sha256"], "framework Mach-O image digest")
+            != image["sha256"]
+            or not isinstance(image["slices"], list)
+            or not 1 <= len(image["slices"]) <= 64
+            or not isinstance(output, dict)
+            or output.get("kind") != "file"
+            or (output.get("size"), output.get("sha256"))
+            != (image["size_bytes"], image["sha256"])
+        ):
+            raise ValidationError("framework Python Mach-O image is not bound")
+        for slice_value in image["slices"]:
+            slice_record = _exact_dict(
+                slice_value,
+                {
+                    "cpu_type", "cpu_subtype", "file_type", "dependencies",
+                    "id_dylib_sha256", "rpath_sha256", "code_signature",
+                },
+                "framework Python Mach-O slice",
+            )
+            if (
+                slice_record["code_signature"] != "embedded"
+                or any(
+                    type(slice_record[field]) is not int
+                    or slice_record[field] < 0
+                    for field in ("cpu_type", "cpu_subtype", "file_type")
+                )
+                or not isinstance(slice_record["dependencies"], list)
+            ):
+                raise ValidationError("framework Python Mach-O slice is not exact")
+            for field in ("id_dylib_sha256", "rpath_sha256"):
+                if not isinstance(slice_record[field], list) or any(
+                    _digest(digest, "framework Mach-O command digest") != digest
+                    for digest in slice_record[field]
+                ):
+                    raise ValidationError("framework Mach-O command digest is malformed")
+            for dependency in slice_record["dependencies"]:
+                binding = dependency.get("binding") if isinstance(dependency, dict) else None
+                keys = (
+                    {"command", "binding", "install_name_sha256"}
+                    if binding == "system"
+                    else {"command", "binding", "install_name", "target"}
+                    if binding == "archive"
+                    else set()
+                )
+                if (
+                    not isinstance(dependency, dict)
+                    or set(dependency) != keys
+                    or type(dependency.get("command")) is not int
+                ):
+                    raise ValidationError("framework Mach-O dependency is malformed")
+                if binding == "system":
+                    _digest(
+                        dependency["install_name_sha256"],
+                        "framework Mach-O dependency digest",
+                    )
+                elif not _string(
+                    dependency["install_name"], "framework Mach-O install name",
+                ).startswith(("@loader_path/", "@executable_path/")):
+                    raise ValidationError("framework Mach-O dependency is not local")
+                else:
+                    safe_path(
+                        dependency["target"], "framework Mach-O dependency target",
+                    )
+        image_paths.append(path)
+    if image_paths != sorted(image_paths) or len(image_paths) != len(set(image_paths)):
+        raise ValidationError("framework Python Mach-O image order is not exact")
+    image_set = set(image_paths)
+    if any(
+        dependency["binding"] == "archive"
+        and dependency["target"] not in image_set
+        for image in runtime["images"]
+        for slice_record in image["slices"]
+        for dependency in slice_record["dependencies"]
+    ):
+        raise ValidationError("framework Mach-O dependency target is absent")
+
+    external: dict[str, dict[str, Any]] = {}
+    external_paths: list[str] = []
+    for source_value in closure["external_sources"]:
+        source = _exact_dict(
+            source_value,
+            {"input_path", "path", "mode", "sha256", "size_bytes"},
+            "external framework Mach-O source",
+        )
+        input_path = safe_path(
+            source["input_path"], "external framework Mach-O input",
+        )
+        path = safe_path(source["path"], "external framework Mach-O output")
+        mode = _mode(source["mode"], "external framework Mach-O source")
+        if (
+            not input_path.startswith("mach-o-dependency-sources/")
+            or "/iroha-loader-deps/" not in f"/{path}"
+            or mode & 0o022 or not mode & 0o444
+            or not 0 < _strict_int(
+                source["size_bytes"], "external framework Mach-O size",
+            ) <= 256 * 1024 * 1024
+        ):
+            raise ValidationError("external framework Mach-O source is unsafe")
+        _digest(source["sha256"], "external framework Mach-O digest")
+        external[path] = source
+        external_paths.append(path)
+
+    transform_paths: list[str] = []
+    for transform_value in closure["transforms"]:
+        transform = _exact_dict(
+            transform_value,
+            {
+                "input_path", "path", "source_mode", "source_sha256",
+                "source_size_bytes", "derived_mode", "derived_sha256",
+                "derived_size_bytes", "operations", "codesign",
+            },
+            "framework Python Mach-O transform",
+        )
+        input_path = safe_path(
+            transform["input_path"], "framework Mach-O transform input",
+        )
+        path = safe_path(transform["path"], "framework Mach-O transform output")
+        source = source_by_path.get(input_path)
+        output = output_by_path.get(path)
+        source_mode = _mode(
+            transform["source_mode"], "framework Mach-O transform source",
+        )
+        if (
+            path not in image_set or source_mode & 0o022 or not source_mode & 0o444
+            or transform["derived_mode"] != "0500"
+            or transform["codesign"] != "adhoc"
+            or not isinstance(transform["operations"], list)
+            or not isinstance(source, dict) or source.get("kind") != "file"
+            or (source.get("source_mode"), source.get("sha256"), source.get("size"))
+            != (
+                transform["source_mode"], transform["source_sha256"],
+                transform["source_size_bytes"],
+            )
+            or not isinstance(output, dict) or output.get("kind") != "file"
+            or (output.get("mode"), output.get("sha256"), output.get("size"))
+            != (
+                transform["derived_mode"], transform["derived_sha256"],
+                transform["derived_size_bytes"],
+            )
+        ):
+            raise ValidationError("framework Python Mach-O transform is not bound")
+        for field in ("source_sha256", "derived_sha256"):
+            _digest(transform[field], f"framework Mach-O {field}")
+        for field in ("source_size_bytes", "derived_size_bytes"):
+            if not 0 < _strict_int(
+                transform[field], f"framework Mach-O {field}",
+            ) <= 256 * 1024 * 1024:
+                raise ValidationError("framework Mach-O transform size is unsafe")
+        for operation in transform["operations"]:
+            operation = _exact_dict(
+                operation,
+                {"operation", "source_install_name_sha256", "replacement"},
+                "framework Mach-O operation",
+            )
+            if (
+                operation["operation"] != "change"
+                or not _string(
+                    operation["replacement"], "framework Mach-O replacement",
+                ).startswith(("@loader_path/", "@executable_path/"))
+            ):
+                raise ValidationError("framework Mach-O operation is unsafe")
+            _digest(
+                operation["source_install_name_sha256"],
+                "framework Mach-O source install name",
+            )
+        bound = external.get(path)
+        if bound is not None and (
+            input_path, transform["source_mode"], transform["source_sha256"],
+            transform["source_size_bytes"],
+        ) != (
+            bound["input_path"], bound["mode"], bound["sha256"],
+            bound["size_bytes"],
+        ):
+            raise ValidationError("external framework Mach-O binding changed")
+        transform_paths.append(path)
+    if (
+        external_paths != sorted(external_paths)
+        or len(external_paths) != len(external)
+        or transform_paths != sorted(transform_paths)
+        or len(transform_paths) != len(set(transform_paths))
+        or not set(external) <= set(transform_paths)
+        or not {
+            "bin/python3",
+            "Resources/Python.app/Contents/MacOS/Python",
+        } <= set(transform_paths)
+        or not {
+            "bin/python3", framework,
+            "Resources/Python.app/Contents/MacOS/Python",
+        } <= image_set
+    ):
+        raise ValidationError("framework Python Mach-O closure is incomplete")
+
+
 def _validate_framework_python_relocation(
     public: Any,
     private: Any,
     input_records: Any,
     runtime_records: list[dict[str, Any]],
 ) -> None:
-    """Independently bind two relocated Mach-O files to sources and tools."""
+    """Independently bind the complete relocated Mach-O closure."""
 
     relocation = _exact_dict(
         public,
-        {"format", "schema_version", "framework", "tools", "artifacts"},
+        {
+            "format", "schema_version", "framework", "tools", "artifacts",
+            "closure",
+        },
         "framework Python relocation",
     )
     if private != relocation or (
@@ -813,7 +1074,7 @@ def _validate_framework_python_relocation(
         or _strict_int(
             relocation["schema_version"], "framework Python relocation schema"
         )
-        != 1
+        != 2
         or not isinstance(relocation["framework"], str)
         or re.fullmatch(
             r"[A-Za-z0-9][A-Za-z0-9._+-]*", relocation["framework"]
@@ -857,12 +1118,23 @@ def _validate_framework_python_relocation(
         if isinstance(record, dict)
     }
     derived_by_path = {record["path"]: record for record in runtime_records}
+    _validate_framework_python_macho_closure(
+        relocation["closure"], source_by_path, derived_by_path,
+        relocation["framework"],
+    )
+    transform_by_path = {
+        transform["path"]: transform
+        for transform in relocation["closure"]["transforms"]
+    }
     rewrites = {
-        "launcher": ("python3", "bin/python3", "@executable_path/../Python"),
+        "launcher": (
+            "python3", "bin/python3",
+            f"@executable_path/../{relocation['framework']}",
+        ),
         "trampoline": (
             "Resources/Python.app/Contents/MacOS/Python",
             "Resources/Python.app/Contents/MacOS/Python",
-            "@executable_path/../../../../Python",
+            f"@executable_path/../../../../{relocation['framework']}",
         ),
     }
     for name, (source_path, derived_path, dependency) in rewrites.items():
@@ -889,6 +1161,7 @@ def _validate_framework_python_relocation(
         )
         source_record = source_by_path.get(source_path)
         derived_record = derived_by_path.get(derived_path)
+        transform = transform_by_path.get(derived_path)
         if (
             artifact["path"] != derived_path
             or _mode(source["mode"], "framework Python relocation source mode")
@@ -921,6 +1194,18 @@ def _validate_framework_python_relocation(
                 derived_record.get("size"),
             )
             != (derived["mode"], derived["sha256"], derived["size_bytes"])
+            or not isinstance(transform, dict)
+            or transform["input_path"] != source_path
+            or (
+                transform["source_mode"], transform["source_sha256"],
+                transform["source_size_bytes"],
+            )
+            != (source["mode"], source["sha256"], source["size_bytes"])
+            or (
+                transform["derived_mode"], transform["derived_sha256"],
+                transform["derived_size_bytes"],
+            )
+            != (derived["mode"], derived["sha256"], derived["size_bytes"])
         ):
             raise ValidationError(
                 "framework Python relocation artifact binding is wrong"
@@ -933,13 +1218,39 @@ def _validate_framework_python_relocation(
         if any(
             not isinstance(digest, str) or _DIGEST_RE.fullmatch(digest) is None
             for digest in digests
-        ) or (
-            source["sha256"] == derived["sha256"]
-            or source["dependency_vector_sha256"]
-            == derived["dependency_vector_sha256"]
         ):
             raise ValidationError(
                 "framework Python relocation digest binding is wrong"
+            )
+        operation_replacements = [
+            operation["replacement"]
+            for operation in transform["operations"]
+        ]
+        already_local = source["framework_dependency_sha256"] == hashlib.sha256(
+            dependency.encode("utf-8", "strict")
+        ).hexdigest()
+        if (
+            operation_replacements not in ([], [dependency])
+            or already_local != (operation_replacements == [])
+            or (
+                operation_replacements
+                and transform["operations"][0][
+                    "source_install_name_sha256"
+                ]
+                != source["framework_dependency_sha256"]
+            )
+            or (
+                operation_replacements
+                and source["sha256"] == derived["sha256"]
+            )
+            or (
+                operation_replacements
+                and source["dependency_vector_sha256"]
+                == derived["dependency_vector_sha256"]
+            )
+        ):
+            raise ValidationError(
+                "framework Python relocation derivation is wrong"
             )
     if derived_by_path.get(relocation["framework"], {}).get("kind") != "file":
         raise ValidationError(

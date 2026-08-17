@@ -1,6 +1,6 @@
 {
   "baseline": {
-    "manifest_fingerprint": "sha256:8c90f97e718d7f63fcbbcf54a91a41858d8173bf80a1802a7cc8530b641d98da",
+    "manifest_fingerprint": "sha256:ec06df684b967ee664a46b9ba8a375cb9a209d3b3419e00373f9de0154f5c2f8",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [

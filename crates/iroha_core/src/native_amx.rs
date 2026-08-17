@@ -33,10 +33,11 @@ const NATIVE_AMX_SIGNING_GUARD_VERSION: u8 = 5;
 #[cfg(unix)]
 const NATIVE_AMX_SIGNING_GUARD_DIRECTORY: &str = "native-amx-v2-signing-guard-v5";
 #[cfg(unix)]
-const NATIVE_AMX_LEGACY_SIGNING_GUARD_DIRECTORIES: &[&str] = &[
+const NATIVE_AMX_UNSUPPORTED_SIGNING_GUARD_DIRECTORIES: &[&str] = &[
     "native-amx-v2-signing-guard-v1",
     "native-amx-v2-signing-guard-v2",
     "native-amx-v2-signing-guard-v3",
+    "native-amx-v2-signing-guard-v4",
 ];
 const NATIVE_AMX_SIGNING_GUARD_RECORD_EXTENSION: &str = "norito";
 const NATIVE_AMX_SIGNING_GUARD_TEMP_EXTENSION: &str = "norito.tmp";
@@ -48,13 +49,6 @@ const NATIVE_AMX_SIGNER_DIRECTORY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signer-d
 const NATIVE_AMX_SIGNING_BODY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signing-body:v5\0";
 const NATIVE_AMX_SIGNING_RECORD_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-chain:v5\0";
 const NATIVE_AMX_SIGNING_GENESIS_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-genesis:v5\0";
-#[cfg(unix)]
-const NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY: &str = "native-amx-v2-signing-guard-v4";
-#[cfg(unix)]
-const NATIVE_AMX_V4_RETIRED_SUFFIX: &str = ".retired-v5";
-const NATIVE_AMX_V4_SIGNING_BODY_DOMAIN: &[u8] = b"iroha:native-amx:v2:signing-body:v4\0";
-const NATIVE_AMX_V4_SIGNING_RECORD_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-chain:v4\0";
-const NATIVE_AMX_V4_SIGNING_GENESIS_DOMAIN: &[u8] = b"iroha:native-amx:v2:record-genesis:v4\0";
 /// Absolute bound for durable Native AMX signing decisions retained at one height.
 pub(crate) const MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD: usize =
     iroha_config::parameters::defaults::sumeragi::V2_NATIVE_AMX_SIGNING_GUARD_RECORD_CAPACITY_MAX;
@@ -449,199 +443,6 @@ impl NativeAmxSigningAnchorV2 {
         })
     }
 }
-/// Version-4 key retained solely to authenticate and migrate the previous
-/// on-disk guard format. Its global view is part of the durable key.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
-struct NativeAmxSigningKeyV4 {
-    network_id: NetworkId,
-    context_id: HeightContextId,
-    round: ConsensusRound,
-    epoch: u64,
-    source_id: [u8; Hash::LENGTH],
-    plan_digest: Hash,
-    participant_lane_id: LaneId,
-    participant_dataspace_id: DataSpaceId,
-    phase: NativeAmxPhase,
-    signer: PeerId,
-}
-impl NativeAmxSigningKeyV4 {
-    fn from_body(body: &NativeAmxAttestationBodyV2, signer: &PeerId) -> Self {
-        Self {
-            network_id: body.network_id,
-            context_id: body.round.context_id,
-            round: body.round,
-            epoch: body.epoch,
-            source_id: body.source_id,
-            plan_digest: body.plan_digest,
-            participant_lane_id: body.participant_lane_id,
-            participant_dataspace_id: body.participant_dataspace_id,
-            phase: body.phase,
-            signer: signer.clone(),
-        }
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct NativeAmxSigningSlotV4 {
-    network_id: NetworkId,
-    context_id: HeightContextId,
-    epoch: u64,
-    authority_context_height: u64,
-    participant_lane_id: LaneId,
-    participant_dataspace_id: DataSpaceId,
-    participant_lane_incarnation: Hash,
-    participant_lane_block_height: u64,
-    participant_lane_block_view: u64,
-    phase: NativeAmxPhase,
-    signer: PeerId,
-}
-impl NativeAmxSigningSlotV4 {
-    fn from_body(body: &NativeAmxAttestationBodyV2, signer: &PeerId) -> Self {
-        Self {
-            network_id: body.network_id,
-            context_id: body.round.context_id,
-            epoch: body.epoch,
-            authority_context_height: body.authority_context_height,
-            participant_lane_id: body.participant_lane_id,
-            participant_dataspace_id: body.participant_dataspace_id,
-            participant_lane_incarnation: body.participant_lane_incarnation,
-            participant_lane_block_height: body.participant_lane_block_height,
-            participant_lane_block_view: body.participant_lane_block_view,
-            phase: body.phase,
-            signer: signer.clone(),
-        }
-    }
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct NativeAmxSourceSessionClaimV4Legacy {
-    source_id: [u8; Hash::LENGTH],
-    tx_entrypoint_hash: HashOf<TransactionEntrypoint>,
-    plan_digest: Hash,
-    round: ConsensusRound,
-    epoch: u64,
-    network_id: NetworkId,
-    authority_context_height: u64,
-    coordinator_lane_id: LaneId,
-    coordinator_dataspace_id: DataSpaceId,
-    coordinator_lane_incarnation: Hash,
-    planned_coordinator_block_height: u64,
-    coordinator_lane_block_view: u64,
-    coordinator_proposal_hash: Hash,
-}
-impl NativeAmxSourceSessionClaimV4Legacy {
-    fn from_body(body: &NativeAmxAttestationBodyV2) -> Self {
-        Self {
-            source_id: body.source_id,
-            tx_entrypoint_hash: body.tx_entrypoint_hash,
-            plan_digest: body.plan_digest,
-            round: body.round,
-            epoch: body.epoch,
-            network_id: body.network_id,
-            authority_context_height: body.authority_context_height,
-            coordinator_lane_id: body.coordinator_lane_id,
-            coordinator_dataspace_id: body.coordinator_dataspace_id,
-            coordinator_lane_incarnation: body.coordinator_lane_incarnation,
-            planned_coordinator_block_height: body.planned_coordinator_block_height,
-            coordinator_lane_block_view: body.coordinator_lane_block_view,
-            coordinator_proposal_hash: body.coordinator_proposal_hash,
-        }
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-struct NativeAmxSigningRecordV4 {
-    version: u8,
-    sequence: u32,
-    previous_head: Hash,
-    key: NativeAmxSigningKeyV4,
-    body: NativeAmxAttestationBodyV2,
-    body_digest: Hash,
-    record_hash: Hash,
-}
-impl NativeAmxSigningRecordV4 {
-    #[cfg(test)]
-    fn from_body_for_test(
-        sequence: u32,
-        previous_head: Hash,
-        body: &NativeAmxAttestationBodyV2,
-        signer: &PeerId,
-    ) -> Result<Self, NativeAmxSigningGuardError> {
-        let encoded_body = norito::encode_canonical(body)
-            .map_err(|error| NativeAmxSigningGuardError::UnsafeJournal(error.to_string()))?;
-        let mut record = Self {
-            version: 4,
-            sequence,
-            previous_head,
-            key: NativeAmxSigningKeyV4::from_body(body, signer),
-            body: *body,
-            body_digest: Hash::new_from_chunks(&[
-                NATIVE_AMX_V4_SIGNING_BODY_DOMAIN,
-                encoded_body.as_slice(),
-            ]),
-            record_hash: Hash::prehashed([0; Hash::LENGTH]),
-        };
-        record.record_hash = record.computed_record_hash()?;
-        Ok(record)
-    }
-    fn computed_body_digest(&self) -> Result<Hash, NativeAmxSigningGuardError> {
-        let encoded = norito::encode_canonical(&self.body)
-            .map_err(|error| NativeAmxSigningGuardError::UnsafeJournal(error.to_string()))?;
-        Ok(Hash::new_from_chunks(&[
-            NATIVE_AMX_V4_SIGNING_BODY_DOMAIN,
-            encoded.as_slice(),
-        ]))
-    }
-    fn computed_record_hash(&self) -> Result<Hash, NativeAmxSigningGuardError> {
-        let mut hashable = self.clone();
-        hashable.record_hash = Hash::prehashed([0; Hash::LENGTH]);
-        let encoded = norito::encode_canonical(&hashable)
-            .map_err(|error| NativeAmxSigningGuardError::UnsafeJournal(error.to_string()))?;
-        Ok(Hash::new_from_chunks(&[
-            NATIVE_AMX_V4_SIGNING_RECORD_DOMAIN,
-            encoded.as_slice(),
-        ]))
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-struct NativeAmxSigningAnchorV4 {
-    version: u8,
-    binding: NativeAmxHeightBindingV2,
-    record_count: u32,
-    head_hash: Hash,
-    highest_view: Option<u64>,
-}
-impl NativeAmxSigningAnchorV4 {
-    #[cfg(test)]
-    fn empty_for_test(
-        binding: NativeAmxHeightBindingV2,
-    ) -> Result<Self, NativeAmxSigningGuardError> {
-        let mut anchor = Self {
-            version: 4,
-            binding,
-            record_count: 0,
-            head_hash: Hash::prehashed([0; Hash::LENGTH]),
-            highest_view: None,
-        };
-        anchor.head_hash = anchor.genesis_head()?;
-        Ok(anchor)
-    }
-    fn genesis_head(&self) -> Result<Hash, NativeAmxSigningGuardError> {
-        let encoded = norito::encode_canonical(&self.binding)
-            .map_err(|error| NativeAmxSigningGuardError::UnsafeJournal(error.to_string()))?;
-        Ok(Hash::new_from_chunks(&[
-            NATIVE_AMX_V4_SIGNING_GENESIS_DOMAIN,
-            encoded.as_slice(),
-        ]))
-    }
-}
-#[derive(Debug)]
-struct LoadedNativeAmxV4Journal {
-    anchor: NativeAmxSigningAnchorV4,
-    records: Vec<NativeAmxSigningRecordV4>,
-}
-#[derive(Debug)]
-struct NativeAmxV5MigrationImage {
-    anchor: NativeAmxSigningAnchorV2,
-    records: Vec<NativeAmxSigningRecordV2>,
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct NativeAmxFileIdentity {
     device: u64,
@@ -806,8 +607,8 @@ impl NativeAmxSigningGuardLimits {
 }
 /// Crash-safe local anti-equivocation guard for Native AMX v2 votes.
 /// Commits form a checkpointed authenticated chain; prepares fsync and quarantine
-/// their volatile view. Call `record` before signing. V4 evidence is migrated;
-/// whole-directory rollback requires external monotonic storage.
+/// their volatile view. Call `record` before signing. Whole-directory rollback
+/// requires external monotonic storage.
 #[derive(Debug)]
 pub(crate) struct NativeAmxSigningGuard {
     directory: PathBuf,
@@ -889,8 +690,7 @@ impl NativeAmxSigningGuard {
             signer: signer.clone(),
             max_records: max_records_u32,
         };
-        let (directory, owner_uid, signer_digest) =
-            native_amx_ensure_signer_directory(store_root, &signer)?;
+        let (directory, owner_uid) = native_amx_ensure_signer_directory(store_root, &signer)?;
         let (directory_handle, directory_identity) =
             native_amx_open_secure_directory(&directory, owner_uid)?;
         let (owner_lock, lock_path, lock_identity) =
@@ -910,15 +710,6 @@ impl NativeAmxSigningGuard {
             owner_uid,
             limits.max_record_bytes.get(),
             limits.max_anchor_bytes.get(),
-        )?;
-        Self::migrate_v4_journal_if_needed(
-            store_root,
-            signer_digest,
-            &directory,
-            &directory_handle,
-            owner_uid,
-            &supplied_binding,
-            limits,
         )?;
         let durable_anchor =
             Self::read_anchor(&directory, owner_uid, limits.max_anchor_bytes.get())?;
@@ -1054,685 +845,6 @@ impl NativeAmxSigningGuard {
                 poisoned: None,
             }),
         })
-    }
-    #[cfg(unix)]
-    fn migrate_v4_journal_if_needed(
-        store_root: &Path,
-        signer_digest: Hash,
-        directory: &Path,
-        directory_handle: &File,
-        owner_uid: u32,
-        supplied_binding: &NativeAmxHeightBindingV2,
-        limits: NativeAmxSigningGuardLimits,
-    ) -> Result<(), NativeAmxSigningGuardError> {
-        let legacy_root = store_root.join(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY);
-        let legacy_root_metadata = match fs::symlink_metadata(&legacy_root) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(native_amx_unsafe_journal(&legacy_root, error.to_string())),
-        };
-        native_amx_validate_secure_directory_metadata(
-            &legacy_root,
-            &legacy_root_metadata,
-            owner_uid,
-        )?;
-        let legacy_directory = legacy_root.join(signer_digest.to_string());
-        let retired_directory =
-            legacy_root.join(format!("{signer_digest}{NATIVE_AMX_V4_RETIRED_SUFFIX}"));
-        let retired_metadata = match fs::symlink_metadata(&retired_directory) {
-            Ok(metadata) => Some(metadata),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => {
-                return Err(native_amx_unsafe_journal(
-                    &retired_directory,
-                    error.to_string(),
-                ));
-            }
-        };
-        if let Some(metadata) = retired_metadata.as_ref() {
-            native_amx_validate_secure_directory_metadata(&retired_directory, metadata, owner_uid)?;
-        }
-        let legacy_metadata = match fs::symlink_metadata(&legacy_directory) {
-            Ok(metadata) => Some(metadata),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => {
-                return Err(native_amx_unsafe_journal(
-                    &legacy_directory,
-                    error.to_string(),
-                ));
-            }
-        };
-        let Some(legacy_metadata) = legacy_metadata else {
-            if retired_metadata.is_some()
-                && Self::read_anchor(directory, owner_uid, limits.max_anchor_bytes.get())?.is_none()
-            {
-                return Err(native_amx_unsafe_journal(
-                    &retired_directory,
-                    "retired V4 evidence exists without a published V5 anchor",
-                ));
-            }
-            return Ok(());
-        };
-        if retired_metadata.is_some() {
-            return Err(native_amx_unsafe_journal(
-                &legacy_root,
-                "active and retired V4 evidence coexist",
-            ));
-        }
-        native_amx_validate_secure_directory_metadata(
-            &legacy_directory,
-            &legacy_metadata,
-            owner_uid,
-        )?;
-        let (legacy_handle, legacy_identity) =
-            native_amx_open_secure_directory(&legacy_directory, owner_uid)?;
-        let (legacy_lock, legacy_lock_path, legacy_lock_identity) =
-            native_amx_acquire_owner_lock(&legacy_directory, &legacy_handle, owner_uid)?;
-        native_amx_verify_owned_directory(
-            &legacy_directory,
-            &legacy_handle,
-            legacy_identity,
-            owner_uid,
-            &legacy_lock_path,
-            &legacy_lock,
-            legacy_lock_identity,
-        )?;
-        native_amx_reconcile_guard_temps(
-            &legacy_directory,
-            &legacy_handle,
-            owner_uid,
-            limits.max_record_bytes.get(),
-            limits.max_anchor_bytes.get(),
-        )?;
-        let legacy = Self::load_validated_v4_journal(
-            &legacy_directory,
-            owner_uid,
-            limits.max_records.get(),
-            limits.max_record_bytes.get(),
-            limits.max_anchor_bytes.get(),
-        )?;
-        let image = Self::v5_migration_image(&legacy, supplied_binding)?;
-        match Self::read_anchor(directory, owner_uid, limits.max_anchor_bytes.get())? {
-            Some(anchor) => {
-                let loaded = Self::load_validated_journal(
-                    directory,
-                    directory_handle,
-                    owner_uid,
-                    &anchor,
-                    limits.max_records.get(),
-                    limits.max_record_bytes.get(),
-                )?;
-                Self::validate_v5_migration_image(directory, &image, &anchor, &loaded)?;
-            }
-            None => {
-                Self::remove_unpublished_v5_migration_prefix(
-                    directory,
-                    directory_handle,
-                    owner_uid,
-                    limits.max_record_bytes.get(),
-                    &image.records,
-                )?;
-                Self::publish_v5_migration_image(
-                    directory,
-                    directory_handle,
-                    owner_uid,
-                    limits,
-                    &image,
-                )?;
-            }
-        }
-        native_amx_verify_owned_directory(
-            &legacy_directory,
-            &legacy_handle,
-            legacy_identity,
-            owner_uid,
-            &legacy_lock_path,
-            &legacy_lock,
-            legacy_lock_identity,
-        )?;
-        fs::rename(&legacy_directory, &retired_directory)
-            .map_err(|error| native_amx_unsafe_journal(&legacy_directory, error.to_string()))?;
-        native_amx_sync_directory_path(&legacy_root)?;
-        let retired = fs::symlink_metadata(&retired_directory)
-            .map_err(|error| native_amx_unsafe_journal(&retired_directory, error.to_string()))?;
-        native_amx_validate_secure_directory_metadata(&retired_directory, &retired, owner_uid)?;
-        if native_amx_file_identity(&retired) != legacy_identity {
-            return Err(native_amx_unsafe_journal(
-                &retired_directory,
-                "retired V4 signer directory changed during publication",
-            ));
-        }
-        Ok(())
-    }
-    #[cfg(unix)]
-    fn load_validated_v4_journal(
-        directory: &Path,
-        owner_uid: u32,
-        max_records: usize,
-        max_record_bytes: usize,
-        max_anchor_bytes: usize,
-    ) -> Result<LoadedNativeAmxV4Journal, NativeAmxSigningGuardError> {
-        let anchor_path = directory.join(NATIVE_AMX_SIGNING_GUARD_ANCHOR_FILE);
-        let bytes = native_amx_read_secure_file(&anchor_path, max_anchor_bytes, owner_uid)?;
-        let anchor = norito::decode_canonical::<NativeAmxSigningAnchorV4>(&bytes)
-            .map_err(|error| native_amx_unsafe_journal(&anchor_path, error.to_string()))?;
-        if anchor.version != 4
-            || anchor.binding.active_height == 0
-            || native_amx_hash_is_zero_sentinel(anchor.binding.context_id.0.as_ref())
-            || native_amx_hash_is_zero_sentinel(anchor.binding.network_id.as_bytes())
-            || anchor.binding.max_records == 0
-            || usize::try_from(anchor.binding.max_records)
-                .map_or(true, |max| max > MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD)
-            || anchor.record_count > anchor.binding.max_records
-        {
-            return Err(native_amx_unsafe_journal(
-                &anchor_path,
-                "unsupported, non-canonical, or invalid V4 chain anchor",
-            ));
-        }
-        let mut current = BTreeMap::<u32, NativeAmxSigningRecordV4>::new();
-        let mut file_count = 0_usize;
-        for item in fs::read_dir(directory)
-            .map_err(|error| native_amx_unsafe_journal(directory, error.to_string()))?
-        {
-            let item =
-                item.map_err(|error| native_amx_unsafe_journal(directory, error.to_string()))?;
-            let path = item.path();
-            let name = item.file_name();
-            let name = name.to_string_lossy();
-            if name == NATIVE_AMX_SIGNING_GUARD_LOCK_FILE
-                || name == NATIVE_AMX_SIGNING_GUARD_ANCHOR_FILE
-            {
-                continue;
-            }
-            if !native_amx_valid_record_filename(&name) {
-                return Err(native_amx_unsafe_journal(&path, "unknown V4 journal file"));
-            }
-            file_count = file_count.saturating_add(1);
-            if file_count > max_records {
-                return Err(native_amx_unsafe_journal(
-                    directory,
-                    "V4 record count exceeds the configured runtime limit",
-                ));
-            }
-            let record_bytes = native_amx_read_secure_file(&path, max_record_bytes, owner_uid)?;
-            let record = norito::decode_canonical::<NativeAmxSigningRecordV4>(&record_bytes)
-                .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
-            let expected_key = NativeAmxSigningKeyV4::from_body(&record.body, &record.key.signer);
-            if record.version != 4
-                || record.sequence == 0
-                || !native_amx_body_shape_valid(&record.body)
-                || record.key != expected_key
-                || record.body_digest != record.computed_body_digest()?
-                || record.record_hash != record.computed_record_hash()?
-                || Self::v4_record_path(directory, &record) != path
-            {
-                return Err(native_amx_unsafe_journal(
-                    &path,
-                    "unsupported, non-canonical, misnamed, or corrupt V4 signing record",
-                ));
-            }
-            let height = record.body.authority_context_height;
-            if height > anchor.binding.active_height {
-                return Err(NativeAmxSigningGuardError::FutureHeight {
-                    record_height: height,
-                    active_height: anchor.binding.active_height,
-                });
-            }
-            if height < anchor.binding.active_height {
-                if height.checked_add(1) != Some(anchor.binding.active_height) {
-                    return Err(native_amx_unsafe_journal(
-                        &path,
-                        "V4 record is more than one height behind its anchor",
-                    ));
-                }
-                continue;
-            }
-            if current.insert(record.sequence, record).is_some() {
-                return Err(native_amx_unsafe_journal(
-                    &path,
-                    "duplicate V4 record sequence",
-                ));
-            }
-        }
-        let mut head = anchor.genesis_head()?;
-        let mut records = Vec::with_capacity(anchor.record_count as usize);
-        let mut source_sessions = BTreeMap::new();
-        let mut source_participants = BTreeMap::new();
-        let mut slot_claims = BTreeMap::new();
-        let mut highest_view = None::<u64>;
-        for sequence in 1..=anchor.record_count {
-            let Some(record) = current.remove(&sequence) else {
-                return Err(native_amx_unsafe_journal(
-                    directory,
-                    format!("anchored V4 record sequence {sequence} is missing"),
-                ));
-            };
-            Self::validate_v4_record_binding(directory, &record, &anchor)?;
-            if record.previous_head != head {
-                return Err(native_amx_unsafe_journal(
-                    directory,
-                    "V4 record chain predecessor mismatch",
-                ));
-            }
-            Self::validate_v4_claims(
-                directory,
-                &record,
-                &mut source_sessions,
-                &mut source_participants,
-                &mut slot_claims,
-            )?;
-            if highest_view.is_some_and(|view| record.body.round.view < view) {
-                return Err(native_amx_unsafe_journal(
-                    directory,
-                    "V4 record chain regresses its durable view high-water",
-                ));
-            }
-            highest_view = Some(highest_view.map_or(record.body.round.view, |view| {
-                view.max(record.body.round.view)
-            }));
-            head = record.record_hash;
-            records.push(record);
-        }
-        if head != anchor.head_hash || highest_view != anchor.highest_view {
-            return Err(native_amx_unsafe_journal(
-                directory,
-                "V4 chain anchor head or highest view mismatch",
-            ));
-        }
-        if !current.is_empty() {
-            let tail_sequence = anchor
-                .record_count
-                .checked_add(1)
-                .ok_or_else(|| native_amx_unsafe_journal(directory, "V4 sequence overflow"))?;
-            if current.len() != 1 || !current.contains_key(&tail_sequence) {
-                return Err(native_amx_unsafe_journal(
-                    directory,
-                    "more than one unpublished V4 tail record",
-                ));
-            }
-            let tail = current
-                .remove(&tail_sequence)
-                .expect("tail membership checked");
-            Self::validate_v4_record_binding(directory, &tail, &anchor)?;
-            if tail.previous_head != anchor.head_hash
-                || anchor.record_count >= anchor.binding.max_records
-                || anchor
-                    .highest_view
-                    .is_some_and(|view| tail.body.round.view < view)
-            {
-                return Err(native_amx_unsafe_journal(
-                    directory,
-                    "invalid unpublished V4 tail record",
-                ));
-            }
-            Self::validate_v4_claims(
-                directory,
-                &tail,
-                &mut source_sessions,
-                &mut source_participants,
-                &mut slot_claims,
-            )?;
-        }
-        Ok(LoadedNativeAmxV4Journal { anchor, records })
-    }
-    #[cfg(unix)]
-    fn validate_v4_record_binding(
-        directory: &Path,
-        record: &NativeAmxSigningRecordV4,
-        anchor: &NativeAmxSigningAnchorV4,
-    ) -> Result<(), NativeAmxSigningGuardError> {
-        let binding = &anchor.binding;
-        if record.body.authority_context_height != binding.active_height
-            || record.body.round.height != binding.active_height
-            || record.body.round.context_id != binding.context_id
-            || record.body.epoch != binding.epoch
-            || record.body.network_id != binding.network_id
-            || record.key.signer != binding.signer
-        {
-            return Err(native_amx_unsafe_journal(
-                directory,
-                "V4 record does not match its anchored height context",
-            ));
-        }
-        Ok(())
-    }
-    #[cfg(unix)]
-    fn validate_v4_claims(
-        directory: &Path,
-        record: &NativeAmxSigningRecordV4,
-        source_sessions: &mut BTreeMap<[u8; Hash::LENGTH], NativeAmxSourceSessionClaimV4Legacy>,
-        source_participants: &mut BTreeMap<
-            ([u8; Hash::LENGTH], LaneId, DataSpaceId),
-            NativeAmxSourceParticipantClaimV4,
-        >,
-        slot_claims: &mut BTreeMap<NativeAmxSigningSlotV4, NativeAmxSigningSlotClaimV3>,
-    ) -> Result<(), NativeAmxSigningGuardError> {
-        let body = &record.body;
-        let source_claim = NativeAmxSourceSessionClaimV4Legacy::from_body(body);
-        if source_sessions
-            .insert(body.source_id, source_claim)
-            .is_some_and(|claim| claim != source_claim)
-        {
-            return Err(native_amx_unsafe_journal(
-                directory,
-                "one source has conflicting V4 session claims",
-            ));
-        }
-        let participant = NativeAmxSourceParticipantClaimV4::from_body(body);
-        if source_participants
-            .insert(
-                (
-                    body.source_id,
-                    participant.lane_id,
-                    participant.dataspace_id,
-                ),
-                participant,
-            )
-            .is_some_and(|claim| claim != participant)
-        {
-            return Err(native_amx_unsafe_journal(
-                directory,
-                "one source has conflicting V4 participant incarnations",
-            ));
-        }
-        let slot = NativeAmxSigningSlotV4::from_body(body, &record.key.signer);
-        let slot_claim = NativeAmxSigningSlotClaimV3::from_body(body);
-        if slot_claims
-            .insert(slot, slot_claim)
-            .is_some_and(|claim| claim != slot_claim)
-        {
-            return Err(native_amx_unsafe_journal(
-                directory,
-                "one V4 participant slot has conflicting proposal/settlement claims",
-            ));
-        }
-        Ok(())
-    }
-    #[cfg(unix)]
-    fn v5_migration_image(
-        legacy: &LoadedNativeAmxV4Journal,
-        supplied_binding: &NativeAmxHeightBindingV2,
-    ) -> Result<NativeAmxV5MigrationImage, NativeAmxSigningGuardError> {
-        let legacy_binding = &legacy.anchor.binding;
-        if legacy_binding.network_id != supplied_binding.network_id
-            || legacy_binding.signer != supplied_binding.signer
-            || legacy_binding.max_records != supplied_binding.max_records
-        {
-            return Err(NativeAmxSigningGuardError::ContextMismatch);
-        }
-        if supplied_binding.active_height < legacy_binding.active_height {
-            return Err(NativeAmxSigningGuardError::HeightRegression {
-                supplied_height: supplied_binding.active_height,
-                durable_height: legacy_binding.active_height,
-            });
-        }
-        let mut anchor = NativeAmxSigningAnchorV2::empty(supplied_binding.clone())?;
-        if supplied_binding.active_height != legacy_binding.active_height {
-            if legacy_binding.active_height.checked_add(1) != Some(supplied_binding.active_height) {
-                return Err(NativeAmxSigningGuardError::HeightJump {
-                    supplied_height: supplied_binding.active_height,
-                    durable_height: legacy_binding.active_height,
-                });
-            }
-            if supplied_binding.context_id == legacy_binding.context_id
-                || supplied_binding.epoch < legacy_binding.epoch
-            {
-                return Err(NativeAmxSigningGuardError::ContextMismatch);
-            }
-            return Ok(NativeAmxV5MigrationImage {
-                anchor,
-                records: Vec::new(),
-            });
-        }
-        if supplied_binding.context_id != legacy_binding.context_id
-            || supplied_binding.epoch != legacy_binding.epoch
-        {
-            return Err(NativeAmxSigningGuardError::ContextMismatch);
-        }
-        let mut source_claims =
-            BTreeMap::<[u8; Hash::LENGTH], NativeAmxDurableSourceClaimV4>::new();
-        let mut slot_claims =
-            BTreeMap::<NativeAmxSigningSlotV3, NativeAmxSigningSlotClaimV3>::new();
-        let mut commit_claims =
-            BTreeMap::<NativeAmxSigningKeyV2, NativeAmxAttestationBodyV2>::new();
-        let mut commit_bodies = Vec::new();
-        let mut highest_prepare_view = None::<u64>;
-        for legacy_record in &legacy.records {
-            let body = &legacy_record.body;
-            match source_claims.entry(body.source_id) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(NativeAmxDurableSourceClaimV4::from_body(body));
-                }
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    if !entry.get().accepts(body) {
-                        return Err(native_amx_unsafe_journal(
-                            Path::new(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY),
-                            "V4 evidence conflicts under V5 source-session semantics",
-                        ));
-                    }
-                    entry.get_mut().insert_participant(body);
-                }
-            }
-            let slot = NativeAmxSigningSlotV3::from_body(body, &legacy_binding.signer);
-            let slot_claim = NativeAmxSigningSlotClaimV3::from_body(body);
-            if slot_claims
-                .insert(slot, slot_claim)
-                .is_some_and(|claim| claim != slot_claim)
-            {
-                return Err(native_amx_unsafe_journal(
-                    Path::new(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY),
-                    "V4 evidence conflicts under V5 phase-neutral slot semantics",
-                ));
-            }
-            if body.phase == NativeAmxPhase::Prepare {
-                highest_prepare_view = Some(
-                    highest_prepare_view.map_or(body.round.view, |view| view.max(body.round.view)),
-                );
-                continue;
-            }
-            let key = NativeAmxSigningKeyV2::from_body(body, &legacy_binding.signer);
-            if let Some(existing) = commit_claims.get(&key) {
-                if !native_amx_bodies_share_durable_signing_decision(existing, body) {
-                    return Err(native_amx_unsafe_journal(
-                        Path::new(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY),
-                        "V4 Commit evidence conflicts under V5 view-neutral key semantics",
-                    ));
-                }
-                continue;
-            }
-            commit_claims.insert(key, *body);
-            // V4 validation already proves that record views never regress.
-            // Preserve that authenticated sequence order: the V5 key erases
-            // the global view, so iterating a key-sorted map here could place
-            // a later-view Commit before an earlier-view Commit.
-            commit_bodies.push(*body);
-        }
-        let mut records = Vec::with_capacity(commit_bodies.len());
-        let mut head = anchor.head_hash;
-        for body in &commit_bodies {
-            let sequence = u32::try_from(records.len())
-                .ok()
-                .and_then(|count| count.checked_add(1))
-                .ok_or_else(|| {
-                    native_amx_unsafe_journal(
-                        Path::new(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY),
-                        "migrated V5 record sequence overflow",
-                    )
-                })?;
-            let record =
-                NativeAmxSigningRecordV2::from_body(sequence, head, body, &legacy_binding.signer)?;
-            head = record.record_hash;
-            records.push(record);
-        }
-        anchor.record_count = u32::try_from(records.len()).map_err(|_| {
-            native_amx_unsafe_journal(
-                Path::new(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY),
-                "migrated V5 record count overflow",
-            )
-        })?;
-        anchor.head_hash = head;
-        anchor.highest_view = legacy.anchor.highest_view;
-        anchor.last_prepare_view = highest_prepare_view;
-        if anchor
-            .last_prepare_view
-            .is_some_and(|view| anchor.highest_view.is_none_or(|highest| view > highest))
-        {
-            return Err(native_amx_unsafe_journal(
-                Path::new(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY),
-                "migrated Prepare quarantine exceeds the V4 view high-water",
-            ));
-        }
-        Ok(NativeAmxV5MigrationImage { anchor, records })
-    }
-    #[cfg(unix)]
-    fn validate_v5_migration_image(
-        directory: &Path,
-        expected: &NativeAmxV5MigrationImage,
-        anchor: &NativeAmxSigningAnchorV2,
-        loaded: &LoadedNativeAmxJournal,
-    ) -> Result<(), NativeAmxSigningGuardError> {
-        if anchor != &expected.anchor || loaded.records.len() != expected.records.len() {
-            return Err(native_amx_unsafe_journal(
-                directory,
-                "published V5 journal conflicts with authenticated V4 evidence",
-            ));
-        }
-        for expected_record in &expected.records {
-            if loaded.records.get(&expected_record.key) != Some(expected_record) {
-                return Err(native_amx_unsafe_journal(
-                    directory,
-                    "published V5 Commit claim conflicts with authenticated V4 evidence",
-                ));
-            }
-        }
-        Ok(())
-    }
-    #[cfg(unix)]
-    fn remove_unpublished_v5_migration_prefix(
-        directory: &Path,
-        directory_handle: &File,
-        owner_uid: u32,
-        max_record_bytes: usize,
-        expected: &[NativeAmxSigningRecordV2],
-    ) -> Result<(), NativeAmxSigningGuardError> {
-        let mut prefix = BTreeMap::<u32, PathBuf>::new();
-        for item in fs::read_dir(directory)
-            .map_err(|error| native_amx_unsafe_journal(directory, error.to_string()))?
-        {
-            let item =
-                item.map_err(|error| native_amx_unsafe_journal(directory, error.to_string()))?;
-            if item.file_name() == NATIVE_AMX_SIGNING_GUARD_LOCK_FILE {
-                continue;
-            }
-            let path = item.path();
-            let name = item.file_name();
-            let name = name.to_string_lossy();
-            if !native_amx_valid_record_filename(&name) {
-                return Err(native_amx_unsafe_journal(
-                    &path,
-                    "unknown unpublished V5 migration entry",
-                ));
-            }
-            let record = Self::read_record(directory, &path, owner_uid, max_record_bytes)?;
-            let index = usize::try_from(record.sequence.saturating_sub(1)).map_err(|_| {
-                native_amx_unsafe_journal(&path, "unpublished V5 sequence overflow")
-            })?;
-            if expected.get(index) != Some(&record)
-                || prefix.insert(record.sequence, path.clone()).is_some()
-            {
-                return Err(native_amx_unsafe_journal(
-                    &path,
-                    "unpublished V5 migration record is not an authenticated prefix",
-                ));
-            }
-        }
-        for sequence in 1..=u32::try_from(prefix.len()).unwrap_or(u32::MAX) {
-            if !prefix.contains_key(&sequence) {
-                return Err(native_amx_unsafe_journal(
-                    directory,
-                    "unpublished V5 migration prefix has a sequence gap",
-                ));
-            }
-        }
-        if prefix.is_empty() {
-            return Ok(());
-        }
-        for path in prefix.into_values() {
-            fs::remove_file(&path)
-                .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
-        }
-        native_amx_sync_directory_handle(directory, directory_handle)
-    }
-    #[cfg(unix)]
-    fn publish_v5_migration_image(
-        directory: &Path,
-        directory_handle: &File,
-        owner_uid: u32,
-        limits: NativeAmxSigningGuardLimits,
-        image: &NativeAmxV5MigrationImage,
-    ) -> Result<(), NativeAmxSigningGuardError> {
-        for record in &image.records {
-            let bytes = norito::encode_canonical(record)
-                .map_err(|error| native_amx_unsafe_journal(directory, error.to_string()))?;
-            if bytes.len() > limits.max_record_bytes.get() {
-                return Err(native_amx_unsafe_journal(
-                    directory,
-                    "migrated V5 record exceeds its configured runtime byte limit",
-                ));
-            }
-            let path = Self::record_path(directory, record);
-            let temp = path.with_extension(NATIVE_AMX_SIGNING_GUARD_TEMP_EXTENSION);
-            native_amx_write_new_secure_temp(
-                &temp,
-                &bytes,
-                limits.max_record_bytes.get(),
-                owner_uid,
-            )?;
-            match fs::symlink_metadata(&path) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Ok(_) => {
-                    return Err(native_amx_unsafe_journal(
-                        &path,
-                        "migrated V5 record path already exists",
-                    ));
-                }
-                Err(error) => return Err(native_amx_unsafe_journal(&path, error.to_string())),
-            }
-            fs::rename(&temp, &path)
-                .map_err(|error| native_amx_unsafe_journal(&path, error.to_string()))?;
-        }
-        if !image.records.is_empty() {
-            native_amx_sync_directory_handle(directory, directory_handle)?;
-        }
-        Self::persist_anchor(
-            directory,
-            directory_handle,
-            owner_uid,
-            &image.anchor,
-            limits.max_anchor_bytes.get(),
-        )?;
-        let anchor = Self::read_anchor(directory, owner_uid, limits.max_anchor_bytes.get())?
-            .ok_or_else(|| native_amx_unsafe_journal(directory, "migrated V5 anchor vanished"))?;
-        let loaded = Self::load_validated_journal(
-            directory,
-            directory_handle,
-            owner_uid,
-            &anchor,
-            limits.max_records.get(),
-            limits.max_record_bytes.get(),
-        )?;
-        Self::validate_v5_migration_image(directory, image, &anchor, &loaded)
-    }
-    #[cfg(unix)]
-    fn v4_record_path(directory: &Path, record: &NativeAmxSigningRecordV4) -> PathBuf {
-        directory.join(format!(
-            "{:020}.{:010}.{}.{}",
-            record.body.authority_context_height,
-            record.sequence,
-            record.record_hash,
-            NATIVE_AMX_SIGNING_GUARD_RECORD_EXTENSION
-        ))
     }
     fn anchor_path(directory: &Path) -> PathBuf {
         directory.join(NATIVE_AMX_SIGNING_GUARD_ANCHOR_FILE)
@@ -2770,7 +1882,7 @@ impl NativeAmxSigningGuard {
 fn native_amx_ensure_signer_directory(
     store_root: &Path,
     signer: &PeerId,
-) -> Result<(PathBuf, u32, Hash), NativeAmxSigningGuardError> {
+) -> Result<(PathBuf, u32), NativeAmxSigningGuardError> {
     #[cfg(not(unix))]
     {
         let _ = (store_root, signer);
@@ -2789,7 +1901,7 @@ fn native_amx_ensure_signer_directory(
         let owner_uid = native_amx_effective_user_id(store_root)?;
         native_amx_validate_uid(store_root, &root_metadata, owner_uid)?;
         let signer_digest = native_amx_signer_directory_digest(store_root, signer)?;
-        native_amx_reject_legacy_signer_journals(store_root, signer_digest, owner_uid)?;
+        native_amx_reject_unsupported_signer_journals(store_root, signer_digest, owner_uid)?;
         let guard_root = store_root.join(NATIVE_AMX_SIGNING_GUARD_DIRECTORY);
         let guard_root_created = native_amx_ensure_secure_directory(&guard_root, owner_uid)?;
         if guard_root_created {
@@ -2800,7 +1912,7 @@ fn native_amx_ensure_signer_directory(
         if signer_created {
             native_amx_sync_directory_path(&guard_root)?;
         }
-        Ok((directory, owner_uid, signer_digest))
+        Ok((directory, owner_uid))
     }
 }
 #[cfg(unix)]
@@ -2816,40 +1928,46 @@ fn native_amx_signer_directory_digest(
     ]))
 }
 #[cfg(unix)]
-fn native_amx_reject_legacy_signer_journals(
+fn native_amx_reject_unsupported_signer_journals(
     store_root: &Path,
     signer_digest: Hash,
     owner_uid: u32,
 ) -> Result<(), NativeAmxSigningGuardError> {
-    for legacy_name in NATIVE_AMX_LEGACY_SIGNING_GUARD_DIRECTORIES {
-        let legacy_root = store_root.join(legacy_name);
-        let legacy_root_metadata = match fs::symlink_metadata(&legacy_root) {
+    for unsupported_name in NATIVE_AMX_UNSUPPORTED_SIGNING_GUARD_DIRECTORIES {
+        let unsupported_root = store_root.join(unsupported_name);
+        let unsupported_root_metadata = match fs::symlink_metadata(&unsupported_root) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
-                return Err(native_amx_unsafe_journal(&legacy_root, error.to_string()));
+                return Err(native_amx_unsafe_journal(
+                    &unsupported_root,
+                    error.to_string(),
+                ));
             }
         };
         native_amx_validate_secure_directory_metadata(
-            &legacy_root,
-            &legacy_root_metadata,
+            &unsupported_root,
+            &unsupported_root_metadata,
             owner_uid,
         )?;
-        let legacy_signer = legacy_root.join(signer_digest.to_string());
-        match fs::symlink_metadata(&legacy_signer) {
+        let unsupported_signer = unsupported_root.join(signer_digest.to_string());
+        match fs::symlink_metadata(&unsupported_signer) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(native_amx_unsafe_journal(&legacy_signer, error.to_string()));
+                return Err(native_amx_unsafe_journal(
+                    &unsupported_signer,
+                    error.to_string(),
+                ));
             }
             Ok(metadata) => {
                 native_amx_validate_secure_directory_metadata(
-                    &legacy_signer,
+                    &unsupported_signer,
                     &metadata,
                     owner_uid,
                 )?;
                 return Err(native_amx_unsafe_journal(
-                    &legacy_signer,
-                    "legacy Native AMX signing evidence requires authenticated recovery; it must not be silently ignored",
+                    &unsupported_signer,
+                    "unsupported pre-release Native AMX signing evidence must not be reused",
                 ));
             }
         }

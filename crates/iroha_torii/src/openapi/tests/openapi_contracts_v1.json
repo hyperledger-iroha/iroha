@@ -1,0 +1,567 @@
+{
+  "version": 1,
+  "sections": [
+    {
+      "id": "evidence.audit.description",
+      "values": [
+        "only accepted genesis query wire",
+        "expected_checkpoint_digest_hex then limit",
+        "after_sequence and after_receipt_digest_hex must be supplied together",
+        "sequence-only or digest-only continuation is rejected",
+        "checkpoint change returns 409",
+        "signed checkpoint_anchor",
+        "digest-bound page_limit",
+        "predecessor and next_cursor",
+        "projection_digest_hex",
+        "never emits a sequence-only continuation"
+      ]
+    },
+    {
+      "id": "evidence.audit.success",
+      "values": [
+        "checkpoint_anchor",
+        "digest-bound page_limit",
+        "predecessor and next_cursor",
+        "receipt_digest_hex",
+        "projection_norito_b64",
+        "projection_digest_hex",
+        "No sequence-only continuation"
+      ]
+    },
+    {
+      "id": "evidence.schemas",
+      "values": [
+        "SorafsEvidenceReceiptCursorV1",
+        "SorafsEvidenceSignedCheckpointAnchorV1",
+        "SorafsEvidenceSignedReceiptV1",
+        "SorafsEvidenceAuditProjectionV1",
+        "SorafsEvidenceAuditStatusV1",
+        "SorafsEvidenceApiErrorV1"
+      ]
+    },
+    {
+      "id": "pin.register.description",
+      "values": [
+        "caller-signed",
+        "exactly one native `RegisterPinManifest`",
+        "queues the original transaction unchanged",
+        "Submitted never means committed or finalized",
+        "not a finality, fee, custody, or pin-status receipt",
+        "never accepts or handles a private key"
+      ]
+    },
+    {
+      "id": "pin.list.description",
+      "values": [
+        "exclusive keyset cursor",
+        "O(1) consensus-maintained",
+        "Offset pagination",
+        "bounded detail route"
+      ]
+    },
+    {
+      "id": "pin.manifest.description",
+      "values": [
+        "exact native Norito JSON `PinManifestFinalizedRecordV1`",
+        "must be supplied together",
+        "stale anchor returns 409",
+        "retired projection `limit`"
+      ]
+    },
+    {
+      "id": "pin.manifest.retired",
+      "values": [
+        "limit",
+        "attestation",
+        "aliases",
+        "alias_count",
+        "aliases_returned",
+        "aliases_truncated",
+        "replication_orders",
+        "replication_order_count",
+        "replication_orders_returned",
+        "replication_orders_truncated"
+      ]
+    },
+    {
+      "id": "replication.description",
+      "values": [
+        "fresh committed registry projection",
+        "assignment revision",
+        "provider-owner signer-policy",
+        "finalized block anchor",
+        "unknown, duplicate, empty, aliased, or out-of-range"
+      ]
+    },
+    {
+      "id": "proof.por.required",
+      "values": [
+        "payload_len",
+        "chunk_count",
+        "chunk_index",
+        "chunk_offset",
+        "chunk_length",
+        "chunk_digest_hex",
+        "chunk_root_hex",
+        "segment_index",
+        "segment_offset",
+        "segment_length",
+        "segment_digest_hex",
+        "leaf_index",
+        "leaf_offset",
+        "leaf_length",
+        "leaf_bytes_hex",
+        "leaf_digest_hex",
+        "segment_leaves_hex",
+        "chunk_segments_hex",
+        "chunk_merkle_path_hex"
+      ]
+    },
+    {
+      "id": "proof.pdp.failures",
+      "values": [
+        "deadline_expired",
+        "submission_late",
+        "future_timestamp",
+        "invalid_proof",
+        "admission_revoked",
+        "admission_inactive",
+        "storage_unavailable"
+      ]
+    },
+    {
+      "id": "proof.potr.failures",
+      "values": [
+        "missed_deadline",
+        "provider_error",
+        "gateway_error",
+        "client_cancelled"
+      ]
+    },
+    {
+      "id": "sumeragi.da.required",
+      "values": ["encoding", "data_shards", "parity_shards"]
+    },
+    {
+      "id": "bridge.proof.required",
+      "values": ["version", "block_header", "finality_artifact"]
+    },
+    {
+      "id": "bridge.attestation.required",
+      "values": ["body", "signature"]
+    },
+    {
+      "id": "finality.artifact.required",
+      "values": [
+        "format_version",
+        "protocol_version",
+        "height",
+        "height_context",
+        "subject",
+        "block_hash",
+        "commit_qc",
+        "validator_set_pops"
+      ]
+    },
+    {
+      "id": "height.context.required",
+      "values": [
+        "network_id",
+        "protocol_version",
+        "height",
+        "epoch",
+        "epoch_end_height",
+        "mode",
+        "roster",
+        "quorum",
+        "nexus_amx_context_hash",
+        "execution_policy_hash",
+        "da_layout",
+        "leader_seed"
+      ]
+    },
+    {
+      "id": "height.context.optional",
+      "values": ["next_epoch_snapshot", "parent_commit_qc", "snapshot_bootstrap"]
+    },
+    {
+      "id": "validator.power.required",
+      "values": ["validator", "power"]
+    },
+    {
+      "id": "dual.quorum.required",
+      "values": ["min_signers", "total_power"]
+    },
+    {
+      "id": "block.subject.required",
+      "values": ["block_hash", "payload_hash"]
+    },
+    {
+      "id": "block.subject.optional",
+      "values": ["parent_block_hash"]
+    },
+    {
+      "id": "merge.carrier.required",
+      "values": ["version", "entry_hash"]
+    },
+    {
+      "id": "execution.required",
+      "values": [
+        "parent_state_root",
+        "post_state_root",
+        "ordinary_writes_root",
+        "topup_anchor_count",
+        "native_amx_application_manifest_version",
+        "native_amx_application_manifest_root",
+        "native_amx_application_manifest_count",
+        "merge_carrier",
+        "executed_block_wire_len",
+        "executed_block_wire_hash"
+      ]
+    },
+    {
+      "id": "execution.optional",
+      "values": ["topup_anchor_root"]
+    },
+    {
+      "id": "qc.required",
+      "values": [
+        "round",
+        "proposal_round",
+        "phase",
+        "subject",
+        "execution_commitment",
+        "signers",
+        "aggregate_signature"
+      ]
+    },
+    {
+      "id": "snapshot.bootstrap.required",
+      "values": [
+        "snapshot_height",
+        "snapshot_block_hash",
+        "snapshot_block_creation_time_ms",
+        "snapshot_state_hash"
+      ]
+    },
+    {
+      "id": "next.epoch.required",
+      "values": [
+        "epoch",
+        "epoch_end_height",
+        "mode",
+        "roster",
+        "validator_set_pops",
+        "quorum",
+        "leader_seed"
+      ]
+    },
+    {
+      "id": "bridge.commitment.required",
+      "values": ["network_id", "height_context_id", "block_height", "block_hash"]
+    },
+    {
+      "id": "bridge.bundle.required",
+      "values": ["commitment", "finality_proof"]
+    },
+    {
+      "id": "block.header.required",
+      "values": [
+        "height",
+        "prev_block_hash",
+        "merkle_root",
+        "result_merkle_root",
+        "da_proof_policies_hash",
+        "da_commitments_hash",
+        "da_pin_intents_hash",
+        "prev_roster_evidence_hash",
+        "sccp_commitment_root",
+        "creation_time_ms",
+        "view_change_index",
+        "confidential_features"
+      ]
+    },
+    {
+      "id": "block.header.optional",
+      "values": ["npos_effects_hash", "execution_context_hash"]
+    },
+    {
+      "id": "bridge.components",
+      "values": [
+        "BridgeFinalityProof",
+        "BridgeFinalityAttestationBodyV1",
+        "BridgeFinalityAttestationV1",
+        "BridgeCommitment",
+        "BridgeFinalityBundle",
+        "SumeragiV2FinalityArtifact",
+        "SumeragiV2FinalizedNextEpochSnapshot",
+        "SumeragiV2HeightContext",
+        "SumeragiV2ValidatorPower",
+        "SumeragiV2DualQuorum",
+        "SumeragiV2BlockSubject",
+        "SumeragiV2MergeCarrierCommitment",
+        "SumeragiV2ExecutionCommitment",
+        "SumeragiV2QuorumCertificate",
+        "SumeragiV2CommitQuorumCertificate"
+      ]
+    },
+    {
+      "id": "bridge.retired",
+      "values": [
+        "authority_set",
+        "next_authority_set",
+        "justification",
+        "signatures",
+        "validator_set_hash",
+        "validator_set_hash_version",
+        "validator_set",
+        "subject_block_hash",
+        "mode_tag",
+        "highest_qc",
+        "aggregate",
+        "signers_bitmap",
+        "bls_aggregate_signature",
+        "mmr_root",
+        "mmr_leaf_index",
+        "mmr_peaks"
+      ]
+    },
+    {
+      "id": "fixture.header.required",
+      "values": [
+        "height",
+        "prev_block_hash",
+        "merkle_root",
+        "result_merkle_root",
+        "da_proof_policies_hash",
+        "da_commitments_hash",
+        "da_pin_intents_hash",
+        "prev_roster_evidence_hash",
+        "sccp_commitment_root",
+        "creation_time_ms",
+        "view_change_index",
+        "confidential_features"
+      ]
+    },
+    {
+      "id": "fixture.artifact.fields",
+      "values": [
+        "block_hash",
+        "commit_qc",
+        "format_version",
+        "height",
+        "height_context",
+        "protocol_version",
+        "subject",
+        "validator_set_pops"
+      ]
+    },
+    {
+      "id": "fixture.execution.fields",
+      "values": [
+        "executed_block_wire_hash",
+        "executed_block_wire_len",
+        "native_amx_application_manifest_count",
+        "native_amx_application_manifest_root",
+        "native_amx_application_manifest_version",
+        "merge_carrier",
+        "ordinary_writes_root",
+        "parent_state_root",
+        "post_state_root",
+        "topup_anchor_count"
+      ]
+    },
+    {
+      "id": "fixture.retired",
+      "values": [
+        "height",
+        "chain_id",
+        "block_hash",
+        "commit_qc",
+        "validator_set_pops",
+        "authority_set",
+        "next_authority_set",
+        "justification",
+        "signatures",
+        "validator_set_hash",
+        "validator_set_hash_version",
+        "validator_set",
+        "subject_block_hash",
+        "parent_state_root",
+        "post_state_root",
+        "mode_tag",
+        "highest_qc",
+        "aggregate",
+        "signers_bitmap",
+        "bls_aggregate_signature"
+      ]
+    },
+    {
+      "id": "lifecycle.required",
+      "values": [
+        "version",
+        "nexus_enabled",
+        "lane_count",
+        "lanes",
+        "catalog_hash",
+        "incarnations",
+        "incarnation_root"
+      ]
+    },
+    {
+      "id": "status.present",
+      "values": [
+        "height_context_id",
+        "restart_required",
+        "pending_persistence_id",
+        "last_committed_subject",
+        "height_context",
+        "last_commit_qc",
+        "liveness"
+      ]
+    },
+    {
+      "id": "status.absent",
+      "values": [
+        "lane_settlement_commitments",
+        "lane_relay_envelopes",
+        "rbc_status",
+        "missing_qc_total"
+      ]
+    },
+    {
+      "id": "native.receipt.required",
+      "values": [
+        "network_id",
+        "lane_incarnation",
+        "authority_context_height",
+        "lane_block_height",
+        "lane_block_view",
+        "coordinator_proposal_hash"
+      ]
+    },
+    {
+      "id": "native.leg.required",
+      "values": [
+        "lane_id",
+        "dataspace_id",
+        "participant_proposal",
+        "participant_settlement",
+        "participant_settlement_hash",
+        "prepare_qc",
+        "commit_qc"
+      ]
+    },
+    {
+      "id": "native.body.required",
+      "values": [
+        "round",
+        "epoch",
+        "network_id",
+        "coordinator_lane_incarnation",
+        "participant_lane_incarnation",
+        "participant_previous_block_height",
+        "participant_previous_block_descriptor_hash",
+        "participant_lane_block_height",
+        "participant_lane_block_view",
+        "participant_proposal_hash",
+        "participant_settlement_commitment",
+        "participant_validator_set_hash",
+        "participant_validator_count",
+        "participant_min_quorum",
+        "authority_context_height",
+        "coordinator_lane_block_view",
+        "coordinator_proposal_hash",
+        "planned_coordinator_block_height"
+      ]
+    },
+    {
+      "id": "hf.headers",
+      "values": [
+        "X-Iroha-Account",
+        "X-Iroha-Signature",
+        "X-Iroha-Timestamp-Ms",
+        "X-Iroha-Nonce",
+        "X-Iroha-Witness"
+      ]
+    },
+    {
+      "id": "private.receipt.metadata",
+      "values": [
+        "total",
+        "returned_items",
+        "remaining_items",
+        "has_more",
+        "count_mode",
+        "continue_cursor"
+      ]
+    },
+    {
+      "id": "app.page.required",
+      "values": ["items", "has_more", "count_mode"]
+    },
+    {
+      "id": "app.page.properties",
+      "values": [
+        "total",
+        "has_more",
+        "count_mode",
+        "indexed_height",
+        "indexed_block_hash",
+        "query_source"
+      ]
+    },
+    {
+      "id": "repo.agreement.fields",
+      "values": [
+        "cash_source",
+        "collateral_custody_asset",
+        "settlement_timestamp_ms",
+        "status"
+      ]
+    },
+    {
+      "id": "repo.query.fields",
+      "values": ["filter", "select", "aggregate", "fetch_size", "count_mode"]
+    },
+    {
+      "id": "contract.alias.request.required",
+      "values": ["contract_alias"]
+    },
+    {
+      "id": "contract.alias.binding.required",
+      "values": ["alias", "status", "bound_at_ms"]
+    },
+    {
+      "id": "contract.alias.binding.optional",
+      "values": ["lease_expiry_ms", "grace_until_ms"]
+    },
+    {
+      "id": "contract.alias.response.required",
+      "values": [
+        "contract_alias",
+        "contract_address",
+        "contract_subject_account",
+        "dataspace",
+        "contract_alias_binding",
+        "source"
+      ]
+    },
+    {
+      "id": "governed.found.fields",
+      "values": [
+        "found",
+        "contract_address",
+        "contract_subject_account",
+        "dataspace",
+        "code_hash_hex",
+        "abi_hash_hex",
+        "public_entrypoints"
+      ]
+    },
+    {
+      "id": "governed.missing.fields",
+      "values": ["found", "contract_address", "dataspace"]
+    }
+  ]
+}

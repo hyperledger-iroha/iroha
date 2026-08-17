@@ -645,9 +645,8 @@ Before the first Prepare signature in that view, the guard atomically fsyncs a
 `last_prepare_view` anchor marker; reopening the same height quarantines
 that view until the global safety WAL installs a strictly newer certified numeric view. This keeps
 same-view crash safety without letting uncertified Prepare choices split honest validators forever
-across view changes. Authenticated V4 journals are migrated before V5 opens: same-height Commit
-claims and the highest Prepare quarantine are preserved, a finalized immediately preceding height
-starts an empty successor journal, and malformed or conflicting legacy evidence still fails closed.
+across view changes. V5 is the only accepted signing-journal layout; unsupported pre-release
+journals fail closed before the canonical signer directory is created.
 Before Prepare or Commit signing, and again at admission, the guard requires
 the active incarnation, exact predecessor height and descriptor hash,
 and the contiguous next lane height. Commit repeats the complete participant identity certified by

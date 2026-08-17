@@ -7,9 +7,9 @@ import json
 import os
 from pathlib import Path
 import stat
+import struct
 import subprocess
 import sys
-import sysconfig
 from typing import Any
 
 import pytest
@@ -18,6 +18,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 HELPER_PATH = ROOT / "scripts/copy_sumeragi_v2_release_cargo_cache.py"
 CLI_PATH = ROOT / "scripts/copy_sumeragi_v2_release_cargo_cache_cli.py"
+FRAMEWORK_PYTHON_312 = Path("/opt/homebrew/bin/python3.12")
 
 
 def _load_helper():
@@ -44,6 +45,7 @@ def _load_publication() -> dict[str, object]:
         "__file__": str(path), "Any": Any, "Path": Path,
         "PurePosixPath": __import__("pathlib").PurePosixPath,
         "ReceiptError": _ReceiptFailure, "re": __import__("re"),
+        "hashlib": hashlib,
         "_DIGEST_RE": __import__("re").compile(r"[0-9a-f]{64}"),
         "_MAX_FRAMEWORK_RUNTIME_MEMBERS": 250_000,
         "_MAX_FRAMEWORK_RUNTIME_BYTES": 4 * 1024 * 1024 * 1024,
@@ -60,6 +62,112 @@ def _vector(dependencies: list[str]) -> str:
     return hashlib.sha256(
         json.dumps(dependencies, ensure_ascii=False, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def test_macho_dependencies_accept_identical_fat_slices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scope = _load_cli()
+    path = Path("/fixture/Python")
+    payload = (
+        f"{path} (architecture x86_64):\n"
+        "\t@rpath/Python (compatibility version 3.9.0, current version 3.9.0)\n"
+        "\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1.0.0)\n"
+        f"{path} (architecture arm64):\n"
+        "\t@rpath/Python (compatibility version 3.9.0, current version 3.9.0)\n"
+        "\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1.0.0)\n"
+    ).encode()
+    monkeypatch.setitem(
+        scope,
+        "_macho_run",
+        lambda *_args, **_kwargs: __import__("types").SimpleNamespace(
+            returncode=0,
+            stdout=payload,
+            stderr=b"",
+        ),
+    )
+
+    assert scope["_macho_dependencies"](
+        path, Path("/usr/bin/otool"), RuntimeError
+    ) == ["@rpath/Python", "/usr/lib/libSystem.B.dylib"]
+
+
+def test_macho_dependencies_reject_mixed_thin_and_fat_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scope = _load_cli()
+    path = Path("/fixture/Python")
+    payload = (
+        f"{path}:\n"
+        "\t@rpath/Python (compatibility version 3.9.0, current version 3.9.0)\n"
+        f"{path} (architecture arm64):\n"
+        "\t@rpath/Python (compatibility version 3.9.0, current version 3.9.0)\n"
+    ).encode()
+    monkeypatch.setitem(
+        scope,
+        "_macho_run",
+        lambda *_args, **_kwargs: __import__("types").SimpleNamespace(
+            returncode=0,
+            stdout=payload,
+            stderr=b"",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="output is malformed"):
+        scope["_macho_dependencies"](
+            path, Path("/usr/bin/otool"), RuntimeError
+        )
+
+
+def _thin_macho(cpu_type: int) -> bytes:
+    name = b"@rpath/Fixture\0"
+    command_size = (24 + len(name) + 7) & ~7
+    command = (
+        struct.pack("<6I", 0x0C, command_size, 24, 0, 0, 0)
+        + name
+        + bytes(command_size - 24 - len(name))
+    )
+    return struct.pack(
+        "<8I", 0xFEEDFACF, cpu_type, 0, 2, 1, len(command), 0, 0,
+    ) + command
+
+
+def test_strict_macho_parser_accepts_thin_and_nonoverlapping_fat_images() -> None:
+    scope = _load_cli()
+    arm = _thin_macho(0x0100000C)
+    x86 = _thin_macho(0x01000007)
+    table_size = 8 + 2 * 20
+    arm_offset = table_size
+    x86_offset = arm_offset + len(arm)
+    assert arm_offset % 8 == 0 and x86_offset % 8 == 0
+    fat = (
+        struct.pack(">II", 0xCAFEBABE, 2)
+        + struct.pack(">5I", 0x0100000C, 0, arm_offset, len(arm), 3)
+        + struct.pack(">5I", 0x01000007, 0, x86_offset, len(x86), 3)
+        + arm + x86
+    )
+
+    thin = scope["_parse_macho"](arm, "thin")
+    universal = scope["_parse_macho"](fat, "fat")
+    assert thin is not None and len(thin) == 1
+    assert universal is not None
+    assert [item["cpu_type"] for item in universal] == [
+        0x0100000C, 0x01000007,
+    ]
+    assert universal[0]["commands"][0]["name"] == "@rpath/Fixture"
+
+
+def test_strict_macho_parser_rejects_nonzero_fat64_reserved_field() -> None:
+    scope = _load_cli()
+    thin = _thin_macho(0x0100000C)
+    offset = 40
+    fat = (
+        struct.pack(">II", 0xCAFEBABF, 1)
+        + struct.pack(">IIQQII", 0x0100000C, 0, offset, len(thin), 3, 1)
+        + thin
+    )
+    with pytest.raises(RuntimeError, match="reserved field"):
+        scope["_parse_macho"](fat, "fat64")
 
 
 def _contract() -> dict[str, object]:
@@ -109,13 +217,107 @@ def _contract() -> dict[str, object]:
                 "codesign": "adhoc",
             },
         }
+    runtime_images = []
+    transforms = []
+    for name, input_path in (
+        ("launcher", "python3"),
+        ("trampoline", "Resources/Python.app/Contents/MacOS/Python"),
+    ):
+        artifact = artifacts[name]
+        rewritten = artifact["derived"]["framework_dependency"]
+        runtime_images.append({
+            "path": artifact["path"],
+            "size_bytes": artifact["derived"]["size_bytes"],
+            "sha256": artifact["derived"]["sha256"],
+            "slices": [{
+                "cpu_type": 0x0100000C, "cpu_subtype": 0, "file_type": 2,
+                "dependencies": [
+                    {
+                        "command": 0x0C, "binding": "archive",
+                        "install_name": rewritten, "target": "Python",
+                    },
+                    {
+                        "command": 0x0C, "binding": "system",
+                        "install_name_sha256": _digest("/usr/lib/libSystem.B.dylib"),
+                    },
+                ],
+                "id_dylib_sha256": [], "rpath_sha256": [],
+                "code_signature": "embedded",
+            }],
+        })
+        transforms.append({
+            "input_path": input_path, "path": artifact["path"],
+            "source_mode": artifact["source"]["mode"],
+            "source_sha256": artifact["source"]["sha256"],
+            "source_size_bytes": artifact["source"]["size_bytes"],
+            "derived_mode": artifact["derived"]["mode"],
+            "derived_sha256": artifact["derived"]["sha256"],
+            "derived_size_bytes": artifact["derived"]["size_bytes"],
+            "operations": [{
+                "operation": "change",
+                "source_install_name_sha256": _digest("/fixture/Python"),
+                "replacement": rewritten,
+            }],
+            "codesign": "adhoc",
+        })
+    runtime_images.append({
+        "path": "Python", "size_bytes": 64,
+        "sha256": _digest("framework"),
+        "slices": [{
+            "cpu_type": 0x0100000C, "cpu_subtype": 0, "file_type": 6,
+            "dependencies": [{
+                "command": 0x0C, "binding": "system",
+                "install_name_sha256": _digest("/usr/lib/libSystem.B.dylib"),
+            }],
+            "id_dylib_sha256": [_digest("/fixture/Python")],
+            "rpath_sha256": [], "code_signature": "embedded",
+        }],
+    })
+    runtime_images.sort(key=lambda image: image["path"])
+    transforms.sort(key=lambda transform: transform["path"])
     return {
         "format": "iroha-sumeragi-v2-framework-python-relocation",
-        "schema_version": 1,
+        "schema_version": 2,
         "framework": "Python",
         "tools": tools,
         "artifacts": artifacts,
+        "closure": {
+            "format": "iroha-sumeragi-v2-framework-python-mach-o-transcript",
+            "schema_version": 1,
+            "source_image_count": 3,
+            "external_sources": [],
+            "transforms": transforms,
+            "runtime": {
+                "format": "iroha-sumeragi-v2-framework-python-mach-o",
+                "schema_version": 1, "image_count": 3,
+                "images": runtime_images,
+            },
+        },
     }
+
+
+def _already_local_contract() -> dict[str, object]:
+    contract = _contract()
+    transforms = {
+        transform["path"]: transform
+        for transform in contract["closure"]["transforms"]
+    }
+    for artifact in contract["artifacts"].values():
+        source = artifact["source"]
+        derived = artifact["derived"]
+        source["sha256"] = derived["sha256"]
+        source["size_bytes"] = derived["size_bytes"]
+        source["framework_dependency_sha256"] = _digest(
+            derived["framework_dependency"]
+        )
+        source["dependency_vector_sha256"] = derived[
+            "dependency_vector_sha256"
+        ]
+        transform = transforms[artifact["path"]]
+        transform["source_sha256"] = source["sha256"]
+        transform["source_size_bytes"] = source["size_bytes"]
+        transform["operations"] = []
+    return contract
 
 
 def _verification_fixture(monkeypatch: pytest.MonkeyPatch):
@@ -155,6 +357,48 @@ def _verification_fixture(monkeypatch: pytest.MonkeyPatch):
         return record
 
     monkeypatch.setitem(scope, "_artifact_record", artifact)
+    def observe(**kwargs):
+        observed = copy.deepcopy(contract)
+        observed["tools"] = {
+            name: scope["_macho_tool_record"](name, None, RuntimeError)
+            for name in sorted(contract["tools"])
+        }
+        paths = {
+            "launcher": (
+                Path("/fixture/bin/source-launcher"),
+                Path("/archive/bin/python3"),
+                "@executable_path/../Python",
+            ),
+            "trampoline": (
+                Path("/fixture/Resources/Python.app/Contents/MacOS/Python"),
+                Path("/archive/Resources/Python.app/Contents/MacOS/Python"),
+                "@executable_path/../../../../Python",
+            ),
+        }
+        for name, (source_path, output_path, rewritten) in paths.items():
+            source_dependencies = observed_dependencies(source_path, None, RuntimeError)
+            derived_dependencies = observed_dependencies(output_path, None, RuntimeError)
+            expected = [
+                rewritten if dependency == old else dependency
+                for dependency in source_dependencies
+            ]
+            if derived_dependencies != expected:
+                raise RuntimeError("framework Python relocated dependency is not exact")
+            scope["_require_adhoc_signature"](output_path, None, RuntimeError)
+            observed["artifacts"][name] = {
+                "path": contract["artifacts"][name]["path"],
+                "source": scope["_artifact_record"](
+                    source_path, source_dependencies, old, None, RuntimeError,
+                    source=True,
+                ),
+                "derived": scope["_artifact_record"](
+                    output_path, derived_dependencies, rewritten, None,
+                    RuntimeError, source=False,
+                ),
+            }
+        return observed, {}
+
+    monkeypatch.setitem(scope, "_observe_framework_python_relocation", observe)
     arguments = {
         "version_root": Path("/fixture"),
         "framework": "Python",
@@ -206,18 +450,83 @@ def test_relocation_contract_rejects_wrong_rewrite_and_unsigned_output() -> None
     ):
         changed = _contract()
         changed["artifacts"]["launcher"]["derived"][field] = value
-        with pytest.raises(RuntimeError, match="artifact binding"):
+        with pytest.raises(RuntimeError, match="binding"):
             validate(changed, RuntimeError)
     changed = _contract()
     changed["artifacts"]["launcher"]["source"]["mode"] = "0777"
-    with pytest.raises(RuntimeError, match="digest binding"):
+    with pytest.raises(RuntimeError, match="mode is unsafe"):
         validate(changed, RuntimeError)
     changed = _contract()
     changed["artifacts"]["launcher"]["source"]["size_bytes"] = (
         256 * 1024 * 1024 + 1
     )
-    with pytest.raises(RuntimeError, match="digest binding"):
+    with pytest.raises(RuntimeError, match="size is outside"):
         validate(changed, RuntimeError)
+
+
+def test_relocation_contract_rejects_open_or_unsigned_runtime_closure() -> None:
+    scope = _load_cli()
+    validate = scope["_validate_framework_python_relocation_contract"]
+    changed = _contract()
+    launcher = next(
+        image for image in changed["closure"]["runtime"]["images"]
+        if image["path"] == "bin/python3"
+    )
+    launcher["slices"][0]["dependencies"][0]["install_name"] = "/fixture/Python"
+    with pytest.raises(RuntimeError, match="archive dependency is unsafe"):
+        validate(changed, RuntimeError)
+    changed = _contract()
+    launcher = next(
+        image for image in changed["closure"]["runtime"]["images"]
+        if image["path"] == "bin/python3"
+    )
+    launcher["slices"][0]["code_signature"] = "unsigned"
+    with pytest.raises(RuntimeError, match="unsigned"):
+        validate(changed, RuntimeError)
+
+
+def test_already_local_launchers_are_signed_zero_operation_transforms() -> None:
+    contract = _already_local_contract()
+    scope = _load_cli()
+    assert scope["_validate_framework_python_relocation_contract"](
+        contract, RuntimeError,
+    ) == contract
+
+    inputs, outputs = _inventory_records(contract)
+    total = sum(record["size"] for record in inputs if record["kind"] == "file")
+    _load_publication()["_validate_framework_python_relocation_evidence"](
+        contract, contract, inputs, outputs, len(inputs), total,
+    )
+
+    changed = _contract()
+    launcher = next(
+        transform for transform in changed["closure"]["transforms"]
+        if transform["path"] == "bin/python3"
+    )
+    launcher["operations"] = []
+    with pytest.raises(RuntimeError, match="closure binding"):
+        scope["_validate_framework_python_relocation_contract"](
+            changed, RuntimeError,
+        )
+
+    changed = _contract()
+    launcher = next(
+        transform for transform in changed["closure"]["transforms"]
+        if transform["path"] == "bin/python3"
+    )
+    launcher["operations"][0]["source_install_name_sha256"] = _digest(
+        "wrong dependency"
+    )
+    with pytest.raises(RuntimeError, match="closure binding"):
+        scope["_validate_framework_python_relocation_contract"](
+            changed, RuntimeError,
+        )
+    inputs, outputs = _inventory_records(changed)
+    total = sum(record["size"] for record in inputs if record["kind"] == "file")
+    with pytest.raises(_ReceiptFailure, match="derivation"):
+        _load_publication()["_validate_framework_python_relocation_evidence"](
+            changed, changed, inputs, outputs, len(inputs), total,
+        )
 
 
 def test_verifier_rejects_residual_absolute_dependency(
@@ -424,8 +733,8 @@ def test_release_runner_selects_relocated_framework_launcher() -> None:
 
 
 @pytest.mark.skipif(
-    sys.platform != "darwin" or not sysconfig.get_config_var("PYTHONFRAMEWORK"),
-    reason="requires the selected macOS framework Python",
+    sys.platform != "darwin" or not FRAMEWORK_PYTHON_312.is_file(),
+    reason="requires Homebrew framework Python 3.12",
 )
 def test_real_framework_archive_is_rewritten_signed_and_reverified(tmp_path: Path) -> None:
     runtime = tmp_path / "python-runtime"
@@ -434,7 +743,8 @@ def test_real_framework_archive_is_rewritten_signed_and_reverified(tmp_path: Pat
         for operation in ("--copy-framework-python", "--verify-framework-python"):
             result = subprocess.run(
                 [
-                    sys.executable, "-I", "-S", str(HELPER_PATH), operation,
+                    str(FRAMEWORK_PYTHON_312), "-I", "-S",
+                    str(HELPER_PATH), operation,
                     "--runtime-root", str(runtime),
                     "--runtime-inventory", str(inventory),
                 ],
@@ -444,9 +754,19 @@ def test_real_framework_archive_is_rewritten_signed_and_reverified(tmp_path: Pat
             assert (result.returncode, result.stdout, result.stderr) == (0, b"", b"")
         document = json.loads(inventory.read_bytes())
         relocation = document["relocation"]
+        framework = relocation["framework"]
+        assert isinstance(framework, str) and framework
+        closure = relocation["closure"]
+        assert closure["source_image_count"] == closure["runtime"]["image_count"]
+        assert closure["external_sources"]
+        assert {
+            source["path"] for source in closure["external_sources"]
+        } <= {
+            transform["path"] for transform in closure["transforms"]
+        }
         for name, expected in (
-            ("launcher", "@executable_path/../Python"),
-            ("trampoline", "@executable_path/../../../../Python"),
+            ("launcher", f"@executable_path/../{framework}"),
+            ("trampoline", f"@executable_path/../../../../{framework}"),
         ):
             derived = relocation["artifacts"][name]["derived"]
             assert derived["framework_dependency"] == expected
@@ -454,7 +774,10 @@ def test_real_framework_archive_is_rewritten_signed_and_reverified(tmp_path: Pat
             assert derived["codesign"] == "adhoc"
         assert stat.S_IMODE((runtime / "bin/python3").stat().st_mode) == 0o500
         probe = subprocess.run(
-            [str(runtime / "bin/python3"), "-I", "-S", "-c", "pass"],
+            [
+                str(runtime / "bin/python3"), "-I", "-S", "-c",
+                "import _decimal, _hashlib, _lzma, _sqlite3, _ssl",
+            ],
             cwd=runtime, env={"LANG": "C", "LC_ALL": "C", "PATH": str(runtime / "bin")},
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             check=False, timeout=30,

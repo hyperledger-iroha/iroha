@@ -36,6 +36,14 @@ def load_script(path: Path, name: str) -> ModuleType:
 
 migration = load_script(MIGRATION_PATH, "migrate_taira_peer_supervision")
 supervisor = load_script(SUPERVISOR_PATH, "taira_peer_supervisor")
+AUTHENTICATED_NODE_IDS = tuple(
+    "taira-node:receipt-signer:secp256k1:sha256:" + f"{number:064x}"
+    for number in range(1, 5)
+)
+AUTHENTICATED_NODE_BINDINGS = tuple(
+    f"taira-validator-{number}={AUTHENTICATED_NODE_IDS[number - 1]}"
+    for number in range(1, 5)
+)
 
 
 def test_taira_source_profile_carries_browser_query_admission_headroom() -> None:
@@ -116,17 +124,18 @@ def render_fake_plan(
         },
     }
     parser = migration.build_parser()
-    args = parser.parse_args(
-        [
-            "plan",
-            "--base",
-            str(base),
-            "--output-dir",
-            str(tmp_path / "stage"),
-            "--maximum-backoff-seconds",
-            "17",
-        ]
-    )
+    argv = [
+        "plan",
+        "--base",
+        str(base),
+        "--output-dir",
+        str(tmp_path / "stage"),
+        "--maximum-backoff-seconds",
+        "17",
+    ]
+    for binding in AUTHENTICATED_NODE_BINDINGS:
+        argv.extend(("--authenticated-node-binding", binding))
+    args = parser.parse_args(argv)
     manifest, assets = migration.create_plan(
         args, process_inspector=lambda pid: processes[pid]
     )
@@ -168,6 +177,22 @@ def stat_sealed_supervisor_fixture(
         storage_inode=storage_info.st_ino,
     )
     return args, binary, config
+
+
+def supervisor_lifecycle_args(tmp_path: Path) -> list[str]:
+    """Build the one mandatory lifecycle identity for a supervisor process test."""
+
+    parent = tmp_path / "lifecycle"
+    parent.mkdir(mode=0o700, exist_ok=True)
+    parent.chmod(0o700)
+    return [
+        "--lifecycle-journal-root",
+        str(parent / "taira-validator-1"),
+        "--validator-id",
+        "taira-validator-1",
+        "--node-id",
+        AUTHENTICATED_NODE_IDS[0],
+    ]
 
 
 def test_supervisor_acl_gate_is_a_stable_noop_off_macos(
@@ -287,12 +312,19 @@ def test_plan_renders_four_independent_keepalive_jobs(tmp_path: Path) -> None:
             == manifest["runtime"]["restart_generation"]
         )
         assert migration.is_sha256(manifest["runtime"]["restart_generation"])
-        for option in (
-            "--lifecycle-journal-root",
-            "--validator-id",
-            "--node-id",
-        ):
-            assert option not in arguments
+        assert arguments[arguments.index("--lifecycle-journal-root") + 1] == str(
+            Path(manifest["install"]["directory"])
+            / "lifecycle"
+            / f"taira-validator-{index + 1}"
+        )
+        assert (
+            arguments[arguments.index("--validator-id") + 1]
+            == f"taira-validator-{index + 1}"
+        )
+        assert (
+            arguments[arguments.index("--node-id") + 1]
+            == AUTHENTICATED_NODE_IDS[index]
+        )
         assert str(configs[(index + 1) % 4]) not in arguments
     assert len({tuple(arguments) for arguments in all_arguments}) == 4
     assert "do-not-persist" not in json.dumps(manifest)
@@ -300,48 +332,103 @@ def test_plan_renders_four_independent_keepalive_jobs(tmp_path: Path) -> None:
         configs[0].parents[1] / "genesis.signed.nrt"
     )
     assert migration.is_sha256(manifest["legacy"]["controller"]["command_sha256"])
-    assert "no independently authenticated" in migration.LIFECYCLE_IDENTITY_BARRIER
 
 
-def test_plist_wires_only_complete_authenticated_lifecycle_identity(
+def test_plist_requires_the_manifest_bound_lifecycle_identity(
     tmp_path: Path,
 ) -> None:
     manifest, _assets, _configs, _storage = render_fake_plan(tmp_path)
     peer = manifest["peers"][0]
     install_dir = Path(manifest["install"]["directory"])
     root = migration.lifecycle_journal_root(install_dir, 1)
-    node_id = "taira-node:validator-1:receipt-signer"
 
     payload = migration.launchd_plist(
         peer=peer,
         manifest=manifest,
         installed_supervisor=Path(manifest["install"]["supervisor"]),
         python_path=Path(manifest["python"]["path"]),
-        lifecycle_journal_root=root,
-        authenticated_node_id=node_id,
     )
     arguments = plistlib.loads(payload)["ProgramArguments"]
     assert arguments[arguments.index("--lifecycle-journal-root") + 1] == str(root)
     assert arguments[arguments.index("--validator-id") + 1] == "taira-validator-1"
-    assert arguments[arguments.index("--node-id") + 1] == node_id
+    assert arguments[arguments.index("--node-id") + 1] == AUTHENTICATED_NODE_IDS[0]
 
-    with pytest.raises(migration.MigrationError, match="provided together"):
-        migration.launchd_plist(
-            peer=peer,
-            manifest=manifest,
-            installed_supervisor=Path(manifest["install"]["supervisor"]),
-            python_path=Path(manifest["python"]["path"]),
-            lifecycle_journal_root=root,
-        )
+    peer["lifecycle"]["node_id"] = "not canonical spaces"
     with pytest.raises(migration.MigrationError, match="authenticated node ID"):
         migration.launchd_plist(
             peer=peer,
             manifest=manifest,
             installed_supervisor=Path(manifest["install"]["supervisor"]),
             python_path=Path(manifest["python"]["path"]),
-            lifecycle_journal_root=root,
-            authenticated_node_id="not canonical spaces",
         )
+
+    peer["lifecycle"]["node_id"] = AUTHENTICATED_NODE_IDS[0]
+    peer["lifecycle"]["journal_root"] = str(tmp_path / "alternate")
+    with pytest.raises(migration.MigrationError, match="journal path"):
+        migration.launchd_plist(
+            peer=peer,
+            manifest=manifest,
+            installed_supervisor=Path(manifest["install"]["supervisor"]),
+            python_path=Path(manifest["python"]["path"]),
+        )
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    (
+        (None, "exactly once"),
+        (AUTHENTICATED_NODE_BINDINGS[:3], "exactly once"),
+        (
+            (*AUTHENTICATED_NODE_BINDINGS[:3], AUTHENTICATED_NODE_BINDINGS[0]),
+            "repeats validator slug",
+        ),
+        (
+            (
+                *AUTHENTICATED_NODE_BINDINGS[:3],
+                f"taira-validator-5={AUTHENTICATED_NODE_IDS[3]}",
+            ),
+            "taira-validator-N",
+        ),
+        (
+            (*AUTHENTICATED_NODE_BINDINGS[:3], "taira-validator-4=not-canonical"),
+            "not canonical",
+        ),
+        (
+            (
+                *AUTHENTICATED_NODE_BINDINGS[:3],
+                f"taira-validator-4={AUTHENTICATED_NODE_IDS[0]}",
+            ),
+            "must be distinct",
+        ),
+    ),
+)
+def test_plan_requires_exact_authenticated_node_bindings(
+    values: tuple[str, ...] | None,
+    message: str,
+) -> None:
+    with pytest.raises(migration.MigrationError, match=message):
+        migration.require_authenticated_node_bindings(values)
+
+
+def test_authenticated_node_bindings_return_canonical_peer_order() -> None:
+    assert (
+        migration.require_authenticated_node_bindings(
+            tuple(reversed(AUTHENTICATED_NODE_BINDINGS))
+        )
+        == AUTHENTICATED_NODE_IDS
+    )
+
+
+def test_manifest_rejects_missing_or_rebound_lifecycle_identity(tmp_path: Path) -> None:
+    manifest, _assets, _configs, _storage = render_fake_plan(tmp_path)
+    manifest["peers"][0]["lifecycle"]["node_id"] = AUTHENTICATED_NODE_IDS[1]
+    with pytest.raises(migration.MigrationError, match="duplicate lifecycle node ID"):
+        migration.validate_manifest_shape(manifest)
+
+    manifest, _assets, _configs, _storage = render_fake_plan(tmp_path / "missing")
+    del manifest["peers"][0]["lifecycle"]
+    with pytest.raises(migration.MigrationError, match="manifest structure is invalid"):
+        migration.validate_manifest_shape(manifest)
 
 
 def test_migration_lifecycle_layout_is_fixed_distinct_and_owner_private(
@@ -1005,6 +1092,7 @@ def test_supervisor_three_hit_latch_stays_alive_and_survives_restart(
         str(terminal),
         "--restart-generation",
         "9" * 64,
+        *supervisor_lifecycle_args(tmp_path),
         "--initial-backoff-seconds",
         "0.01",
         "--maximum-backoff-seconds",
@@ -1120,6 +1208,7 @@ def test_supervisor_signal_shutdown_forwards_to_active_child(
             str(terminal),
             "--restart-generation",
             "9" * 64,
+            *supervisor_lifecycle_args(tmp_path),
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -1209,6 +1298,7 @@ def test_single_peer_supervisor_uses_bounded_restart_backoff(
                 str(tmp_path / "terminal" / "peer.json"),
                 "--restart-generation",
                 "9" * 64,
+                *supervisor_lifecycle_args(tmp_path),
                 "--initial-backoff-seconds",
                 "0.02",
                 "--maximum-backoff-seconds",

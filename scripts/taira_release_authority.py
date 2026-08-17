@@ -8,12 +8,10 @@ actual release subject and native exact-12 evidence and requires byte-for-byte
 equality, so a valid signature cannot authorize a relocated or substituted
 artifact by path alone.
 
-The current implementation can close byte identities, but it cannot establish
-that the source-built native runner actually produced semantically valid
-Exact12 results.  Every production entry point is therefore provisioned closed
-until a separately authenticated native-evidence authority is installed.  The
-lower structural builder is retained only for hostile and post-provisioning
-tests; its self-consistent hashes are not release authority.
+The structural payload is never authority by itself.  Production entry points
+first authenticate the fixed native-evidence service, which independently
+validates the Exact12 artifacts and returns a signed envelope plus durable
+receipt.  The lower structural builder remains available for hostile tests.
 """
 
 from __future__ import annotations
@@ -24,6 +22,7 @@ import os
 import re
 import sys
 import tarfile
+from dataclasses import dataclass
 from pathlib import Path
 from pathlib import PurePosixPath
 
@@ -155,15 +154,28 @@ class TairaReleaseAuthorityError(RuntimeError):
     """The release cannot be authorized by the exact first-release contract."""
 
 
+@dataclass(frozen=True)
+class AuthorizedAuthority:
+    """One exact release subject and its authenticated native sidecars."""
+
+    subject: dict[str, object]
+    authority_envelope: bytes
+    durable_receipt: bytes
+
+
 def _fail(message: str) -> None:
     raise TairaReleaseAuthorityError(message)
 
 
-def require_independent_native_evidence_authority_provisioned() -> None:
+def require_independent_native_evidence_authority_provisioned(
+    *, require_signing: bool = True
+) -> None:
     """Authenticate the fixed native-evidence binding and live service."""
 
     try:
-        taira_authority_client.preflight("native-evidence")
+        taira_authority_client.preflight(
+            "native-evidence", require_signing=require_signing
+        )
     except taira_authority_client.TairaAuthorityClientError as error:
         raise TairaReleaseAuthorityError(
             f"{INDEPENDENT_NATIVE_EVIDENCE_AUTHORITY_PROVISIONING_ERROR}: {error}"
@@ -676,8 +688,8 @@ def _build_untrusted_authority_structure(args: argparse.Namespace) -> dict[str, 
     }
 
 
-def build_authority(args: argparse.Namespace) -> dict[str, object]:
-    """Authorize the exact structural subject with the native-evidence role."""
+def build_authority(args: argparse.Namespace) -> AuthorizedAuthority:
+    """Authorize the exact subject and return its required native sidecars."""
 
     require_independent_native_evidence_authority_provisioned()
     subject = _build_untrusted_authority_structure(args)
@@ -691,11 +703,18 @@ def build_authority(args: argparse.Namespace) -> dict[str, object]:
         raise TairaReleaseAuthorityError(
             f"native-evidence authority refused the exact release subject: {error}"
         ) from error
-    # Keep the long-standing structural return type.  The CLI persists the two
-    # authenticated objects as explicit sidecars instead of adding self-hashes
-    # to the subject schema.
-    setattr(args, "_native_authority_result", result)
-    return subject
+    authority_envelope = result.authority_envelope_bytes
+    durable_receipt = result.durable_receipt_bytes
+    if (
+        len(authority_envelope) > MAX_AUTHORITY_BYTES
+        or len(durable_receipt) > MAX_AUTHORITY_BYTES
+    ):
+        _fail("native-evidence authority sidecar violates its byte bound")
+    return AuthorizedAuthority(
+        subject=subject,
+        authority_envelope=authority_envelope,
+        durable_receipt=durable_receipt,
+    )
 
 
 def _authority_artifacts(
@@ -769,22 +788,26 @@ def main(argv: list[str] | None = None) -> int:
         # This authenticated call is intentionally before evidence, subject,
         # output, or sidecar path access.
         if args.command == "create":
-            expected = build_authority(args)
+            authorized = build_authority(args)
+            expected = authorized.subject
         else:
-            require_independent_native_evidence_authority_provisioned()
+            require_independent_native_evidence_authority_provisioned(
+                require_signing=False
+            )
             expected = _build_untrusted_authority_structure(args)
         expected_bytes = canonical_json_bytes(expected)
         if args.command == "create":
             exclusive_write_bytes(Path(args.output), expected_bytes, mode=0o644)
-            result = getattr(args, "_native_authority_result", None)
-            if not isinstance(result, taira_authority_client.AuthorityResult):
-                _fail("native-evidence authority did not return authenticated sidecars")
             envelope_path, receipt_path = _sidecar_paths(Path(args.output))
             exclusive_write_bytes(
-                envelope_path, result.authority_envelope_bytes, mode=0o644
+                envelope_path,
+                authorized.authority_envelope,
+                mode=0o644,
             )
             exclusive_write_bytes(
-                receipt_path, result.durable_receipt_bytes, mode=0o644
+                receipt_path,
+                authorized.durable_receipt,
+                mode=0o644,
             )
         else:
             authority = Path(args.authority)

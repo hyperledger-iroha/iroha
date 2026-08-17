@@ -157,6 +157,8 @@ MACOS_FILES = COMMON_FILES + (
     "scripts/close_taira_publication_handoff.py",
     "scripts/close_taira_qualification_handoff.py",
     "scripts/deploy_taira_v21_reset.py",
+    "scripts/deploy_taira_v21_reset_authority.py",
+    "scripts/deploy_taira_v21_reset_health.py",
     "scripts/extract_authenticated_taira_privacy_release.py",
     "scripts/generate_release_manifest.py",
     "scripts/prepare_taira_empty_reset_bundle.py",

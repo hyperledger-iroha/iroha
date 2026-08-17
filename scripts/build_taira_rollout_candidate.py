@@ -31,7 +31,7 @@ from pathlib import Path, PurePosixPath
 from typing import NoReturn
 
 try:
-    from . import build_privacy_v1_boi_handoff as boi_handoff
+    from . import build_privacy_v1_boi_handoff as qualification_handoff
     from . import deploy_taira_v21_reset as deploy
     from . import taira_privacy_protocol_receipt as privacy_evidence
     from . import taira_rollout_admission as admission
@@ -57,7 +57,7 @@ try:
         verify_release_manifest,
     )
 except ImportError:
-    import build_privacy_v1_boi_handoff as boi_handoff
+    import build_privacy_v1_boi_handoff as qualification_handoff
     import deploy_taira_v21_reset as deploy
     import taira_privacy_protocol_receipt as privacy_evidence
     import taira_rollout_admission as admission
@@ -368,14 +368,16 @@ def _capture_boi_artifact_handoff(
             _fail(f"Privacy v1 BOI artifact differs from inventory: {relative!r}")
         captured[relative] = info
     try:
-        independently_validated = boi_handoff.validate_candidate_boi_artifact_handoff(
-            root,
-            source=source.as_dict(),
-            exact12_matrix_sha256=expected_exact12_matrix_sha256,
-            inventory_sha256=manifest.sha256,
-            inventory_payload=payload,
+        independently_validated = (
+            qualification_handoff.validate_candidate_artifact_handoff(
+                root,
+                source=source.as_dict(),
+                exact12_matrix_sha256=expected_exact12_matrix_sha256,
+                inventory_sha256=manifest.sha256,
+                inventory_payload=payload,
+            )
         )
-    except boi_handoff.BoiHandoffError as exc:
+    except qualification_handoff.QualificationHandoffError as exc:
         raise TairaCandidateBuildError(
             f"Privacy v1 BOI artifact rebind failed: {exc}"
         ) from exc

@@ -14,7 +14,8 @@ mod coordinator_support;
 #[cfg(test)]
 pub(crate) use coordinator_support::{
     reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
-    reviewed_v2_adapter_source_for_test, reviewed_v2_runtime_source_for_test,
+    reviewed_v2_adapter_source_for_test, reviewed_v2_runtime_source_for_test, run_source_contract,
+    source_contract_test,
 };
 /// Sealed coordinator cuts for adjacent direct body-pipeline transitions.
 #[path = "v2_lifecycle_body_pipeline_transition.rs"]
@@ -1987,125 +1988,9 @@ mod tests {
         );
         assert_eq!(format!("{coordinator:?}"), before);
     }
-    #[test]
-    fn production_scheduler_factory_has_no_raw_rank_mint() {
-        let schema = include_str!("v2_lifecycle_schema.rs");
-        let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
-        let registry = reviewed_lifecycle_work_registry_source_for_test();
-        let concrete = include_str!("v2_lifecycle_concrete_admission.rs");
-        let selector = include_str!("v2_lifecycle_selector.rs");
-        let worker = include_str!("v2_worker.rs");
-        let body_store = include_str!("v2_body_store.rs");
-        let effects = include_str!("v2_effects.rs");
-        let runner = include_str!("v2_runner.rs");
-        assert_eq!(
-            scheduler
-                .matches("fn direct_registry_scheduler_inputs(")
-                .count(),
-            1
-        );
-        assert_eq!(
-            scheduler
-                .matches("SchedulerReadyInputs::from_authenticated(")
-                .count(),
-            1
-        );
-        assert_eq!(
-            scheduler
-                .matches("SchedulerReadyInputs::from_authenticated_waiting_fetch(")
-                .count(),
-            1
-        );
-        assert_eq!(
-            schema
-                .matches("pub(super) fn from_authenticated_waiting_fetch(")
-                .count(),
-            1
-        );
-        assert_eq!(
-            selector
-                .matches("pub(super) fn matches_waiting_record(")
-                .count(),
-            1
-        );
-        assert_eq!(
-            scheduler
-                .matches("SchedulerInputs::from_authenticated(")
-                .count(),
-            1
-        );
-        assert_eq!(
-            scheduler
-                .matches("AuthenticatedSchedulerInputsFactory::new()")
-                .count(),
-            8
-        );
-        assert!(schema.contains("_factory: &AuthenticatedSchedulerInputsFactory"));
-        assert!(schema.contains("_factory: AuthenticatedSchedulerInputsFactory"));
-        assert!(schema.contains(
-            "/// Construct one test row without exposing a production rank mint.\n    #[cfg(test)]\n    pub(super) fn new("
-        ));
-        assert!(schema.contains(
-            "/// Construct one unique test snapshot without exposing a production mint.\n    #[cfg(test)]\n    pub(super) fn new("
-        ));
-        assert!(!scheduler.contains("pub fn direct_registry_scheduler_inputs("));
-        assert!(!scheduler.contains("\n    SchedulerInputs {"));
-        assert!(scheduler.contains("pub(crate) fn plan_ingress_turn"));
-        assert!(scheduler.contains("runner: LifecycleCurrentRunnerTurn<'_>"));
-        assert!(runner.contains("while let Some(current_turn) = outer_turns.next_current()"));
-        assert!(runner.contains("pub(crate) struct LifecycleCurrentRunnerTurn<'cursor>"));
-        assert!(scheduler.contains("attest_scheduler_fetch_carrier"));
-        assert!(scheduler.contains("mode != executor.lifecycle_mode_rank_snapshot()"));
-        assert!(scheduler.contains("services.matches_lifecycle_executor_output_guard(executor)"));
-        assert!(scheduler.contains("ProductionIngressSchedulerInputsError::BodyStoreNotBound"));
-        assert!(scheduler.contains("services.matches_lifecycle_body_store(body_store_identity)"));
-        assert!(effects.contains("owner.plan_ingress_turn("));
-        assert!(worker.contains("struct LifecycleIoCapacityReservation<'a>"));
-        assert!(worker.contains("MutexGuard<'a, V2IoCommandQueueState>"));
-        assert!(worker.contains("operation: Option<ConsensusFailStopOperation<'a>>"));
-        assert!(worker.contains("begin_fail_stop_operation()"));
-        assert!(worker.contains("lifecycle_capacity_generation_exhausted"));
-        assert!(worker.contains("target.matches_certified_fetch_work_id(task.work_id())"));
-        assert!(worker.contains("enum LifecycleIoCapacityWaitStatus"));
-        assert!(worker.contains("LifecycleIoCapacityWaitStatus::ForeignOrDisconnected"));
-        assert!(worker.contains("Arc::ptr_eq(&self.output_guard, &services.output_guard)"));
-        assert!(worker.contains("services.output_guard.restart_required()"));
-        assert!(!worker.contains("submit_certified_fetch_body_persistence"));
-        assert!(!worker.contains("retry_certified_fetch_body_persistence"));
-        assert!(!worker.contains("CertifiedFetchBodyPersistenceSubmissionError"));
-        assert!(!worker.contains("fn release_advanced("));
-        assert!(!worker.contains("fn generation_exhausted("));
-        assert!(selector.contains("_linearity: LifecycleIngressIoTargetSealLinearity"));
-        assert!(selector.contains(".filter(|next| *next != u64::MAX)"));
-        assert!(body_store.contains("Arc::ptr_eq(&self.0, &other.0)"));
-        assert!(!worker.contains("fn lifecycle_capacity_queue_depth"));
-        let ingress_plan = scheduler
-            .split_once("fn plan_ingress_turn_with_runner_debt(")
-            .expect("one owner-only ingress factory")
-            .1
-            .split_once("\n    }\n}")
-            .expect("ingress factory remains one bounded owner method")
-            .0;
-        let ordered = [
-            "preflight_selected_target_work_absent()",
-            "prepare_certified_fetch_body_persistence(prepared)",
-            "preflight_certified_fetch_body_persistence(&task)",
-            "coordinator.plan_turn(inputs)",
-            "settle_turn(lease, super::TurnOutcome::Blocked(post_submit_wait))",
-            "commit_certified_fetch_body_persistence(task)",
-        ];
-        let mut cursor = 0;
-        for required in ordered {
-            let relative = ingress_plan[cursor..]
-                .find(required)
-                .unwrap_or_else(|| panic!("ingress transaction omitted {required}"));
-            cursor += relative + required.len();
-        }
-        for source in [registry, concrete, selector] {
-            assert!(!source.contains("SchedulerReadyInputs::from_authenticated("));
-            assert!(!source.contains("SchedulerInputs {"));
-        }
-    }
+    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+        production_scheduler_factory_has_no_raw_rank_mint
+    );
     #[test]
     fn planning_requires_a_fresh_rank_for_every_ready_ordinal() {
         let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));

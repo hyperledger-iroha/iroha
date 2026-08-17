@@ -41,10 +41,10 @@ pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1: usize =
 pub const OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1: usize = 128;
 /// Maximum bytes accepted for one issuer-scoped platform key identifier.
 pub const OFFLINE_DEVICE_ATTESTATION_KEY_ID_MAX_BYTES_V1: usize = 64;
-/// Legacy App Attest assertion authenticator-data size (RP hash, flags, counter).
-pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1: usize = 37;
-/// Minimum App Attest assertion authenticator-data size.
+/// Fixed current App Attest assertion header before the mandatory extension CBOR.
+pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_FIXED_HEADER_BYTES_V1: usize = 37;
+/// Minimum extension-bearing App Attest assertion authenticator-data size.
 pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1: usize =
-    KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1;
-/// Maximum App Attest assertion authenticator-data size, including iOS 27 extensions.
+    KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_FIXED_HEADER_BYTES_V1 + 1;
+/// Maximum App Attest assertion authenticator-data size, including mandatory extensions.
 pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1: usize = 4 * 1024;

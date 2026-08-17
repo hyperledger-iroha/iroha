@@ -4,9 +4,9 @@
 This helper is installed by ``migrate_taira_peer_supervision.py`` and is not
 intended to be started by hand.  It preserves the validated binary, config,
 and storage-directory identities from the migration plan, forwards shutdown
-signals to the validator, and applies bounded exponential restart backoff. An
-explicit peer identity can also enable a durable local lifecycle journal for a
-separately protected four-peer evidence collector.
+signals to the validator, and applies bounded exponential restart backoff. Its
+required peer identity binds a durable local lifecycle journal for a separately
+protected four-peer evidence collector.
 """
 
 from __future__ import annotations
@@ -132,7 +132,9 @@ LIFECYCLE_VALIDATOR_FIELDS = {
 }
 LIFECYCLE_EVENTS = frozenset({"healthy", "restart", "unexpected_exit"})
 LIFECYCLE_VALIDATOR_RE = re.compile(r"taira-validator-[1-4]")
-LIFECYCLE_NODE_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+-]{7,255}")
+LIFECYCLE_NODE_ID_RE = re.compile(
+    r"taira-node:receipt-signer:secp256k1:sha256:[0-9a-f]{64}"
+)
 LOWER_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
@@ -2275,9 +2277,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pid-file", required=True)
     parser.add_argument("--terminal-unhealthy-file", required=True)
     parser.add_argument("--restart-generation", required=True)
-    parser.add_argument("--lifecycle-journal-root")
-    parser.add_argument("--validator-id")
-    parser.add_argument("--node-id")
+    parser.add_argument("--lifecycle-journal-root", required=True)
+    parser.add_argument("--validator-id", required=True)
+    parser.add_argument("--node-id", required=True)
     parser.add_argument(
         "--lifecycle-healthy-interval-seconds",
         type=float,
@@ -2319,18 +2321,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--rapid-fatal-uptime-seconds must be positive")
     if re.fullmatch(r"[0-9a-f]{64}", args.restart_generation) is None:
         parser.error("--restart-generation must be one lowercase SHA-256 digest")
-    lifecycle_values = (
-        args.lifecycle_journal_root,
-        args.validator_id,
-        args.node_id,
-    )
-    if any(value is not None for value in lifecycle_values) and not all(
-        value is not None for value in lifecycle_values
-    ):
-        parser.error(
-            "--lifecycle-journal-root, --validator-id, and --node-id "
-            "must be provided together"
-        )
     if (
         not math.isfinite(args.lifecycle_healthy_interval_seconds)
         or args.lifecycle_healthy_interval_seconds <= 0
@@ -2346,16 +2336,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error(
             "--terminal-unhealthy-file must be a distinct canonical absolute path"
         )
-    if args.lifecycle_journal_root is not None:
-        lifecycle_root = Path(args.lifecycle_journal_root)
-        if (
-            not lifecycle_root.is_absolute()
-            or ".." in lifecycle_root.parts
-            or lifecycle_root in {terminal_file, pid_file}
-            or LIFECYCLE_VALIDATOR_RE.fullmatch(args.validator_id) is None
-            or LIFECYCLE_NODE_ID_RE.fullmatch(args.node_id) is None
-        ):
-            parser.error("lifecycle journal identity or path is not canonical")
+    lifecycle_root = Path(args.lifecycle_journal_root)
+    if (
+        not lifecycle_root.is_absolute()
+        or ".." in lifecycle_root.parts
+        or lifecycle_root in {terminal_file, pid_file}
+        or LIFECYCLE_VALIDATOR_RE.fullmatch(args.validator_id) is None
+        or LIFECYCLE_NODE_ID_RE.fullmatch(args.node_id) is None
+    ):
+        parser.error("lifecycle journal identity or path is not canonical")
     return args
 
 
@@ -2410,39 +2399,38 @@ def run(argv: list[str] | None = None) -> int:
     except (IdentityError, OSError) as exc:
         print(f"taira supervisor identity refusal: {exc}", file=sys.stderr, flush=True)
         return 78
+    try:
+        lifecycle = LifecycleJournal(
+            Path(args.lifecycle_journal_root),
+            lifecycle_binding_sha256(args, args.validator_id, args.node_id),
+            args.validator_id,
+            args.node_id,
+            args.restart_generation,
+        )
+    except (IdentityError, OSError) as exc:
+        print(
+            f"taira supervisor lifecycle refusal: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 78
+
+    def finish(result: int) -> int:
+        lifecycle.close()
+        return result
+
     binding = terminal_binding_sha256(args)
     try:
         if existing_terminal_latch(terminal_file, binding):
             persisted = read_terminal_payload(terminal_file)
             assert persisted is not None
-            return hold_terminal_unhealthy(
-                str(persisted[0]["fatal_fingerprint_sha256"])
+            return finish(
+                hold_terminal_unhealthy(
+                    str(persisted[0]["fatal_fingerprint_sha256"])
+                )
             )
     except (IdentityError, OSError):
-        return hold_terminal_unhealthy(None)
-
-    lifecycle: LifecycleJournal | None = None
-    if args.lifecycle_journal_root is not None:
-        try:
-            lifecycle = LifecycleJournal(
-                Path(args.lifecycle_journal_root),
-                lifecycle_binding_sha256(args, args.validator_id, args.node_id),
-                args.validator_id,
-                args.node_id,
-                args.restart_generation,
-            )
-        except (IdentityError, OSError) as exc:
-            print(
-                f"taira supervisor lifecycle refusal: {exc}",
-                file=sys.stderr,
-                flush=True,
-            )
-            return 78
-
-    def finish(result: int) -> int:
-        if lifecycle is not None:
-            lifecycle.close()
-        return result
+        return finish(hold_terminal_unhealthy(None))
 
     backoff = args.initial_backoff_seconds
     fatal_tracker = RapidFatalExitTracker()
@@ -2501,28 +2489,27 @@ def run(argv: list[str] | None = None) -> int:
             stderr_capture.wait(child)
             stderr_capture.finish()
             raise
-        if lifecycle is not None:
+        try:
+            already_started = lifecycle.process_has_started()
+            if already_started:
+                lifecycle.record("restart")
+            elif child.poll() is None:
+                lifecycle.record("healthy")
+        except (IdentityError, OSError) as exc:
             try:
-                already_started = lifecycle.process_has_started()
-                if already_started:
-                    lifecycle.record("restart")
-                elif child.poll() is None:
-                    lifecycle.record("healthy")
-            except (IdentityError, OSError) as exc:
-                try:
-                    child.terminate()
-                except ProcessLookupError:
-                    pass
-                stderr_capture.wait(child)
-                stderr_capture.finish()
-                remove_owned_pid(pid_file, child.pid)
-                child = None
-                print(
-                    f"taira supervisor lifecycle refusal: {exc}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                return finish(78)
+                child.terminate()
+            except ProcessLookupError:
+                pass
+            stderr_capture.wait(child)
+            stderr_capture.finish()
+            remove_owned_pid(pid_file, child.pid)
+            child = None
+            print(
+                f"taira supervisor lifecycle refusal: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return finish(78)
         print(f"taira validator started pid={child.pid}", flush=True)
         next_healthy_at = (
             time.monotonic() + args.lifecycle_healthy_interval_seconds
@@ -2530,8 +2517,6 @@ def run(argv: list[str] | None = None) -> int:
 
         def record_periodic_health() -> None:
             nonlocal next_healthy_at
-            if lifecycle is None:
-                return
             now = time.monotonic()
             if now >= next_healthy_at:
                 lifecycle.record("healthy")
@@ -2576,16 +2561,15 @@ def run(argv: list[str] | None = None) -> int:
             )
             continue
 
-        if lifecycle is not None:
-            try:
-                lifecycle.record("unexpected_exit")
-            except (IdentityError, OSError) as exc:
-                print(
-                    f"taira supervisor lifecycle refusal: {exc}",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                return finish(78)
+        try:
+            lifecycle.record("unexpected_exit")
+        except (IdentityError, OSError) as exc:
+            print(
+                f"taira supervisor lifecycle refusal: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return finish(78)
 
         if uptime >= args.stable_uptime_seconds:
             backoff = args.initial_backoff_seconds

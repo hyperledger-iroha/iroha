@@ -256,12 +256,10 @@ barriers into multi-second stalls.
   for all four supervisors and fails immediately if any current-generation
   marker appears during initial health, consensus advancement, or the child
   restart proof. On macOS it authenticates native NUL-delimited process argv
-  rather than `ps` rendering and launches new supervisors through the exact
-  validated root-controlled Python.app executable. The emergency
-  `--allow-framework-python-argv0-rewrite` option is only for migrating a
-  legacy testnet Homebrew supervisor whose same-framework Python.app rewrite,
-  remaining argv, parent/UID, child, and rollback identity all match exactly;
-  it is refused by default.
+  rather than `ps` rendering and launches supervisors through the exact
+  validated root-controlled Python.app executable. The live supervisor argv
+  must equal its sealed launch configuration exactly, including `argv[0]`;
+  every argument difference is rejected.
 - `scripts/deploy_taira_testnet_update.py`: is the small routine-update
   controller for this testnet. A preinstalled root-owned copy changes only the
   content-addressed `iroha3d` path and its supervisor stat seal, restarts one
@@ -272,6 +270,8 @@ barriers into multi-second stalls.
   adoption plan for an existing four-peer macOS deployment, then performs an
   explicitly confirmed maintenance-window cutover from `run-canonical.sh` or
   `launchd-run.sh` to four independent launchd jobs without replacing storage.
+  Planning requires the four distinct receipt-signer node IDs from authenticated
+  deploy evidence; it never derives identity from config labels or hostnames.
 - `scripts/taira_peer_supervisor.py`: launchd-owned single-validator restart
   loop used by the migration. It guards the planned binary, config, and storage
   identities and caps exponential child-restart backoff. Three consecutive
@@ -610,10 +610,11 @@ evidence directory and matching `.tar.gz`; only
 `<bundle>.authority/`. The final macOS candidate carries an independently
 signed top-level authority tuple. Each authority contains
 `release_manifest.json`, its raw `.sig` and `.pub`, and an `artifacts/`
-directory holding the canonical exact-12 authority, `SHA256SUMS`, the pinned
-native verifier, the portable authority validator, and
-`authority-controller-v1.json`. The signed payload has no build-host absolute
-path. It binds the full workspace-source identity and controller digest,
+directory holding the canonical exact-12 authority, its required native
+authority envelope and durable receipt, `SHA256SUMS`, the pinned native
+verifier, the portable authority validator, and `authority-controller-v1.json`.
+The signed payload has no build-host absolute path. It binds the full
+workspace-source identity and controller digest,
 exact-12 registry and retired-label set, validator, evidence runner, Cargo
 lock, matrix, all authoritative Norito evidence and mandatory JSON
 projections, and the exact archive digest.
@@ -1097,19 +1098,135 @@ proxies, and bind both to independently reviewed SHA-256 pins. The selected
 Cargo home is cache-only, must contain no `config` or `config.toml`, and the
 sealed build runs offline with a fixed `HOME` and `PATH`.
 
+Cargo 1.93 cannot emit its unstable unit graph on the production stable
+surface, and `cargo metadata` is not an equivalent graph. Before the sealed
+build, a reviewed external controller must assert that it captured the real
+graph for the exact package/features/binary/target command and normalize it
+under the field-preservation and path/sort rules in
+`specs/offline_kagemusha.md`. The controller's truthful capture is an
+irreducible external trust requirement: the producer authenticates the signed
+assertion and both transferred graph artifacts but cannot prove that the raw
+bytes came from Cargo or that normalization was performed faithfully. This
+repository currently ships no real raw graph,
+release-normalized graph, or controller receipt. The three-unit regression
+fixture is not release evidence. The source-projection producer is mode
+`100644`: invoke it only through an absolute, independently digest-pinned
+Python interpreter, not through PATH or its shebang.
+
+On the first controller, set every `_SHA256` value from an independent review,
+use new output paths, and generate the exact request. Transfer that request to
+the controller holding the release authorization key and create one detached
+SSH signature in the fixed namespace. The private key is runtime-only and must
+not enter the checkout or release bundle.
+
 ```bash
-python3 -I scripts/build_kagemusha_v4_candidate_bundle.py \
+PROJECTION_PYTHON=/absolute/root-custodied/digest-pinned/python3
+PROJECTION_PRODUCER=/absolute/root-custodied/reviewed-iroha/scripts/produce_kagemusha_v4_source_seal_projection.py
+SOURCE_ROOT=/absolute/root-custodied/reviewed-iroha
+SOURCE_CLOSURE=/absolute/private/path/reviewed-source-closure.json
+SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>'
+EXECUTION_POLICY=/absolute/private/path/source-projection-execution-policy.json
+EXECUTION_POLICY_SHA256='<reviewed-execution-policy-64-lowercase-hex>'
+RAW_UNIT_GRAPH=/absolute/private/path/cargo-1.93-raw-unit-graph-v1.json
+RAW_UNIT_GRAPH_SHA256='<reviewed-raw-unit-graph-64-lowercase-hex>'
+NORMALIZED_UNIT_GRAPH=/absolute/private/path/cargo-1.93-normalized-unit-graph-v1.json
+NORMALIZED_UNIT_GRAPH_SHA256='<reviewed-unit-graph-64-lowercase-hex>'
+REVIEWED_CARGO_BINARY_SHA256='<reviewed-direct-cargo-64-lowercase-hex>'
+REVIEWED_RUSTC_BINARY_SHA256='<reviewed-direct-rustc-64-lowercase-hex>'
+CONTROLLER_AUTHORIZATION=/absolute/private/path/source-projection-authorization-v1.json
+SOURCE_PROJECTION=/absolute/private/path/authenticated-source-seal-projection.json
+
+# Construct this canonical policy only after independently authenticating the
+# direct tools, their `-Vv` output, and both graph files. Transfer both pinned
+# graph artifacts to the production and independent-verification controllers.
+PROJECTION_COMMON_ARGS=(
+  --root "${SOURCE_ROOT}"
+  --reviewed-source-closure "${SOURCE_CLOSURE}"
+  --reviewed-source-closure-sha256 "${SOURCE_CLOSURE_SHA256}"
+  --execution-policy "${EXECUTION_POLICY}"
+  --execution-policy-sha256 "${EXECUTION_POLICY_SHA256}"
+  --raw-unit-graph "${RAW_UNIT_GRAPH}"
+  --raw-unit-graph-sha256 "${RAW_UNIT_GRAPH_SHA256}"
+  --unit-graph "${NORMALIZED_UNIT_GRAPH}"
+  --unit-graph-sha256 "${NORMALIZED_UNIT_GRAPH_SHA256}"
+)
+
+"${PROJECTION_PYTHON}" -I "${PROJECTION_PRODUCER}" request \
+  "${PROJECTION_COMMON_ARGS[@]}" \
+  --output "${CONTROLLER_AUTHORIZATION}"
+
+/usr/bin/ssh-keygen -Y sign \
+  -f /absolute/controller-only/source-projection-key \
+  -n iroha-kagemusha-source-seal-projection-v1 \
+  "${CONTROLLER_AUTHORIZATION}"
+```
+
+After independently pinning the authorization, detached signature, sole-key
+allowed-signers policy, and explicit revocation file (an empty file is allowed
+only when its nonzero SHA-256 is pinned), produce the projection. A separate
+controller must then reconstruct it with `verify`. A fresh digest pin on
+different projection bytes does not pass this step. The execution policy must
+use the exact V1 fields, fixed capture argv and empty-environment map documented
+in `specs/offline_kagemusha.md`; `{}`, unknown fields, tool/version drift, and a
+normalized size or digest that differs from `NORMALIZED_UNIT_GRAPH` fail
+closed. The raw size and digest must likewise match the separately pinned
+`RAW_UNIT_GRAPH` bytes on request, production, and independent verification.
+That proves transfer identity, not that Cargo emitted the bytes or that the
+external controller normalized them correctly.
+
+```bash
+CONTROLLER_AUTHORIZATION_SHA256='<reviewed-authorization-64-lowercase-hex>'
+CONTROLLER_SIGNATURE="${CONTROLLER_AUTHORIZATION}.sig"
+CONTROLLER_SIGNATURE_SHA256='<reviewed-signature-64-lowercase-hex>'
+CONTROLLER_ALLOWED_SIGNERS=/absolute/private/path/projection-controller-allowed-signers
+CONTROLLER_ALLOWED_SIGNERS_SHA256='<reviewed-controller-policy-64-lowercase-hex>'
+CONTROLLER_REVOCATION=/absolute/private/path/projection-controller-revocation
+CONTROLLER_REVOCATION_SHA256='<reviewed-controller-revocation-64-lowercase-hex>'
+
+PROJECTION_CONTROLLER_ARGS=(
+  --authorization "${CONTROLLER_AUTHORIZATION}"
+  --authorization-sha256 "${CONTROLLER_AUTHORIZATION_SHA256}"
+  --controller-signature "${CONTROLLER_SIGNATURE}"
+  --controller-signature-sha256 "${CONTROLLER_SIGNATURE_SHA256}"
+  --controller-allowed-signers "${CONTROLLER_ALLOWED_SIGNERS}"
+  --controller-allowed-signers-sha256 "${CONTROLLER_ALLOWED_SIGNERS_SHA256}"
+  --controller-revocation "${CONTROLLER_REVOCATION}"
+  --controller-revocation-sha256 "${CONTROLLER_REVOCATION_SHA256}"
+)
+
+"${PROJECTION_PYTHON}" -I "${PROJECTION_PRODUCER}" produce \
+  "${PROJECTION_COMMON_ARGS[@]}" \
+  "${PROJECTION_CONTROLLER_ARGS[@]}" \
+  --output "${SOURCE_PROJECTION}"
+
+SOURCE_PROJECTION_SHA256='<producer-reported-projection-64-lowercase-hex>'
+"${PROJECTION_PYTHON}" -I "${PROJECTION_PRODUCER}" verify \
+  "${PROJECTION_COMMON_ARGS[@]}" \
+  "${PROJECTION_CONTROLLER_ARGS[@]}" \
+  --projection "${SOURCE_PROJECTION}" \
+  --projection-sha256 "${SOURCE_PROJECTION_SHA256}" \
+  > /absolute/private/path/independent-source-projection-verification.json
+```
+
+The authenticated promotion launcher must require the final command to return
+zero immediately before promotion and must pass that same
+`SOURCE_PROJECTION_SHA256` below. The readiness gate treats this digest as an
+external trust anchor; root custody of a hand-authored projection is not a
+substitute for the independent reconstruction.
+
+```bash
+"${PROJECTION_PYTHON}" -I scripts/build_kagemusha_v4_candidate_bundle.py \
   --root "$PWD" \
   --cargo /absolute/direct/toolchain/bin/cargo \
-  --cargo-sha256 '<reviewed-64-lowercase-hex>' \
+  --cargo-sha256 "${REVIEWED_CARGO_BINARY_SHA256}" \
   --rustc /absolute/direct/toolchain/bin/rustc \
-  --rustc-sha256 '<reviewed-64-lowercase-hex>' \
+  --rustc-sha256 "${REVIEWED_RUSTC_BINARY_SHA256}" \
   --cargo-home /absolute/owner-controlled/cache-only-cargo-home \
   --target-dir /absolute/private/path/kagemusha-sealed-target \
   --reviewed-source-closure /absolute/private/path/reviewed-source-closure.json \
   --reviewed-source-closure-sha256 '<64-lowercase-hex>' \
-  --authenticated-source-seal-projection /absolute/private/path/authenticated-source-seal-projection.json \
-  --authenticated-source-seal-projection-sha256 '<64-lowercase-hex>' \
+  --authenticated-source-seal-projection "${SOURCE_PROJECTION}" \
+  --authenticated-source-seal-projection-sha256 "${SOURCE_PROJECTION_SHA256}" \
   > /absolute/private/path/sealed-kagemusha-candidate-build.json
 
 python3 scripts/run_kagemusha_v4_generation.py \
@@ -1161,8 +1278,8 @@ KAGEMUSHA_PRODUCTION_READINESS_PYTHON=/absolute/root-custodied/python3 \
 KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256='<reviewed-python-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=/absolute/root-custodied/reviewed-source-closure.json \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>' \
-KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION=/absolute/root-custodied/authenticated-source-seal-projection.json \
-KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256='<reviewed-projection-64-lowercase-hex>' \
+KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION="${SOURCE_PROJECTION}" \
+KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256="${SOURCE_PROJECTION_SHA256}" \
 KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_PATH=/absolute/root-custodied/allowed-signers \
 KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_SHA256='<reviewed-allowed-signers-64-lowercase-hex>' \
 KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_PATH=/absolute/root-custodied/revocation \
@@ -1703,8 +1820,18 @@ The planning phase only inspects processes and writes a new staging directory:
 ```bash
 python3 scripts/migrate_taira_peer_supervision.py plan \
   --base /absolute/path/to/the/deployed/taira-rollout \
-  --output-dir /absolute/path/to/new/taira-supervision-plan
+  --output-dir /absolute/path/to/new/taira-supervision-plan \
+  --authenticated-node-binding taira-validator-1=TAIRA_VALIDATOR_1_RECEIPT_SIGNER_NODE_ID \
+  --authenticated-node-binding taira-validator-2=TAIRA_VALIDATOR_2_RECEIPT_SIGNER_NODE_ID \
+  --authenticated-node-binding taira-validator-3=TAIRA_VALIDATOR_3_RECEIPT_SIGNER_NODE_ID \
+  --authenticated-node-binding taira-validator-4=TAIRA_VALIDATOR_4_RECEIPT_SIGNER_NODE_ID
 ```
+
+Copy those slug-bound values only from the authenticated deployment record.
+Argument order is irrelevant because every binding names its exact validator;
+all four slugs must appear exactly once. If that evidence is unavailable,
+refuse adoption and use the fresh reset or reprovisioning workflow; public
+keys, labels, and hostnames are not node-ID substitutes.
 
 It requires four exact peer PID files, exact `iroha3d --sora --config ...`
 commands, one common parent whose command names an approved
@@ -1913,8 +2040,8 @@ native verifier. A crash leaves a non-resumable attempt, and clock drift, a
 missed capture window, state rewriting, or root-path replacement fails closed.
 The module is not a workload runner and is not an installed controller
 operation; exposing it directly would exit without contacting Taira or
-producing evidence. The reset and legacy-migration plist renderers accept the
-exact journal root, validator ID, and node ID only as one all-or-none identity.
+producing evidence. The reset and one-shot migration plist renderers require
+the exact journal root, validator ID, and node ID for every supervisor invocation.
 Each validator now receives an explicit runtime-only Torii secp256k1 receipt
 key pair. Its public key and domain-separated derived node ID are carried,
 without the private key, through the reset manifest, four-peer receipt,
@@ -1924,7 +2051,7 @@ config digest, restart generation, validator slug, and node ID. This closes the
 former pre-deploy lifecycle node-ID source barrier; the separate deployment-
 issuance authority remains source-disabled.
 
-The opt-in supervisor journal records owner-private per-peer lifecycle windows.
+The mandatory supervisor journal records owner-private per-peer lifecycle windows.
 `scripts/collect_taira_public_v2_lifecycle_evidence.py` validates those four raw
 chains, retains the exact source artifacts and their deploy-bound identities,
 globally resequences them, and publishes final lifecycle evidence only after

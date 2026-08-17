@@ -22,6 +22,14 @@ const MAX_PROBE_RESULT_BYTES_V1: usize = 256 * 1024;
 const MAX_PROBE_DIAGNOSTIC_BYTES_V1: usize = 64 * 1024;
 const QUALIFICATION_SERVICE_ID_V1: u32 = 0;
 const QUALIFICATION_HOSTILE_ID_V1: u32 = 65_534;
+
+const fn qualification_hostile_identity(parent_uid: u32, parent_gid: u32) -> Option<(u32, u32)> {
+    if parent_uid == QUALIFICATION_SERVICE_ID_V1 && parent_gid == QUALIFICATION_SERVICE_ID_V1 {
+        Some((QUALIFICATION_HOSTILE_ID_V1, QUALIFICATION_HOSTILE_ID_V1))
+    } else {
+        None
+    }
+}
 const WHEEL_RESULT_FIELDS_V1: [&str; 7] = [
     "capability_binding",
     "capability_binding_sha256",
@@ -515,7 +523,7 @@ fn valid_trust_identifier(value: &str) -> bool {
 mod platform {
     use super::*;
     use std::{
-        ffi::{c_char, c_int, c_long, c_uint, c_void},
+        ffi::{c_int, c_long, c_uint, c_void},
         io::Read,
         os::{
             fd::{AsRawFd as _, RawFd},
@@ -561,10 +569,7 @@ mod platform {
         let parent_pid = unsafe { getpid() };
         let parent_uid = unsafe { geteuid() };
         let parent_gid = unsafe { getegid() };
-        if parent_pid <= 1
-            || parent_uid != QUALIFICATION_SERVICE_ID_V1
-            || parent_gid != QUALIFICATION_SERVICE_ID_V1
-        {
+        if parent_pid <= 1 || qualification_hostile_identity(parent_uid, parent_gid).is_none() {
             return Err(TairaAuthorityErrorV1::Rejected);
         }
 
@@ -827,24 +832,14 @@ mod platform {
     }
 
     fn enter_hostile_identity(parent_uid: c_uint, parent_gid: c_uint) -> std::io::Result<()> {
-        if parent_uid != QUALIFICATION_SERVICE_ID_V1 || parent_gid != QUALIFICATION_SERVICE_ID_V1 {
+        let Some((hostile_uid, hostile_gid)) =
+            qualification_hostile_identity(parent_uid, parent_gid)
+        else {
             return Err(std::io::Error::from_raw_os_error(EPERM));
-        }
+        };
         if unsafe { setgroups(0, std::ptr::null()) } != 0
-            || unsafe {
-                setresgid(
-                    QUALIFICATION_HOSTILE_ID_V1,
-                    QUALIFICATION_HOSTILE_ID_V1,
-                    QUALIFICATION_HOSTILE_ID_V1,
-                )
-            } != 0
-            || unsafe {
-                setresuid(
-                    QUALIFICATION_HOSTILE_ID_V1,
-                    QUALIFICATION_HOSTILE_ID_V1,
-                    QUALIFICATION_HOSTILE_ID_V1,
-                )
-            } != 0
+            || unsafe { setresgid(hostile_gid, hostile_gid, hostile_gid) } != 0
+            || unsafe { setresuid(hostile_uid, hostile_uid, hostile_uid) } != 0
         {
             return Err(last_error());
         }
@@ -858,8 +853,8 @@ mod platform {
         if unsafe { getgroups(0, std::ptr::null_mut()) } != 0
             || unsafe { getresuid(&mut real_uid, &mut effective_uid, &mut saved_uid) } != 0
             || unsafe { getresgid(&mut real_gid, &mut effective_gid, &mut saved_gid) } != 0
-            || [real_uid, effective_uid, saved_uid] != [QUALIFICATION_HOSTILE_ID_V1; 3]
-            || [real_gid, effective_gid, saved_gid] != [QUALIFICATION_HOSTILE_ID_V1; 3]
+            || [real_uid, effective_uid, saved_uid] != [hostile_uid; 3]
+            || [real_gid, effective_gid, saved_gid] != [hostile_gid; 3]
         {
             return Err(std::io::Error::from_raw_os_error(EPERM));
         }
@@ -1440,6 +1435,17 @@ mod tests {
         "iroha-ivm-private-note-stark-v1",
         "pq-masp-stark-v0",
     ];
+
+    #[test]
+    fn qualification_uses_a_distinct_host_identity() {
+        assert_eq!(QUALIFICATION_SERVICE_ID_V1, 0);
+        assert_eq!(QUALIFICATION_HOSTILE_ID_V1, 65_534);
+        assert_ne!(QUALIFICATION_SERVICE_ID_V1, QUALIFICATION_HOSTILE_ID_V1);
+        assert_eq!(qualification_hostile_identity(0, 0), Some((65_534, 65_534)));
+        assert_eq!(qualification_hostile_identity(1_000, 1_000), None);
+        assert_eq!(qualification_hostile_identity(0, 1_000), None);
+        assert_eq!(qualification_hostile_identity(1_000, 0), None);
+    }
 
     fn manifest_entry(
         ordinal: u16,

@@ -103,7 +103,9 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         private const val MAX_REQUEST_AUTHORIZATION_BYTES: Int = 512 * 1024
         private const val IOS_APP_ATTEST_ASSERTION_OBJECT_MAX_BYTES: Int = 8 * 1024
-        private const val IOS_APP_ATTEST_AUTHENTICATOR_DATA_BYTES: Int = 37
+        private const val IOS_APP_ATTEST_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES: Int = 37
+        private const val IOS_APP_ATTEST_AUTHENTICATOR_DATA_MIN_BYTES: Int =
+            IOS_APP_ATTEST_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES + 1
         private const val IOS_APP_ATTEST_AUTHENTICATOR_DATA_MAX_BYTES: Int = 4 * 1024
         private const val IOS_APP_ATTEST_EXTENSION_DATA_FLAG: Int = 0x80
         const val MAX_TORII_RESPONSE_BYTES: Int = 4 * 1024 * 1024
@@ -2011,24 +2013,14 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         private fun requireIosAppAttestAuthenticatorDataProjection(authenticatorData: ByteArray) {
             check(
-                authenticatorData.size in IOS_APP_ATTEST_AUTHENTICATOR_DATA_BYTES..
+                authenticatorData.size in IOS_APP_ATTEST_AUTHENTICATOR_DATA_MIN_BYTES..
                     IOS_APP_ATTEST_AUTHENTICATOR_DATA_MAX_BYTES,
             ) {
                 "native Kagemusha App Attest finalization returned invalid authenticator data"
             }
             val flags = authenticatorData[32].toInt() and 0xff
-            check(flags and IOS_APP_ATTEST_EXTENSION_DATA_FLAG.inv() == 0) {
-                "native Kagemusha App Attest finalization returned unsupported authenticator flags"
-            }
-            val hasExtensions = flags and IOS_APP_ATTEST_EXTENSION_DATA_FLAG != 0
-            check(
-                if (hasExtensions) {
-                    authenticatorData.size > IOS_APP_ATTEST_AUTHENTICATOR_DATA_BYTES
-                } else {
-                    authenticatorData.size == IOS_APP_ATTEST_AUTHENTICATOR_DATA_BYTES
-                },
-            ) {
-                "native Kagemusha App Attest finalization returned inconsistent authenticator data"
+            check(flags == IOS_APP_ATTEST_EXTENSION_DATA_FLAG) {
+                "native Kagemusha App Attest finalization must return extension-bearing authenticator data"
             }
         }
 

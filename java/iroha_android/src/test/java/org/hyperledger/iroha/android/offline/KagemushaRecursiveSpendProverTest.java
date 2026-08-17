@@ -163,38 +163,37 @@ public final class KagemushaRecursiveSpendProverTest {
     final byte[] rawLowSSignature = new byte[64];
     rawLowSSignature[31] = 1;
     rawLowSSignature[63] = 1;
-    final byte[] legacyAuthenticatorData = new byte[37];
-    legacyAuthenticatorData[36] = 1;
-    final KagemushaRecursiveSpendProver.RequestAuthorization accepted =
-        KagemushaRecursiveSpendProver.requestAuthorizationFromIosAppAttestNativeProjection(
-            new byte[][] {authorizationArchive, rawLowSSignature, legacyAuthenticatorData});
-    assert Arrays.equals(authorizationArchive, accepted.noritoEncoded());
-
     final byte[] extensionAuthenticatorData = new byte[38];
     extensionAuthenticatorData[32] = (byte) 0x80;
+    extensionAuthenticatorData[36] = 1;
     extensionAuthenticatorData[37] = (byte) 0xa0;
-    KagemushaRecursiveSpendProver.requestAuthorizationFromIosAppAttestNativeProjection(
-        new byte[][] {authorizationArchive, rawLowSSignature, extensionAuthenticatorData});
+    final KagemushaRecursiveSpendProver.RequestAuthorization accepted =
+        KagemushaRecursiveSpendProver.requestAuthorizationFromIosAppAttestNativeProjection(
+            new byte[][] {authorizationArchive, rawLowSSignature, extensionAuthenticatorData});
+    assert Arrays.equals(authorizationArchive, accepted.noritoEncoded());
 
     final List<byte[][]> invalidProjections = Arrays.asList(
         new byte[][] {authorizationArchive, rawLowSSignature},
-        new byte[][] {authorizationArchive, new byte[0], legacyAuthenticatorData},
+        new byte[][] {authorizationArchive, new byte[0], extensionAuthenticatorData},
         new byte[][] {
-          authorizationArchive, Arrays.copyOf(rawLowSSignature, 63), legacyAuthenticatorData
+          authorizationArchive, Arrays.copyOf(rawLowSSignature, 63), extensionAuthenticatorData
         },
-        new byte[][] {authorizationArchive, new byte[64], legacyAuthenticatorData},
+        new byte[][] {authorizationArchive, new byte[64], extensionAuthenticatorData},
         new byte[][] {authorizationArchive, rawLowSSignature, new byte[36]},
         new byte[][] {authorizationArchive, rawLowSSignature, new byte[38]},
+        new byte[][] {
+          authorizationArchive, rawLowSSignature, authenticatorData(37, 0)
+        },
         new byte[][] {
           authorizationArchive, rawLowSSignature, authenticatorData(37, 0x80)
         },
         new byte[][] {
-          authorizationArchive, rawLowSSignature, authenticatorData(37, 0x01)
+          authorizationArchive, rawLowSSignature, authenticatorData(38, 0x01)
         },
         new byte[][] {
           authorizationArchive, rawLowSSignature, authenticatorData(4 * 1024 + 1, 0x80)
         },
-        new byte[][] {authorizationArchive, null, legacyAuthenticatorData});
+        new byte[][] {authorizationArchive, null, extensionAuthenticatorData});
     for (final byte[][] projection : invalidProjections) {
       assertThrowsIllegalState(() ->
           KagemushaRecursiveSpendProver

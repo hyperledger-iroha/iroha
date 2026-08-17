@@ -205,63 +205,6 @@
         )
         .expect("set secure test record mode");
     }
-    #[cfg(unix)]
-    fn write_v4_signing_journal(
-        root: &Path,
-        signer: &PeerId,
-        bodies: &[NativeAmxAttestationBodyV2],
-        max_records: usize,
-    ) -> PathBuf {
-        let first = bodies.first().expect("V4 fixture has at least one record");
-        let owner_uid = native_amx_effective_user_id(root).expect("effective uid");
-        let signer_digest =
-            native_amx_signer_directory_digest(root, signer).expect("signer digest");
-        let legacy_root = root.join(NATIVE_AMX_V4_SIGNING_GUARD_DIRECTORY);
-        native_amx_ensure_secure_directory(&legacy_root, owner_uid).expect("create secure V4 root");
-        let directory = legacy_root.join(signer_digest.to_string());
-        native_amx_ensure_secure_directory(&directory, owner_uid)
-            .expect("create secure V4 signer journal");
-        let binding = NativeAmxHeightBindingV2 {
-            active_height: first.authority_context_height,
-            context_id: first.round.context_id,
-            epoch: first.epoch,
-            network_id: first.network_id,
-            signer: signer.clone(),
-            max_records: u32::try_from(max_records).expect("fixture capacity fits u32"),
-        };
-        let mut anchor =
-            NativeAmxSigningAnchorV4::empty_for_test(binding).expect("create V4 anchor");
-        for (index, body) in bodies.iter().enumerate() {
-            let sequence = u32::try_from(index + 1).expect("fixture sequence fits u32");
-            let record = NativeAmxSigningRecordV4::from_body_for_test(
-                sequence,
-                anchor.head_hash,
-                body,
-                signer,
-            )
-            .expect("create V4 signing record");
-            let bytes = norito::encode_canonical(&record).expect("encode V4 signing record");
-            write_secure_new(
-                &NativeAmxSigningGuard::v4_record_path(&directory, &record),
-                &bytes,
-            );
-            anchor.record_count = sequence;
-            anchor.head_hash = record.record_hash;
-            anchor.highest_view = Some(
-                anchor
-                    .highest_view
-                    .map_or(body.round.view, |view| view.max(body.round.view)),
-            );
-        }
-        let anchor_bytes = norito::encode_canonical(&anchor).expect("encode V4 anchor");
-        write_secure_new(
-            &directory.join(NATIVE_AMX_SIGNING_GUARD_ANCHOR_FILE),
-            &anchor_bytes,
-        );
-        native_amx_sync_directory_path(&directory).expect("sync V4 signer journal");
-        native_amx_sync_directory_path(&legacy_root).expect("sync V4 root");
-        directory
-    }
     fn another_context(label: &[u8]) -> HeightContextId {
         HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(Hash::new(
             label,
@@ -311,188 +254,40 @@
     }
     #[cfg(unix)]
     #[test]
-    fn signing_guard_rejects_legacy_signer_journal_instead_of_ignoring_it() {
-        for (index, legacy_name) in NATIVE_AMX_LEGACY_SIGNING_GUARD_DIRECTORIES
+    fn signing_guard_rejects_unsupported_pre_release_journals() {
+        for (index, unsupported_name) in NATIVE_AMX_UNSUPPORTED_SIGNING_GUARD_DIRECTORIES
             .iter()
             .enumerate()
         {
             let root = tempfile::tempdir().expect("temp dir");
             let body = body(NativeAmxPhase::Prepare);
-            let seed = 0x6F_u8.saturating_add(u8::try_from(index).expect("legacy index fits u8"));
+            let seed =
+                0x6F_u8.saturating_add(u8::try_from(index).expect("directory index fits u8"));
             let (_keypair, signer) = signing_guard_signer(seed);
             let owner_uid = native_amx_effective_user_id(root.path()).expect("effective uid");
             let signer_digest =
                 native_amx_signer_directory_digest(root.path(), &signer).expect("signer digest");
-            let legacy_root = root.path().join(*legacy_name);
-            native_amx_ensure_secure_directory(&legacy_root, owner_uid)
-                .expect("create secure legacy root");
+            let unsupported_root = root.path().join(*unsupported_name);
+            native_amx_ensure_secure_directory(&unsupported_root, owner_uid)
+                .expect("create secure unsupported root");
             native_amx_ensure_secure_directory(
-                &legacy_root.join(signer_digest.to_string()),
+                &unsupported_root.join(signer_digest.to_string()),
                 owner_uid,
             )
-            .expect("create secure legacy signer journal");
+            .expect("create secure unsupported signer journal");
             assert!(matches!(
                 open_signing_guard(root.path(), &body, signer, 8),
                 Err(NativeAmxSigningGuardError::UnsafeJournal(message))
-                    if message.contains("authenticated recovery")
+                    if message.contains("unsupported pre-release")
             ));
             assert!(
                 !root
                     .path()
                     .join(NATIVE_AMX_SIGNING_GUARD_DIRECTORY)
                     .exists(),
-                "legacy directory {legacy_name} must fail before V5 journal creation"
+                "unsupported directory {unsupported_name} must fail before V5 journal creation"
             );
         }
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_migrates_v4_commits_and_quarantines_v4_prepare_view() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0xA5);
-        let prepare = body(NativeAmxPhase::Prepare);
-        let mut commit = prepare;
-        commit.phase = NativeAmxPhase::Commit;
-        let legacy_directory =
-            write_v4_signing_journal(root.path(), &signer, &[prepare, commit], 8);
-        let guard = open_guard(root.path(), &prepare, signer.clone(), 8);
-        let inner = guard.inner.lock();
-        assert_eq!(inner.anchor.record_count, 1);
-        assert_eq!(inner.anchor.last_prepare_view, Some(prepare.round.view));
-        assert_eq!(inner.prepare_quarantine_view, Some(prepare.round.view));
-        assert_eq!(inner.records.len(), 1);
-        drop(inner);
-        record_body(&guard, &commit);
-        assert_eq!(
-            guard.record_body_for_test(&prepare),
-            Err(NativeAmxSigningGuardError::PrepareViewQuarantined {
-                view: prepare.round.view,
-            })
-        );
-        assert!(!legacy_directory.exists());
-        let retired = legacy_directory.with_file_name(format!(
-            "{}{}",
-            legacy_directory
-                .file_name()
-                .expect("legacy signer basename")
-                .to_string_lossy(),
-            NATIVE_AMX_V4_RETIRED_SUFFIX
-        ));
-        assert!(retired.exists(), "V4 evidence is atomically retired");
-        drop(guard);
-        open_guard(root.path(), &prepare, signer, 8);
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_v4_migration_preserves_authenticated_cross_view_order() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0xA9);
-        let mut earlier = body(NativeAmxPhase::Commit);
-        earlier.source_id = [0xFE; Hash::LENGTH];
-        let mut later = earlier;
-        later.round.view = earlier.round.view + 1;
-        later.source_id = [0x01; Hash::LENGTH];
-        write_v4_signing_journal(root.path(), &signer, &[earlier, later], 8);
-
-        let guard = open_guard(root.path(), &earlier, signer, 8);
-        let mut migrated = guard
-            .inner
-            .lock()
-            .records
-            .values()
-            .map(|record| (record.sequence, record.body.round.view))
-            .collect::<Vec<_>>();
-        migrated.sort_by_key(|(sequence, _)| *sequence);
-        assert_eq!(
-            migrated,
-            vec![(1, earlier.round.view), (2, later.round.view)]
-        );
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_v4_upgrade_at_next_height_starts_empty() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0xA6);
-        let prepare = body(NativeAmxPhase::Prepare);
-        let mut commit = prepare;
-        commit.phase = NativeAmxPhase::Commit;
-        write_v4_signing_journal(root.path(), &signer, &[prepare, commit], 8);
-        let next_context = another_context(b"V4-to-V5-next-height");
-        let mut next = prepare;
-        next.round.context_id = next_context;
-        next.round.height += 1;
-        next.round.view = 0;
-        next.authority_context_height += 1;
-        next.planned_coordinator_block_height += 1;
-        next.coordinator_lane_block_view = 0;
-        let guard = open_guard(root.path(), &next, signer, 8);
-        {
-            let inner = guard.inner.lock();
-            assert_eq!(inner.anchor.record_count, 0);
-            assert_eq!(inner.anchor.highest_view, None);
-            assert_eq!(inner.anchor.last_prepare_view, None);
-            assert_eq!(inner.prepare_quarantine_view, None);
-        }
-        record_body(&guard, &next);
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_v4_migration_recovers_an_unpublished_v5_prefix() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0xA7);
-        let prepare = body(NativeAmxPhase::Prepare);
-        let mut commit = prepare;
-        commit.phase = NativeAmxPhase::Commit;
-        write_v4_signing_journal(root.path(), &signer, &[prepare, commit], 8);
-        let (directory, owner_uid, _) =
-            native_amx_ensure_signer_directory(root.path(), &signer).expect("create V5 directory");
-        let binding = NativeAmxHeightBindingV2 {
-            active_height: prepare.authority_context_height,
-            context_id: prepare.round.context_id,
-            epoch: prepare.epoch,
-            network_id: prepare.network_id,
-            signer: signer.clone(),
-            max_records: 8,
-        };
-        let empty_anchor = NativeAmxSigningAnchorV2::empty(binding).expect("empty V5 anchor");
-        let prefix =
-            NativeAmxSigningRecordV2::from_body(1, empty_anchor.head_hash, &commit, &signer)
-                .expect("V5 migration prefix");
-        write_secure_new(
-            &NativeAmxSigningGuard::record_path(&directory, &prefix),
-            &norito::encode_canonical(&prefix).expect("encode V5 prefix"),
-        );
-        native_amx_sync_directory_path(&directory).expect("sync V5 prefix");
-        let guard = open_guard(root.path(), &prepare, signer, 8);
-        assert_eq!(guard.inner.lock().anchor.record_count, 1);
-        assert_eq!(
-            native_amx_secure_file_identity(
-                &NativeAmxSigningGuard::record_path(&directory, &prefix),
-                signing_guard_limits(8).max_record_bytes.get(),
-                owner_uid,
-            )
-            .is_ok(),
-            true
-        );
-    }
-    #[cfg(unix)]
-    #[test]
-    fn signing_guard_v4_migration_fails_closed_on_corrupt_evidence() {
-        let root = tempfile::tempdir().expect("temp dir");
-        let (_keypair, signer) = signing_guard_signer(0xA8);
-        let prepare = body(NativeAmxPhase::Prepare);
-        let legacy_directory = write_v4_signing_journal(root.path(), &signer, &[prepare], 8);
-        let record_path = fs::read_dir(&legacy_directory)
-            .expect("read V4 journal")
-            .map(|entry| entry.expect("V4 entry"))
-            .find(|entry| native_amx_valid_record_filename(&entry.file_name().to_string_lossy()))
-            .expect("V4 record")
-            .path();
-        let mut bytes = fs::read(&record_path).expect("read V4 record");
-        let last = bytes.last_mut().expect("non-empty V4 record");
-        *last ^= 0x01;
-        fs::write(&record_path, bytes).expect("corrupt V4 record");
-        assert_unsafe_open(root.path(), &prepare, signer, 8);
     }
     #[cfg(unix)]
     #[test]

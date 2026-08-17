@@ -819,15 +819,9 @@ fn sampled_scalar_slots_are_owned_before_rejection_or_return() {
             && upstream_drop < zero_check
             && zero_check < returned
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "sampled_scalar_slots_are_owned_before_rejection_or_return/00",
         random,
-        &[
-            "Result<F, FcmpNativeErrorV1>",
-            "if let Some(mut scalar)",
-            "ProverSecretScalarV1::take(&mut scalar)",
-            "scalar.expose_copy().is_zero()",
-            "return Ok(scalar.expose_copy())",
-        ],
     );
     let owner = source_section(
         source,
@@ -845,31 +839,16 @@ fn sampled_scalar_slots_are_owned_before_rejection_or_return() {
         "fn take(value: &mut F) -> Self",
     );
     assert!(borrowed_constructor.contains("Self(*value)"));
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "sampled_scalar_slots_are_owned_before_rejection_or_return/01",
         borrowed_constructor,
-        &["Self::take", "Self::new", "BorrowedProverScalarSlotV1"],
     );
     assert!(negated_constructor.contains("Self(-self.0)"));
     assert_eq!(negated_constructor.matches("self.0").count(), 1);
     assert_eq!(negated_constructor.matches("Self(").count(), 1);
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "sampled_scalar_slots_are_owned_before_rejection_or_return/02",
         negated_constructor,
-        &[
-            "-> F",
-            "neg_ref",
-            "expose_ref",
-            "expose_copy",
-            "copy_from_borrowed",
-            "let negated",
-            "callback",
-            "getter",
-            "FnOnce",
-            "FnMut",
-            "Deref",
-            "Clone",
-            ".clone(",
-            ".copied(",
-        ],
     );
     assert!(!owner.contains("fn expose_copy(&self) -> F"));
     let proof_math = include_str!("../../proof_math.rs");
@@ -886,46 +865,17 @@ fn sampled_scalar_slots_are_owned_before_rejection_or_return() {
         "fn prove_fcmp_plus_plus_once_v1(",
         "fn retry_membership_prover<T>(",
     );
-    assert_source_counts(
+    assert_source_contract_group(
+        "sampled_scalar_slots_are_owned_before_rejection_or_return/03",
         prove_once,
-        &[
-            ("random_proof_scalar", 8),
-            ("push_owned_secret_scalar_v1(&mut", 6),
-            ("push_owned_secret_scalar_v1(", 6),
-            ("blind.scalar.negated_owner_v1()", 2),
-            ("let nonce = random_proof_scalar::<", 2),
-        ],
     );
-    assert_source_contains_all(
+    assert_source_contract_group(
+        "sampled_scalar_slots_are_owned_before_rejection_or_return/04",
         prove_once,
-        &[
-            "prepare_selene_blind(random_proof_scalar(rng)?)?",
-            "prepare_helios_blind(random_proof_scalar(rng)?)?",
-            "push_owned_secret_scalar_v1(&mut c1_branch_masks, blind.scalar.negated_owner_v1())?",
-            "push_owned_secret_scalar_v1(&mut c2_branch_masks, blind.scalar.negated_owner_v1())?",
-            "push_owned_secret_scalar_v1(&mut c1_branch_masks, random_proof_scalar(rng)?)?",
-            "push_owned_secret_scalar_v1(&mut c2_branch_masks, random_proof_scalar(rng)?)?",
-            "push_owned_secret_scalar_v1(&mut c1_masks, random_proof_scalar(rng)?)?",
-            "push_owned_secret_scalar_v1(&mut c2_masks, random_proof_scalar(rng)?)?",
-            "let nonce = random_proof_scalar::<Field25519>(rng)?",
-            "let nonce = random_proof_scalar::<HelioseleneField>(rng)?",
-        ],
     );
-    assert_source_excludes_all(
+    assert_source_contract_group(
+        "sampled_scalar_slots_are_owned_before_rejection_or_return/05",
         prove_once,
-        &[
-            "push_secret_scalar_v1(&mut c1_branch_masks, random_proof_scalar(rng)?)?",
-            "push_secret_scalar_v1(&mut c2_branch_masks, random_proof_scalar(rng)?)?",
-            "push_secret_scalar_v1(&mut c1_masks, random_proof_scalar(rng)?)?",
-            "push_secret_scalar_v1(&mut c2_masks, random_proof_scalar(rng)?)?",
-            "push_secret_scalar_v1(&mut c1_branch_masks",
-            "push_secret_scalar_v1(&mut c2_branch_masks",
-            "blind.scalar.expose_ref().neg_ref()",
-            "blind.scalar.neg_ref()",
-            "-blind.scalar",
-            "let mut nonce = random_proof_scalar",
-            "ProverSecretScalarV1::take(&mut nonce)",
-        ],
     );
 }
 #[test]
