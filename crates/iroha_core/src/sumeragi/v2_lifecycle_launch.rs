@@ -35,8 +35,9 @@ pub(in crate::sumeragi) use preactivation::{
 #[cfg(test)]
 pub(in crate::sumeragi) use turn_driver::ProductionPreparedCertifiedServeTestSettlementV1;
 pub(in crate::sumeragi) use turn_driver::{
-    ProductionLifecycleCompletionSelectionV1, ProductionLifecycleCompletionTurnV1,
-    ProductionLifecycleIngressSelectionV1, ProductionLifecycleIngressTurnV1,
+    ProductionLifecycleCompletionPreGateV1, ProductionLifecycleCompletionSelectionV1,
+    ProductionLifecycleCompletionTurnV1, ProductionLifecycleIngressSelectionV1,
+    ProductionLifecycleIngressTurnV1, ProductionLifecycleReadyCompletionTurnV1,
     ProductionPreparedOrdinaryIngressTurnV1, ProductionRecoveredLifecycleSignCompletionSelectionV1,
 };
 
@@ -564,6 +565,8 @@ impl LaunchedProductionLifecycleV1 {
             retry!(ProductionRecoveredDecisionFetchStoreSettlementFailureV1::Owner);
         };
         let key = completion.completion().dispatch_key();
+        let wait_source =
+            super::projection::certified_fetch_wait_source(completion.completion().request_hash());
         let response_hash = completion.completion().response_hash();
         let physical_ordinal = completion.completion().physical_admission_ordinal();
         let Some(body) = completion.completion().project_store_body_authority() else {
@@ -612,6 +615,7 @@ impl LaunchedProductionLifecycleV1 {
                 &owner.coordinator,
                 &lease,
                 key,
+                wait_source,
                 body,
             ) {
             Ok(authority) => authority,
@@ -636,6 +640,7 @@ impl LaunchedProductionLifecycleV1 {
                 &lease,
                 &owner.verified,
                 key,
+                wait_source,
                 adapter,
             ) {
             Ok(successor) => successor,

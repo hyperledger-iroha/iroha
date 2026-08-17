@@ -634,19 +634,30 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
         )
         .expect("bind CompleteTip H+1 Kura advert source"),
     );
-    let (exact_output_handoff_owner, _transport_owner) =
+    let (exact_output_handoff_owner, transport_owner) =
         super::super::v2_worker::durable_exact_output_handoff_owner_pair();
+    let mut lane_work =
+        super::super::v2_lane_work::V2LaneWorkAdapter::lifecycle_finalization_fixture_for_test(
+            context.clone(),
+            local_peer.clone(),
+            local_signer.clone(),
+            Arc::clone(&state),
+            Arc::clone(&kura),
+            Arc::clone(&output_guard),
+            transport_owner,
+        )
+        .expect("open exact CompleteTip lifecycle lane/output owner");
     let launch_inputs =
         super::super::v2_lifecycle_coordinator::ProductionLifecycleLaunchInputsV1::new(
             launched_at,
             Duration::from_secs(10),
             super::super::v2_runtime::RuntimeQueueConfig::default(),
             super::super::v2_effects::EffectQueueConfig::default(),
-            local_peer,
+            local_peer.clone(),
             Some(local_validator),
-            local_signer,
+            local_signer.clone(),
             crate::IrohaNetwork::closed_for_tests(),
-            state,
+            Arc::clone(&state),
             Arc::clone(&kura),
             None,
             64,
@@ -657,16 +668,118 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
             kura_replica_advert_refresh,
             exact_output_handoff_owner,
         );
-    let setup_context =
-        super::super::v2_runner::lifecycle_run_inner::launch_non_pending_lifecycle_height_and_shutdown_for_test(
+    let (mut activated, setup_context) =
+        super::super::v2_runner::lifecycle_run_inner::launch_non_pending_lifecycle_height_and_activate_for_test(
             owner,
             launch_inputs,
             Some(retirement),
             &ingress_ready,
             &ingress,
         )
-        .unwrap_or_else(|error| panic!("launch and stop sealed CompleteTip H+1 owner: {error}"));
+        .unwrap_or_else(|error| panic!("launch sealed CompleteTip H+1 owner: {error}"));
     assert_eq!(setup_context, context.id());
+
+    let mut active_runner =
+        super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
+    let mut block_sync_server = super::super::v2_block_sync::V2BlockSyncServer::new(
+        context.network_id.clone(),
+        64,
+    )
+    .expect("open CompleteTip block-sync server");
+    let mut block_sync = super::super::v2_block_sync::V2BlockSyncDiscovery::new(
+        context.clone(),
+        local_peer,
+        64,
+    )
+    .expect("open CompleteTip block-sync discovery");
+    let mut block_sync_request = None;
+    let mut npos_vrf = super::super::v2_npos::V2NposVrfLifecycle::open(
+        &context,
+        state.as_ref(),
+        Some(local_validator),
+        &local_signer,
+    )
+    .expect("open CompleteTip NPoS lifecycle");
+    let first = super::super::v2_runner::drain_lifecycle_v2_ingress(
+        &mut activated,
+        &mut active_runner,
+        &ingress,
+        &mut lane_work,
+        kura.as_ref(),
+        &local_signer,
+        &mut block_sync_server,
+        &mut block_sync,
+        &mut block_sync_request,
+        &mut npos_vrf,
+        1,
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
+    )
+    .expect("dispatch the first active CompleteTip recovered Sign");
+    assert_eq!(
+        first.producer_claim(),
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingCompletion,
+        "the recovered Sign worker owns Completion before ProducerTurn may claim"
+    );
+    assert!(first.requires_yield());
+    assert!(
+        !output_guard.restart_required(),
+        "queueing the recovered Sign must keep consensus output open"
+    );
+
+    let completion_deadline = Instant::now() + Duration::from_secs(5);
+    let mut producer_claim = first.producer_claim();
+    loop {
+        let next = super::super::v2_runner::drain_lifecycle_v2_ingress(
+            &mut activated,
+            &mut active_runner,
+            &ingress,
+            &mut lane_work,
+            kura.as_ref(),
+            &local_signer,
+            &mut block_sync_server,
+            &mut block_sync,
+            &mut block_sync_request,
+            &mut npos_vrf,
+            1,
+            producer_claim,
+        )
+        .expect("settle the active CompleteTip recovered Sign");
+        producer_claim = next.producer_claim();
+        if producer_claim
+            == super::super::v2_runner::LifecycleProducerClaimDispositionV1::Eligible
+        {
+            assert!(!next.requires_yield());
+            break;
+        }
+        assert!(next.requires_yield());
+        assert!(!output_guard.restart_required());
+        if Instant::now() >= completion_deadline {
+            panic!("timed out waiting for the CompleteTip recovered Sign completion");
+        }
+        std::thread::yield_now();
+    }
+    assert!(
+        !output_guard.restart_required(),
+        "the recovered Sign Broadcast settlement must keep output open"
+    );
+    let broadcast_successor = std::fs::read(&successor_ledger_path)
+        .expect("read the durable CompleteTip Broadcast successor frame");
+    assert_ne!(
+        broadcast_successor, repaired_successor,
+        "the worker completion must durably replace the recovered Sign with its Broadcast child"
+    );
+    let producer = activated
+        .claim_producer_turn_for_local_proposal(&mut active_runner)
+        .unwrap_or_else(|error| {
+            panic!("post-Sign ProducerTurn claim must not see an unsettled lease: {error:?}")
+        });
+    assert!(
+        producer.is_none(),
+        "the repaired CompleteTip fixture has no ready ProducerTurn"
+    );
+    activated
+        .into_clean_shutdown(&mut active_runner)
+        .unwrap_or_else(|error| panic!("stop active CompleteTip H+1 owner: {error}"));
 
     assert!(!ingress_ready.load(Ordering::Acquire));
     let ingress_state = ingress.state.lock();
@@ -674,6 +787,8 @@ fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
     assert!(ingress_state.leader_wire_lifecycle_gate.is_none());
     drop(ingress_state);
     assert!(!output_guard.restart_required());
+    assert!(crate::sumeragi::status::v2_status().is_some());
+    crate::sumeragi::status::clear_v2_status();
     assert!(crate::sumeragi::status::v2_status().is_none());
 }
 
@@ -1863,7 +1978,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             ));
             let mut batch_runner =
                 super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
-            super::super::v2_runner::drain_lifecycle_v2_ingress(
+            let producer_claim = super::super::v2_runner::drain_lifecycle_v2_ingress(
                 &mut activated,
                 &mut batch_runner,
                 &leader_wire_ingress,
@@ -1875,8 +1990,10 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 &mut block_sync_request,
                 &mut npos_vrf,
                 1,
+                super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
             )
             .expect("drain one exact lifecycle-owned ordinary batch");
+            assert!(!producer_claim.requires_yield());
             assert_eq!(leader_wire_ingress.len(), 0);
             assert!(!output_guard.restart_required());
             let (rejected_serve, admitted_serve) =
@@ -1953,7 +2070,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 |runner| {
                     match activated.drive_ingress_turn(runner) {
                         ProductionLifecycleIngressTurnV1::Selected(
-                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CapacityPending,
+                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending,
                         ) => true,
                         ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
                             drop(runner);
@@ -2011,7 +2128,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     LifecycleRunnerRankTarget::Completion,
                     |runner| match activated.drive_completion_turn(runner, &mut lane_work) {
                         ProductionLifecycleCompletionTurnV1::Selected(
-                            ProductionLifecycleCompletionSelectionV1::CertifiedServeCompleted,
+                            ProductionLifecycleCompletionSelectionV1::CertifiedServeClaimedCompleted,
                         ) => true,
                         ProductionLifecycleCompletionTurnV1::PassThrough(_) => false,
                         ProductionLifecycleCompletionTurnV1::Selected(selected) => {
@@ -2032,6 +2149,45 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 );
                 std::thread::yield_now();
             }
+            assert!(matches!(
+                leader_wire_ingress.try_push(
+                    super::super::v2_worker::tests::certified_serve_inbound(
+                        admitted_serve.request(),
+                        local_peer.clone(),
+                    ),
+                ),
+                Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+            ));
+            let competing_serve_ordinal =
+                leader_wire_ingress.state.lock().last_admission_ordinal;
+            let ((), after_competing_serve) = with_lifecycle_current_runner_turn_for_test(
+                &recovered_context,
+                LifecycleRunnerRankTarget::Ingress,
+                |runner| match activated.drive_ingress_turn(runner) {
+                    ProductionLifecycleIngressTurnV1::Selected(
+                        super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeCompetingReady,
+                    ) => {}
+                    ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
+                        drop(runner);
+                        panic!("Ready Producer must retain the current certified Serve")
+                    }
+                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => {
+                        drop(turn);
+                        panic!("Ready Producer cannot let the current certified Serve drain")
+                    }
+                    ProductionLifecycleIngressTurnV1::Selected(_) => {
+                        panic!("Ready Producer selected the wrong Serve outcome")
+                    }
+                },
+            );
+            assert_eq!(after_competing_serve, LifecycleRunnerRankTarget::Completion);
+            assert_eq!(leader_wire_ingress.len(), 1);
+            assert_eq!(
+                leader_wire_ingress.state.lock().last_admission_ordinal,
+                competing_serve_ordinal,
+                "the Ready-Producer guard cannot dequeue or renumber the retained Serve"
+            );
+            assert!(!output_guard.restart_required());
             let claimed_producer = activated
                 .claim_producer_turn_for_local_proposal(&mut serve_runner)
                 .expect("authenticate the complete Ready Producer census")
@@ -2041,6 +2197,61 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             activated
                 .settle_producer_turn_after_local_proposal(&mut serve_runner, attempted_producer)
                 .expect("durably settle the attempted ProducerTurn");
+            assert!(!output_guard.restart_required());
+
+            let ((), after_terminal_replay_queue) = with_lifecycle_current_runner_turn_for_test(
+                &recovered_context,
+                LifecycleRunnerRankTarget::Ingress,
+                |runner| match activated.drive_ingress_turn(runner) {
+                    ProductionLifecycleIngressTurnV1::Selected(
+                        super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeReplayQueued,
+                    ) => {}
+                    ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
+                        drop(runner);
+                        panic!("released Producer must expose the retained Serve terminal replay")
+                    }
+                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => {
+                        drop(turn);
+                        panic!("authenticated terminal Serve replay remains lifecycle-owned")
+                    }
+                    ProductionLifecycleIngressTurnV1::Selected(_) => {
+                        panic!("retained Serve replay selected the wrong outcome")
+                    }
+                },
+            );
+            assert_eq!(
+                after_terminal_replay_queue,
+                LifecycleRunnerRankTarget::Completion
+            );
+            assert_eq!(leader_wire_ingress.len(), 0);
+            let replay_deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let (completed, _) = with_lifecycle_current_runner_turn_for_test(
+                    &recovered_context,
+                    LifecycleRunnerRankTarget::Completion,
+                    |runner| match activated.drive_completion_turn(runner, &mut lane_work) {
+                        ProductionLifecycleCompletionTurnV1::Selected(
+                            ProductionLifecycleCompletionSelectionV1::CertifiedServeReplayCompleted,
+                        ) => true,
+                        ProductionLifecycleCompletionTurnV1::PassThrough(_) => false,
+                        ProductionLifecycleCompletionTurnV1::Selected(selected) => {
+                            assert!(
+                                !selected.restart_required(),
+                                "terminal Serve replay completion requires lifecycle restart"
+                            );
+                            false
+                        }
+                    },
+                );
+                if completed {
+                    break;
+                }
+                assert!(
+                    Instant::now() < replay_deadline,
+                    "timed out waiting for retained Serve terminal replay completion"
+                );
+                std::thread::yield_now();
+            }
             assert!(!output_guard.restart_required());
 
             let ((), after_activated_ingress_pass_through) =

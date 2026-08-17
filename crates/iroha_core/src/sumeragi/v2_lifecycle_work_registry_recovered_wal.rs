@@ -4139,6 +4139,7 @@ impl ConcreteLifecycleWorkRegistry {
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
         key: RecoveredDecisionFetchDispatchKeyV1,
+        wait_source: super::WaitSource,
         body: crate::sumeragi::v2_body_store::RecoveredDecisionFetchStoreBodyAuthorityV1,
     ) -> Result<
         super::RecoveredDecisionFetchStoreAdapterAuthorityV1,
@@ -4163,6 +4164,8 @@ impl ConcreteLifecycleWorkRegistry {
         if work.digest != digest
             || !work.validates_at(address)
             || fetch.dispatch_key != Some(key)
+            || fetch.wait_source != Some(wait_source)
+            || !matches!(wait_source, super::WaitSource::External(_))
             || !key.matches(coordinator.active_context, address, digest)
             || !fetch.matches_claimed_record(address, digest, coordinator, lease)
         {
@@ -4180,6 +4183,7 @@ impl ConcreteLifecycleWorkRegistry {
         lease: &TurnLease,
         verified: &VerifiedHeightContext,
         key: RecoveredDecisionFetchDispatchKeyV1,
+        wait_source: super::WaitSource,
         adapter: crate::sumeragi::v2::PreparedRecoveredDecisionFetchStoreAdapterV1<'adapter>,
     ) -> Result<
         PreparedRecoveredDecisionFetchStoreSuccessor<'registry, 'adapter>,
@@ -4202,6 +4206,8 @@ impl ConcreteLifecycleWorkRegistry {
             return Err(RecoveredDecisionFetchStorePreparationErrorV1::InvalidFetchCarrier);
         };
         if fetch.dispatch_key != Some(key)
+            || fetch.wait_source != Some(wait_source)
+            || !matches!(wait_source, super::WaitSource::External(_))
             || !key.matches(coordinator.active_context, fetch_address, digest)
             || !fetch.matches_claimed_record(fetch_address, digest, coordinator, lease)
         {

@@ -1411,6 +1411,50 @@ impl LifecycleLedgerV1 {
         }
         Ok((staged, ordinal, true))
     }
+    /// Distinguish an exact advanced recovered-Decision Fetch from every
+    /// malformed live-Fetch coalescing failure.
+    ///
+    /// Store recovery is the sole caller.  It may consult the body store only
+    /// after the opened frame proves that the exact WAL Fetch parent advanced
+    /// to a Store continuation.  In particular, a process-generation replay
+    /// mismatch must not be misclassified as a body-fsynced Store crash cut.
+    pub(super) fn has_exact_recovered_decision_fetch_store_parent(
+        &self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> bool {
+        if self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT).is_err()
+            || !projection.belongs_to_context(self.context())
+        {
+            return false;
+        }
+        let mut matching = self
+            .records
+            .iter()
+            .filter(|record| projection.names_record(record));
+        let Some(fetch) = matching.next() else {
+            return false;
+        };
+        if matching.next().is_some() {
+            return false;
+        }
+        let Some((DurableContinuationEdge::FetchToStore, store_ordinal)) = fetch
+            .continuation()
+            .and_then(DurableContinuation::successor_parts)
+        else {
+            return false;
+        };
+        projection.exactly_matches_advanced_apply_parent(fetch, store_ordinal)
+            && self
+                .records
+                .binary_search_by_key(&store_ordinal, LifecycleLedgerRecordV1::ordinal)
+                .ok()
+                .and_then(|index| self.records.get(index))
+                .is_some_and(|store| {
+                    store.owner() == fetch.owner()
+                        && store.ordinal() == store_ordinal
+                        && store.work_class() == Some(LifecycleWorkClass::Store)
+                })
+    }
     /// Authenticate the crash cut after a recovered Fetch advanced to one live Store.
     ///
     /// The WAL parent remains payload-free. The sole same-owner child must be

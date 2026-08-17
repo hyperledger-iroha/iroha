@@ -2847,24 +2847,30 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered Decision Fetch LedgerV1 open failed",
                 )
             })?;
-        let (repaired, ordinal, changed) =
-            match opened.stage_authenticated_wal_decision_fetch(&projection) {
-                Ok(staged) => staged,
-                Err(_) => {
-                    return Self::open_recovered_decision_store_startup(
-                        verified,
-                        projection,
-                        ledger_store,
-                        opened,
-                        body_store,
-                        config,
-                        reply_route_source_capacity,
-                        payload_store,
-                        serve_payloads,
-                        adapter_startup,
-                    );
-                }
-            };
+        let (repaired, ordinal, changed) = match opened
+            .stage_authenticated_wal_decision_fetch(&projection)
+        {
+            Ok(staged) => staged,
+            Err(_) if opened.has_exact_recovered_decision_fetch_store_parent(&projection) => {
+                return Self::open_recovered_decision_store_startup(
+                    verified,
+                    projection,
+                    ledger_store,
+                    opened,
+                    body_store,
+                    config,
+                    reply_route_source_capacity,
+                    payload_store,
+                    serve_payloads,
+                    adapter_startup,
+                );
+            }
+            Err(_) => {
+                return Err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                    "recovered Decision LedgerV1 is neither an exact live Fetch nor an exact advanced Store parent",
+                ));
+            }
+        };
         if changed {
             ledger_store
                 .persist_exact_successor(&opened, &repaired)

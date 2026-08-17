@@ -1150,8 +1150,9 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         crate::sumeragi::status::v2_status().is_none(),
         "Decision Fetch owner construction must remain unpublished"
     );
+    let first_dispatch_projection;
     {
-        let runtime_verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs)
+        let runtime_verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs.clone())
             .expect("verify the clean recovered Fetch executor context");
         let (adapter, startup) = SumeragiV2Adapter::open(
             storage
@@ -1197,6 +1198,164 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
             services
                 .has_pending_exact_output()
                 .expect("inspect the recovered Fetch exact-output owner")
+        );
+        first_dispatch_projection = reopened
+            .recovered_fetch_dispatch_projection_for_test(&executor, first_summary.0)
+            .expect("published recovered Fetch parks its exact request owner externally");
+        assert_eq!(first_dispatch_projection.2.observed_generation(), 0);
+        let foreign_source = super::super::v2_lifecycle_coordinator::WaitSource::External(
+            super::super::v2_lifecycle_coordinator::LifecycleDigest::new([0xEE; 32]),
+        );
+        assert_ne!(foreign_source, first_dispatch_projection.2.source());
+        assert_eq!(
+            reopened.replace_recovered_fetch_wait_source_for_test(first_summary.0, foreign_source,),
+            Some(first_dispatch_projection.2.source())
+        );
+        assert!(
+            reopened
+                .recovered_fetch_dispatch_projection_for_test(&executor, first_summary.0)
+                .is_none(),
+            "a foreign registry wait source cannot authenticate the parked request owner"
+        );
+        assert_eq!(
+            reopened.replace_recovered_fetch_wait_source_for_test(
+                first_summary.0,
+                first_dispatch_projection.2.source(),
+            ),
+            Some(foreign_source)
+        );
+        assert_eq!(
+            reopened.recovered_fetch_dispatch_projection_for_test(&executor, first_summary.0),
+            Some(first_dispatch_projection)
+        );
+        assert!(!output_guard.restart_required());
+        output_guard.close_admission_for_restart();
+        planner_io.detach(&mut services);
+    }
+    drop(reopened);
+    crate::sumeragi::status::clear_v2_status();
+    let mismatched_verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs.clone())
+        .expect("reverify the mismatched-generation Decision Fetch context");
+    let mismatched = SumeragiV2Adapter::open_recovered_startup_with_aggregator(
+        safety.path().join("authenticated-fifo-safety.wal"),
+        mismatched_verified,
+        Some(0),
+        reducer::Generation::new(51),
+        [0xCA; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("replay the Decision WAL under a mismatched process generation")
+    .authenticate_final_wal_startup_authority()
+    .unwrap_or_else(|(error, _)| panic!("authenticate mismatched Decision Fetch: {error}"));
+    let Err(error) = mismatched.open_production_lifecycle_owner_v1_from_roots_for_test(
+        &lifecycle_owner_config(),
+        4,
+        &ledger_root,
+        &serve_root,
+        &body_root,
+        super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+        &local_signer,
+    ) else {
+        panic!("a process-generation mismatch cannot coalesce a durable Decision Fetch")
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("neither an exact live Fetch nor an exact advanced Store parent"),
+        "a live-Fetch mismatch must not be misclassified as a body-fsynced Store cut: {error}"
+    );
+    assert_eq!(
+        std::fs::read(&ledger_path).expect("read generation-mismatched Decision Fetch LedgerV1"),
+        first_frame,
+        "a generation mismatch fails before rewriting the exact durable Fetch"
+    );
+    let verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs.clone())
+        .expect("reverify the externally parked Decision Fetch context");
+    let cold = SumeragiV2Adapter::open_recovered_startup_with_aggregator(
+        safety.path().join("authenticated-fifo-safety.wal"),
+        verified,
+        Some(0),
+        reducer::Generation::new(50),
+        [0xCA; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("cold-open the externally parked Decision Fetch")
+    .authenticate_final_wal_startup_authority()
+    .unwrap_or_else(|(error, _)| panic!("reauthenticate parked Decision Fetch: {error}"));
+    let mut cold = cold
+        .open_production_lifecycle_owner_v1_from_roots_for_test(
+            &lifecycle_owner_config(),
+            4,
+            &ledger_root,
+            &serve_root,
+            &body_root,
+            super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+            &local_signer,
+        )
+        .unwrap_or_else(|error| panic!("reconstruct parked Decision Fetch: {error}"));
+    assert_eq!(
+        cold.recovered_decision_fetch_row_summary_for_test()
+            .expect("cold open normalizes the volatile wait to exact Ready"),
+        first_summary
+    );
+    assert_eq!(
+        std::fs::read(&ledger_path).expect("read cold-opened Decision Fetch LedgerV1"),
+        first_frame,
+        "external Waiting and request ownership never rewrite the durable nonterminal row"
+    );
+    {
+        let runtime_verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs)
+            .expect("verify the redispatched recovered Fetch executor context");
+        let (adapter, startup) = SumeragiV2Adapter::open(
+            storage
+                .path()
+                .join("decision-fetch-cold-redispatch-runtime.wal"),
+            runtime_verified,
+            Some(0),
+            reducer::Generation::new(3),
+            [0xCD; 32],
+            fingerprints(),
+            deferred_admission_ordinals(),
+        )
+        .expect("open the cold redispatch executor adapter");
+        assert!(startup.is_empty());
+        let runtime = super::super::v2_runtime::SerializedV2Runtime::new(
+            adapter,
+            startup,
+            Instant::now(),
+            Duration::from_secs(10),
+            super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+        )
+        .expect("wrap the cold redispatch executor adapter")
+        .0;
+        let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
+        let (mut services, _) = super::super::v2_worker::tests::fixture();
+        let (mut executor, planner_io) = cold.bind_body_store_to_recovered_completion_io_for_test(
+            &mut services,
+            runtime,
+            Arc::clone(&output_guard),
+            2,
+        );
+        super::super::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
+        assert_eq!(
+            cold.dispatch_recovered_completion_for_test(&services, &mut executor, 0)
+                .expect("redispatch the cold-opened recovered Fetch"),
+            super::super::v2_lifecycle_coordinator::ProductionRecoveredCompletionDispatchV1::FetchDispatched {
+                ordinal: first_summary.0,
+            }
+        );
+        let redispatch = cold
+            .recovered_fetch_dispatch_projection_for_test(&executor, first_summary.0)
+            .expect("cold redispatch reinstalls the exact external wait and owner");
+        assert_eq!(redispatch, first_dispatch_projection);
+        assert!(
+            services
+                .has_pending_exact_output()
+                .expect("cold redispatch republishes the exact request fanout")
         );
         assert!(!output_guard.restart_required());
         planner_io.detach(&mut services);
@@ -2578,4 +2737,6 @@ fn bls_mutated_control_frame_identity_fails_before_serve_or_ledger_open() {
     assert!(!storage.path().join("serve").exists());
     assert!(crate::sumeragi::status::v2_status().is_none());
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(recovered_wal_first_release_source_is_closed_and_store_ordered);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    recovered_wal_first_release_source_is_closed_and_store_ordered
+);

@@ -608,7 +608,8 @@ pub(in crate::sumeragi) enum ProductionRecoveredCompletionDispatchV1 {
         /// Exact selected lifecycle ordinal.
         ordinal: u128,
     },
-    /// The selected recovered Fetch owns its executor request and exact fanout.
+    /// The selected recovered Fetch owns its executor request and exact fanout,
+    /// is parked on its external wait, and has released the active lease.
     FetchDispatched {
         /// Exact selected lifecycle ordinal.
         ordinal: u128,
@@ -738,7 +739,7 @@ pub(crate) enum ProductionRecoveredDecisionFetchPersistenceV1 {
 /// Closed failure before recovered Decision Fetch Phase-A queue publication.
 #[must_use]
 pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchPersistenceErrorV1 {
-    /// The active coordinator lease/carrier/request owner was not exact.
+    /// The coordinator row/carrier/request owner was not exact.
     InvalidClaimedCarrier,
     /// The selected response or service belonged to another height owner.
     ForeignOwner,
@@ -749,8 +750,11 @@ pub(in crate::sumeragi) enum ProductionRecoveredDecisionFetchPersistenceErrorV1 
         /// Unchanged selector restored from the aborted capacity reservation.
         prepared: PreparedLifecycleIngressSelector,
     },
-    /// The dedicated queue already owns this lifecycle key.
+    /// The dedicated queue owns this key without the required active lease;
+    /// this impossible half-cut requires restart rather than completion wait.
     InFlightSelectedWork(PreparedLifecycleIngressSelector),
+    /// Direct Ready lifecycle work must drain before this external wake.
+    CompetingReadyWork(PreparedLifecycleIngressSelector),
     /// The exact task changed after capacity was retained.
     InvalidReservedCommand,
     /// The executor response-family claim drifted before the commit tail.
@@ -1401,6 +1405,62 @@ impl ProductionLifecycleOwnerV1 {
                     .prepare_recovered_decision_fetch_request_registration(owner)
                     .map_err(ProductionRecoveredCompletionDispatchErrorV1::Executor)?;
                 let dispatch_key = registration.dispatch_key();
+                let wait_source =
+                    super::projection::certified_fetch_wait_source(registration.request_hash());
+                let observed_generation = self
+                    .coordinator
+                    .observed_generation
+                    .get(&wait_source)
+                    .copied()
+                    .unwrap_or(0);
+                if observed_generation == u64::MAX
+                    || self.coordinator.records.iter().any(|(candidate, record)| {
+                        *candidate != ordinal
+                            && matches!(
+                                record.state,
+                                LifecycleState::Waiting(wait) if wait.source() == wait_source
+                            )
+                    })
+                    || lease.output_reservation().is_some()
+                {
+                    return Err(ProductionRecoveredCompletionDispatchErrorV1::DispatchProjection);
+                }
+                let wait = super::WaitToken::new(wait_source, observed_generation);
+                let mut expected_observed = self.coordinator.observed_generation.clone();
+                expected_observed
+                    .entry(wait_source)
+                    .or_insert(observed_generation);
+                let mut next = self.coordinator.stage_durable_transaction();
+                next.reduce_settle_turn(lease.clone(), super::TurnOutcome::Blocked(wait), None);
+                let staged_wait_is_exact = next.episode_authority
+                    == self.coordinator.episode_authority
+                    && next.active_context == self.coordinator.active_context
+                    && next.fault.is_none()
+                    && next.active_lease.is_none()
+                    && next.records.len() == self.coordinator.records.len()
+                    && next
+                        .records
+                        .get(&ordinal)
+                        .is_some_and(|record| record.state == LifecycleState::Waiting(wait))
+                    && self.coordinator.records.iter().all(|(candidate, record)| {
+                        *candidate == ordinal || next.records.get(candidate) == Some(record)
+                    })
+                    && next.ready_index == self.coordinator.ready_index
+                    && next.key_index == self.coordinator.key_index
+                    && next.owner_index == self.coordinator.owner_index
+                    && next.admission_waits == self.coordinator.admission_waits
+                    && next.high_water == self.coordinator.high_water
+                    && next.next_lease == self.coordinator.next_lease
+                    && next.durable_records == self.coordinator.durable_records
+                    && next.capacity_geometry == self.coordinator.capacity_geometry
+                    && next.capacity_used == self.coordinator.capacity_used
+                    && next.capacity_generation == self.coordinator.capacity_generation
+                    && next.producer_debts == self.coordinator.producer_debts
+                    && next.observed_generation == expected_observed
+                    && next.ledger_store.is_some() == self.coordinator.ledger_store.is_some();
+                if !staged_wait_is_exact {
+                    return Err(ProductionRecoveredCompletionDispatchErrorV1::DispatchProjection);
+                }
                 let prepared = self
                     .registry
                     .registry_mut()
@@ -1417,12 +1477,13 @@ impl ProductionLifecycleOwnerV1 {
                         ProductionRecoveredCompletionDispatchErrorV1::ReservedOwnerMismatch,
                     );
                 }
-                let installed = registration.commit(prepared);
+                let installed = registration.commit(prepared, wait_source);
                 if installed != dispatch_key {
                     return Err(
                         ProductionRecoveredCompletionDispatchErrorV1::ReservedOwnerMismatch,
                     );
                 }
+                self.coordinator = next;
                 output.commit();
                 Ok(ProductionRecoveredCompletionDispatchV1::FetchDispatched { ordinal })
             }
@@ -1964,25 +2025,29 @@ impl ProductionLifecycleOwnerV1 {
         // local actor admission is not a durable terminal receipt.
         Ok(ProductionRecoveredLifecycleSignedBroadcastRefanoutV1::Refanned { ordinal })
     }
+    /// Wake and reclaim one externally parked recovered Fetch, then publish
+    /// its exact response persistence while retaining the active lease for
+    /// the Phase-B Fetch-to-Store transaction.
     #[allow(clippy::result_large_err)]
     pub(super) fn persist_recovered_decision_fetch_response_after_runner(
         &mut self,
         services: &ProductionV2Services,
         executor: &mut V2EffectExecutor<SerializedV2Runtime>,
         selector: PreparedLifecycleIngressSelector,
+        runner: &LifecycleCurrentRunnerTurn<'_>,
     ) -> Result<
         ProductionRecoveredDecisionFetchPersistenceV1,
         ProductionRecoveredDecisionFetchPersistenceErrorV1,
     > {
         let context = selector.context();
-        let Some(lease) = self.coordinator.active_lease.clone() else {
+        if self.coordinator.fault.is_some() || self.coordinator.active_lease.is_some() {
             return Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::InvalidClaimedCarrier);
-        };
-        if self.coordinator.fault.is_some()
-            || lease.work_class() != LifecycleWorkClass::Fetch
-            || lease.ordinal() == 0
+        }
+        if runner.target() != LifecycleRunnerRankTarget::Ingress
+            || runner.height() != context.height()
+            || runner.context_id().0.as_ref() != context.id().as_bytes()
         {
-            return Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::InvalidClaimedCarrier);
+            return Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignOwner);
         }
         let Some(body_store_identity) = self.body_store_identity.as_ref() else {
             return Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignOwner);
@@ -1998,6 +2063,22 @@ impl ProductionLifecycleOwnerV1 {
             || mode.context_id().0.as_ref() != context.id().as_bytes()
         {
             return Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignOwner);
+        }
+        let fetch = selector
+            .attest_scheduler_recovered_fetch_carrier(&self.coordinator, &mut self.registry)
+            .map_err(|_| {
+                ProductionRecoveredDecisionFetchPersistenceErrorV1::InvalidClaimedCarrier
+            })?;
+        if !self.coordinator.ready_index.is_empty()
+            || self
+                .coordinator
+                .records
+                .values()
+                .any(|record| matches!(record.state, LifecycleState::Ready))
+        {
+            return Err(
+                ProductionRecoveredDecisionFetchPersistenceErrorV1::CompetingReadyWork(selector),
+            );
         }
         let capacity = services
             .capture_lifecycle_capacity_rank(selector)
@@ -2023,13 +2104,21 @@ impl ProductionLifecycleOwnerV1 {
                 prepared,
             } => (reservation, prepared),
         };
-        drop(factory);
         if !reservation.preflight_recovered_decision_fetch_target_absent() {
             let prepared = reservation.abort_into_prepared(prepared);
             return Err(
                 ProductionRecoveredDecisionFetchPersistenceErrorV1::InFlightSelectedWork(prepared),
             );
         }
+        let positions = prepared.selected_positions().components();
+        let live_debts = [
+            mode.debt(),
+            reservation.authenticated_predecessor_debt(&factory),
+            prepared.selector_debt(),
+            positions[0],
+            positions[1],
+            runner.debt(),
+        ];
         let task = match executor.prepare_recovered_decision_fetch_body_persistence(prepared) {
             Ok(task) => task,
             Err(error) => {
@@ -2043,17 +2132,32 @@ impl ProductionLifecycleOwnerV1 {
                 );
             }
         };
+        let ordinal = fetch.ordinal();
+        let record = self
+            .coordinator
+            .records
+            .get(&ordinal)
+            .ok_or(ProductionRecoveredDecisionFetchPersistenceErrorV1::InvalidClaimedCarrier)?;
+        let row = authenticated_waiting_fetch_ready_row(&factory, record, fetch, live_debts)
+            .ok_or(ProductionRecoveredDecisionFetchPersistenceErrorV1::InvalidClaimedCarrier)?;
+        let (source, generation) = fetch.wake_generation();
+        let inputs = authenticated_scheduler_inputs(
+            factory,
+            BTreeMap::from([(source, generation)]),
+            BTreeMap::from([(ordinal, row)]),
+        );
         if !task
             .dispatch_key()
             .matches_height_context(self.verified.context())
-            || task.dispatch_key().lifecycle_ordinal() != lease.ordinal()
+            || task.dispatch_key().lifecycle_ordinal() != ordinal
+            || super::projection::certified_fetch_wait_source(task.request_hash()) != source
             || !self
                 .registry
                 .registry_mut()
-                .matches_claimed_dispatched_recovered_decision_fetch(
+                .matches_waiting_dispatched_recovered_decision_fetch(
                     &self.coordinator,
-                    &lease,
                     task.dispatch_key(),
+                    source,
                 )
         {
             return Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::InvalidClaimedCarrier);
@@ -2061,10 +2165,40 @@ impl ProductionLifecycleOwnerV1 {
         if !reservation.preflight_recovered_decision_fetch_body_persistence(&task) {
             return Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::InvalidReservedCommand);
         }
-        let ordinal = lease.ordinal();
         let claim = executor
             .prepare_recovered_decision_fetch_response_claim(&task)
             .map_err(ProductionRecoveredDecisionFetchPersistenceErrorV1::Claim)?;
+        let mut next = self.coordinator.stage_durable_transaction();
+        let lease = match next.plan_turn(inputs) {
+            super::TurnPlan::Execute(lease)
+                if lease.ordinal() == ordinal
+                    && lease.work_class() == LifecycleWorkClass::Fetch
+                    && lease.output_reservation().is_none() =>
+            {
+                lease
+            }
+            super::TurnPlan::Execute(_)
+            | super::TurnPlan::Idle
+            | super::TurnPlan::Waiting(_)
+            | super::TurnPlan::FailClosed(_) => {
+                return Err(
+                    ProductionRecoveredDecisionFetchPersistenceErrorV1::InvalidClaimedCarrier,
+                );
+            }
+        };
+        if !self
+            .registry
+            .registry_mut()
+            .matches_claimed_dispatched_recovered_decision_fetch(
+                &next,
+                &lease,
+                task.dispatch_key(),
+                source,
+            )
+        {
+            return Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::InvalidClaimedCarrier);
+        }
+        self.coordinator = next;
         claim.commit_with_queue(reservation, task);
         assert_eq!(self.coordinator.active_lease.as_ref(), Some(&lease));
         Ok(ProductionRecoveredDecisionFetchPersistenceV1::Queued { ordinal })
@@ -3139,6 +3273,56 @@ impl ProductionLifecycleOwnerV1 {
             self.coordinator.fault,
             self.coordinator.active_lease.is_some(),
         )
+    }
+    /// Rejoin the sole executor owner, exact external wait, and recovered WAL
+    /// registry carrier after the production request publication cut.
+    pub(in crate::sumeragi) fn recovered_fetch_dispatch_projection_for_test(
+        &mut self,
+        executor: &crate::sumeragi::v2_effects::V2EffectExecutor<
+            crate::sumeragi::v2_runtime::SerializedV2Runtime,
+        >,
+        ordinal: u128,
+    ) -> Option<(
+        super::work_registry::RecoveredDecisionFetchDispatchKeyV1,
+        iroha_crypto::HashOf<iroha_data_model::block::consensus_v2::CertifiedBodyRequest>,
+        super::WaitToken,
+    )> {
+        let (key, request_hash) = executor.recovered_decision_fetch_owner_for_test()?;
+        if key.lifecycle_ordinal() != ordinal || self.coordinator.active_lease.is_some() {
+            return None;
+        }
+        let wait_source = super::projection::certified_fetch_wait_source(request_hash);
+        let record = self.coordinator.records.get(&ordinal)?;
+        let LifecycleState::Waiting(wait) = record.state else {
+            return None;
+        };
+        (wait.source() == wait_source
+            && self.coordinator.observed_generation.get(&wait_source)
+                == Some(&wait.observed_generation())
+            && !self.coordinator.ready_index.contains(&ordinal)
+            && self
+                .registry
+                .registry_mut()
+                .matches_waiting_dispatched_recovered_decision_fetch(
+                    &self.coordinator,
+                    key,
+                    wait_source,
+                )
+            && self
+                .registry
+                .registry_mut()
+                .exactly_covers_all_live_work(&self.verified, &self.coordinator))
+        .then_some((key, request_hash, wait))
+    }
+    /// Corrupt or restore only the volatile recovered-Fetch wait-source join.
+    pub(in crate::sumeragi) fn replace_recovered_fetch_wait_source_for_test(
+        &mut self,
+        ordinal: u128,
+        replacement: super::WaitSource,
+    ) -> Option<super::WaitSource> {
+        self.registry
+            .registry_mut()
+            .replace_recovered_fetch_wait_source_for_test(ordinal, replacement)
     }
 }
 

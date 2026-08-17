@@ -153,6 +153,24 @@ impl ConcreteLifecycleWorkRegistry {
     pub(super) fn remove_exact_for_test(&mut self, address: ConcreteWorkAddress) -> bool {
         self.entries.remove(&address).is_some()
     }
+    /// Replace only the volatile recovered-Fetch wait source for a negative
+    /// exact-owner regression and return the prior source.
+    #[cfg(test)]
+    pub(super) fn replace_recovered_fetch_wait_source_for_test(
+        &mut self,
+        ordinal: u128,
+        replacement: super::WaitSource,
+    ) -> Option<super::WaitSource> {
+        let (_, work) = self
+            .entries
+            .iter_mut()
+            .find(|(address, _)| address.ordinal == ordinal)?;
+        let ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(fetch) = &mut work.kind
+        else {
+            return None;
+        };
+        fetch.wait_source.replace(replacement)
+    }
 
     /// Return whether one Broadcast carrier declares a paired next Vote.
     pub(super) fn recovered_lifecycle_signed_broadcast_declares_next_vote(
@@ -659,6 +677,7 @@ impl ConcreteLifecycleWorkRegistry {
             return Err(ReadyRecoveredDecisionFetchAttestationErrorV1::WrongWorkKind);
         };
         if fetch.dispatch_key.is_some()
+            || fetch.wait_source.is_some()
             || !fetch.matches_current_ready_record(address, digest, coordinator)
         {
             return Err(ReadyRecoveredDecisionFetchAttestationErrorV1::InvalidCarrier);
@@ -686,6 +705,7 @@ impl ConcreteLifecycleWorkRegistry {
         coordinator: &LifecycleCoordinator,
         lease: &TurnLease,
         key: RecoveredDecisionFetchDispatchKeyV1,
+        wait_source: super::WaitSource,
     ) -> bool {
         if coordinator.fault.is_some()
             || coordinator.active_lease.as_ref() != Some(lease)
@@ -717,7 +737,63 @@ impl ConcreteLifecycleWorkRegistry {
         work.validates_at(address)
             && work.digest == digest
             && fetch.dispatch_key == Some(key)
+            && fetch.wait_source == Some(wait_source)
+            && matches!(wait_source, super::WaitSource::External(_))
             && fetch.matches_claimed_record(address, digest, coordinator, lease)
+    }
+    /// Join one queue-selected response to its exact externally parked
+    /// recovered Decision Fetch and installed request owner.
+    pub(super) fn matches_waiting_dispatched_recovered_decision_fetch(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        key: RecoveredDecisionFetchDispatchKeyV1,
+        wait_source: super::WaitSource,
+    ) -> bool {
+        if coordinator.fault.is_some()
+            || coordinator.active_lease.is_some()
+            || !matches!(wait_source, super::WaitSource::External(_))
+        {
+            return false;
+        }
+        let ordinal = key.lifecycle_ordinal();
+        let Some(record) = coordinator.records.get(&ordinal) else {
+            return false;
+        };
+        let Some((&slot, &digest)) = record.physical_slots.first_key_value() else {
+            return false;
+        };
+        let Some(address) = ConcreteWorkAddress::new(record.owner, ordinal, slot) else {
+            return false;
+        };
+        if record.work_class != LifecycleWorkClass::Fetch
+            || record.key.phase() != LifecyclePhase::Fetch
+            || record.stage.kind() != LifecycleStageKind::FetchBody
+            || record.stage.predecessor_scope() != PredecessorScope::Independent
+            || record.physical_slots.len() != 1
+            || slot != PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)
+            || !key.matches(coordinator.active_context, address, digest)
+            || coordinator.records.iter().any(|(candidate, other)| {
+                *candidate != ordinal
+                    && matches!(
+                        other.state,
+                        super::LifecycleState::Waiting(wait)
+                            if wait.source() == wait_source
+                    )
+            })
+        {
+            return false;
+        }
+        let Some(work) = self.entries.get(&address) else {
+            return false;
+        };
+        let ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(fetch) = &work.kind else {
+            return false;
+        };
+        work.validates_at(address)
+            && work.digest == digest
+            && fetch.dispatch_key == Some(key)
+            && fetch.wait_source == Some(wait_source)
+            && fetch.matches_waiting_record(address, digest, coordinator, wait_source)
     }
     /// Join one exact claimed recovered Decision Fetch back to its closed carrier.
     pub(super) fn prepare_recovered_decision_fetch_dispatch(
@@ -770,7 +846,7 @@ impl ConcreteLifecycleWorkRegistry {
         if !fetch.matches_claimed_record(address, digest, coordinator, lease) {
             return Err(RecoveredDecisionFetchDispatchProjectionErrorV1::InvalidCarrier);
         }
-        if fetch.dispatch_key.is_some() {
+        if fetch.dispatch_key.is_some() || fetch.wait_source.is_some() {
             return Err(RecoveredDecisionFetchDispatchProjectionErrorV1::AlreadyDispatched);
         }
         Ok(PreparedRecoveredDecisionFetchDispatchV1 { work: fetch, key })
@@ -1267,6 +1343,7 @@ impl ConcreteLifecycleWorkRegistry {
                     carrier,
                     address,
                     dispatch_key: None,
+                    wait_source: None,
                 },
             ),
         };
@@ -2640,9 +2717,22 @@ impl ConcreteLifecycleWorkRegistry {
                         && broadcast.matches_current_ready_record(address, digest, coordinator)
                 }
                 ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(fetch) => {
-                    fetch.dispatch_key.is_none()
-                        && fetch.carrier.validates_in_ledger(verified, &exact_ledger)
-                        && fetch.matches_current_ready_record(address, digest, coordinator)
+                    fetch.carrier.validates_in_ledger(verified, &exact_ledger)
+                        && match (fetch.dispatch_key, fetch.wait_source) {
+                            (None, None) => {
+                                fetch.matches_current_ready_record(address, digest, coordinator)
+                            }
+                            (Some(key), Some(source)) => {
+                                key.matches(coordinator.active_context, address, digest)
+                                    && fetch.matches_waiting_record(
+                                        address,
+                                        digest,
+                                        coordinator,
+                                        source,
+                                    )
+                            }
+                            (None, Some(_)) | (Some(_), None) => false,
+                        }
                 }
                 ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(store) => {
                     store.store.is_exact(verified)
@@ -3120,11 +3210,24 @@ impl ConcreteLifecycleWorkRegistry {
                         &work.kind,
                         ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(fetch)
                             if record.physical_slots.get(&address.slot) == Some(&work.digest)
-                                && fetch.matches_current_ready_record(
-                                    address,
-                                    work.digest,
-                                    coordinator,
-                                )
+                                && match (fetch.dispatch_key, fetch.wait_source) {
+                                    (None, None) => fetch.matches_current_ready_record(
+                                        address,
+                                        work.digest,
+                                        coordinator,
+                                    ),
+                                    (Some(key), Some(source)) => key.matches(
+                                        coordinator.active_context,
+                                        address,
+                                        work.digest,
+                                    ) && fetch.matches_waiting_record(
+                                        address,
+                                        work.digest,
+                                        coordinator,
+                                        source,
+                                    ),
+                                    (None, Some(_)) | (Some(_), None) => false,
+                                }
                     )
                 })
             }

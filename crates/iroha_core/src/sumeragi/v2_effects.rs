@@ -1746,10 +1746,18 @@ impl<R: EffectRuntime> PreparedRecoveredDecisionFetchRequestRegistrationV1<'_, R
             .expect("prepared recovered request retains its owner")
             .dispatch_key()
     }
+    /// Hash of the exact signed request retained by this vacant reservation.
+    pub(in crate::sumeragi) fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
+        self.owner
+            .as_ref()
+            .expect("prepared recovered request retains its owner")
+            .request_hash()
+    }
     /// Arm the closed registry carrier and install the request owner indexes.
     pub(in crate::sumeragi) fn commit(
         mut self,
         prepared_registry: super::v2_lifecycle_coordinator::PreparedRecoveredDecisionFetchDispatchV1<'_>,
+        wait_source: super::v2_lifecycle_coordinator::WaitSource,
     ) -> super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1 {
         let owner = self
             .owner
@@ -1768,7 +1776,7 @@ impl<R: EffectRuntime> PreparedRecoveredDecisionFetchRequestRegistrationV1<'_, R
                 .recovered_decision_fetch_by_request
                 .contains_key(&request_hash)
         );
-        assert_eq!(prepared_registry.commit_for_executor(), key);
+        assert_eq!(prepared_registry.commit_for_executor(wait_source), key);
         let previous_owner = self.executor.recovered_decision_fetches.insert(key, owner);
         assert!(previous_owner.is_none());
         let previous_reverse = self
@@ -3770,6 +3778,22 @@ fn authenticate_recovered_lifecycle_next_vote_body_catalogs(
 }
 
 impl<R: EffectRuntime> V2EffectExecutor<R> {
+    /// Project the sole exact recovered request indexes for lifecycle tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn recovered_decision_fetch_owner_for_test(
+        &self,
+    ) -> Option<(
+        super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
+        HashOf<wire::CertifiedBodyRequest>,
+    )> {
+        let (&key, owner) = self.recovered_decision_fetches.first_key_value()?;
+        let request_hash = owner.request_hash();
+        (self.recovered_decision_fetches.len() == 1
+            && self.recovered_decision_fetch_by_request.len() == 1
+            && self.recovered_decision_fetch_by_request.get(&request_hash) == Some(&key))
+        .then_some((key, request_hash))
+    }
+
     /// Preflight one dedicated recovered request without retaining an executor borrow.
     ///
     /// `Ok(false)` is reserved for the configured request-capacity bound. Every

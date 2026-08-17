@@ -2023,12 +2023,18 @@ fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_an
     let executor = dispatch
         .find("prepare_recovered_decision_fetch_request_registration(owner)")
         .expect("executor vacancy is reserved");
+    let staged_wait = dispatch
+        .find("let mut next = self.coordinator.stage_durable_transaction();")
+        .expect("the exact external wait is staged before owner mutation");
     let registry = dispatch
         .find("prepare_recovered_decision_fetch_dispatch(")
         .expect("the claimed row projects its exact task");
     let commit = dispatch
-        .find("registration.commit(prepared)")
+        .find("registration.commit(prepared, wait_source)")
         .expect("request owner has one commit tail");
+    let waiting = dispatch
+        .find("self.coordinator = next;")
+        .expect("the claimed Fetch is parked before external publication");
     let publication = dispatch
         .find("output.commit();")
         .expect("exact output publishes after request installation");
@@ -2036,9 +2042,11 @@ fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_an
         census < claim
             && claim < output
             && output < executor
-            && executor < registry
+            && executor < staged_wait
+            && staged_wait < registry
             && registry < commit
-            && commit < publication
+            && commit < waiting
+            && waiting < publication
     );
 }
 
@@ -2088,6 +2096,72 @@ fn recovered_decision_fetch_phase_a_is_reachable_only_after_runner_validation() 
     assert!(cursor < handoff);
     assert!(driver.contains("persist_recovered_decision_fetch_response_after_runner("));
     assert!(!scheduler.contains("fn persist_recovered_decision_fetch_response("));
+}
+
+#[test]
+fn authenticated_current_serve_context_drift_fails_closed_instead_of_retrying() {
+    let driver = include_str!("v2_lifecycle_turn_driver.rs");
+    let narrowing = source_region(
+        driver,
+        "let expected_context = lifecycle_context_for_ingress(executor.context());",
+        "let selector = match executor.capture_lifecycle_ingress_selector(lifecycle_cut)",
+    );
+    assert_source_tokens_in_order(
+        narrowing,
+        &[
+            "Ok(FairIngressTurnContextCut::Ordinary(cut))",
+            "authenticated current Certified-Serve lost its active lifecycle context",
+            "close_admission_for_restart()",
+            "drop(cut);",
+            "drop(runner);",
+            "ProductionLifecycleIngressSelectionV1::RestartRequired",
+        ],
+    );
+    assert!(!driver.contains("OrdinaryRetained"));
+}
+
+#[test]
+fn recovered_decision_fetch_phase_a_wakes_waiting_owner_before_queue_publication() {
+    let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
+    let registry = include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs");
+    let phase_a = source_region(
+        scheduler,
+        "pub(super) fn persist_recovered_decision_fetch_response_after_runner(",
+        "/// Plan, submit, and reblock one exact selected certified-Fetch response.",
+    );
+    assert_source_tokens_in_order(
+        phase_a,
+        &[
+            "self.coordinator.active_lease.is_some()",
+            "attest_scheduler_recovered_fetch_carrier(",
+            "capture_lifecycle_capacity_rank(selector)",
+            "authenticated_waiting_fetch_ready_row(",
+            "prepare_recovered_decision_fetch_response_claim(&task)",
+            "let mut next = self.coordinator.stage_durable_transaction();",
+            "let lease = match next.plan_turn(inputs)",
+            "matches_claimed_dispatched_recovered_decision_fetch(",
+            "self.coordinator = next;",
+            "claim.commit_with_queue(reservation, task);",
+        ],
+    );
+    let swap = source_token_position(phase_a, "self.coordinator = next;");
+    let tail = &phase_a[swap..];
+    assert!(!tail.contains("return Err"));
+    assert!(!tail.contains("settle_turn("));
+    assert!(tail.contains("assert_eq!(self.coordinator.active_lease.as_ref(), Some(&lease))"));
+    let waiting_carrier = source_region(
+        registry,
+        "pub(super) fn matches_waiting_dispatched_recovered_decision_fetch(",
+        "/// Join one exact claimed recovered Decision Fetch back to its closed carrier.",
+    );
+    assert_required_source_tokens(
+        waiting_carrier,
+        &[
+            "coordinator.records.iter().any",
+            "*candidate != ordinal",
+            "wait.source() == wait_source",
+        ],
+    );
 }
 
 #[test]

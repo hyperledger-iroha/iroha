@@ -1596,9 +1596,9 @@ impl SchedulerReadyInputs {
     /// Join one reserved ordinary certified-Fetch ingress transaction to its
     /// exact Waiting coordinator row.
     ///
-    /// This path is distinct from recovered-WAL Fetch scheduling: the selector
-    /// seal authenticates the prospective generation transition while the
-    /// caller retains the bounded I/O reservation.
+    /// The selector seal authenticates the prospective generation transition
+    /// for either an ordinary or recovered-WAL Fetch while the caller retains
+    /// the bounded I/O reservation.
     pub(super) fn from_authenticated_waiting_fetch(
         _factory: &AuthenticatedSchedulerInputsFactory,
         record: &LifecycleRecord,
