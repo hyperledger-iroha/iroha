@@ -71,6 +71,7 @@ where
         | V2LaneWorkEffect::PostNativeAmx { .. }
         | V2LaneWorkEffect::PostLaneDrainVote { .. }
         | V2LaneWorkEffect::BroadcastMerge(_)
+        | V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }
         | V2LaneWorkEffect::PostCertifiedMergeSidecar { .. } => return true,
     };
     let Some(routes) = reply_routes.as_mut() else {

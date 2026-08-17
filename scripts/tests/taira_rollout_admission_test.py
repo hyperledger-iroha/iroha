@@ -25,6 +25,7 @@ import pytest
 from scripts import build_taira_rollout_candidate as candidate_builder
 from scripts import release_artifact_contract as contract
 from scripts import release_manifest_signing as signing
+from scripts import render_taira_validator_bundle as receipt_renderer
 from scripts import seal_taira_release_controllers as controller_seal
 from scripts import taira_privacy_protocol_receipt as privacy_evidence
 from scripts import taira_release_authority as linux_authority
@@ -52,25 +53,135 @@ SUBSTITUTE_PUBLIC_KEY = bytes.fromhex(
 SOURCE_DATE_EPOCH = 1_700_000_000
 
 
+def _receipt_signers() -> dict[str, dict[str, object]]:
+    result: dict[str, dict[str, object]] = {}
+    for number, slug in enumerate(admission.SLUGS, start=1):
+        private_payload = number.to_bytes(32, "big")
+        public_payload = receipt_renderer._secp256k1_public_payload(private_payload)
+        public_key = receipt_renderer.RECEIPT_PUBLIC_KEY_PREFIX + (
+            public_payload.hex().upper()
+        )
+        result[slug] = {
+            "node_id": receipt_renderer.receipt_node_id(public_key),
+            "public_key": {
+                "algorithm": "secp256k1",
+                "payload_hex": public_payload.hex(),
+            },
+        }
+    return result
+
+
 @pytest.fixture(autouse=True)
 def _exercise_checks_behind_unprovisioned_authority_barrier(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    client = linux_authority.taira_authority_client
+    records: dict[
+        str,
+        tuple[
+            bytes,
+            tuple[dict[str, object], ...],
+            dict[str, object],
+            dict[str, object],
+        ],
+    ] = {}
+
+    def artifact_manifest(
+        artifacts: tuple[client.Artifact, ...],
+    ) -> tuple[dict[str, object], ...]:
+        return tuple(
+            {
+                "name": artifact.name,
+                "ordinal": ordinal,
+                "sha256": hashlib.sha256(artifact.path.read_bytes()).hexdigest(),
+                "size": artifact.path.stat().st_size,
+            }
+            for ordinal, artifact in enumerate(artifacts)
+        )
+
+    def authorize(
+        role: str,
+        subject: dict[str, object],
+        *,
+        artifacts: tuple[client.Artifact, ...] = (),
+        **_kwargs: object,
+    ) -> client.AuthorityResult:
+        manifest = artifact_manifest(artifacts)
+        run_id = client.derive_run_id(role, subject)
+        operation_id = client._operation_id(role, run_id, subject, manifest)
+        envelope = {
+            "operation_id": operation_id,
+            "role": role,
+            "schema": "iroha.taira.test-native-evidence-envelope.v1",
+        }
+        receipt = {
+            "operation_id": operation_id,
+            "role": role,
+            "schema": "iroha.taira.test-native-evidence-receipt.v1",
+        }
+        records[operation_id] = (
+            client.canonical_json_bytes(subject),
+            manifest,
+            envelope,
+            receipt,
+        )
+        return client.AuthorityResult(
+            role=role,
+            operation_id=operation_id,
+            run_id=run_id,
+            status="authorized",
+            authority_envelope=envelope,
+            durable_receipt=receipt,
+            artifact_manifest=manifest,
+        )
+
+    def verify_receipt(
+        role: str,
+        subject: dict[str, object],
+        *,
+        authority_envelope: dict[str, object],
+        durable_receipt: dict[str, object],
+        artifacts: tuple[client.Artifact, ...] = (),
+        **_kwargs: object,
+    ) -> client.AuthorityResult:
+        manifest = artifact_manifest(artifacts)
+        run_id = client.derive_run_id(role, subject)
+        operation_id = client._operation_id(role, run_id, subject, manifest)
+        expected = records.get(operation_id)
+        observed = (
+            client.canonical_json_bytes(subject),
+            manifest,
+            authority_envelope,
+            durable_receipt,
+        )
+        if expected != observed:
+            raise client.TairaAuthorityClientError(
+                "test native-evidence authority binding differs"
+            )
+        return client.AuthorityResult(
+            role=role,
+            operation_id=operation_id,
+            run_id=run_id,
+            status="valid",
+            authority_envelope=authority_envelope,
+            durable_receipt=durable_receipt,
+            artifact_manifest=manifest,
+        )
+
     monkeypatch.setattr(
         privacy_evidence,
         "require_controller_origin_authority_provisioned",
         lambda: None,
     )
-    monkeypatch.setattr(
-        linux_authority,
-        "require_independent_native_evidence_authority_provisioned",
-        lambda: None,
-    )
+    monkeypatch.setattr(client, "preflight", lambda role: {"role": role})
+    monkeypatch.setattr(client, "authorize", authorize)
+    monkeypatch.setattr(client, "verify_receipt", verify_receipt)
 
 
 ReceiptMutation = Callable[[dict[str, object]], None]
 PrivacyReceiptMutation = Callable[[dict[str, object]], None]
 ManifestMutation = Callable[[dict[str, object]], None]
+ArtifactMutation = Callable[[dict[str, bytes]], None]
 
 
 @dataclass(frozen=True)
@@ -247,7 +358,7 @@ def _authority_payload(
     evidence: Path,
     archive: Path,
     verifier_sha256: str,
-) -> dict[str, object]:
+) -> linux_authority.AuthorizedAuthority:
     return linux_authority.build_authority(
         argparse.Namespace(
             archive=str(archive),
@@ -275,6 +386,7 @@ def _receipt(now_unix: int, mutation: ReceiptMutation | None) -> dict[str, objec
     }
     start_hash = "4" * 64
     end_hash = "5" * 64
+    receipt_signers = _receipt_signers()
     body: dict[str, object] = {
         "artifact_handoff_sha256": "2" * 64,
         "end": {"block_hash": end_hash, "height": 102},
@@ -287,6 +399,9 @@ def _receipt(now_unix: int, mutation: ReceiptMutation | None) -> dict[str, objec
                 "final_height": 102,
                 "label": f"taira-validator-{number}",
                 "number": number,
+                "receipt_signer_node_id": receipt_signers[
+                    f"taira-validator-{number}"
+                ]["node_id"],
                 "restart_proof": "passed",
                 "source_commit": COMMIT,
                 "validator_binary_sha256": validator_sha,
@@ -295,6 +410,7 @@ def _receipt(now_unix: int, mutation: ReceiptMutation | None) -> dict[str, objec
             for number in range(1, 5)
         ],
         "platform": {"arch": "arm64", "os": "macos"},
+        "receipt_signers": receipt_signers,
         "reset_manifest_sha256": reset_manifest_sha,
         "restart_generation": "6" * 64,
         "schema": admission.MACOS_RECEIPT_SCHEMA,
@@ -309,6 +425,13 @@ def _receipt(now_unix: int, mutation: ReceiptMutation | None) -> dict[str, objec
         mutation(body)
     receipt_id = admission.compute_macos_receipt_id(body)
     return {**body, "receipt_id": receipt_id}
+
+
+def _swap_receipt_signer_associations(receipt: dict[str, object]) -> None:
+    signers = receipt["receipt_signers"]
+    assert isinstance(signers, dict)
+    first, second = admission.SLUGS[:2]
+    signers[first], signers[second] = signers[second], signers[first]
 
 
 def _privacy_protocol_evidence(
@@ -441,6 +564,7 @@ def _build_candidate(
     boi_inventory_mutation: ManifestMutation | None = None,
     admission_mutation: ManifestMutation | None = None,
     nested_authority_mutation: ManifestMutation | None = None,
+    nested_artifact_mutation: ArtifactMutation | None = None,
     nested_manifest_mutation: ManifestMutation | None = None,
     controller_manifest_mutation: ManifestMutation | None = None,
     outer_manifest_mutation: ManifestMutation | None = None,
@@ -462,7 +586,10 @@ def _build_candidate(
     )
     evidence = _evidence_root(root)
     linux_archive = _linux_archive(root, evidence)
-    authority_payload = _authority_payload(evidence, linux_archive, verifier_sha256)
+    authorized_authority = _authority_payload(
+        evidence, linux_archive, verifier_sha256
+    )
+    authority_payload = authorized_authority.subject
     if nested_authority_mutation is not None:
         nested_authority_mutation(authority_payload)
 
@@ -485,11 +612,19 @@ def _build_candidate(
         "authority-controller-v1.json": linux_controller_manifest,
         "release_artifact_contract.py": b"trusted contract helper\n",
         "sorafs-validate": verifier.read_bytes(),
-        "taira-exact12-release-authority-v1.json": (
+        admission.LINUX_AUTHORITY_SUBJECT: (
             contract.canonical_json_bytes(authority_payload)
+        ),
+        admission.LINUX_AUTHORITY_ENVELOPE: (
+            authorized_authority.authority_envelope
+        ),
+        admission.LINUX_AUTHORITY_DURABLE_RECEIPT: (
+            authorized_authority.durable_receipt
         ),
         "taira_release_authority.py": b"trusted exact12 helper\n",
     }
+    if nested_artifact_mutation is not None:
+        nested_artifact_mutation(nested_artifacts)
     nested_checksums = "".join(
         f"{hashlib.sha256(payload).hexdigest()}  {name}\n"
         for name, payload in sorted(nested_artifacts.items())
@@ -767,6 +902,7 @@ def test_valid_dual_target_archive_is_verified_without_deployment(
     assert result["reset_manifest_sha256"] == "8" * 64
     assert result["supervisor_sha256"] == "7" * 64
     assert result["validator_binary_sha256"] == "3" * 64
+    assert result["receipt_signers"] == _receipt_signers()
     assert result["boi_artifact_inventory_sha256"] == hashlib.sha256(
         (
             candidate.boi_artifact_handoff
@@ -776,6 +912,29 @@ def test_valid_dual_target_archive_is_verified_without_deployment(
     assert set(result["validator_config_sha256"]) == {
         f"taira-validator-{number}" for number in range(1, 5)
     }
+
+
+@pytest.mark.parametrize(
+    "sidecar",
+    (
+        admission.LINUX_AUTHORITY_ENVELOPE,
+        admission.LINUX_AUTHORITY_DURABLE_RECEIPT,
+    ),
+)
+def test_signed_candidate_requires_both_native_authority_sidecars(
+    tmp_path: Path,
+    sidecar: str,
+) -> None:
+    candidate = _build_candidate(
+        tmp_path,
+        nested_artifact_mutation=lambda artifacts: artifacts.pop(sidecar),
+    )
+
+    with pytest.raises(
+        admission.TairaRolloutAdmissionError,
+        match="does not contain the exact first-release inventory",
+    ):
+        _verify(candidate)
 
 
 def _replace_boi_row_digest(
@@ -992,6 +1151,10 @@ def test_admission_controller_closure_matches_the_root_sealer() -> None:
     assert admission.MACOS_CONTROLLER_FILES == tuple(
         sorted(controller_seal.MACOS_FILES)
     )
+    assert {
+        "scripts/deploy_taira_v21_reset_authority.py",
+        "scripts/deploy_taira_v21_reset_health.py",
+    } <= set(admission.MACOS_CONTROLLER_FILES)
 
 
 @pytest.mark.parametrize(
@@ -1079,8 +1242,8 @@ def test_candidate_builder_reconstructs_the_same_admitted_archive_deterministica
         }
 
     monkeypatch.setattr(
-        candidate_builder.boi_handoff,
-        "validate_candidate_boi_artifact_handoff",
+        candidate_builder.qualification_handoff,
+        "validate_candidate_artifact_handoff",
         accept_fixture_boi,
     )
     public_key = input_root / "release.pub"
@@ -1167,8 +1330,8 @@ def test_candidate_builder_rejects_boi_inventory_toctou(
 ) -> None:
     candidate = _build_candidate(tmp_path)
     monkeypatch.setattr(
-        candidate_builder.boi_handoff,
-        "validate_candidate_boi_artifact_handoff",
+        candidate_builder.qualification_handoff,
+        "validate_candidate_artifact_handoff",
         lambda root, **_kwargs: {
             relative: contract.stable_hash_relative(root, relative)
             for relative in admission.BOI_SOURCE_ARTIFACT_PATHS
@@ -1277,6 +1440,45 @@ def test_admission_manifest_rejects_extra_field(tmp_path: Path) -> None:
             lambda receipt: receipt.__setitem__("supervisor_sha256", "NOT-A-DIGEST"),
             "supervisor digest",
         ),
+        (
+            lambda receipt: receipt.pop("receipt_signers"),
+            "fields are not exact",
+        ),
+        (
+            lambda receipt: receipt["receipt_signers"].pop(admission.SLUGS[-1]),
+            "exact ordered four validator slugs",
+        ),
+        (
+            lambda receipt: receipt["receipt_signers"][
+                admission.SLUGS[0]
+            ].__setitem__(
+                "node_id", admission.RECEIPT_NODE_ID_PREFIX + "0" * 64
+            ),
+            "not derived from its receipt key",
+        ),
+        (
+            _swap_receipt_signer_associations,
+            "exact receipt signer node ID",
+        ),
+        (
+            lambda receipt: receipt["receipt_signers"][
+                admission.SLUGS[0]
+            ].__setitem__("receipt_private_key", "812620" + "01" * 32),
+            "fields are not exact",
+        ),
+        (
+            lambda receipt: receipt["receipt_signers"][admission.SLUGS[0]][
+                "public_key"
+            ].__setitem__("payload_hex", "00" * 33),
+            "payload is noncanonical",
+        ),
+        (
+            lambda receipt: receipt["receipt_signers"].__setitem__(
+                admission.SLUGS[1],
+                dict(receipt["receipt_signers"][admission.SLUGS[0]]),
+            ),
+            "aliases receipt signer identities",
+        ),
     ],
     ids=(
         "wrong-arch",
@@ -1291,6 +1493,13 @@ def test_admission_manifest_rejects_extra_field(tmp_path: Path) -> None:
         "missing-config-binding",
         "peer-config-substitution",
         "invalid-supervisor-binding",
+        "missing-receipt-signer-map",
+        "missing-receipt-signer",
+        "receipt-node-mismatch",
+        "receipt-signer-association-swap",
+        "receipt-private-key-leak",
+        "non-secp-receipt-key",
+        "duplicate-receipt-signer",
     ),
 )
 def test_macos_receipt_rejects_malformed_or_cross_source_rows(

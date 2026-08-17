@@ -59,7 +59,8 @@ run the same universally capable Iroha software.
 - Archived pre-v2 chain ID: `809574f5-fee7-5e69-bfcf-52451e42d50f`
 - Address chain discriminant: `369` (this is what drives canonical I105 literals such as `testu...`)
 - Consensus protocol: Sumeragi v2 state machine, wire revision 4 only (`wire_protocol_version = 4`)
-- Timing profile: authoritative 4,000 ms block cadence and one absolute 40,000 ms view-zero round deadline
+- Timing profile: authoritative 1,000 ms block cadence, 10,000 ms view-zero
+  round deadline, and 100,000 ms maximum certified-view deadline
 - Candidate bounds: 96 transactions, 16 MiB canonical body, and a four-times bounded queue scan
 - Role/mode boundary: each validator config says `role = "validator"`; NPoS mode and DA/chunk
   geometry come from signed genesis, not a mutable local mode or RBC selector
@@ -149,7 +150,8 @@ barriers into multi-second stalls.
 - `validator_roster.example.toml`: copy-me roster template for all validator
   public addresses, public keys, and PoPs. Keep the populated file user-local.
 - `validator_secrets.example.toml`: copy-me runtime template for per-validator
-  BLS private keys and dedicated SoraNet Ed25519 transport key pairs, shared
+  BLS private keys, dedicated SoraNet Ed25519 transport key pairs, and dedicated
+  Torii secp256k1 submission-receipt key pairs, shared
   onboarding/faucet authority and streaming identity key
   material, the public identity of the provider-backed Soracloud mutation
   signer, plus the public SoraFS admission-council roots and quorum. Keep the
@@ -254,12 +256,10 @@ barriers into multi-second stalls.
   for all four supervisors and fails immediately if any current-generation
   marker appears during initial health, consensus advancement, or the child
   restart proof. On macOS it authenticates native NUL-delimited process argv
-  rather than `ps` rendering and launches new supervisors through the exact
-  validated root-controlled Python.app executable. The emergency
-  `--allow-framework-python-argv0-rewrite` option is only for migrating a
-  legacy testnet Homebrew supervisor whose same-framework Python.app rewrite,
-  remaining argv, parent/UID, child, and rollback identity all match exactly;
-  it is refused by default.
+  rather than `ps` rendering and launches supervisors through the exact
+  validated root-controlled Python.app executable. The live supervisor argv
+  must equal its sealed launch configuration exactly, including `argv[0]`;
+  every argument difference is rejected.
 - `scripts/deploy_taira_testnet_update.py`: is the small routine-update
   controller for this testnet. A preinstalled root-owned copy changes only the
   content-addressed `iroha3d` path and its supervisor stat seal, restarts one
@@ -270,6 +270,8 @@ barriers into multi-second stalls.
   adoption plan for an existing four-peer macOS deployment, then performs an
   explicitly confirmed maintenance-window cutover from `run-canonical.sh` or
   `launchd-run.sh` to four independent launchd jobs without replacing storage.
+  Planning requires the four distinct receipt-signer node IDs from authenticated
+  deploy evidence; it never derives identity from config labels or hostnames.
 - `scripts/taira_peer_supervisor.py`: launchd-owned single-validator restart
   loop used by the migration. It guards the planned binary, config, and storage
   identities and caps exponential child-restart backoff. Three consecutive
@@ -608,10 +610,11 @@ evidence directory and matching `.tar.gz`; only
 `<bundle>.authority/`. The final macOS candidate carries an independently
 signed top-level authority tuple. Each authority contains
 `release_manifest.json`, its raw `.sig` and `.pub`, and an `artifacts/`
-directory holding the canonical exact-12 authority, `SHA256SUMS`, the pinned
-native verifier, the portable authority validator, and
-`authority-controller-v1.json`. The signed payload has no build-host absolute
-path. It binds the full workspace-source identity and controller digest,
+directory holding the canonical exact-12 authority, its required native
+authority envelope and durable receipt, `SHA256SUMS`, the pinned native
+verifier, the portable authority validator, and `authority-controller-v1.json`.
+The signed payload has no build-host absolute path. It binds the full
+workspace-source identity and controller digest,
 exact-12 registry and retired-label set, validator, evidence runner, Cargo
 lock, matrix, all authoritative Norito evidence and mandatory JSON
 projections, and the exact archive digest.
@@ -681,14 +684,16 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
 3. Fill in every validator's real `public_key`, `pop_hex`, and
    `public_address` plus its own direct `torii_public_address` in the public
    roster, then put each matching validator `private_key` plus its dedicated
-   Ed25519 `soranet_transport_public_key`/`soranet_transport_private_key` pair
-   and the shared
+   Ed25519 `soranet_transport_public_key`/`soranet_transport_private_key` pair,
+   its secp256k1 `receipt_public_key`/`receipt_private_key` pair, and the shared
    `account_onboarding_*`, `torii_faucet_*`, `streaming_identity_*`, every
    `soracloud_runtime_signer_*` public binding field,
    `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
    values in the runtime file. A validator's SoraNet transport identity must
    be distinct from both its BLS node identity and the shared streaming
-   identity; the renderer rejects reuse and duplicate transport identities.
+   identity. The Torii receipt key is also validator-specific and distinct from
+   every validator and transport key; the renderer checks each public/private
+   pair on secp256k1 and rejects duplicate receipt identities.
    SoraFS council roots must be canonical Ed25519
    governance keys; never substitute validator, node identity, or provider
    advert keys.
@@ -699,13 +704,14 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir "${TAIRA_VALIDATOR_RENDER_ROOT}/taira-validators"`
 5. Copy each validator's complete generated directory to that validator
    host's canonical `/etc/iroha/taira-validator` directory. Every rendered
-config binds signer sidecars and governance manifests to that same
-first-release install root; it never embeds the developer checkout or
-`dist/` path. The renderer creates bundle and runtime directories with mode
-`0700`, creates validator, SoraNet transport, streaming, Kagemusha command,
-onboarding, faucet, and API-token sidecars with mode `0600`, writes only
-canonical signer paths and the BLAKE3 token digest to peer config, and emits a
-protective `.gitignore`. It also creates the
+   config binds signer sidecars and governance manifests to that same
+   first-release install root; it never embeds the developer checkout or
+   `dist/` path. The renderer creates bundle and runtime directories with mode
+   `0700`, creates validator, SoraNet transport, streaming, Kagemusha command,
+   onboarding, faucet, and API-token sidecars with mode `0600`, injects only
+   that validator's receipt key pair directly into its owner-private config,
+   writes canonical paths for the other signers plus the BLAKE3 token digest,
+   and emits a protective `.gitignore`. It also creates the
    co-located `sorafs_admission/` directory and rewrites admission-envelope,
    signer, and manifest paths together when
    `--install-root` is changed. It prints sidecar paths but never their contents.
@@ -1092,19 +1098,135 @@ proxies, and bind both to independently reviewed SHA-256 pins. The selected
 Cargo home is cache-only, must contain no `config` or `config.toml`, and the
 sealed build runs offline with a fixed `HOME` and `PATH`.
 
+Cargo 1.93 cannot emit its unstable unit graph on the production stable
+surface, and `cargo metadata` is not an equivalent graph. Before the sealed
+build, a reviewed external controller must assert that it captured the real
+graph for the exact package/features/binary/target command and normalize it
+under the field-preservation and path/sort rules in
+`specs/offline_kagemusha.md`. The controller's truthful capture is an
+irreducible external trust requirement: the producer authenticates the signed
+assertion and both transferred graph artifacts but cannot prove that the raw
+bytes came from Cargo or that normalization was performed faithfully. This
+repository currently ships no real raw graph,
+release-normalized graph, or controller receipt. The three-unit regression
+fixture is not release evidence. The source-projection producer is mode
+`100644`: invoke it only through an absolute, independently digest-pinned
+Python interpreter, not through PATH or its shebang.
+
+On the first controller, set every `_SHA256` value from an independent review,
+use new output paths, and generate the exact request. Transfer that request to
+the controller holding the release authorization key and create one detached
+SSH signature in the fixed namespace. The private key is runtime-only and must
+not enter the checkout or release bundle.
+
 ```bash
-python3 -I scripts/build_kagemusha_v4_candidate_bundle.py \
+PROJECTION_PYTHON=/absolute/root-custodied/digest-pinned/python3
+PROJECTION_PRODUCER=/absolute/root-custodied/reviewed-iroha/scripts/produce_kagemusha_v4_source_seal_projection.py
+SOURCE_ROOT=/absolute/root-custodied/reviewed-iroha
+SOURCE_CLOSURE=/absolute/private/path/reviewed-source-closure.json
+SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>'
+EXECUTION_POLICY=/absolute/private/path/source-projection-execution-policy.json
+EXECUTION_POLICY_SHA256='<reviewed-execution-policy-64-lowercase-hex>'
+RAW_UNIT_GRAPH=/absolute/private/path/cargo-1.93-raw-unit-graph-v1.json
+RAW_UNIT_GRAPH_SHA256='<reviewed-raw-unit-graph-64-lowercase-hex>'
+NORMALIZED_UNIT_GRAPH=/absolute/private/path/cargo-1.93-normalized-unit-graph-v1.json
+NORMALIZED_UNIT_GRAPH_SHA256='<reviewed-unit-graph-64-lowercase-hex>'
+REVIEWED_CARGO_BINARY_SHA256='<reviewed-direct-cargo-64-lowercase-hex>'
+REVIEWED_RUSTC_BINARY_SHA256='<reviewed-direct-rustc-64-lowercase-hex>'
+CONTROLLER_AUTHORIZATION=/absolute/private/path/source-projection-authorization-v1.json
+SOURCE_PROJECTION=/absolute/private/path/authenticated-source-seal-projection.json
+
+# Construct this canonical policy only after independently authenticating the
+# direct tools, their `-Vv` output, and both graph files. Transfer both pinned
+# graph artifacts to the production and independent-verification controllers.
+PROJECTION_COMMON_ARGS=(
+  --root "${SOURCE_ROOT}"
+  --reviewed-source-closure "${SOURCE_CLOSURE}"
+  --reviewed-source-closure-sha256 "${SOURCE_CLOSURE_SHA256}"
+  --execution-policy "${EXECUTION_POLICY}"
+  --execution-policy-sha256 "${EXECUTION_POLICY_SHA256}"
+  --raw-unit-graph "${RAW_UNIT_GRAPH}"
+  --raw-unit-graph-sha256 "${RAW_UNIT_GRAPH_SHA256}"
+  --unit-graph "${NORMALIZED_UNIT_GRAPH}"
+  --unit-graph-sha256 "${NORMALIZED_UNIT_GRAPH_SHA256}"
+)
+
+"${PROJECTION_PYTHON}" -I "${PROJECTION_PRODUCER}" request \
+  "${PROJECTION_COMMON_ARGS[@]}" \
+  --output "${CONTROLLER_AUTHORIZATION}"
+
+/usr/bin/ssh-keygen -Y sign \
+  -f /absolute/controller-only/source-projection-key \
+  -n iroha-kagemusha-source-seal-projection-v1 \
+  "${CONTROLLER_AUTHORIZATION}"
+```
+
+After independently pinning the authorization, detached signature, sole-key
+allowed-signers policy, and explicit revocation file (an empty file is allowed
+only when its nonzero SHA-256 is pinned), produce the projection. A separate
+controller must then reconstruct it with `verify`. A fresh digest pin on
+different projection bytes does not pass this step. The execution policy must
+use the exact V1 fields, fixed capture argv and empty-environment map documented
+in `specs/offline_kagemusha.md`; `{}`, unknown fields, tool/version drift, and a
+normalized size or digest that differs from `NORMALIZED_UNIT_GRAPH` fail
+closed. The raw size and digest must likewise match the separately pinned
+`RAW_UNIT_GRAPH` bytes on request, production, and independent verification.
+That proves transfer identity, not that Cargo emitted the bytes or that the
+external controller normalized them correctly.
+
+```bash
+CONTROLLER_AUTHORIZATION_SHA256='<reviewed-authorization-64-lowercase-hex>'
+CONTROLLER_SIGNATURE="${CONTROLLER_AUTHORIZATION}.sig"
+CONTROLLER_SIGNATURE_SHA256='<reviewed-signature-64-lowercase-hex>'
+CONTROLLER_ALLOWED_SIGNERS=/absolute/private/path/projection-controller-allowed-signers
+CONTROLLER_ALLOWED_SIGNERS_SHA256='<reviewed-controller-policy-64-lowercase-hex>'
+CONTROLLER_REVOCATION=/absolute/private/path/projection-controller-revocation
+CONTROLLER_REVOCATION_SHA256='<reviewed-controller-revocation-64-lowercase-hex>'
+
+PROJECTION_CONTROLLER_ARGS=(
+  --authorization "${CONTROLLER_AUTHORIZATION}"
+  --authorization-sha256 "${CONTROLLER_AUTHORIZATION_SHA256}"
+  --controller-signature "${CONTROLLER_SIGNATURE}"
+  --controller-signature-sha256 "${CONTROLLER_SIGNATURE_SHA256}"
+  --controller-allowed-signers "${CONTROLLER_ALLOWED_SIGNERS}"
+  --controller-allowed-signers-sha256 "${CONTROLLER_ALLOWED_SIGNERS_SHA256}"
+  --controller-revocation "${CONTROLLER_REVOCATION}"
+  --controller-revocation-sha256 "${CONTROLLER_REVOCATION_SHA256}"
+)
+
+"${PROJECTION_PYTHON}" -I "${PROJECTION_PRODUCER}" produce \
+  "${PROJECTION_COMMON_ARGS[@]}" \
+  "${PROJECTION_CONTROLLER_ARGS[@]}" \
+  --output "${SOURCE_PROJECTION}"
+
+SOURCE_PROJECTION_SHA256='<producer-reported-projection-64-lowercase-hex>'
+"${PROJECTION_PYTHON}" -I "${PROJECTION_PRODUCER}" verify \
+  "${PROJECTION_COMMON_ARGS[@]}" \
+  "${PROJECTION_CONTROLLER_ARGS[@]}" \
+  --projection "${SOURCE_PROJECTION}" \
+  --projection-sha256 "${SOURCE_PROJECTION_SHA256}" \
+  > /absolute/private/path/independent-source-projection-verification.json
+```
+
+The authenticated promotion launcher must require the final command to return
+zero immediately before promotion and must pass that same
+`SOURCE_PROJECTION_SHA256` below. The readiness gate treats this digest as an
+external trust anchor; root custody of a hand-authored projection is not a
+substitute for the independent reconstruction.
+
+```bash
+"${PROJECTION_PYTHON}" -I scripts/build_kagemusha_v4_candidate_bundle.py \
   --root "$PWD" \
   --cargo /absolute/direct/toolchain/bin/cargo \
-  --cargo-sha256 '<reviewed-64-lowercase-hex>' \
+  --cargo-sha256 "${REVIEWED_CARGO_BINARY_SHA256}" \
   --rustc /absolute/direct/toolchain/bin/rustc \
-  --rustc-sha256 '<reviewed-64-lowercase-hex>' \
+  --rustc-sha256 "${REVIEWED_RUSTC_BINARY_SHA256}" \
   --cargo-home /absolute/owner-controlled/cache-only-cargo-home \
   --target-dir /absolute/private/path/kagemusha-sealed-target \
   --reviewed-source-closure /absolute/private/path/reviewed-source-closure.json \
   --reviewed-source-closure-sha256 '<64-lowercase-hex>' \
-  --authenticated-source-seal-projection /absolute/private/path/authenticated-source-seal-projection.json \
-  --authenticated-source-seal-projection-sha256 '<64-lowercase-hex>' \
+  --authenticated-source-seal-projection "${SOURCE_PROJECTION}" \
+  --authenticated-source-seal-projection-sha256 "${SOURCE_PROJECTION_SHA256}" \
   > /absolute/private/path/sealed-kagemusha-candidate-build.json
 
 python3 scripts/run_kagemusha_v4_generation.py \
@@ -1156,8 +1278,8 @@ KAGEMUSHA_PRODUCTION_READINESS_PYTHON=/absolute/root-custodied/python3 \
 KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256='<reviewed-python-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=/absolute/root-custodied/reviewed-source-closure.json \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>' \
-KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION=/absolute/root-custodied/authenticated-source-seal-projection.json \
-KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256='<reviewed-projection-64-lowercase-hex>' \
+KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION="${SOURCE_PROJECTION}" \
+KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256="${SOURCE_PROJECTION_SHA256}" \
 KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_PATH=/absolute/root-custodied/allowed-signers \
 KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_SHA256='<reviewed-allowed-signers-64-lowercase-hex>' \
 KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_PATH=/absolute/root-custodied/revocation \
@@ -1698,8 +1820,18 @@ The planning phase only inspects processes and writes a new staging directory:
 ```bash
 python3 scripts/migrate_taira_peer_supervision.py plan \
   --base /absolute/path/to/the/deployed/taira-rollout \
-  --output-dir /absolute/path/to/new/taira-supervision-plan
+  --output-dir /absolute/path/to/new/taira-supervision-plan \
+  --authenticated-node-binding taira-validator-1=TAIRA_VALIDATOR_1_RECEIPT_SIGNER_NODE_ID \
+  --authenticated-node-binding taira-validator-2=TAIRA_VALIDATOR_2_RECEIPT_SIGNER_NODE_ID \
+  --authenticated-node-binding taira-validator-3=TAIRA_VALIDATOR_3_RECEIPT_SIGNER_NODE_ID \
+  --authenticated-node-binding taira-validator-4=TAIRA_VALIDATOR_4_RECEIPT_SIGNER_NODE_ID
 ```
+
+Copy those slug-bound values only from the authenticated deployment record.
+Argument order is irrelevant because every binding names its exact validator;
+all four slugs must appear exactly once. If that evidence is unavailable,
+refuse adoption and use the fresh reset or reprovisioning workflow; public
+keys, labels, and hostnames are not node-ID substitutes.
 
 It requires four exact peer PID files, exact `iroha3d --sora --config ...`
 commands, one common parent whose command names an approved
@@ -1880,9 +2012,9 @@ Before any self-hosted job or Cargo invocation, the hosted `release-readiness`
 job runs `scripts/check_taira_release_prerequisites.py`. It reports and rejects
 any critical-path authority that remains an unconditional source-level refusal.
 This is intentionally the current result until the independent native-evidence,
-protocol-receipt, Exact12-governance, BOI, deploy-issuance, and rollout-observation
-authorities, plus the distinct public 24-hour soak observation authority, are
-implemented and provisioned. The gate
+protocol-receipt, Exact12-governance, BOI, deploy-issuance, post-deploy native-
+evidence, rollout-observation, public-soak producer, and distinct public-soak
+observation authorities are implemented and provisioned. The gate
 prevents an unavailable release from spending build hours merely to reach the
 same refusal later.
 
@@ -1899,6 +2031,52 @@ It publishes no authority itself. Admission remains source-disabled until an
 independent Ed25519 verifier, pinned native evidence verifier, and atomic replay
 broker provision the dedicated public-soak authority contract and durable
 admission receipt; no live public-soak receipt is currently claimed.
+
+`scripts/taira_public_v2_24h_soak_state.py` supplies the controller-side lease
+primitive for that future runner. One process holds the lock for the entire
+attempt; state transitions are atomic and bind the exact source, three handoffs,
+deployed tip, native-verified soak anchor and producer launch, controller, and
+native verifier. A crash leaves a non-resumable attempt, and clock drift, a
+missed capture window, state rewriting, or root-path replacement fails closed.
+The module is not a workload runner and is not an installed controller
+operation; exposing it directly would exit without contacting Taira or
+producing evidence. The reset and one-shot migration plist renderers require
+the exact journal root, validator ID, and node ID for every supervisor invocation.
+Each validator now receives an explicit runtime-only Torii secp256k1 receipt
+key pair. Its public key and domain-separated derived node ID are carried,
+without the private key, through the reset manifest, four-peer receipt,
+admission, qualification, and deployment records. Deployment rederives the
+supervisor runtime and lifecycle bindings from the exact binary stat seal,
+config digest, restart generation, validator slug, and node ID. This closes the
+former pre-deploy lifecycle node-ID source barrier; the separate deployment-
+issuance authority remains source-disabled.
+
+The mandatory supervisor journal records owner-private per-peer lifecycle windows.
+`scripts/collect_taira_public_v2_lifecycle_evidence.py` validates those four raw
+chains, retains the exact source artifacts and their deploy-bound identities,
+globally resequences them, and publishes final lifecycle evidence only after
+passing all five journals to a digest-pinned native verifier and capturing its
+exact request-bound receipt. The collector is still an offline helper, not an
+installed controller operation or an authority. The candidate and publication
+prerequisite handoffs now have path-only producers behind two `macos-publish`
+controller operations, and the publication workflow retains their root-closed
+outputs. They remain fail-closed until the existing native-evidence, privacy-
+origin, and rollout-observation authorities are provisioned. The structural
+post-deploy handoff producer validates the exact applied reset report, reset
+manifest, four native-receipt files, candidate/publication handoffs, and
+installed deploy-controller attestation before emitting the closed deploy
+identity consumed by the soak checker. Its public entry point still refuses
+before path I/O until the independent deploy-native evidence authority is
+provisioned, and it is not installed as a controller/workflow operation.
+`scripts/run_taira_public_v2_24h_soak.py` now supplies the structural long-lived
+runner around that contract. Its private injected-backend seam binds the full
+candidate/publication/deploy/anchor launch subject, dispatches exactly 432,000
+monotonic slots, holds the lease through capture, streams the bounded evidence
+inventories, and requires exact native launch and backend-shutdown receipts.
+Its public API and CLI remain an unconditional source refusal before caller
+path or network I/O. A genuine protected runtime signer/native verifier,
+observation authority, replay broker, and controller/workflow integration are
+still required before any deployed-public soak can start or claim completion.
 
 Both untrusted native builders default to six Cargo jobs and reuse a Cargo
 target outside the authenticated source checkout only for retries of the same
@@ -2656,7 +2834,9 @@ away from the shipped MCP-enabled config:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir "${TAIRA_VALIDATOR_RENDER_ROOT}/taira-validators"`
    - `validator_secrets.local.toml` must include every validator BLS private
      key, its dedicated Ed25519 `soranet_transport_public_key` and
-     `soranet_transport_private_key`, and the shared `account_onboarding_*`, `torii_faucet_*`, and
+     `soranet_transport_private_key`, its dedicated secp256k1
+     `receipt_public_key` and `receipt_private_key`, and the shared
+     `account_onboarding_*`, `torii_faucet_*`, and
      `streaming_identity_*`, `soracloud_runtime_signer_*`,
      `sorafs_council_public_keys`, and `sorafs_council_signature_threshold`
      fields because the checked-in template intentionally leaves those

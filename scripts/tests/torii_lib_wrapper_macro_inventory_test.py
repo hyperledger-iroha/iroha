@@ -542,7 +542,11 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
                 "runtime.mark_queued(&msg_id); runtime.mark_queued(&msg_id);",
             ),
             (
-                '(handler_iso_sese025_submit, "sese.025", "v1/iso20022/sese025"),',
+                "(\n"
+                "        handler_iso_sese025_submit,\n"
+                '        "sese.025",\n'
+                '        "v1/iso20022/sese025"\n'
+                "    ),",
                 "",
             ),
             ("$message_type:literal", "$message_type:expr"),

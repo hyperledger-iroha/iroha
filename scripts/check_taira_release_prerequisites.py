@@ -21,6 +21,15 @@ from pathlib import Path
 NATIVE_CLIENT_PATH = "scripts/taira_authority_client.py"
 NATIVE_CARGO_PATH = "crates/irohad/Cargo.toml"
 NATIVE_SOURCE_PATH = "crates/irohad/src/bin/taira_release_authority.rs"
+NATIVE_PROTOCOL_PATH = (
+    "crates/irohad/src/external_software_signer/taira_authority/protocol.rs"
+)
+NATIVE_TRANSPORT_PATH = (
+    "crates/irohad/src/external_software_signer/taira_authority/transport.rs"
+)
+NATIVE_SERVICE_PATH = (
+    "crates/irohad/src/external_software_signer/taira_authority/service.rs"
+)
 NATIVE_FEATURE = "taira-authority-bin"
 NATIVE_BINARY = "taira_release_authority"
 NATIVE_MODULE = "external_software_signer::taira_authority"
@@ -48,6 +57,42 @@ NATIVE_COMMANDS = (
     "rotate",
     "revoke",
 )
+
+NATIVE_ROLE_VARIANTS = (
+    "NativeEvidence",
+    "PrivacyProtocolOrigin",
+    "PrivacyGovernance",
+    "Qualification",
+    "DeployIssuance",
+    "RolloutObservation",
+    "PublicSoakObservation",
+    "PublicSoakReplayAdmission",
+)
+
+NATIVE_COMMAND_VARIANTS = (
+    "Provision",
+    "Serve",
+    "AssignRun",
+    "Authorize",
+    "Recover",
+    "VerifyReceipt",
+    "Status",
+    "Rotate",
+    "Revoke",
+)
+
+NATIVE_ROLE_VALIDATORS = {
+    "native-evidence": "validate_native_evidence_v1",
+    "privacy-protocol-origin": "validate_privacy_protocol_origin_v1",
+    "privacy-governance": "validate_assigned_privacy_governance_request_v1",
+    "qualification": "run_qualification_probes",
+    "deploy-issuance": "finalize_deployment",
+    "rollout-observation": "validate_rollout_observation_subject_v1",
+    "public-soak-observation": "issue_public_soak_observation",
+    "public-soak-replay-admission": "issue_public_soak_replay_admission",
+}
+
+NATIVE_ROLE_VARIANT_BY_LABEL = dict(zip(ROLE_REGISTRY, NATIVE_ROLE_VARIANTS))
 
 FIXED_AUTHORITY_ROOTS = (
     "/etc/iroha/taira-authorities/v1",
@@ -126,10 +171,14 @@ PREREQUISITES = (
     ),
     Prerequisite(
         "scripts/build_privacy_v1_boi_handoff.py",
-        "require_boi_qualification_isolation",
+        "require_native_qualification_isolation",
         "native qualification authority",
         ("qualification",),
-        (RequiredCall("assemble_boi_handoff", "authorize", "qualification"),),
+        (
+            RequiredCall(
+                "assemble_qualification_handoff", "authorize", "qualification"
+            ),
+        ),
     ),
     Prerequisite(
         "scripts/deploy_taira_v21_reset.py",
@@ -221,6 +270,45 @@ def _body(function: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.stmt]:
     return body
 
 
+def _constant_truth(value: ast.expr) -> bool | None:
+    if isinstance(value, ast.Constant) and value.value in (None, True, False, 0, 1):
+        return bool(value.value)
+    return None
+
+
+def _live_nodes(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> tuple[ast.AST, ...]:
+    """Walk executable nodes while pruning statically dead literal branches."""
+
+    nodes: list[ast.AST] = []
+
+    def visit(node: ast.AST) -> None:
+        nodes.append(node)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            return
+        if isinstance(node, ast.If):
+            visit(node.test)
+            truth = _constant_truth(node.test)
+            selected = node.body if truth is True else node.orelse if truth is False else None
+            for child in selected if selected is not None else (*node.body, *node.orelse):
+                visit(child)
+            return
+        if isinstance(node, ast.While):
+            visit(node.test)
+            truth = _constant_truth(node.test)
+            selected = node.orelse if truth is False else (*node.body, *node.orelse)
+            for child in selected:
+                visit(child)
+            return
+        for child in ast.iter_child_nodes(node):
+            visit(child)
+
+    for statement in function.body:
+        visit(statement)
+    return tuple(nodes)
+
+
 def is_unconditional_refusal(
     function: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> bool:
@@ -286,7 +374,7 @@ def _reachable(
         result.append(function)
         pending.extend(
             node.func.id
-            for node in ast.walk(function)
+            for node in _live_nodes(function)
             if isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id in module.functions
@@ -310,7 +398,7 @@ def _reaches_client_call(
     module: ParsedModule, *, function: str, method: str, role: str
 ) -> bool:
     for definition in _reachable(module, function):
-        for node in ast.walk(definition):
+        for node in _live_nodes(definition):
             if not isinstance(node, ast.Call) or not isinstance(
                 node.func, ast.Attribute
             ):
@@ -329,7 +417,7 @@ def _reachable_literals(module: ParsedModule, function: str) -> set[str]:
     literals: set[str] = set()
     referenced: set[str] = set()
     for definition in _reachable(module, function):
-        for node in ast.walk(definition):
+        for node in _live_nodes(definition):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 literals.add(node.value)
             elif isinstance(node, ast.Name):
@@ -343,7 +431,7 @@ def _reaches_transport(module: ParsedModule, function: str) -> bool:
     return any(
         isinstance(node.func, ast.Attribute) and node.func.attr in native_calls
         for definition in _reachable(module, function)
-        for node in ast.walk(definition)
+        for node in _live_nodes(definition)
         if isinstance(node, ast.Call)
     )
 
@@ -367,6 +455,311 @@ def _report(
     if line is not None:
         result["line"] = line
     return result
+
+
+def _rust_tokens(source: str) -> tuple[str, ...]:
+    """Lex enough Rust to inspect items without trusting comments or strings."""
+
+    tokens: list[str] = []
+    index = 0
+    length = len(source)
+    while index < length:
+        character = source[index]
+        if character.isspace():
+            index += 1
+            continue
+        if source.startswith("//", index):
+            newline = source.find("\n", index + 2)
+            index = length if newline < 0 else newline + 1
+            continue
+        if source.startswith("/*", index):
+            depth = 1
+            index += 2
+            while index < length and depth:
+                if source.startswith("/*", index):
+                    depth += 1
+                    index += 2
+                elif source.startswith("*/", index):
+                    depth -= 1
+                    index += 2
+                else:
+                    index += 1
+            continue
+
+        raw = re.match(r'(?:br|r)(?P<hashes>#{0,255})"', source[index:])
+        if raw is not None and (
+            index == 0 or not (source[index - 1].isalnum() or source[index - 1] == "_")
+        ):
+            terminator = '"' + raw.group("hashes")
+            payload_start = index + raw.end()
+            payload_end = source.find(terminator, payload_start)
+            index = length if payload_end < 0 else payload_end + len(terminator)
+            continue
+        if character == '"' or (
+            character in {"b", "c"} and index + 1 < length and source[index + 1] == '"'
+        ):
+            index += 2 if character in {"b", "c"} else 1
+            while index < length:
+                if source[index] == "\\":
+                    index += 2
+                elif source[index] == '"':
+                    index += 1
+                    break
+                else:
+                    index += 1
+            continue
+        if character.isalpha() or character == "_":
+            end = index + 1
+            while end < length and (source[end].isalnum() or source[end] == "_"):
+                end += 1
+            tokens.append(source[index:end])
+            index = end
+            continue
+        if character.isdigit():
+            end = index + 1
+            while end < length and (source[end].isalnum() or source[end] == "_"):
+                end += 1
+            tokens.append(source[index:end])
+            index = end
+            continue
+        operator = next(
+            (
+                candidate
+                for candidate in ("::", "=>", "==", "!=", "&&", "||", "->")
+                if source.startswith(candidate, index)
+            ),
+            None,
+        )
+        if operator is not None:
+            tokens.append(operator)
+            index += len(operator)
+            continue
+        tokens.append(character)
+        index += 1
+    return tuple(tokens)
+
+
+def _matching_token(
+    tokens: Sequence[str], start: int, opening: str, closing: str
+) -> int | None:
+    if start >= len(tokens) or tokens[start] != opening:
+        return None
+    depth = 0
+    for index in range(start, len(tokens)):
+        if tokens[index] == opening:
+            depth += 1
+        elif tokens[index] == closing:
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _rust_item_body(
+    source: str, keyword: str, item_name: str
+) -> tuple[str, ...] | None:
+    tokens = _rust_tokens(source)
+    for index in range(len(tokens) - 1):
+        if tokens[index] != keyword or tokens[index + 1] != item_name:
+            continue
+        try:
+            opening = tokens.index("{", index + 2)
+        except ValueError:
+            return None
+        if ";" in tokens[index + 2 : opening]:
+            continue
+        closing = _matching_token(tokens, opening, "{", "}")
+        if closing is not None:
+            return tokens[opening + 1 : closing]
+    return None
+
+
+def _split_top_level(tokens: Sequence[str], delimiter: str) -> tuple[tuple[str, ...], ...]:
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    stack: list[str] = []
+    chunks: list[tuple[str, ...]] = []
+    start = 0
+    for index, token in enumerate(tokens):
+        if token in pairs:
+            stack.append(pairs[token])
+        elif stack and token == stack[-1]:
+            stack.pop()
+        elif token == delimiter and not stack:
+            chunks.append(tuple(tokens[start:index]))
+            start = index + 1
+    if start < len(tokens):
+        chunks.append(tuple(tokens[start:]))
+    return tuple(chunk for chunk in chunks if chunk)
+
+
+def _rust_enum_variants(source: str, enum_name: str) -> tuple[str, ...] | None:
+    body = _rust_item_body(source, "enum", enum_name)
+    if body is None:
+        return None
+    variants: list[str] = []
+    for declaration in _split_top_level(body, ","):
+        variant = next(
+            (
+                token
+                for token in declaration
+                if token and token[0].isupper() and token.replace("_", "").isalnum()
+            ),
+            None,
+        )
+        if variant is None:
+            return None
+        variants.append(variant)
+    return tuple(variants)
+
+
+def _contains_tokens(tokens: Sequence[str], expected: Sequence[str]) -> bool:
+    width = len(expected)
+    return any(
+        tuple(tokens[index : index + width]) == tuple(expected)
+        for index in range(len(tokens) - width + 1)
+    )
+
+
+def _called_rust_functions(tokens: Sequence[str]) -> set[str]:
+    return {
+        token
+        for index, token in enumerate(tokens[:-1])
+        if (token[0].isalpha() or token.startswith("_")) and tokens[index + 1] == "("
+    }
+
+
+def _role_variants(tokens: Sequence[str]) -> set[str]:
+    variants: set[str] = set()
+    for index in range(len(tokens) - 2):
+        if tokens[index : index + 2] == ("TairaAuthorityRoleV1", "::"):
+            variants.add(tokens[index + 2])
+    return variants
+
+
+def _top_level_arrow(tokens: Sequence[str]) -> int | None:
+    stack: list[str] = []
+    pairs = {"(": ")", "[": "]", "{": "}"}
+    for index, token in enumerate(tokens):
+        if token in pairs:
+            stack.append(pairs[token])
+        elif stack and token == stack[-1]:
+            stack.pop()
+        elif token == "=>" and not stack:
+            return index
+    return None
+
+
+def _rust_match_arms(
+    tokens: Sequence[str],
+) -> tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]:
+    arms: list[tuple[tuple[str, ...], tuple[str, ...]]] = []
+    cursor = 0
+    while cursor < len(tokens):
+        while cursor < len(tokens) and tokens[cursor] == ",":
+            cursor += 1
+        arrow_offset = _top_level_arrow(tokens[cursor:])
+        if arrow_offset is None:
+            break
+        arrow = cursor + arrow_offset
+        pattern = tuple(tokens[cursor:arrow])
+        expression_start = arrow + 1
+        if expression_start >= len(tokens):
+            break
+        if tokens[expression_start] == "{":
+            expression_end = _matching_token(tokens, expression_start, "{", "}")
+            if expression_end is None:
+                break
+            expression = tuple(tokens[expression_start : expression_end + 1])
+            cursor = expression_end + 1
+        else:
+            stack: list[str] = []
+            pairs = {"(": ")", "[": "]", "{": "}"}
+            expression_end = len(tokens)
+            for index in range(expression_start, len(tokens)):
+                token = tokens[index]
+                if token in pairs:
+                    stack.append(pairs[token])
+                elif stack and token == stack[-1]:
+                    stack.pop()
+                elif token == "," and not stack:
+                    expression_end = index
+                    break
+            expression = tuple(tokens[expression_start:expression_end])
+            cursor = expression_end + 1
+        arms.append((pattern, expression))
+    return tuple(arms)
+
+
+def _authorize_role_dispatches(source: str) -> Mapping[str, set[str]]:
+    """Return calls protected by concrete role/disposition branches in authorize."""
+
+    body = _rust_item_body(source, "fn", "authorize_json")
+    if body is None:
+        return {}
+    dispatches: dict[str, set[str]] = {}
+
+    # Calls in `match self.role` arms are associated with the exact arm variants.
+    for index, token in enumerate(body):
+        if token != "match":
+            continue
+        try:
+            opening = body.index("{", index + 1)
+        except ValueError:
+            continue
+        if not _contains_tokens(body[index + 1 : opening], ("self", ".", "role")):
+            continue
+        closing = _matching_token(body, opening, "{", "}")
+        if closing is None:
+            continue
+        for pattern, expression in _rust_match_arms(body[opening + 1 : closing]):
+            calls = _called_rust_functions(expression)
+            for variant in _role_variants(pattern):
+                dispatches.setdefault(variant, set()).update(calls)
+
+    # Role-specific `if` blocks cover governance and replay pre-validation.
+    # The deployment finalizer is guarded by its typed disposition, whose parser
+    # accepts that field only for the deployment role.
+    for index, token in enumerate(body):
+        if token != "if":
+            continue
+        opening = None
+        stack: list[str] = []
+        pairs = {"(": ")", "[": "]"}
+        for candidate in range(index + 1, len(body)):
+            current = body[candidate]
+            if current in pairs:
+                stack.append(pairs[current])
+            elif stack and current == stack[-1]:
+                stack.pop()
+            elif current == "{" and not stack:
+                opening = candidate
+                break
+        if opening is None:
+            continue
+        closing = _matching_token(body, opening, "{", "}")
+        if closing is None:
+            continue
+        condition = body[index + 1 : opening]
+        calls = _called_rust_functions(body[opening + 1 : closing])
+        if _contains_tokens(condition, ("self", ".", "role")):
+            for variant in _role_variants(condition):
+                if not _contains_tokens(
+                    condition,
+                    (
+                        "self",
+                        ".",
+                        "role",
+                        "==",
+                        "TairaAuthorityRoleV1",
+                        "::",
+                        variant,
+                    ),
+                ):
+                    continue
+                dispatches.setdefault(variant, set()).update(calls)
+        if _contains_tokens(condition, ("DeployDispositionV1", "::", "Finalize")):
+            dispatches.setdefault("DeployIssuance", set()).update(calls)
+    return dispatches
 
 
 def _audit_native(repository: Path) -> list[dict[str, object]]:
@@ -396,7 +789,7 @@ def _audit_native(repository: Path) -> list[dict[str, object]]:
     except (OSError, UnicodeError) as error:
         reports.append(_report("native-service", NATIVE_SOURCE_PATH, stage, str(error)))
         return reports
-    for marker in (NATIVE_MODULE, FRAME_MAGIC):
+    for marker in (NATIVE_MODULE, "run_cli()"):
         if marker not in source:
             reports.append(
                 _report(
@@ -404,6 +797,54 @@ def _audit_native(repository: Path) -> list[dict[str, object]]:
                     NATIVE_SOURCE_PATH,
                     stage,
                     f"native source is missing {marker!r}",
+                )
+            )
+    try:
+        protocol = (repository / NATIVE_PROTOCOL_PATH).read_text(encoding="utf-8")
+        transport = (repository / NATIVE_TRANSPORT_PATH).read_text(encoding="utf-8")
+        service = (repository / NATIVE_SERVICE_PATH).read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as error:
+        reports.append(_report("native-service", NATIVE_PROTOCOL_PATH, stage, str(error)))
+        return reports
+    variants = _rust_enum_variants(protocol, "TairaAuthorityRoleV1")
+    if variants != NATIVE_ROLE_VARIANTS:
+        reports.append(
+            _report(
+                "native-role-registry",
+                NATIVE_PROTOCOL_PATH,
+                stage,
+                f"expected exact native roles {list(ROLE_REGISTRY)}",
+            )
+        )
+    if FRAME_MAGIC not in protocol:
+        reports.append(
+            _report(
+                "native-frame",
+                NATIVE_PROTOCOL_PATH,
+                stage,
+                f"native protocol is missing {FRAME_MAGIC!r}",
+            )
+        )
+    commands = _rust_enum_variants(transport, "Command")
+    if commands is None or any(command not in commands for command in NATIVE_COMMAND_VARIANTS):
+        reports.append(
+            _report(
+                "native-command-registry",
+                NATIVE_TRANSPORT_PATH,
+                stage,
+                f"required commands are missing: {list(NATIVE_COMMANDS)}",
+            )
+        )
+    dispatches = _authorize_role_dispatches(service)
+    for role, validator in NATIVE_ROLE_VALIDATORS.items():
+        variant = NATIVE_ROLE_VARIANT_BY_LABEL[role]
+        if validator not in dispatches.get(variant, set()):
+            reports.append(
+                _report(
+                    "native-role-validator",
+                    NATIVE_SERVICE_PATH,
+                    stage,
+                    f"authorize_json does not dispatch role {role!r} to {validator}",
                 )
             )
     return reports

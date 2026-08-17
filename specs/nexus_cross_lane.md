@@ -321,6 +321,14 @@ in both the ordinary global-body path and reservation-bound autonomous
 payloads. A routing plan names its coordinator and every participant leg. The
 producer must collect the required participant prepare/commit QCs;
 coordinator-only evidence is not synthesized.
+On the ordinary path the authenticated global leader owns these requests. In
+reservation-bound lookahead, only the independently frozen deterministic lane
+author may issue them, including when that author is outside the current global
+roster; a global leader cannot pre-empt that lane slot. Exactly one active lane
+route owns autonomous Native-AMX coordination in each global view, using the
+committed route order rotated by `(height + view)`. Other autonomous Native
+coordinators retain their reservations until their turn, preventing concurrent
+authors from splitting participant-slot votes between incompatible proposals.
 One shared predicate determines whether a receipt leg requires separate
 participant application. Validation, Kura sidecars, State frontiers, startup
 repair, diagnostics, drain checks, and retirement all use it. A coordinator leg

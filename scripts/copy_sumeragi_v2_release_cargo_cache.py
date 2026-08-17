@@ -4,17 +4,18 @@
 # RELEASE_CARGO_CACHE_COPY_HELPER_V1
 from __future__ import annotations
 
-import argparse
 import ctypes
 import errno
 import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import posixpath
 import re
 import secrets
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -162,6 +163,13 @@ VALIDATION_ACK_COMPONENT_SHA256 = (
     "9dab3cd31c184be81838db6df78146914a85d228400a7bb07b916f5f41e679e8"
 )
 VALIDATION_ACK_COMPONENT_MAXIMUM_BYTES = 512 * 1024
+CLI_COMPONENT_FILES = (
+    "copy_sumeragi_v2_release_cargo_cache_cli.py",
+)
+CLI_COMPONENT_SHA256 = (
+    "b7089197ea41d6b809984dae70b60e39536696aeec4b3d4973c53de3c4c0af02"
+)
+CLI_COMPONENT_MAXIMUM_BYTES = 512 * 1024
 
 class CacheCopyError(RuntimeError):
     """The inherited Cargo cache is unsafe, unstable, or too large."""
@@ -1276,11 +1284,17 @@ def verify_cache_sources(
         raise CacheCopyError("private Cargo home contains external configuration")
     _bind_runtime_destinations(records, current, update=False)
 
-def _hold_regular(path: Path, label: str) -> dict[str, object]:
+
+def _hold_regular(
+    path: Path,
+    label: str,
+    *,
+    maximum_bytes: int = MAXIMUM_FILE_BYTES,
+) -> dict[str, object]:
     parent_fd, parent_identity = _open_directory(path.parent, f"{label} parent")
     try:
         before = _entry_stat(parent_fd, path.name, label)
-        if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1 or before.st_size > MAXIMUM_FILE_BYTES:
+        if not stat.S_ISREG(before.st_mode) or stat.S_ISLNK(before.st_mode) or before.st_uid != os.geteuid() or before.st_nlink != 1 or before.st_size > maximum_bytes:
             raise CacheCopyError(f"retained {label} metadata is unsafe")
         descriptor = os.open(path.name, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
         opened = os.fstat(descriptor)
@@ -1289,7 +1303,7 @@ def _hold_regular(path: Path, label: str) -> dict[str, object]:
         data = bytearray()
         while block := os.read(descriptor, 1024 * 1024):
             data.extend(block)
-            if len(data) > MAXIMUM_FILE_BYTES:
+            if len(data) > maximum_bytes:
                 raise CacheCopyError(f"retained {label} exceeds its bound")
         after = os.fstat(descriptor)
         if len(data) != opened.st_size or not _unchanged(opened, after):
@@ -1300,7 +1314,7 @@ def _hold_regular(path: Path, label: str) -> dict[str, object]:
         if "descriptor" in locals():
             os.close(descriptor)
         raise
-    held = {"path": path, "label": label, "parent_fd": parent_fd, "parent_identity": parent_identity, "descriptor": descriptor, "metadata": after, "data": bytes(data)}
+    held = {"path": path, "label": label, "parent_fd": parent_fd, "parent_identity": parent_identity, "descriptor": descriptor, "metadata": after, "data": bytes(data), "maximum_bytes": maximum_bytes}
     _revalidate_held_regular(held)
     return held
 
@@ -1308,14 +1322,15 @@ def _revalidate_held_regular(held: dict[str, object]) -> None:
     path, label = held["path"], held["label"]
     descriptor, parent_fd = held["descriptor"], held["parent_fd"]
     metadata, data = held["metadata"], held["data"]
-    assert isinstance(path, Path) and isinstance(label, str) and isinstance(descriptor, int) and isinstance(parent_fd, int) and isinstance(metadata, os.stat_result) and isinstance(data, bytes)
+    maximum_bytes = held["maximum_bytes"]
+    assert isinstance(path, Path) and isinstance(label, str) and isinstance(descriptor, int) and isinstance(parent_fd, int) and isinstance(metadata, os.stat_result) and isinstance(data, bytes) and isinstance(maximum_bytes, int)
     if not _unchanged(metadata, os.fstat(descriptor)) or not _unchanged(metadata, _entry_stat(parent_fd, path.name, label)):
         raise CacheCopyError(f"retained {label} changed while held")
     os.lseek(descriptor, 0, os.SEEK_SET)
     observed = bytearray()
     while block := os.read(descriptor, 1024 * 1024):
         observed.extend(block)
-        if len(observed) > MAXIMUM_FILE_BYTES:
+        if len(observed) > maximum_bytes:
             raise CacheCopyError(f"retained {label} exceeds its bound")
     if bytes(observed) != data or not _unchanged(metadata, os.fstat(descriptor)):
         raise CacheCopyError(f"retained {label} bytes changed while held")
@@ -1326,15 +1341,24 @@ def _revalidate_held_regular(held: dict[str, object]) -> None:
 def _close_held_regular(held: dict[str, object]) -> None:
     os.close(held["descriptor"]); os.close(held["parent_fd"])
 
-def _read_regular(path: Path, label: str) -> tuple[bytes, os.stat_result]:
-    held = _hold_regular(path, label)
+
+def _read_regular(
+    path: Path,
+    label: str,
+    *,
+    maximum_bytes: int = MAXIMUM_FILE_BYTES,
+) -> tuple[bytes, os.stat_result]:
+    held = _hold_regular(path, label, maximum_bytes=maximum_bytes)
     try:
         return held["data"], held["metadata"]
     finally:
         _close_held_regular(held)
 
-def _digest_regular(path: Path, label: str) -> tuple[str, int, os.stat_result]:
-    data, metadata = _read_regular(path, label)
+
+def _digest_regular(
+    path: Path, label: str, *, maximum_bytes: int = MAXIMUM_FILE_BYTES,
+) -> tuple[str, int, os.stat_result]:
+    data, metadata = _read_regular(path, label, maximum_bytes=maximum_bytes)
     return hashlib.sha256(data).hexdigest(), len(data), metadata
 
 def _retained_tree(root: Path, excluded: set[Path]) -> tuple[list[dict[str, object]], int]:
@@ -1935,14 +1959,26 @@ def _verify_runtime_sources(
                 metadata = _entry_stat(parent_fd, root.name, f"runtime source {prefix}")
                 descriptor = os.open(root.name, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
                 try:
+                    opened = os.fstat(descriptor)
+                    if (
+                        opened.st_size > MAXIMUM_FILE_BYTES
+                        or not _unchanged(metadata, opened)
+                    ):
+                        raise CacheCopyError(
+                            f"runtime source file exceeds its bound: {prefix}"
+                        )
                     digest = hashlib.sha256()
                     total = 0
                     while block := os.read(descriptor, 1024 * 1024):
                         digest.update(block); total += len(block)
-                    opened = os.fstat(descriptor)
+                        if total > MAXIMUM_FILE_BYTES:
+                            raise CacheCopyError(
+                                f"runtime source file exceeds its bound: {prefix}"
+                            )
+                    after = os.fstat(descriptor)
                 finally:
                     os.close(descriptor)
-                if not isinstance(record, dict) or record.get("kind") != "file" or record.get("source_device") != opened.st_dev or record.get("source_inode") != opened.st_ino or record.get("source_mode") != format(stat.S_IMODE(opened.st_mode), "04o") or record.get("size") != total or record.get("sha256") != digest.hexdigest() or not _unchanged(metadata, opened):
+                if not isinstance(record, dict) or record.get("kind") != "file" or record.get("source_device") != after.st_dev or record.get("source_inode") != after.st_ino or record.get("source_mode") != format(stat.S_IMODE(after.st_mode), "04o") or record.get("size") != total or record.get("sha256") != digest.hexdigest() or not _unchanged(opened, after):
                     raise CacheCopyError(f"runtime source file changed: {prefix}")
             finally:
                 os.close(parent_fd)
@@ -1950,13 +1986,21 @@ def _verify_runtime_sources(
         raise CacheCopyError("runtime source inventory has unbound records")
 
 def _bind_runtime_destinations(
-    inputs: list[dict[str, object]], outputs: list[dict[str, object]], *, update: bool,
+    inputs: list[dict[str, object]], outputs: list[dict[str, object]], *,
+    update: bool, relocation: object | None = None,
 ) -> None:
     by_path = {record.get("path"): record for record in outputs if isinstance(record, dict)}
     if len(by_path) != len(outputs):
         raise CacheCopyError("private destination inventory has duplicate records")
+    relocated: set[str] = set()
+    if relocation is not None:
+        relocated = _cli_component()[3](
+            inputs, outputs, relocation, CacheCopyError, update=update,
+        )
     for record in inputs:
         path = record.get("path")
+        if path in relocated:
+            continue
         output = by_path.get(path)
         if output is None and isinstance(path, str):
             output = by_path.get(f"bin/{path}")
@@ -2396,65 +2440,12 @@ def _probe_framework_python_runtime(
     runtime_root: Path, stdlib_name: str,
 ) -> bytes:
     """Run the archived interpreter and require its exact archive-local identity."""
-
-    executable = runtime_root / "bin" / "python3"
-    metadata = executable.lstat()
-    if (
-        stat.S_ISLNK(metadata.st_mode)
-        or not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_uid != os.geteuid()
-        or stat.S_IMODE(metadata.st_mode) != 0o500
-        or metadata.st_nlink != 1
-    ):
-        raise CacheCopyError(
-            "archived framework Python executable metadata is unsafe"
-        )
-    expected_zip = runtime_root / "lib" / (
-        f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+    return _cli_component()[4](
+        runtime_root=runtime_root,
+        stdlib_name=stdlib_name,
+        probe_code=_FRAMEWORK_PYTHON_PROBE,
+        error_type=CacheCopyError,
     )
-    expected_stdlib = runtime_root / "lib" / stdlib_name
-    expected_dynload = expected_stdlib / "lib-dynload"
-    argv = [
-        str(executable),
-        "-I",
-        "-S",
-        "-c",
-        _FRAMEWORK_PYTHON_PROBE,
-        str(executable),
-        str(runtime_root),
-        str(expected_zip),
-        str(expected_stdlib),
-        str(expected_dynload),
-    ]
-    try:
-        result = subprocess.run(
-            argv,
-            cwd=runtime_root,
-            env={
-                "LANG": "C",
-                "LC_ALL": "C",
-                "PATH": str(runtime_root / "bin"),
-            },
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-            timeout=30,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise CacheCopyError(
-            "archived framework Python probe could not run"
-        ) from error
-    expected_stdout = os.fsencode(str(executable)) + b"\n"
-    if (
-        result.returncode != 0
-        or result.stdout != expected_stdout
-        or result.stderr != b""
-    ):
-        raise CacheCopyError(
-            "archived framework Python isolated probe did not report its executable"
-        )
-    return expected_stdout
 
 def _runtime_source_roots(resolved: list[Path]) -> dict[str, Path]:
     names = _runtime_names(resolved)
@@ -2508,16 +2499,15 @@ def verify_runtime_sources(
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise CacheCopyError("runtime inventory is malformed") from error
     keys = {"format", "schema_version", "runtime_root", "record_count", "file_bytes", "records", "source_disclosure", "input_record_count", "input_file_bytes", "input_records"}
-    if not isinstance(inventory, dict) or set(inventory) != keys or inventory.get("format") != "iroha-sumeragi-v2-private-runtime" or type(inventory.get("schema_version")) is not int or inventory["schema_version"] != 1 or inventory.get("source_disclosure") != "withheld" or not isinstance(inventory.get("input_records"), list) or not isinstance(inventory.get("records"), list) or stat.S_IMODE(inventory_metadata.st_mode) != 0o400 or payload != _canonical_payload(inventory):
+    if framework_python is not None:
+        keys.add("framework_python_relocation")
+    expected_schema = 2 if framework_python is not None else 1
+    if not isinstance(inventory, dict) or set(inventory) != keys or inventory.get("format") != "iroha-sumeragi-v2-private-runtime" or type(inventory.get("schema_version")) is not int or inventory["schema_version"] != expected_schema or inventory.get("source_disclosure") != "withheld" or not isinstance(inventory.get("input_records"), list) or not isinstance(inventory.get("records"), list) or stat.S_IMODE(inventory_metadata.st_mode) != 0o400 or payload != _canonical_payload(inventory):
         raise CacheCopyError("runtime inventory contract is not exact")
     input_file_bytes = sum(record.get("size", 0) for record in inventory["input_records"] if isinstance(record, dict) and record.get("kind") == "file")
     if type(inventory.get("input_record_count")) is not int or inventory["input_record_count"] != len(inventory["input_records"]) or type(inventory.get("input_file_bytes")) is not int or inventory["input_file_bytes"] != input_file_bytes:
         raise CacheCopyError("runtime source inventory accounting is not exact")
-    _verify_runtime_sources(
-        _runtime_source_roots(resolved),
-        inventory["input_records"],
-        omitted_paths=framework_omitted_paths,
-    )
+    source_roots = _runtime_source_roots(resolved)
     for record in inventory["records"]:
         if not isinstance(record, dict):
             raise CacheCopyError("private runtime record is not an object")
@@ -2538,7 +2528,23 @@ def verify_runtime_sources(
         _validate_framework_python_runtime_records(
             inventory["records"], framework, stdlib_name,
         )
-    _bind_runtime_destinations(inventory["input_records"], inventory["records"], update=False)
+        source_roots.update(_cli_component()[2](
+            version_root=version_root,
+            framework=framework,
+            source_python=resolved[0],
+            runtime_root=runtime_root,
+            contract=inventory["framework_python_relocation"],
+            digest_regular=_digest_regular,
+            error_type=CacheCopyError,
+        ))
+    _verify_runtime_sources(
+        source_roots, inventory["input_records"],
+        omitted_paths=framework_omitted_paths,
+    )
+    _bind_runtime_destinations(
+        inventory["input_records"], inventory["records"], update=False,
+        relocation=inventory.get("framework_python_relocation"),
+    )
     if not isinstance(inventory["runtime_root"], str):
         raise CacheCopyError("private runtime path is not exact")
     _normalized_absolute(runtime_root, "private runtime")
@@ -4084,6 +4090,7 @@ def _populate_runtime(
     names = _runtime_names(resolved)
     framework_python = _framework_python_closure(resolved)
     framework_omitted_paths: frozenset[str] = frozenset()
+    framework_relocation: object | None = None
     if framework_python is not None:
         version_root, framework, stdlib_name = framework_python
         framework_omitted_paths = _framework_python_omitted_paths(stdlib_name)
@@ -4142,7 +4149,10 @@ def _populate_runtime(
             os.close(source_fd)
             os.close(destination_parent_fd)
 
-    def copy_stable_file(source: Path, destination: Path, label: str) -> None:
+    def copy_stable_file(
+        source: Path, destination: Path, label: str, *,
+        input_path: str | None = None,
+    ) -> None:
         source_parent_fd, source_parent_identity = _open_directory(source.parent, f"{label} parent")
         destination_parent_fd, destination_parent_identity = _open_directory(destination.parent, f"private {label} parent")
         try:
@@ -4152,7 +4162,7 @@ def _populate_runtime(
             input_budget["records"] += 1
             input_records.append(_copy_regular(
                 source_parent_fd, destination_parent_fd, source.name,
-                destination.name, before, input_budget,
+                input_path or destination.name, before, input_budget,
                 destination_name=destination.name,
             ))
             _revalidate_entry(source_parent_fd, source.name, before, label)
@@ -4252,7 +4262,30 @@ def _populate_runtime(
                 symlink_parts=(name,),
                 omitted_paths=framework_omitted_paths,
             )
+        dependency_root = (
+            runtime_root / "lib" / stdlib_name / "iroha-loader-deps"
+        )
+        os.mkdir(dependency_root, mode=0o700)
+        def copy_external(
+            source: Path, archive_path: str, input_path: str,
+        ) -> None:
+            destination = runtime_root / archive_path
+            if destination.parent != dependency_root:
+                raise CacheCopyError("framework Mach-O destination is not exact")
+            copy_stable_file(
+                source, destination, "external framework Mach-O dependency",
+                input_path=input_path,
+            )
         _validate_framework_python_sources(version_root, framework, stdlib_name)
+        framework_relocation = _cli_component()[1](
+            version_root=version_root,
+            framework=framework,
+            source_python=resolved[0],
+            runtime_root=runtime_root,
+            digest_regular=_digest_regular,
+            error_type=CacheCopyError,
+            copy_external=copy_external,
+        )
     _seal_copied_tree(
         runtime_root,
         "runtime",
@@ -4263,6 +4296,15 @@ def _populate_runtime(
         ),
     )
     if framework_python is not None:
+        source_roots.update(_cli_component()[2](
+            version_root=version_root,
+            framework=framework,
+            source_python=resolved[0],
+            runtime_root=runtime_root,
+            contract=framework_relocation,
+            digest_regular=_digest_regular,
+            error_type=CacheCopyError,
+        ))
         _probe_framework_python_runtime(runtime_root, stdlib_name)
     runtime_fd, runtime_identity = _open_directory(runtime_root, "private runtime")
     records: list[dict[str, object]] = []
@@ -4276,10 +4318,13 @@ def _populate_runtime(
         _validate_framework_python_runtime_records(
             records, framework, stdlib_name,
         )
-    _bind_runtime_destinations(input_records, records, update=True)
+    _bind_runtime_destinations(
+        input_records, records, update=True,
+        relocation=framework_relocation,
+    )
     document = {
         "format": "iroha-sumeragi-v2-private-runtime",
-        "schema_version": 1,
+        "schema_version": 2 if framework_python is not None else 1,
         "runtime_root": str(runtime_root),
         "record_count": len(records), "file_bytes": runtime_budget["bytes"],
         "records": sorted(records, key=lambda record: str(record["path"])),
@@ -4288,6 +4333,8 @@ def _populate_runtime(
         "input_file_bytes": input_budget["bytes"],
         "input_records": sorted(input_records, key=lambda record: str(record["path"])),
     }
+    if framework_python is not None:
+        document["framework_python_relocation"] = framework_relocation
     _verify_runtime_sources(
         source_roots,
         input_records,
@@ -4340,10 +4387,11 @@ def _framework_python_runtime_inventory(
     budget: dict[str, int],
     input_records: list[dict[str, object]],
     input_budget: dict[str, int],
+    relocation: object,
 ) -> dict[str, object]:
     return {
         "format": "iroha-sumeragi-v2-private-framework-python-runtime",
-        "schema_version": 1,
+        "schema_version": 2,
         "runtime_root": str(runtime_root),
         "record_count": len(records),
         "file_bytes": budget["bytes"],
@@ -4354,6 +4402,7 @@ def _framework_python_runtime_inventory(
         "input_records": sorted(
             input_records, key=lambda record: str(record["path"])
         ),
+        "relocation": relocation,
     }
 
 def verify_framework_python_runtime(
@@ -4391,6 +4440,7 @@ def verify_framework_python_runtime(
         "input_record_count",
         "input_file_bytes",
         "input_records",
+        "relocation",
     }
     if (
         not isinstance(inventory, dict)
@@ -4398,7 +4448,7 @@ def verify_framework_python_runtime(
         or inventory.get("format")
         != "iroha-sumeragi-v2-private-framework-python-runtime"
         or type(inventory.get("schema_version")) is not int
-        or inventory["schema_version"] != 1
+        or inventory["schema_version"] != 2
         or inventory.get("runtime_root") != str(runtime_root)
         or inventory.get("source_disclosure") != "withheld"
         or not isinstance(inventory.get("records"), list)
@@ -4431,10 +4481,22 @@ def verify_framework_python_runtime(
         "Resources": version_root / "Resources",
         "lib": version_root / "lib",
     }
+    source_roots.update(_cli_component()[2](
+        version_root=version_root,
+        framework=framework,
+        source_python=source_python,
+        runtime_root=runtime_root,
+        contract=inventory["relocation"],
+        digest_regular=_digest_regular,
+        error_type=CacheCopyError,
+    ))
     _verify_runtime_sources(
         source_roots, input_records, omitted_paths=omitted_paths,
     )
-    _bind_runtime_destinations(input_records, records, update=False)
+    _bind_runtime_destinations(
+        input_records, records, update=False,
+        relocation=inventory["relocation"],
+    )
     _validate_framework_python_runtime_records(records, framework, stdlib_name)
     _probe_framework_python_runtime(runtime_root, stdlib_name)
     runtime_fd, runtime_identity = _open_directory(
@@ -4495,7 +4557,10 @@ def copy_framework_python_runtime(
     input_records: list[dict[str, object]] = []
     input_budget = {"records": 0, "bytes": 0}
 
-    def copy_file(source: Path, destination: Path, label: str) -> None:
+    def copy_file(
+        source: Path, destination: Path, label: str, *,
+        input_path: str | None = None,
+    ) -> None:
         source_parent_fd, source_parent = _open_directory(
             source.parent, f"{label} parent",
         )
@@ -4516,7 +4581,7 @@ def copy_framework_python_runtime(
                     source_parent_fd,
                     destination_parent_fd,
                     source.name,
-                    destination.name,
+                    input_path or destination.name,
                     before,
                     input_budget,
                     destination_name=destination.name,
@@ -4613,11 +4678,43 @@ def copy_framework_python_runtime(
         )
         for name in ("Resources", "lib"):
             copy_tree(version_root / name, runtime_root / name, name)
+        dependency_root = (
+            runtime_root / "lib" / stdlib_name / "iroha-loader-deps"
+        )
+        os.mkdir(dependency_root, mode=0o700)
+        def copy_external(
+            source: Path, archive_path: str, input_path: str,
+        ) -> None:
+            destination = runtime_root / archive_path
+            if destination.parent != dependency_root:
+                raise CacheCopyError("framework Mach-O destination is not exact")
+            copy_file(
+                source, destination, "external framework Mach-O dependency",
+                input_path=input_path,
+            )
         _validate_framework_python_sources(version_root, framework, stdlib_name)
+        relocation = _cli_component()[1](
+            version_root=version_root,
+            framework=framework,
+            source_python=source_python,
+            runtime_root=runtime_root,
+            digest_regular=_digest_regular,
+            error_type=CacheCopyError,
+            copy_external=copy_external,
+        )
         _seal_copied_tree(
             runtime_root,
             "protected framework Python runtime",
             owner_private_directory_roots=(("Resources", "Python.app"),),
+        )
+        external_roots = _cli_component()[2](
+            version_root=version_root,
+            framework=framework,
+            source_python=source_python,
+            runtime_root=runtime_root,
+            contract=relocation,
+            digest_regular=_digest_regular,
+            error_type=CacheCopyError,
         )
         _probe_framework_python_runtime(runtime_root, stdlib_name)
         runtime_fd, runtime_identity = _open_directory(
@@ -4638,9 +4735,12 @@ def copy_framework_python_runtime(
         _validate_framework_python_runtime_records(
             records, framework, stdlib_name,
         )
-        _bind_runtime_destinations(input_records, records, update=True)
+        _bind_runtime_destinations(
+            input_records, records, update=True, relocation=relocation,
+        )
         document = _framework_python_runtime_inventory(
             runtime_root, records, budget, input_records, input_budget,
+            relocation,
         )
         source_roots = {
             "python3": source_python,
@@ -4648,6 +4748,7 @@ def copy_framework_python_runtime(
             "Resources": version_root / "Resources",
             "lib": version_root / "lib",
         }
+        source_roots.update(external_roots)
         _verify_runtime_sources(
             source_roots, input_records, omitted_paths=omitted_paths,
         )
@@ -4672,259 +4773,71 @@ def copy_framework_python_runtime(
     finally:
         os.close(parent_fd)
 
+
+def _cli_component():
+    """Load the bounded, authenticated CLI dispatcher beside this helper."""
+
+    component = Path(__file__).parent.resolve(strict=True) / CLI_COMPONENT_FILES[0]
+    payload, metadata = _read_regular(
+        component,
+        "Cargo cache CLI component",
+        maximum_bytes=CLI_COMPONENT_MAXIMUM_BYTES,
+    )
+    if (
+        len(payload) > CLI_COMPONENT_MAXIMUM_BYTES
+        or metadata.st_size != len(payload)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+    ):
+        raise CacheCopyError("Cargo cache CLI component metadata is not exact")
+    if hashlib.sha256(payload).hexdigest() != CLI_COMPONENT_SHA256:
+        raise CacheCopyError("Cargo cache CLI component digest mismatch")
+    namespace = {
+        "__file__": str(component),
+        "__name__": "copy_sumeragi_v2_release_cargo_cache_cli",
+    }
+    code = compile(payload, str(component), "exec")
+    exec(code, namespace)
+    operations = tuple(
+        namespace.get(name)
+        for name in (
+            "run",
+            "relocate_framework_python_runtime",
+            "verify_framework_python_relocation",
+            "bind_framework_python_relocation",
+            "probe_framework_python_runtime",
+        )
+    )
+    if not all(callable(operation) for operation in operations):
+        raise CacheCopyError("Cargo cache CLI component lacks required operations")
+    return operations
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--source-cargo-home", type=Path)
-    parser.add_argument("--cargo-home", type=Path)
-    parser.add_argument("--inventory", type=Path)
-    parser.add_argument("--final", action="store_true")
-    parser.add_argument("--publish-validation-failure", action="store_true")
-    parser.add_argument("--seal-release-result", action="store_true")
-    parser.add_argument("--copy-runtime", action="store_true")
-    parser.add_argument("--copy-framework-python", action="store_true")
-    parser.add_argument("--verify-framework-python", action="store_true")
-    parser.add_argument("--verify-runtime-sources", action="store_true")
-    parser.add_argument("--verify-cache-sources", action="store_true")
-    parser.add_argument("--copy-private-bundle", action="store_true")
-    parser.add_argument("--verify-private-bundle", action="store_true")
-    parser.add_argument("--copy-sdk-dependencies", action="store_true")
-    parser.add_argument("--verify-sdk-dependencies", action="store_true")
-    parser.add_argument("--create-sdk-command-work", action="store_true")
-    parser.add_argument("--cleanup-sdk-command-work", action="store_true")
-    parser.add_argument("--cleanup-invocation", action="store_true")
-    parser.add_argument("--runtime-root", type=Path)
-    parser.add_argument("--runtime-inventory", type=Path)
-    parser.add_argument("--runtime-source", type=Path, action="append", default=[])
-    parser.add_argument("--bundle-source", type=Path)
-    parser.add_argument("--bundle-root", type=Path)
-    parser.add_argument("--sdk-dependency-bundle-manifest", type=Path)
-    parser.add_argument("--expected-sdk-dependency-bundle-manifest-sha256")
-    parser.add_argument("--repository-root", type=Path)
-    parser.add_argument("--sdk-input-root", type=Path)
-    parser.add_argument("--sdk-work-root", type=Path)
-    parser.add_argument("--sdk-archive", type=Path)
-    parser.add_argument("--sdk-dependency-inventory", type=Path)
-    parser.add_argument("--sdk-work-final-inventory", type=Path)
-    parser.add_argument("--invocation-root", type=Path)
-    parser.add_argument("--bootstrap-evidence", type=Path)
-    parser.add_argument("--source-manifest-sha256")
-    parser.add_argument("--candidate-root", type=Path)
-    parser.add_argument("--scaling-evidence-manifest", type=Path)
-    parser.add_argument("--expected-signer-fingerprint")
-    parser.add_argument("--expected-scaling-trial-harness-sha256")
-    parser.add_argument("--expected-scaling-configuration-sha256")
-    parser.add_argument("--expected-scaling-irohad-sha256")
-    parser.add_argument("--expected-scaling-iroha-cli-sha256")
-    parser.add_argument("--validator-exit-status", type=int)
-    parser.add_argument("--cleanup-base", type=Path)
-    parser.add_argument("--cleanup-prefix")
-    args = parser.parse_args()
     try:
-        if args.create_sdk_command_work or args.cleanup_sdk_command_work:
-            if (
-                args.create_sdk_command_work == args.cleanup_sdk_command_work
-                or args.sdk_input_root is None
-                or args.sdk_work_root is None
-                or any((
-                    args.final, args.publish_validation_failure,
-                    args.seal_release_result, args.copy_runtime,
-                    args.copy_framework_python, args.verify_framework_python,
-                    args.verify_runtime_sources, args.verify_cache_sources,
-                    args.copy_private_bundle, args.verify_private_bundle,
-                    args.copy_sdk_dependencies, args.verify_sdk_dependencies,
-                    args.cleanup_invocation,
-                ))
-                or args.runtime_source
-                or any(value is not None for value in (
-                    args.source_cargo_home, args.cargo_home, args.inventory,
-                    args.runtime_root, args.runtime_inventory,
-                    args.bundle_source, args.bundle_root,
-                    args.sdk_dependency_bundle_manifest,
-                    args.expected_sdk_dependency_bundle_manifest_sha256,
-                    args.repository_root, args.sdk_archive,
-                    args.sdk_dependency_inventory,
-                    args.sdk_work_final_inventory, args.invocation_root,
-                    args.bootstrap_evidence, args.source_manifest_sha256,
-                    args.candidate_root, args.scaling_evidence_manifest,
-                    args.expected_signer_fingerprint,
-                    args.expected_scaling_trial_harness_sha256,
-                    args.expected_scaling_configuration_sha256,
-                    args.expected_scaling_irohad_sha256,
-                    args.expected_scaling_iroha_cli_sha256,
-                    args.validator_exit_status, args.cleanup_base,
-                    args.cleanup_prefix,
-                ))
-            ):
-                raise CacheCopyError("SDK command work inputs are not exact")
-            if args.create_sdk_command_work:
-                create_sdk_command_work(args.sdk_input_root, args.sdk_work_root)
-            else:
-                cleanup_sdk_command_work(args.sdk_input_root, args.sdk_work_root)
-            return 0
-        if args.copy_sdk_dependencies or args.verify_sdk_dependencies:
-            if (
-                args.copy_sdk_dependencies == args.verify_sdk_dependencies
-                or any(value is None for value in (
-                    args.sdk_dependency_bundle_manifest,
-                    args.expected_sdk_dependency_bundle_manifest_sha256,
-                    args.repository_root, args.sdk_input_root, args.sdk_work_root,
-                    args.sdk_archive, args.sdk_dependency_inventory,
-                ))
-                or (args.copy_sdk_dependencies and args.sdk_work_final_inventory is not None)
-                or (args.verify_sdk_dependencies and args.sdk_work_final_inventory is None)
-                or any((
-                    args.final, args.publish_validation_failure,
-                    args.seal_release_result, args.copy_runtime,
-                    args.copy_framework_python, args.verify_framework_python,
-                    args.verify_runtime_sources, args.verify_cache_sources,
-                    args.copy_private_bundle, args.verify_private_bundle,
-                    args.create_sdk_command_work,
-                    args.cleanup_sdk_command_work,
-                    args.cleanup_invocation,
-                ))
-                or any(value is not None for value in (
-                    args.source_cargo_home, args.cargo_home, args.inventory,
-                    args.runtime_root, args.runtime_inventory,
-                    args.bundle_source, args.bundle_root,
-                    args.invocation_root, args.bootstrap_evidence,
-                    args.source_manifest_sha256, args.candidate_root,
-                    args.scaling_evidence_manifest,
-                    args.expected_signer_fingerprint,
-                    args.expected_scaling_trial_harness_sha256,
-                    args.expected_scaling_configuration_sha256,
-                    args.expected_scaling_irohad_sha256,
-                    args.expected_scaling_iroha_cli_sha256,
-                    args.validator_exit_status, args.cleanup_base,
-                    args.cleanup_prefix,
-                ))
-                or args.runtime_source
-            ):
-                raise CacheCopyError("SDK dependency bundle inputs are not exact")
-            sdk_arguments = (
-                args.sdk_dependency_bundle_manifest,
-                args.expected_sdk_dependency_bundle_manifest_sha256,
-                args.repository_root, args.sdk_input_root, args.sdk_work_root,
-                args.sdk_archive, args.sdk_dependency_inventory,
-            )
-            if args.copy_sdk_dependencies:
-                copy_sdk_dependencies(*sdk_arguments)
-            else:
-                verify_sdk_dependencies(
-                    *sdk_arguments,
-                    final_work_inventory=args.sdk_work_final_inventory,
-                )
-            return 0
-        if args.copy_framework_python or args.verify_framework_python:
-            if (
-                args.copy_framework_python == args.verify_framework_python
-                or args.runtime_root is None
-                or args.runtime_inventory is None
-                or args.runtime_source
-                or args.source_cargo_home is not None
-                or args.cargo_home is not None
-                or args.inventory is not None
-                or args.final
-                or args.publish_validation_failure
-                or args.seal_release_result
-                or args.copy_runtime
-                or args.verify_runtime_sources
-                or args.verify_cache_sources
-                or args.copy_private_bundle
-                or args.verify_private_bundle
-                or args.copy_sdk_dependencies
-                or args.verify_sdk_dependencies
-                or args.create_sdk_command_work
-                or args.cleanup_sdk_command_work
-                or args.cleanup_invocation
-            ):
-                raise CacheCopyError(
-                    "framework Python runtime inputs are not exact"
-                )
-            if args.copy_framework_python:
-                copy_framework_python_runtime(
-                    args.runtime_root, args.runtime_inventory,
-                )
-            else:
-                verify_framework_python_runtime(
-                    args.runtime_root, args.runtime_inventory,
-                )
-            return 0
-        if args.verify_cache_sources:
-            if args.source_cargo_home is None or args.cargo_home is None or args.inventory is None:
-                raise CacheCopyError("caller cache verification lacks required inputs")
-            verify_cache_sources(args.source_cargo_home, args.cargo_home, args.inventory)
-        elif args.verify_private_bundle:
-            if args.bundle_source is None or args.bundle_root is None or args.inventory is None:
-                raise CacheCopyError("private bundle verification lacks required inputs")
-            _verify_private_bundle(args.bundle_source, args.bundle_root, args.inventory)
-        elif args.copy_private_bundle:
-            if args.bundle_source is None or args.bundle_root is None or args.inventory is None:
-                raise CacheCopyError("private bundle copy lacks required inputs")
-            copy_private_bundle(args.bundle_source, args.bundle_root, args.inventory)
-        elif args.verify_runtime_sources:
-            if args.runtime_root is None or args.runtime_inventory is None:
-                raise CacheCopyError("runtime source verification lacks its inventory")
-            verify_runtime_sources(args.runtime_source, args.runtime_root, args.runtime_inventory)
-        elif args.cleanup_invocation:
-            if args.cleanup_base is None or args.invocation_root is None or args.cleanup_prefix is None:
-                raise CacheCopyError("private invocation cleanup lacks required inputs")
-            cleanup_invocation(args.cleanup_base, args.invocation_root, args.cleanup_prefix)
-        elif args.publish_validation_failure:
-            if any(value is None for value in (
-                args.invocation_root, args.bootstrap_evidence, args.cleanup_base,
-                args.cleanup_prefix, args.source_manifest_sha256,
-                args.validator_exit_status,
-            )):
-                raise CacheCopyError("receipt validation failure lacks required inputs")
-            publish_validation_failure(
-                args.invocation_root, args.bootstrap_evidence, args.cleanup_base,
-                args.cleanup_prefix, args.source_manifest_sha256,
-                args.validator_exit_status,
-            )
-        elif args.copy_runtime:
-            if args.runtime_root is None or args.runtime_inventory is None:
-                raise CacheCopyError("private child runtime lacks its root")
-            copy_runtime(args.runtime_root, args.runtime_source, args.runtime_inventory)
-        elif args.seal_release_result:
-            if any(value is None for value in (
-                args.invocation_root,
-                args.bootstrap_evidence,
-                args.source_manifest_sha256,
-                args.candidate_root,
-                args.scaling_evidence_manifest,
-                args.expected_signer_fingerprint,
-                args.expected_scaling_trial_harness_sha256,
-                args.expected_scaling_configuration_sha256,
-                args.expected_scaling_irohad_sha256,
-                args.expected_scaling_iroha_cli_sha256,
-            )):
-                raise CacheCopyError("retained release publication lacks required inputs")
-            seal_release_result(
-                args.invocation_root,
-                args.bootstrap_evidence,
-                args.source_manifest_sha256,
-                args.candidate_root,
-                args.scaling_evidence_manifest,
-                args.expected_signer_fingerprint,
-                args.expected_scaling_trial_harness_sha256,
-                args.expected_scaling_configuration_sha256,
-                args.expected_scaling_irohad_sha256,
-                args.expected_scaling_iroha_cli_sha256,
-            )
-        elif args.final:
-            if args.cargo_home is None or args.inventory is None:
-                raise CacheCopyError("final cache snapshot lacks required paths")
-            if args.source_cargo_home is not None:
-                raise CacheCopyError("final cache snapshot does not accept a source home")
-            snapshot_cache(args.cargo_home, args.inventory)
-        else:
-            if args.source_cargo_home is None or args.cargo_home is None or args.inventory is None:
-                raise CacheCopyError("cache copy requires a source home")
-            copy_cache(args.source_cargo_home, args.cargo_home, args.inventory)
+        dispatcher = _cli_component()[0]
     except (CacheCopyError, OSError) as error:
         print(f"release Cargo cache isolation failed: {error}", file=sys.stderr)
         return 1
-    return 0
+    return dispatcher(
+        error_type=CacheCopyError,
+        cleanup_invocation=cleanup_invocation,
+        cleanup_sdk_command_work=cleanup_sdk_command_work,
+        copy_cache=copy_cache,
+        copy_framework_python_runtime=copy_framework_python_runtime,
+        copy_private_bundle=copy_private_bundle,
+        copy_runtime=copy_runtime,
+        copy_sdk_dependencies=copy_sdk_dependencies,
+        create_sdk_command_work=create_sdk_command_work,
+        publish_validation_failure=publish_validation_failure,
+        seal_release_result=seal_release_result,
+        snapshot_cache=snapshot_cache,
+        verify_cache_sources=verify_cache_sources,
+        verify_framework_python_runtime=verify_framework_python_runtime,
+        verify_private_bundle=_verify_private_bundle,
+        verify_runtime_sources=verify_runtime_sources,
+        verify_sdk_dependencies=verify_sdk_dependencies,
+    )
 
 if __name__ == "__main__":
     raise SystemExit(main())

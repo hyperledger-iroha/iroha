@@ -1574,7 +1574,8 @@ fn prove_fee_sponsor_vault_allocation(
         "entry_hash".to_owned(),
         source_tx_commitment.as_ref().to_vec(),
     );
-    fastpq_prover::bind_axt_batch(&mut batch, &binding)
+    let committed_amount = integer_mantissa(&work.verified_allocation);
+    fastpq_prover::bind_axt_batch_with_committed_amount(&mut batch, &binding, committed_amount)
         .wrap_err("bind fee sponsor vault allocation AXT batch")?;
     let proof = prover_from_config(fastpq)?
         .prove(&batch)
@@ -1587,7 +1588,7 @@ fn prove_fee_sponsor_vault_allocation(
         da_commitment: None,
         proof: payload,
         fastpq_binding: Some(binding),
-        committed_amount: integer_mantissa(&work.verified_allocation),
+        committed_amount,
         amount_commitment: None,
     };
     Ok(ProofBlob {
@@ -1752,9 +1753,9 @@ mod tests {
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(10),
             tx_count: 1,
-            total_local_amount: "0.000076".parse().expect("valid settlement quantity"),
-            total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
-            total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
             total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),

@@ -92,6 +92,12 @@ enum ExactOutputRolloverClaim {
         scope: ExactOutputCreationScope,
         share_hash: HashOf<MergeCommitteeSignature>,
     },
+    QueuePlanAdmission {
+        scope: ExactOutputCreationScope,
+        target: PeerId,
+        view: wire::View,
+        certificate_hash: Hash,
+    },
     CertifiedSidecarRequest {
         scope: ExactOutputCreationScope,
         target: PeerId,
@@ -155,6 +161,7 @@ impl ExactOutputRolloverClaim {
             | Self::NativeAmx { scope, .. }
             | Self::LaneDrainVote { scope, .. }
             | Self::MergeShare { scope, .. }
+            | Self::QueuePlanAdmission { scope, .. }
             | Self::CertifiedSidecarRequest { scope, .. }
             | Self::CertifiedSidecarControl { scope, .. }
             | Self::CertifiedSidecarChunk { scope, .. } => Some(*scope),
@@ -546,6 +553,29 @@ impl ExactOutputRolloverClaim {
                 };
                 if HashOf::new(signature.as_ref()) != *share_hash {
                     return Err("merge-share rollover claim changed semantic identity".to_owned());
+                }
+                Ok(())
+            }
+            Self::QueuePlanAdmission {
+                target,
+                certificate_hash,
+                ..
+            } => {
+                let [NetworkMessage::QueuePlanAdmissionCertificate(certificate)] = messages else {
+                    return Err(
+                        "QueuePlan admission rollover claim requires one exact certificate"
+                            .to_owned(),
+                    );
+                };
+                if peers != std::slice::from_ref(target)
+                    || certificate.is_empty()
+                    || certificate.len()
+                        > iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES
+                    || Hash::new(certificate.as_slice()) != *certificate_hash
+                {
+                    return Err(
+                        "QueuePlan admission rollover claim changed semantic identity".to_owned(),
+                    );
                 }
                 Ok(())
             }

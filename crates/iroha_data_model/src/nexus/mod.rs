@@ -1,9 +1,9 @@
 //! Nexus lane and dataspace routing types.
 //!
 //! These identifiers model the multi-lane/data-space routing surface described
-//! in `nexus.md` and `nexus_transition_notes`. The default catalog remains a
-//! single primary lane for compatibility, while deployments may add lane and
-//! dataspace entries for independent routing, storage, and consensus policy.
+//! in `nexus.md` and `nexus_transition_notes`. The default catalog contains one
+//! universal lane; deployments may declare additional lane and dataspace entries
+//! for independent routing, storage, and consensus policy.
 use crate::{
     da::commitment::DaProofScheme,
     id::IdBox,
@@ -626,11 +626,14 @@ pub const AUTOSCALE_META_CREATED_HEIGHT: &str = "autoscale.created_height";
 pub const AUTOSCALE_META_DRAIN_STATE: &str = "autoscale.drain_state";
 /// Metadata key pinning the authoritative committee for one elastic-lane incarnation.
 pub const AUTOSCALE_META_COMMITTEE: &str = "autoscale.committee_v1";
+const RETIRED_SHARD_ID_METADATA_KEY: &str = "da_shard_id";
 /// Metadata describing an execution lane.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct LaneConfig {
     /// Lane identifier.
     pub id: LaneId,
+    /// Explicit DA/storage shard override; absent values follow the lane identifier.
+    pub shard_id: Option<ShardId>,
     /// Physical dataspace this logical lane belongs to.
     pub dataspace_id: DataSpaceId,
     /// Human-friendly alias.
@@ -656,6 +659,7 @@ impl Default for LaneConfig {
     fn default() -> Self {
         Self {
             id: LaneId::SINGLE,
+            shard_id: None,
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "default".to_string(),
             description: None,
@@ -670,6 +674,11 @@ impl Default for LaneConfig {
     }
 }
 impl LaneConfig {
+    /// Resolve the effective DA/storage shard for this lane.
+    #[must_use]
+    pub fn effective_shard_id(&self) -> ShardId {
+        self.shard_id.unwrap_or_else(|| self.id.into())
+    }
     /// Return `true` when this lane uses the reserved autoscale ownership metadata key.
     #[must_use]
     pub fn claims_autoscale_managed(&self) -> bool {
@@ -711,7 +720,8 @@ impl LaneConfig {
     /// identical to the routing default lane they scale.
     #[must_use]
     pub fn inherits_autoscale_profile_from(&self, base: &Self) -> bool {
-        self.dataspace_id == base.dataspace_id
+        self.shard_id == base.shard_id
+            && self.dataspace_id == base.dataspace_id
             && self.visibility == base.visibility
             && self.lane_type == base.lane_type
             && self.governance == base.governance
@@ -882,6 +892,10 @@ impl norito::json::FastJsonWrite for LaneConfig {
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.id, out);
         out.push(',');
+        norito::json::write_json_string("shard_id", out);
+        out.push(':');
+        norito::json::JsonSerialize::json_serialize(&self.shard_id, out);
+        out.push(',');
         norito::json::write_json_string("dataspace_id", out);
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.dataspace_id, out);
@@ -930,6 +944,8 @@ impl norito::json::FastJsonWrite for LaneConfig {
         out.begin_container()?;
         out.push_str("{\"id\":")?;
         norito::json::JsonSerialize::json_serialize_to(&self.id, out)?;
+        out.push_str(",\"shard_id\":")?;
+        norito::json::JsonSerialize::json_serialize_to(&self.shard_id, out)?;
         out.push_str(",\"dataspace_id\":")?;
         norito::json::JsonSerialize::json_serialize_to(&self.dataspace_id, out)?;
         out.push_str(",\"alias\":")?;
@@ -963,8 +979,6 @@ impl norito::json::JsonDeserialize for LaneConfig {
         use norito::json::MapVisitor;
         let mut visitor = MapVisitor::new(parser)?;
         let mut lane = LaneConfig::default();
-        let mut saw_id = false;
-        let mut saw_alias = false;
         let mut seen_fields = BTreeSet::new();
         while let Some(key) = visitor.next_key()? {
             let key_name = key.as_str();
@@ -976,14 +990,15 @@ impl norito::json::JsonDeserialize for LaneConfig {
             match key_name {
                 "id" => {
                     lane.id = visitor.parse_value()?;
-                    saw_id = true;
+                }
+                "shard_id" => {
+                    lane.shard_id = visitor.parse_value()?;
                 }
                 "dataspace_id" => {
                     lane.dataspace_id = visitor.parse_value()?;
                 }
                 "alias" => {
                     lane.alias = visitor.parse_value()?;
-                    saw_alias = true;
                 }
                 "description" => {
                     lane.description = visitor.parse_value()?;
@@ -1022,15 +1037,27 @@ impl norito::json::JsonDeserialize for LaneConfig {
             }
         }
         visitor.finish()?;
-        if !saw_id {
-            return Err(norito::json::Error::Message(
-                "missing required lane metadata field `id`".into(),
-            ));
-        }
-        if !saw_alias {
-            return Err(norito::json::Error::Message(
-                "missing required lane metadata field `alias`".into(),
-            ));
+        let required_fields = [
+            "id",
+            "shard_id",
+            "dataspace_id",
+            "alias",
+            "description",
+            "visibility",
+            "lane_type",
+            "governance",
+            "settlement",
+            "storage",
+            "proof_scheme",
+            "metadata",
+        ];
+        if let Some(missing_field) = required_fields
+            .into_iter()
+            .find(|field| !seen_fields.contains(*field))
+        {
+            return Err(norito::json::Error::Message(format!(
+                "missing required lane metadata field `{missing_field}`"
+            )));
         }
         Ok(lane)
     }
@@ -1455,9 +1482,9 @@ impl LaneCatalog {
     /// Build a catalog ensuring identifiers and aliases are unique and in range.
     ///
     /// # Errors
-    /// Returns a [`LaneCatalogError`] when lane metadata violates alias uniqueness, identifier
-    /// uniqueness, exceeds the configured lane count, or exceeds the consensus-wide active-lane
-    /// bound.
+    /// Returns a [`LaneCatalogError`] when lane metadata uses the retired shard key, violates alias
+    /// or identifier uniqueness, exceeds the configured lane count, or exceeds the consensus-wide
+    /// active-lane bound.
     pub fn new(
         lane_count: NonZeroU32,
         mut lanes: Vec<LaneConfig>,
@@ -1476,6 +1503,9 @@ impl LaneCatalog {
         for lane in &lanes {
             if lane.alias.trim().is_empty() {
                 return Err(LaneCatalogError::EmptyAlias(lane.id));
+            }
+            if lane.metadata.contains_key(RETIRED_SHARD_ID_METADATA_KEY) {
+                return Err(LaneCatalogError::RetiredShardIdMetadata(lane.id));
             }
             if lane.id.as_u32() >= lane_count.get() {
                 return Err(LaneCatalogError::LaneOutOfBounds {
@@ -1587,6 +1617,9 @@ pub enum LaneCatalogError {
     /// Alias was left blank.
     #[error("lane {0} has an empty alias")]
     EmptyAlias(LaneId),
+    /// Lane used the retired string metadata representation for its shard override.
+    #[error("lane {0} uses retired metadata key `da_shard_id`; use the typed `shard_id` field")]
+    RetiredShardIdMetadata(LaneId),
     /// Lifecycle plan would leave the catalog empty.
     #[error("lane catalog cannot be empty")]
     EmptyCatalog,
@@ -1640,7 +1673,7 @@ impl DataSpaceCatalog {
     /// # Errors
     /// Returns a [`DataSpaceCatalogError`] when metadata reuses an identifier or alias, when
     /// an alias is left blank, or when fault tolerance is below 1.
-    pub fn new(entries: Vec<DataSpaceMetadata>) -> Result<Self, DataSpaceCatalogError> {
+    pub fn new(mut entries: Vec<DataSpaceMetadata>) -> Result<Self, DataSpaceCatalogError> {
         let mut seen_ids = BTreeSet::new();
         let mut seen_aliases = BTreeSet::new();
         for entry in &entries {
@@ -1660,6 +1693,7 @@ impl DataSpaceCatalog {
                 return Err(DataSpaceCatalogError::DuplicateAlias(entry.alias.clone()));
             }
         }
+        entries.sort_unstable_by_key(|entry| entry.id);
         Ok(Self { entries })
     }
     /// Access the catalog entries.
@@ -1858,6 +1892,15 @@ mod tests {
             LaneCatalogError::LaneOutOfBounds { lane, lane_count: 2 }
                 if lane.as_u32() == 5
         ));
+
+        let mut retired_shard_metadata = LaneConfig::default();
+        retired_shard_metadata
+            .metadata
+            .insert("da_shard_id".to_owned(), "9".to_owned());
+        assert_eq!(
+            LaneCatalog::new(lane_count, vec![retired_shard_metadata]),
+            Err(LaneCatalogError::RetiredShardIdMetadata(LaneId::SINGLE))
+        );
     }
     #[test]
     fn lane_catalog_rejects_active_entries_above_consensus_bound() {
@@ -1941,6 +1984,7 @@ mod tests {
         metadata.insert("scheduler.teu_capacity".to_string(), "1024".to_string());
         let config = LaneConfig {
             id: LaneId::new(1),
+            shard_id: Some(ShardId::new(9)),
             dataspace_id: DataSpaceId::new(5),
             alias: "governance".to_string(),
             description: Some("Governance lane".to_string()),
@@ -1956,17 +2000,58 @@ mod tests {
         let mut slice: &[u8] = &bytes;
         let decoded = LaneConfig::decode_all(&mut slice).expect("decode LaneConfig");
         assert_eq!(decoded, config);
+        assert_eq!(decoded.effective_shard_id(), ShardId::new(9));
+        let json = norito::json::to_string(&config).expect("encode LaneConfig JSON");
+        let decoded_json =
+            norito::json::from_str::<LaneConfig>(&json).expect("decode LaneConfig JSON");
+        assert_eq!(decoded_json, config);
+    }
+    #[test]
+    fn lane_config_shard_defaults_to_lane_identifier() {
+        let config = LaneConfig {
+            id: LaneId::new(7),
+            alias: "default-shard".to_owned(),
+            ..LaneConfig::default()
+        };
+        assert_eq!(config.shard_id, None);
+        assert_eq!(config.effective_shard_id(), ShardId::new(7));
+
+        let mut following_clone = config.clone();
+        following_clone.id = LaneId::new(8);
+        assert_eq!(following_clone.effective_shard_id(), ShardId::new(8));
+
+        let mut pinned_clone = config;
+        pinned_clone.shard_id = Some(ShardId::new(7));
+        pinned_clone.id = LaneId::new(8);
+        assert_eq!(pinned_clone.effective_shard_id(), ShardId::new(7));
     }
     #[test]
     fn dataspace_catalog_validates_entries() {
-        let catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
-            id: DataSpaceId::new(1),
-            alias: "telemetry".into(),
-            description: None,
-            fault_tolerance: 1,
-        }])
+        let catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::new(2),
+                alias: "settlement".into(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: DataSpaceId::new(1),
+                alias: "telemetry".into(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
         .expect("valid dataspace");
         assert!(catalog.by_alias("telemetry").is_some());
+        assert_eq!(
+            catalog
+                .entries()
+                .iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
+            vec![DataSpaceId::new(1), DataSpaceId::new(2)],
+            "catalog construction must canonicalize semantic entry order"
+        );
         let invalid_fault_tolerance = DataSpaceCatalog::new(vec![DataSpaceMetadata {
             id: DataSpaceId::new(9),
             alias: "invalid".into(),
@@ -2061,6 +2146,7 @@ mod tests {
     fn autoscale_profile_inheritance_ignores_identity_and_reserved_metadata_only() {
         let mut base = LaneConfig {
             id: LaneId::new(2),
+            shard_id: None,
             dataspace_id: DataSpaceId::new(7),
             alias: "settlement-base".into(),
             description: Some("operator-facing base lane".into()),
@@ -2098,6 +2184,11 @@ mod tests {
         );
         assert!(elastic.inherits_autoscale_profile_from(&base));
         let profile_drifts = [
+            ("shard policy", {
+                let mut drift = elastic.clone();
+                drift.shard_id = Some(ShardId::new(9));
+                drift
+            }),
             ("dataspace", {
                 let mut drift = elastic.clone();
                 drift.dataspace_id = DataSpaceId::new(8);
@@ -2405,6 +2496,16 @@ mod tests {
                 "unexpected duplicate-field error: {err}"
             );
         }
+    }
+    #[test]
+    fn lane_config_json_rejects_partial_payloads() {
+        let partial = r#"{"id":0,"alias":"default"}"#;
+        let err = norito::json::from_str::<LaneConfig>(partial)
+            .expect_err("canonical V1 lane metadata must include every serialized field");
+        assert!(
+            err.to_string()
+                .contains("missing required lane metadata field `shard_id`")
+        );
     }
     #[test]
     fn lane_lifecycle_json_rejects_nested_duplicate_lane_field() {

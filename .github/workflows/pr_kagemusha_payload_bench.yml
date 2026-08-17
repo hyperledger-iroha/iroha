@@ -826,6 +826,7 @@ jobs:
           scripts/tests/build_kagemusha_v4_candidate_bundle_test.py
           scripts/tests/check_kagemusha_candidate_ios_evidence_test.py
           scripts/tests/kagemusha_source_tree_seal_test.py
+          scripts/tests/produce_kagemusha_v4_source_seal_projection_test.py
           scripts/tests/kagemusha_staged_resource_guard_test.py
           scripts/tests/stage_kagemusha_candidate_android_artifacts_test.py
           scripts/tests/stage_kagemusha_candidate_android_lab_test.py

@@ -599,6 +599,17 @@ fn applied_height_reconstruction_covers(
     }
     if matches!(
         rollover_claim,
+        ExactOutputRolloverClaim::QueuePlanAdmission { .. }
+    ) {
+        return queue_plan_admission_reconstruction_covers(
+            messages,
+            rollover_claim,
+            artifact,
+            durable_history,
+        );
+    }
+    if matches!(
+        rollover_claim,
         ExactOutputRolloverClaim::DurableCommitCertificateResponse { .. }
             | ExactOutputRolloverClaim::DurableCertifiedBodyResponse { .. }
             | ExactOutputRolloverClaim::DurableLaneCertificateResponse { .. }

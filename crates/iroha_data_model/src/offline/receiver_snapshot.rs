@@ -10,11 +10,23 @@ use norito::codec::{Decode, Encode};
 pub const KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_VERSION_V1: u16 = 1;
 /// Maximum active or ambiguous receiver tuples committed by one block.
 pub const KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_MAX_LEAVES_V1: usize = 65_536;
+/// Maximum unexpired native device registrations retained across all accounts.
+///
+/// Bounding records by the receiver-snapshot leaf ceiling also bounds the work needed to derive
+/// the snapshot when every registration maps to a distinct receiver tuple.
+pub const KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1: usize =
+    KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_MAX_LEAVES_V1;
+/// Maximum unexpired native device registrations retained for one account.
+pub const KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1: usize = 256;
+const _: () = assert!(
+    KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1
+        <= KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1
+);
 /// Maximum depth of the canonical balanced receiver tree.
 pub const KAGEMUSHA_ACTIVE_RECEIVER_SNAPSHOT_MAX_SIBLINGS_V1: usize = 16;
 /// Exact depth of the execution-witness sparse tree.
 pub const KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_SIBLINGS_V1: usize = 256;
-/// Fixed synthetic execution-witness key committed by every post-upgrade block.
+/// Fixed synthetic execution-witness key committed by every current block.
 pub const KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1: &[u8] =
     b"\xd3iroha:kagemusha:active-receiver:v1";
 const RECEIVER_LEAF_DOMAIN_V1: &[u8] = b"iroha:kagemusha:active-receiver:leaf:v1\0";

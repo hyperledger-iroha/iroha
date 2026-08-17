@@ -333,10 +333,10 @@ authorize production planning. The activated owner now enters one consuming
 finalization chain. It proves executor and recovered-work quiescence before
 clearing readiness, closing the exact ingress, and jointly detaching the
 Certified-Serve and leader-wire gates. It then consumes the executor's Kura
-receipt/artifact and retires the serialized adapter WAL under fail-stop
-ownership. The resulting type state keeps services, lifecycle stores, and
+receipt/artifact and closes the serialized adapter under fail-stop ownership.
+The resulting type state keeps its safety WAL, services, lifecycle stores, and
 finality evidence joined while the existing lane/service rollover seals the
-durable exact-output handoff. Only after that handoff may it authenticate the
+durable exact-output handoff. Only after that handoff may it retire the WAL and authenticate the
 recovered registry, rescan and revalidate the live Certified-Serve directory
 against ledger-owned rows plus capacity-fenced admission waits, retire
 payloads, and publish one all-row terminal LedgerV1 successor. The staged
@@ -1420,10 +1420,13 @@ prevents duplicate topology fanouts during the current process.
 Cold open rejoins that exact row pair to the recovered WAL request, verifies the
 signed consensus message against the recovered roster, replays `Signed` on the
 cold reducer, and installs only the authenticated Broadcast carrier. Proposal's
-body/chunk plus Prepare-intent-WAL cut remains a TODO at the runner boundary and
-may not enter the single-Broadcast transaction. The narrower
-Broadcast-plus-next-Sign path is sealed and durably publishable for the
-already-WAL-ahead Proposal shape.
+body/chunk plus Prepare-intent-WAL cut now enters the same unified Completion-
+turn driver as the already-WAL-ahead shape. The live lifecycle height driver
+supplies the borrow-bound Completion turn, and the recovered Proposal
+settlement first reserves its aggregate control/chunk output, fsyncs the exact
+PrepareIntent, authenticates the resulting Prepare Sign against the retained
+body, and only then publishes the adjacent Broadcast and Sign rows. It may not
+enter the narrower single-Broadcast transaction.
 The reducer-derived next-Vote lookup is consumable only by the launched service
 and its exact executor/body-store instance; that join requires the same
 validated receipt, durable receipt, recovered manifest, execution commitment,

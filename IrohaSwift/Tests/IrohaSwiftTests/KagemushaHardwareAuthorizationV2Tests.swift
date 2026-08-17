@@ -86,7 +86,7 @@ final class KagemushaHardwareAuthorizationV2Tests: XCTestCase {
             .derRepresentation
 
         XCTAssertThrowsError(try android.finalizeIosAppAttest(
-            authenticatorData: legacyAuthenticatorData(counter: 1),
+            authenticatorData: extensionAuthenticatorData(counter: 1),
             derSignature: der
         ))
         XCTAssertThrowsError(try ios.finalizeAndroidKeyMint(derSignature: der))
@@ -125,7 +125,7 @@ final class KagemushaHardwareAuthorizationV2Tests: XCTestCase {
             signature: signature
         )
         let ios = KagemushaOnlineHardwareAssertion.iosAppAttest(
-            authenticatorData: legacyAuthenticatorData(counter: 1),
+            authenticatorData: extensionAuthenticatorData(counter: 1),
             signature: signature
         )
 
@@ -133,7 +133,7 @@ final class KagemushaHardwareAuthorizationV2Tests: XCTestCase {
         XCTAssertNil(android.authenticatorData)
         XCTAssertEqual(android.signature, signature)
         XCTAssertEqual(ios.platform, .iosAppAttest)
-        XCTAssertEqual(ios.authenticatorData, legacyAuthenticatorData(counter: 1))
+        XCTAssertEqual(ios.authenticatorData, extensionAuthenticatorData(counter: 1))
         XCTAssertEqual(ios.signature, signature)
     }
 
@@ -250,8 +250,10 @@ final class KagemushaHardwareAuthorizationV2Tests: XCTestCase {
         try XCTUnwrap(Data(hexString: value))
     }
 
-    private func legacyAuthenticatorData(counter: UInt32) -> Data {
-        authenticatorData(flags: 0, counter: counter)
+    private func extensionAuthenticatorData(counter: UInt32) -> Data {
+        var value = authenticatorData(flags: 0x80, counter: counter)
+        value.append(0xa0)
+        return value
     }
 
     private func authenticatorData(flags: UInt8, counter: UInt32) -> Data {

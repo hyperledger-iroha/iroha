@@ -118,8 +118,8 @@ pub const MERGE_CARRIER_COMMITMENT_VERSION_V1: u16 = 1;
 /// Keeping the bytes here lets configuration-independent genesis builders emit
 /// a valid signed template without introducing a data-model/config cycle.
 pub const RECOMMENDED_NEXUS_AMX_CONTEXT_HASH: [u8; 32] = [
-    234, 106, 76, 240, 125, 39, 95, 30, 253, 3, 79, 200, 36, 73, 150, 119, 19, 65, 12, 108, 19,
-    223, 247, 205, 27, 171, 181, 31, 56, 200, 112, 91,
+    48, 72, 121, 217, 199, 209, 245, 192, 246, 39, 8, 210, 192, 151, 163, 93, 234, 252, 236, 4, 49,
+    78, 136, 209, 109, 194, 211, 166, 26, 112, 186, 67,
 ];
 /// Canonical V1 boot execution-policy identity emitted by the recommended genesis template.
 ///

@@ -1,15 +1,5 @@
-enum DecidedLaneRecoveryCurrentServe {
-    Authenticated {
-        authenticated_via: PeerId,
-        request: AuthenticatedCertifiedBodyRequest,
-    },
-    Negative {
-        request_hash: HashOf<wire::CertifiedBodyRequest>,
-        outcome: CertifiedServeNegativeOutcome,
-        reason: String,
-    },
-    Service(String),
-}
+type DecidedLaneRecoveryCurrentServe =
+    ordinary_ingress_consumer::CurrentCertifiedServePreAdmissionV1;
 
 enum DecidedLaneRecoveryIngressPreparation {
     LaneLocal,
@@ -38,43 +28,9 @@ enum DecidedLaneRecoveryDrainDecision<Admission> {
     FailClosed(String),
 }
 
-trait DecidedLaneRecoveryDrainAuthorizer {
-    type Admission;
-
-    fn stage_negative(
-        &mut self,
-        request_hash: HashOf<wire::CertifiedBodyRequest>,
-        outcome: CertifiedServeNegativeOutcome,
-    ) -> Result<(), String>;
-
-    fn prepare_exact(
-        &mut self,
-        authenticated_via: &PeerId,
-        request: AuthenticatedCertifiedBodyRequest,
-    ) -> Result<Self::Admission, CertifiedServePrepareError>;
-}
-
-impl DecidedLaneRecoveryDrainAuthorizer for ProductionV2Services {
-    type Admission = CertifiedServeAdmission;
-
-    fn stage_negative(
-        &mut self,
-        request_hash: HashOf<wire::CertifiedBodyRequest>,
-        outcome: CertifiedServeNegativeOutcome,
-    ) -> Result<(), String> {
-        self.stage_certified_serve_rejection(request_hash, outcome)
-    }
-
-    fn prepare_exact(
-        &mut self,
-        authenticated_via: &PeerId,
-        request: AuthenticatedCertifiedBodyRequest,
-    ) -> Result<Self::Admission, CertifiedServePrepareError> {
-        self.prepare_certified_request(authenticated_via, request)
-    }
-}
-
-fn authorize_decided_lane_recovery_drain<A: DecidedLaneRecoveryDrainAuthorizer>(
+fn authorize_decided_lane_recovery_drain<
+    A: ordinary_ingress_consumer::CurrentCertifiedServePreDequeueAuthorizer,
+>(
     preparation: DecidedLaneRecoveryIngressPreparation,
     authorizer: &mut A,
 ) -> DecidedLaneRecoveryDrainDecision<A::Admission> {
@@ -99,48 +55,36 @@ fn authorize_decided_lane_recovery_drain<A: DecidedLaneRecoveryDrainAuthorizer>(
                 DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,
             )
         }
-        DecidedLaneRecoveryIngressPreparation::CurrentServe(
-            DecidedLaneRecoveryCurrentServe::Negative {
-                request_hash,
-                outcome,
-                reason,
-            },
-        ) => match authorizer.stage_negative(request_hash, outcome) {
-            Ok(()) => DecidedLaneRecoveryDrainDecision::Authorized(
+        DecidedLaneRecoveryIngressPreparation::CurrentServe(prepared) => {
+            match ordinary_ingress_consumer::authorize_current_certified_serve_pre_dequeue(
+                prepared, authorizer,
+            ) {
+                ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Retain => {
+                    DecidedLaneRecoveryDrainDecision::Retain
+                }
+                ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Prepared(
+                    ordinary_ingress_consumer::ProductionPreparedCertifiedServeV1::Admitted(
+                        admission,
+                    ),
+                ) => DecidedLaneRecoveryDrainDecision::Authorized(
+                    DecidedLaneRecoveryDrainAuthorization::CurrentServe(
+                        DecidedLaneRecoveryCurrentDrain::Admitted(admission),
+                    ),
+                ),
+                ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Prepared(
+                    ordinary_ingress_consumer::ProductionPreparedCertifiedServeV1::Rejected(
+                        reason,
+                    ),
+                ) => DecidedLaneRecoveryDrainDecision::Authorized(
                 DecidedLaneRecoveryDrainAuthorization::CurrentServe(
                     DecidedLaneRecoveryCurrentDrain::Rejected(reason),
                 ),
-            ),
-            Err(error) => DecidedLaneRecoveryDrainDecision::FailClosed(error),
-        },
-        DecidedLaneRecoveryIngressPreparation::CurrentServe(
-            DecidedLaneRecoveryCurrentServe::Service(reason),
-        ) => DecidedLaneRecoveryDrainDecision::FailClosed(reason),
-        DecidedLaneRecoveryIngressPreparation::CurrentServe(
-            DecidedLaneRecoveryCurrentServe::Authenticated {
-                authenticated_via,
-                request,
-            },
-        ) => match authorizer.prepare_exact(&authenticated_via, request) {
-            Ok(admission) => DecidedLaneRecoveryDrainDecision::Authorized(
-                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                    DecidedLaneRecoveryCurrentDrain::Admitted(admission),
                 ),
-            ),
-            Err(CertifiedServePrepareError::Backpressure) => {
-                DecidedLaneRecoveryDrainDecision::Retain
+                ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Prepared(
+                    ordinary_ingress_consumer::ProductionPreparedCertifiedServeV1::Service(reason),
+                ) => DecidedLaneRecoveryDrainDecision::FailClosed(reason),
             }
-            Err(CertifiedServePrepareError::Rejected(reason)) => {
-                DecidedLaneRecoveryDrainDecision::Authorized(
-                    DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                        DecidedLaneRecoveryCurrentDrain::Rejected(reason),
-                    ),
-                )
-            }
-            Err(CertifiedServePrepareError::Service(reason)) => {
-                DecidedLaneRecoveryDrainDecision::FailClosed(reason)
-            }
-        },
+        }
     }
 }
 
@@ -167,8 +111,11 @@ fn prepare_decided_lane_recovery_ingress(
     };
     if message.validate_version().is_err() {
         return DecidedLaneRecoveryIngressPreparation::CurrentServe(
-            DecidedLaneRecoveryCurrentServe::Service(
-                "terminal recovery Serve ingress crossed version validation".to_owned(),
+            ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
+                inbound,
+                active_height,
+                Some(decided_subject),
+                authenticate,
             ),
         );
     }
@@ -178,75 +125,13 @@ fn prepare_decided_lane_recovery_ingress(
     if request.round.height > active_height {
         return DecidedLaneRecoveryIngressPreparation::LeaderWireRetire;
     }
-    let Some(sender) = inbound.sender() else {
-        return DecidedLaneRecoveryIngressPreparation::CurrentServe(
-            DecidedLaneRecoveryCurrentServe::Service(
-                "terminal recovery Serve ingress lost its authenticated sender".to_owned(),
-            ),
-        );
-    };
-    let Some(authenticated_via) = inbound.via() else {
-        return DecidedLaneRecoveryIngressPreparation::CurrentServe(
-            DecidedLaneRecoveryCurrentServe::Service(
-                "terminal recovery Serve ingress lost its authenticated source".to_owned(),
-            ),
-        );
-    };
-    let Some(reply_routes) = inbound.reply_routes() else {
-        return DecidedLaneRecoveryIngressPreparation::CurrentServe(
-            DecidedLaneRecoveryCurrentServe::Service(
-                "terminal recovery Serve ingress lost its reply capability".to_owned(),
-            ),
-        );
-    };
-    let Some(ingress_ownership) = inbound.ingress_ownership() else {
-        return DecidedLaneRecoveryIngressPreparation::CurrentServe(
-            DecidedLaneRecoveryCurrentServe::Service(
-                "terminal recovery Serve ingress lost its ownership evidence".to_owned(),
-            ),
-        );
-    };
-    if reply_routes.semantic_target() != sender
-        || !ingress_ownership.validate_exact()
-        || !ingress_ownership.matches_message(inbound.message())
-        || !ingress_ownership.matches_semantic_origin(Some(sender))
-        || !ingress_ownership.matches_reply_routes(Some(reply_routes))
-    {
-        return DecidedLaneRecoveryIngressPreparation::CurrentServe(
-            DecidedLaneRecoveryCurrentServe::Service(
-                "terminal recovery Serve ingress changed its transport ownership".to_owned(),
-            ),
-        );
-    }
-    let authenticated = match authenticate(request.clone(), sender) {
-        Ok(authenticated) => authenticated,
-        Err(reason) => {
-            return DecidedLaneRecoveryIngressPreparation::CurrentServe(
-                DecidedLaneRecoveryCurrentServe::Negative {
-                    request_hash: HashOf::new(request),
-                    outcome: CertifiedServeNegativeOutcome::InvalidCertificate,
-                    reason,
-                },
-            );
-        }
-    };
-    if request.subject != decided_subject {
-        return DecidedLaneRecoveryIngressPreparation::CurrentServe(
-            DecidedLaneRecoveryCurrentServe::Negative {
-                request_hash: authenticated.request_hash(),
-                outcome: CertifiedServeNegativeOutcome::SupersededByDurableDecision(
-                    decided_subject,
-                ),
-                reason: "terminal recovery Serve request was superseded by durable Decision"
-                    .to_owned(),
-            },
-        );
-    }
     DecidedLaneRecoveryIngressPreparation::CurrentServe(
-        DecidedLaneRecoveryCurrentServe::Authenticated {
-            authenticated_via: authenticated_via.clone(),
-            request: authenticated,
-        },
+        ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
+            inbound,
+            active_height,
+            Some(decided_subject),
+            authenticate,
+        ),
     )
 }
 
@@ -477,118 +362,40 @@ fn drain_v2_ingress(
                 let BlockMessage::V2(message) = inbound.message() else {
                     return true;
                 };
-                if message.validate_version().is_err() {
-                    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-                        "reserved certified-body ingress crossed version validation".to_owned(),
-                    ));
-                    return true;
-                }
-                let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) =
-                    &message.payload
-                else {
-                    return true;
-                };
-                if request.round.height != executor.context().height {
-                    return true;
-                }
-                let superseded_by_decision = certified_body_request_is_superseded_after_decision(
-                    request,
-                    terminal_subject,
-                    executor.context().height,
+                let current_serve = matches!(
+                    &message.payload,
+                    wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request)
+                        if request.round.height == executor.context().height
                 );
-                let Some(sender) = inbound.sender() else {
-                    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-                        "reserved certified-body ingress lost its authenticated sender".to_owned(),
-                    ));
-                    return true;
-                };
-                let Some(authenticated_via) = inbound.via() else {
-                    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-                        "reserved certified-body ingress lost its authenticated source".to_owned(),
-                    ));
-                    return true;
-                };
-                let Some(reply_routes) = inbound.reply_routes() else {
-                    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-                        "reserved certified-body ingress lost its reply capability".to_owned(),
-                    ));
-                    return true;
-                };
-                let Some(ingress_ownership) = inbound.ingress_ownership() else {
-                    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-                        "reserved certified-body ingress lost its ownership evidence".to_owned(),
-                    ));
-                    return true;
-                };
-                if reply_routes.semantic_target() != sender
-                    || !ingress_ownership.validate_exact()
-                    || !ingress_ownership.matches_message(inbound.message())
-                    || !ingress_ownership.matches_semantic_origin(Some(sender))
-                    || !ingress_ownership.matches_reply_routes(Some(reply_routes))
-                {
-                    prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(
-                        "reserved certified-body ingress changed its transport ownership"
-                            .to_owned(),
-                    ));
+                if message.validate_version().is_ok() && !current_serve {
                     return true;
                 }
-                let authenticated = match executor
-                    .authenticate_certified_body_request(request.clone(), sender)
-                {
-                    Ok(authenticated) => authenticated,
-                    Err(error) => {
-                        prepared_serve = Some(
-                            match services.stage_certified_serve_rejection(
-                                HashOf::new(request),
-                                CertifiedServeNegativeOutcome::InvalidCertificate,
-                            ) {
-                                Ok(()) => {
-                                    ProductionPreparedCertifiedServeV1::Rejected(error.to_string())
-                                }
-                                Err(reason) => ProductionPreparedCertifiedServeV1::Service(reason),
-                            },
-                        );
-                        return true;
-                    }
-                };
-                if superseded_by_decision {
-                    let decided = terminal_subject.expect(
-                        "Decision supersession requires the durable exact terminal subject",
-                    );
-                    prepared_serve = Some(
-                        match services.stage_certified_serve_rejection(
-                            authenticated.request_hash(),
-                            CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
-                        ) {
-                            Ok(()) => ProductionPreparedCertifiedServeV1::Rejected(
-                                "certified body request was superseded by durable Decision"
-                                    .to_owned(),
-                            ),
-                            Err(reason) => ProductionPreparedCertifiedServeV1::Service(reason),
-                        },
-                    );
-                    return true;
-                }
-                match services.prepare_certified_request(authenticated_via, authenticated) {
-                    Ok(admission) => {
-                        prepared_serve =
-                            Some(ProductionPreparedCertifiedServeV1::Admitted(admission));
+                let prepared = ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
+                    inbound,
+                    executor.context().height,
+                    terminal_subject,
+                    |request, sender| {
+                        executor
+                            .authenticate_certified_body_request(request, sender)
+                            .map_err(|error| error.to_string())
+                    },
+                );
+                match ordinary_ingress_consumer::authorize_current_certified_serve_pre_dequeue(
+                    prepared,
+                    services,
+                ) {
+                    ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Prepared(
+                        prepared,
+                    ) => {
+                        prepared_serve = Some(prepared);
                         true
                     }
-                    Err(CertifiedServePrepareError::Backpressure) => {
+                    ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Retain => {
                         // `prepare_certified_request` installs the off-queue debt
                         // before returning capacity backpressure. The fair
                         // selector's immutable physical cutoff keeps every later
                         // ingress occurrence behind this retained target.
                         false
-                    }
-                    Err(CertifiedServePrepareError::Rejected(reason)) => {
-                        prepared_serve = Some(ProductionPreparedCertifiedServeV1::Rejected(reason));
-                        true
-                    }
-                    Err(CertifiedServePrepareError::Service(reason)) => {
-                        prepared_serve = Some(ProductionPreparedCertifiedServeV1::Service(reason));
-                        true
                     }
                 }
             })

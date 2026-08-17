@@ -5,6 +5,7 @@ mod tests {
         metadata::Metadata,
         nexus::{PublicLaneValidatorRecord, PublicLaneValidatorStatus},
     };
+
     #[test]
     fn sora_profile_keeps_logical_lanes_in_the_universal_dataspace() {
         let lanes = sora_lane_catalog();
@@ -339,7 +340,7 @@ mod tests {
                 Some([0x44; 32]),
             ),
             (
-                "Kagemusha release policy",
+                "Kagemusha release catalog",
                 [0x11; 32],
                 [0x22; 32],
                 Some([0x45; 32]),
@@ -1174,7 +1175,7 @@ mod tests {
             sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
         assert_eq!(
             hex::encode(hash.as_ref()),
-            "ea6a4cf07d275f1efd034fc82449967713410c6c13dff7cd1babb51f38c8705b",
+            "304879d9c7d1f5c0f62708d2c097a35deafcec04314e88d16dc2d3a61a70ba43",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),
@@ -1204,6 +1205,31 @@ mod tests {
             sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
             sumeragi_v2_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
             "dataspace catalog iteration order must not affect the signed Nexus/AMX commitment"
+        );
+    }
+    #[test]
+    fn sumeragi_v2_nexus_amx_hash_canonicalizes_fee_exempt_authorities() {
+        let mut left = Nexus::default();
+        left.fees.successful_claim_fee_exempt_authorities = vec![
+            "authority-b".to_owned(),
+            "authority-a".to_owned(),
+            "authority-a".to_owned(),
+        ];
+        let mut right = left.clone();
+        right.fees.successful_claim_fee_exempt_authorities =
+            vec!["authority-a".to_owned(), "authority-b".to_owned()];
+
+        assert_eq!(
+            sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
+            sumeragi_v2_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            "set order and duplicate entries must not affect the signed Nexus/AMX commitment"
+        );
+
+        right.fees.successful_claim_fee_exempt_authorities = vec!["authority-c".to_owned()];
+        assert_ne!(
+            sumeragi_v2_nexus_amx_context_hash(&left, &Pipeline::default(), &[], &[]),
+            sumeragi_v2_nexus_amx_context_hash(&right, &Pipeline::default(), &[], &[]),
+            "changing the canonical authority set must change the signed commitment"
         );
     }
     fn test_active_validator(seed: u8, lane: LaneId) -> GenesisActiveNexusLaneRecord {
@@ -1428,22 +1454,7 @@ signature_threshold = 1
         Root::from_toml_source(TomlSource::inline(table))
             .expect("load config with valid SoraFS admission")
     }
-    #[test]
-    fn apply_sora_profile_leaves_discovery_disabled_without_admission() {
-        let mut root = minimal_root();
-        assert!(root.torii.sorafs_discovery.admission.is_none());
-        assert!(!root.torii.sorafs_discovery.discovery_enabled);
-        root.apply_sora_profile();
-        assert!(root.nexus.enabled, "Sora profile must still enable Nexus");
-        assert!(
-            root.torii.sorafs_storage.enabled,
-            "Sora profile must still enable SoraFS storage"
-        );
-        assert!(
-            !root.torii.sorafs_discovery.discovery_enabled,
-            "discovery must remain fail-closed without an admission trust policy"
-        );
-    }
+    include!("sora_profile_discovery_disabled_test.rs");
     #[test]
     fn apply_sora_profile_enables_discovery_with_parsed_admission() {
         let mut root = minimal_root_with_sorafs_admission();
@@ -1474,6 +1485,10 @@ signature_threshold = 1
         root.apply_sora_profile();
         assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
         assert_eq!(root.nexus.lane_catalog, sora_lane_catalog());
+        assert_eq!(
+            root.nexus.configured_lane_catalog, root.nexus.lane_catalog,
+            "the profile catalog must become the immutable consensus-policy baseline"
+        );
         assert_eq!(root.nexus.dataspace_catalog, sora_dataspace_catalog());
         assert_eq!(root.nexus.routing_policy, sora_routing_policy());
         assert_eq!(
@@ -1528,6 +1543,7 @@ signature_threshold = 1
         )
         .expect("valid custom catalog");
         root.nexus.lane_config = LaneConfig::from_catalog(&custom_catalog);
+        root.nexus.configured_lane_catalog = custom_catalog.clone();
         root.nexus.lane_catalog = custom_catalog.clone();
         root.apply_sora_profile();
         assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
@@ -1539,6 +1555,7 @@ signature_threshold = 1
             &PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT)
         );
         assert_eq!(root.nexus.lane_catalog, custom_catalog);
+        assert_eq!(root.nexus.configured_lane_catalog, custom_catalog);
         assert_eq!(
             root.nexus
                 .lane_config

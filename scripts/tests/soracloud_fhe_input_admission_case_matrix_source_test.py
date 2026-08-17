@@ -18,7 +18,7 @@ REGION_START = """    #[derive(Clone, Copy)]
 REGION_END = """    #[cfg(feature = "zk-stark")]
     #[test]
     fn mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof"""
-REGION_HASH = "a3e53f2f8f1b648c58e265e7d5a12da831a7dba57dd39fa5d110fd5bfbc9eb0f"
+REGION_HASH = "79725ce363652dc2891ae82f88572123b98101014acb1a4465d5a5389b5dd32a"
 
 TEST_CASES = {
     "mutate_soracloud_state_rejects_fhe_input_admission_proof_without_registered_verifier": (
@@ -108,8 +108,7 @@ VERIFIER_MUTATION_TOKENS = (
 RUNNER_TOKENS = (
     "for &case in cases",
     "configure_fhe_input_admission_rejection_verifier",
-    "sample_bundle_with_state_binding",
-    "isi::DeploySoracloudService",
+    "deploy_fhe_job_test_service",
     "sample_fhe_input_admission_proof",
     "sample_fhe_input_admission_binding_air_rejection_proof",
     "isi::MutateSoracloudState",

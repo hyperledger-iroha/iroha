@@ -1,6 +1,10 @@
 ---- MODULE SumeragiV2AsyncRankAndInitContinuationProofs ----
 EXTENDS SumeragiV2AsyncRankAndInitProofs
 
+THEOREM ModelResponsiveValidators ==
+  ModelConfiguration => Responsive \subseteq ValidatorIds
+BY SMT DEF ModelConfiguration, QuorumConfiguration
+
 AsyncHistoricalRecoveryFrameVars ==
   <<context, up, gst, applied, asyncHistoricalRecoveryTargets>>
 

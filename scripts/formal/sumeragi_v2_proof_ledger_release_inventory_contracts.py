@@ -1799,13 +1799,13 @@ def _production_liveness_release_inventory_errors(
                     "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
-                    "314270ab70b6e71905c697e94c38ff928385419ee270d9d7e8c423022d152426"
+                    "1745d4e9b2409ff999eeb655f9573dda4e823bde405d50c2339e2a981ad7fbad"
                 ),
                 "write_sumeragi_v2_release_receipt_gate_evidence.py": (
                     "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
-                    "337c9237f5a7e29a81b4960a514b8875e097bc8baa44d7d35b4a438f6b1fdbb9"
+                    "4f351ac1711c88465e76f804c714a8d43ee0fc8d0133739b717f6e31dcf79ae6"
                 ),
             }
             if assignments["_RELEASE_RECEIPT_COMPONENT_SHA256"] != [
@@ -1893,6 +1893,8 @@ def _production_liveness_release_inventory_errors(
                     "_runtime_tool_probe_evidence",
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
+                    "_validate_framework_python_input_records",
+                    "_validate_framework_python_relocation_evidence",
                     "_require_pruned_build_roots",
                     "build_receipt",
                     "_iter_artifact_records",
@@ -1993,11 +1995,13 @@ def _production_liveness_release_inventory_errors(
     )
     expected_bootstrap_component_sha256 = {
         "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-            "e336273e2a4322d125344b6bd5162fdd1a9dcfce874aa49497a03c30141bfd8b"
+            "59bdbde20094d65a855f08dd5aad22e827c985c19f58edf3090a72164cd7cc0e"
         ),
     }
     expected_bootstrap_component_symbols = {
         "bootstrap_sumeragi_v2_release_receipt_replay.py": (
+            "_framework_python_input_records",
+            "_framework_python_marker_record",
             "_validate_terminal_release_evidence",
             "_retained_release_layout",
             "_receipt_validation_failure",

@@ -181,6 +181,7 @@ impl PreparedCandidateWork {
 pub(crate) struct CandidateWorkUnavailable {
     indices: BTreeSet<usize>,
     reason: String,
+    defer_native_for_episode: bool,
 }
 impl CandidateWorkUnavailable {
     /// Construct an unavailable-work result.
@@ -189,6 +190,26 @@ impl CandidateWorkUnavailable {
         Self {
             indices,
             reason: reason.into(),
+            defer_native_for_episode: false,
+        }
+    }
+    /// Defer the selected indices and suppress every later Native AMX refill
+    /// for this one assembly episode.
+    ///
+    /// Native coordinator and participant bodies bind a dependency-coupled
+    /// transaction slice. Once a provider has staged requests for that slice,
+    /// refilling from a different Native cohort can create a conflicting body
+    /// for the same participant slot before the first request leaves the
+    /// adapter.
+    #[must_use]
+    pub(crate) fn defer_native_for_episode(
+        indices: BTreeSet<usize>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            indices,
+            reason: reason.into(),
+            defer_native_for_episode: true,
         }
     }
     /// Candidate indices which must remain queued for a later height/view.
@@ -198,6 +219,11 @@ impl CandidateWorkUnavailable {
     /// Stable diagnostic supplied by the lane/AMX adapter.
     pub(crate) fn reason(&self) -> &str {
         &self.reason
+    }
+    /// Whether every later Native AMX refill must be suppressed for this
+    /// assembly episode.
+    pub(crate) const fn defers_native_for_episode(&self) -> bool {
+        self.defer_native_for_episode
     }
 }
 /// Snapshot adapter for lane-local and Native AMX readiness.
@@ -470,7 +496,15 @@ impl V2CandidateAssembler {
                 {
                     Ok(work) => work,
                     Err(unavailable) => {
+                        let defer_native_for_episode = unavailable.defers_native_for_episode();
                         remove_unavailable_candidates(&mut selected, &unavailable, &mut report)?;
+                        if defer_native_for_episode {
+                            defer_native_candidates_for_episode(
+                                &mut selected,
+                                &mut reserve,
+                                &mut report,
+                            );
+                        }
                         fill_selection(
                             &mut selected,
                             &mut reserve,
@@ -980,6 +1014,20 @@ fn remove_unavailable_candidates(
         report.work_deferred = report.work_deferred.saturating_add(1);
     }
     Ok(())
+}
+fn defer_native_candidates_for_episode(
+    selected: &mut Vec<CandidateRecord>,
+    reserve: &mut VecDeque<CandidateRecord>,
+    report: &mut CandidateScanReport,
+) {
+    let selected_before = selected.len();
+    selected.retain(|candidate| !matches!(&candidate.routing_plan, RoutingPlan::NativeAmx(_)));
+    let reserve_before = reserve.len();
+    reserve.retain(|candidate| !matches!(&candidate.routing_plan, RoutingPlan::NativeAmx(_)));
+    report.work_deferred = report
+        .work_deferred
+        .saturating_add(selected_before.saturating_sub(selected.len()))
+        .saturating_add(reserve_before.saturating_sub(reserve.len()));
 }
 fn validate_prepared_work(
     context: &wire::HeightContext,
@@ -1909,6 +1957,41 @@ mod tests {
             unavailable_native_amx_indices(&candidates),
             BTreeSet::from([1])
         );
+    }
+    #[test]
+    fn native_episode_deferral_suppresses_later_native_refill() {
+        let coordinator = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+        let participant = RouteLeg::new(
+            RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
+            RouteLegRole::Participant,
+        );
+        let mut selected_native = record(1, "selected-native", 0);
+        selected_native.routing_plan =
+            RoutingPlan::native_amx(coordinator.clone(), vec![participant.clone()]);
+        let selected_single = record(2, "selected-single", 1);
+        let mut reserve_native = record(3, "reserve-native", 2);
+        reserve_native.routing_plan = RoutingPlan::native_amx(coordinator, vec![participant]);
+        let reserve_single = record(4, "reserve-single", 3);
+        let mut selected = vec![selected_native, selected_single];
+        let mut reserve = VecDeque::from([reserve_native, reserve_single]);
+        let mut report = CandidateScanReport::default();
+
+        defer_native_candidates_for_episode(&mut selected, &mut reserve, &mut report);
+        fill_selection(&mut selected, &mut reserve, 4, usize::MAX, &mut report);
+
+        assert_eq!(selected.len(), 2);
+        assert!(
+            selected
+                .iter()
+                .all(|candidate| matches!(&candidate.routing_plan, RoutingPlan::Single(_)))
+        );
+        assert!(reserve.is_empty());
+        assert_eq!(report.work_deferred, 2);
+        let unavailable = CandidateWorkUnavailable::defer_native_for_episode(
+            BTreeSet::from([0]),
+            "Native cohort pending",
+        );
+        assert!(unavailable.defers_native_for_episode());
     }
     #[test]
     fn autonomous_anchors_validate_without_ordinary_candidates() {

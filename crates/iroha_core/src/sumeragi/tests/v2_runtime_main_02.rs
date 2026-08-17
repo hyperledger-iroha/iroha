@@ -372,22 +372,25 @@ fn fresh_periodic_episodes_wait_behind_pre_and_post_timeout_signers() {
     assert!(runtime.deferred_lifecycle_ownership.is_empty());
 }
 #[test]
-fn round_timeout_grows_linearly_by_view_without_wrapping() {
+fn round_timeout_grows_linearly_then_stays_bounded_without_wrapping() {
     let base = Duration::from_secs(10);
     assert_eq!(round_timeout_for_view(base, 0), base);
     assert_eq!(round_timeout_for_view(base, 1), Duration::from_secs(20));
     assert_eq!(round_timeout_for_view(base, 7), Duration::from_secs(80));
+    assert_eq!(round_timeout_for_view(base, 9), Duration::from_secs(100));
+    assert_eq!(round_timeout_for_view(base, 10), Duration::from_secs(100));
+    assert_eq!(round_timeout_for_view(base, 260), Duration::from_secs(100));
     assert_eq!(
         round_timeout_for_view(Duration::new(1, 500_000_000), 1),
         Duration::from_secs(3),
     );
     assert_eq!(
         round_timeout_for_view(Duration::from_secs(1), u64::MAX - 1),
-        Duration::from_secs(u64::MAX)
+        Duration::from_secs(10)
     );
     assert_eq!(
         round_timeout_for_view(Duration::from_secs(1), u64::MAX),
-        Duration::MAX
+        Duration::from_secs(10)
     );
     assert_eq!(round_timeout_for_view(Duration::MAX, 1), Duration::MAX);
 }
@@ -411,6 +414,28 @@ fn recovered_nonzero_view_uses_scaled_timeout_from_live_arm() {
     let _ = runtime.step_and_take_scheduler_ownership_for_test(armed_at + Duration::from_secs(49));
     assert!(runtime.driver.timeouts.is_empty());
     let _ = runtime.step_and_take_scheduler_ownership_for_test(armed_at + Duration::from_secs(50));
+    assert_eq!(runtime.driver.timeouts, vec![recovered]);
+}
+#[test]
+fn recovered_high_view_uses_bounded_timeout_from_live_arm() {
+    let constructed_at = Instant::now();
+    let armed_at = constructed_at + Duration::from_secs(500);
+    let recovered = tag(260);
+    let (mut runtime, _) = SerializedV2Runtime::with_driver(
+        FakeDriver::new(recovered),
+        constructed_at,
+        Duration::from_secs(10),
+        RuntimeQueueConfig::new(8, 2, 2),
+        Vec::new(),
+    )
+    .expect("open recovered high-view runtime");
+    runtime
+        .arm_live_clocks(armed_at)
+        .expect("arm after recovered high-view startup");
+    assert_eq!(runtime.round_timeout(), Duration::from_secs(100));
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(armed_at + Duration::from_secs(99));
+    assert!(runtime.driver.timeouts.is_empty());
+    let _ = runtime.step_and_take_scheduler_ownership_for_test(armed_at + Duration::from_secs(100));
     assert_eq!(runtime.driver.timeouts, vec![recovered]);
 }
 #[test]

@@ -80,7 +80,7 @@ LaneConfigEntry {
 - `LaneConfig::from_catalog` recomputes the geometry whenever configuration is loaded (`State::set_nexus`).
 - Aliases are sanitised into lowercase slugs; consecutive non-alphanumeric characters collapse into `_`. If the alias yields an empty slug we fall back to `lane{id}`.
 - Key prefixes ensure the WSV keeps per-lane key ranges disjoint even when the same backend is shared.
-- `shard_id` is derived from the catalog metadata key `da_shard_id` (defaulting to `lane_id`) and drives the persisted shard cursor journal to keep DA replay deterministic across restarts/resharding.
+- `shard_id` is a typed lane-catalog field. When absent it canonically resolves to `lane_id`; an explicit value selects the persisted DA cursor/storage shard used across restarts and resharding.
 - Kura segment names are deterministic across hosts; auditors can cross-check segment directories and manifests without bespoke tooling.
 - Merge segments (`lane_{id:03}_merge`) hold the latest merge-hint roots and global state commitments for that lane.
 - When governance renames a lane alias, nodes automatically relabel the corresponding `blocks/lane_{id:03}_{slug}` directories (and tiered snapshots) so auditors always see the canonical slug without manual cleanup. If the target Kura segment already exists, the config/lifecycle transition fails before catalog or tiered-state changes are committed.
@@ -454,14 +454,22 @@ LaneConfigEntry {
   must verify before the state-dependent live-PoP check and exact-body cache
   insertion run. QC assembly repeats the BLS-normal and individual-signature
   checks before aggregating, so polluted vote inputs fail closed even outside
-  the normal ingress path. Vote caches are bounded both by session count and by
-  exact attestation-body buckets inside each session, using deterministic FIFO
-  eviction so one source/plan cannot retain unbounded retried or adversarial
-  bodies. Revision 4 derives these guards from the shared finite projection:
-  session capacity follows the control/reducer capacity projected from
-  `sumeragi.queues.commands`, and exact-body buckets per session follow
-  `sumeragi.block.max_transactions`. There are no separate Native AMX cache
-  switches.
+  the normal ingress path. Only votes for an exact locally issued
+  `(body, signer)` request may allocate a cache entry. Certified global-view
+  changes retire stale body buckets and request authorizations. Vote caches are
+  bounded by source sessions and exact attestation bodies, while request
+  ownership is stored once per body with a compact expected-peer set. Delivery
+  remains bounded by `sumeragi.queues.commands` and rotates fairly across
+  bodies and missing committee members. An identical topology retry reuses its
+  retained exact-output owner instead of consuming another corridor slot. If
+  the worker cannot accept a request, compact catalog ownership releases that
+  adapter delivery occurrence so a silent peer cannot pin every bounded slot;
+  the fair cursor retries it after later peers.
+  Revision 4 derives Native AMX cache
+  geometry from `sumeragi.block.max_transactions`, the maximum participant-leg
+  count, and the protocol lane bound. There are no separate operator-facing
+  Native AMX cache switches. A certified global body lock or Decision retires
+  adapter and exact-output Native ownership and rejects delayed resurrection.
 - Any Torii ingress node may accept transactions and route them using the
   active routing policy, even if the target dataspace is not validated locally
   by that ingress node.

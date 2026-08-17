@@ -112,6 +112,12 @@ def install_cache_helper(source_root: Path, repository_root: Path) -> None:
         repository_root / "scripts" / "copy_sumeragi_v2_release_cargo_cache.py",
         scripts / "copy_sumeragi_v2_release_cargo_cache.py",
     )
+    shutil.copy2(
+        repository_root
+        / "scripts"
+        / "copy_sumeragi_v2_release_cargo_cache_cli.py",
+        scripts / "copy_sumeragi_v2_release_cargo_cache_cli.py",
+    )
 
 
 def fixture_corridor_legs(

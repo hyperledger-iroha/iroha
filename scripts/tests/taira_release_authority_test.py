@@ -84,12 +84,45 @@ def test_native_client_preflight_precedes_subject_and_authorization(
         or result,
     )
 
-    assert authority.build_authority(argparse.Namespace()) == {"ok": True}
+    authorized = authority.build_authority(argparse.Namespace())
+    assert authorized.subject == {"ok": True}
+    assert authorized.authority_envelope == result.authority_envelope_bytes
+    assert authorized.durable_receipt == result.durable_receipt_bytes
     assert calls == [
         ("preflight", "native-evidence"),
         ("subject", "native-evidence"),
         ("authorize", "native-evidence"),
     ]
+
+
+def test_authority_rejects_oversized_authenticated_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = authority.taira_authority_client.AuthorityResult(
+        role="native-evidence",
+        operation_id="c" * 64,
+        run_id="d" * 64,
+        status="authorized",
+        authority_envelope={"payload": "x" * authority.MAX_AUTHORITY_BYTES},
+        durable_receipt={"schema": "test-native-evidence-receipt"},
+    )
+    monkeypatch.setattr(
+        authority,
+        "_build_untrusted_authority_structure",
+        lambda _args: {"ok": True},
+    )
+    monkeypatch.setattr(authority, "_authority_artifacts", lambda _args: ())
+    monkeypatch.setattr(
+        authority.taira_authority_client,
+        "authorize",
+        lambda *_args, **_kwargs: result,
+    )
+
+    with pytest.raises(
+        authority.TairaReleaseAuthorityError,
+        match="sidecar violates its byte bound",
+    ):
+        authority.build_authority(argparse.Namespace())
 
 
 def _evidence_root(tmp_path: Path) -> Path:
@@ -181,7 +214,7 @@ def _args(
 
 def test_archive_authority_is_canonical_portable_and_exact12(tmp_path: Path) -> None:
     args = _args(tmp_path)
-    payload = authority.build_authority(args)
+    payload = authority.build_authority(args).subject
     encoded = contract.canonical_json_bytes(payload)
     decoded = json.loads(encoded)
 
@@ -247,7 +280,7 @@ def test_create_then_verify_rebuilds_exact_subject(tmp_path: Path) -> None:
         ]
     ) == 0
     assert output.read_bytes() == contract.canonical_json_bytes(
-        authority.build_authority(create_args)
+        authority.build_authority(create_args).subject
     )
     assert authority.main(
         [
@@ -548,7 +581,7 @@ def test_image_authority_requires_exact_source_bound_registry_pair(
     tmp_path: Path,
 ) -> None:
     args = _args(tmp_path, image=True)
-    payload = authority.build_authority(args)
+    payload = authority.build_authority(args).subject
     assert payload["subject"]["manifest_digest"] == f"sha256:{'5' * 64}"
     assert payload["subject"]["image_id"] == f"sha256:{'6' * 64}"
 

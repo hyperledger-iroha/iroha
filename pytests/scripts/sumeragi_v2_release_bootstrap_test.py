@@ -2170,6 +2170,7 @@ class Fixture:
     receipt_validator: Path
     receipt_validator_support: Path
     runtime_helper: Path
+    runtime_helper_cli: Path
     tool_probe_helper: Path
     approval_contract: Path
     approvals: dict[str, Path]
@@ -2228,6 +2229,8 @@ class Fixture:
             _sha256(self.receipt_validator_support),
             "--runtime-helper", str(self.runtime_helper),
             "--expected-runtime-helper-sha256", _sha256(self.runtime_helper),
+            "--runtime-helper-cli", str(self.runtime_helper_cli),
+            "--expected-runtime-helper-cli-sha256", _sha256(self.runtime_helper_cli),
             "--tool-probe-helper", str(self.tool_probe_helper),
             "--expected-tool-probe-helper-sha256",
             _sha256(self.tool_probe_helper),
@@ -2354,6 +2357,11 @@ def release_fixture(tmp_path: Path) -> Fixture:
         (REPO_ROOT / "scripts" / "copy_sumeragi_v2_release_cargo_cache.py").read_bytes(),
         0o400,
     )
+    runtime_helper_cli = _write(
+        trust / "copy_sumeragi_v2_release_cargo_cache_cli.py",
+        (REPO_ROOT / "scripts" / "copy_sumeragi_v2_release_cargo_cache_cli.py").read_bytes(),
+        0o400,
+    )
     tool_probe_helper = _write(
         trust / "tool-probe-helper.py",
         _tool_support.fixture_tool_probe_helper(),
@@ -2408,6 +2416,7 @@ def release_fixture(tmp_path: Path) -> Fixture:
         receipt_validator,
         receipt_validator_support,
         runtime_helper,
+        runtime_helper_cli,
         tool_probe_helper,
         approval_contract,
         approvals,
@@ -2530,7 +2539,7 @@ def _rebind_bootstrap_trusted_input(
             )
         runtime_record = {
             "format": "iroha-sumeragi-v2-framework-python-runtime",
-            "schema_version": 1,
+            "schema_version": 2,
             "archive_root": "python-runtime",
             "root_mode": "0500",
             "executable": "bin/python3",
@@ -2547,6 +2556,7 @@ def _rebind_bootstrap_trusted_input(
                 if record["kind"] == "file"
             ),
             "records": records,
+            "relocation": private_inventory["relocation"],
         }
         probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
         probe = subprocess.run(
@@ -2598,7 +2608,8 @@ def _rebind_bootstrap_trusted_input(
                 "sha256": _sha256(component_archive),
                 "size_bytes": component_archive.stat().st_size,
             }
-    digest = _sha256(source)
+    digest = _sha256(archive if framework_python else source)
+    source_metadata = (archive if framework_python else source).stat()
     runtime_name = {"python": "python3", "bash": "bash", "git": "git"}.get(label)
     if runtime_name is not None:
         runtime_tools = evidence.get("runtime_tool_probe_tools")

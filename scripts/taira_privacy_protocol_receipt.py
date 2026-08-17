@@ -8,10 +8,10 @@ unsigned v2 format below is retained only for structural diagnostics.  Its
 self-hashes do not prove that the installed controller produced the libtest
 bytes, so it cannot authorize candidate signing or admission.
 
-Release use remains closed until a separately pinned controller-origin
-authority can authenticate a canonical envelope under the provisioning
-contract named below.  A receipt row, self-reported digest, caller marker, or
-the candidate signing identity is never sufficient by itself.
+Release use requires the separately pinned controller-origin authority to
+authenticate a canonical envelope under the provisioning contract below.  A
+receipt row, self-reported digest, caller marker, or candidate signing identity
+is never sufficient by itself.
 """
 
 from __future__ import annotations
@@ -352,11 +352,15 @@ def _fail(message: str) -> NoReturn:
     raise PrivacyProtocolEvidenceError(message)
 
 
-def require_controller_origin_authority_provisioned() -> None:
+def require_controller_origin_authority_provisioned(
+    *, require_signing: bool = True
+) -> None:
     """Authenticate the fixed privacy-protocol-origin authority service."""
 
     try:
-        taira_authority_client.preflight("privacy-protocol-origin")
+        taira_authority_client.preflight(
+            "privacy-protocol-origin", require_signing=require_signing
+        )
     except taira_authority_client.TairaAuthorityClientError as error:
         raise PrivacyProtocolEvidenceError(
             f"{CONTROLLER_ORIGIN_AUTHORITY_PROVISIONING_BARRIER}: {error}"
@@ -1163,7 +1167,7 @@ def verify_authenticated_evidence_directory(
 ) -> AuthenticatedPrivacyProtocolEvidence:
     """Historically verify deterministic sidecars without issuing a new receipt."""
 
-    require_controller_origin_authority_provisioned()
+    require_controller_origin_authority_provisioned(require_signing=False)
     result, subject, artifacts = _validated_authority_request(
         root,
         expected_source=expected_source,

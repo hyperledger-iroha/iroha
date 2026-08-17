@@ -1,9 +1,9 @@
 use super::*;
 use iroha_data_model::nexus::{
-    LaneCatalog, LaneConfig as LaneConfigMetadata, LaneId, LaneVisibility,
+    LaneCatalog, LaneConfig as LaneConfigMetadata, LaneId, LaneVisibility, ShardId,
 };
 use iroha_primitives::{addr::socket_addr, unique_vec};
-use std::{collections::BTreeMap, num::NonZeroU32};
+use std::num::NonZeroU32;
 fn checked_random_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked iroha_config dummy peer keypair")
 }
@@ -113,15 +113,13 @@ fn concurrency_validate_accepts_defaults() {
     assert!(Concurrency::from_defaults().validate().is_ok());
 }
 #[test]
-fn lane_config_uses_metadata_shard_id() {
-    let mut metadata = BTreeMap::new();
-    metadata.insert("da_shard_id".to_string(), "9".to_string());
+fn lane_config_uses_typed_shard_id() {
     let catalog = LaneCatalog::new(
         NonZeroU32::new(6).expect("lane count"),
         vec![LaneConfigMetadata {
             id: LaneId::new(5),
+            shard_id: Some(ShardId::new(9)),
             alias: "lane5".into(),
-            metadata,
             ..LaneConfigMetadata::default()
         }],
     )
@@ -133,15 +131,13 @@ fn lane_config_uses_metadata_shard_id() {
 }
 #[test]
 fn shard_mapping_exposes_lane_binding() {
-    let mut metadata = BTreeMap::new();
-    metadata.insert("da_shard_id".to_string(), "7".to_string());
     let catalog = LaneCatalog::new(
         NonZeroU32::new(2).expect("lane count"),
         vec![
             LaneConfigMetadata {
                 id: LaneId::new(0),
+                shard_id: Some(ShardId::new(7)),
                 alias: "lane1".into(),
-                metadata,
                 ..LaneConfigMetadata::default()
             },
             LaneConfigMetadata {
@@ -157,7 +153,7 @@ fn shard_mapping_exposes_lane_binding() {
     assert_eq!(config.shard_id(LaneId::new(1)), 1);
 }
 #[test]
-fn shard_defaults_to_lane_id_when_metadata_missing() {
+fn shard_defaults_to_lane_id_when_override_is_absent() {
     let catalog = LaneCatalog::new(
         NonZeroU32::new(4).expect("lane count"),
         vec![LaneConfigMetadata {

@@ -6,8 +6,10 @@ pub(in crate::sumeragi) use crate::sumeragi::v2_runner::ordinary_ingress_consume
 #[cfg(test)]
 use crate::sumeragi::v2_runner::ordinary_ingress_consumer::settle_prepared_certified_serve_for_test;
 use crate::sumeragi::v2_runner::ordinary_ingress_consumer::{
-    PreparedDequeuedV2IngressV1, ProductionPreparedCertifiedServeV1,
-    ProductionPreparedOrdinaryIngressConsumptionV1, consume_prepared_dequeued_v2_ingress,
+    PreparedDequeuedV2IngressV1, ProductionCurrentCertifiedServePreparationV1,
+    ProductionPreparedCertifiedServeV1, ProductionPreparedOrdinaryIngressConsumptionV1,
+    authorize_current_certified_serve_pre_dequeue, consume_prepared_dequeued_v2_ingress,
+    prepare_current_certified_serve_pre_admission,
 };
 
 /// Closed result of servicing one recovered Sign completion.
@@ -307,108 +309,25 @@ fn prepare_and_dequeue_current_certified_serve<'cursor>(
         );
     };
 
-    let prepared = {
-        let inbound = cut.selected_occurrence().inbound();
-        let message = match inbound.message() {
-            crate::sumeragi::message::BlockMessage::V2(message) => message,
-            _ => unreachable!("current Serve classifier selected one v2 request"),
-        };
-        if let Err(error) = message.validate_version() {
-            ProductionPreparedCertifiedServeV1::Service(format!(
-                "reserved certified-body ingress crossed version validation: {error}"
-            ))
-        } else {
-            let iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::CertifiedBodyRequest(
-                request,
-            ) = &message.payload
-            else {
-                unreachable!("current Serve classifier selected one CertifiedBodyRequest");
-            };
-            let superseded =
-                crate::sumeragi::v2_effects::certified_body_request_is_superseded_after_decision(
-                    request,
-                    terminal_subject,
-                    executor.context().height,
-                );
-            let ownership = (|| {
-                let sender = inbound.sender().ok_or_else(|| {
-                    "reserved certified-body ingress lost its authenticated sender".to_owned()
-                })?;
-                let authenticated_via = inbound.via().ok_or_else(|| {
-                    "reserved certified-body ingress lost its authenticated source".to_owned()
-                })?;
-                let reply_routes = inbound.reply_routes().ok_or_else(|| {
-                    "reserved certified-body ingress lost its reply capability".to_owned()
-                })?;
-                let ownership = inbound.ingress_ownership().ok_or_else(|| {
-                    "reserved certified-body ingress lost its ownership evidence".to_owned()
-                })?;
-                if reply_routes.semantic_target() != sender
-                    || !ownership.validate_exact()
-                    || !ownership.matches_message(inbound.message())
-                    || !ownership.matches_semantic_origin(Some(sender))
-                    || !ownership.matches_reply_routes(Some(reply_routes))
-                {
-                    return Err(
-                        "reserved certified-body ingress changed its transport ownership"
-                            .to_owned(),
-                    );
-                }
-                Ok((sender, authenticated_via))
-            })();
-            match ownership {
-                Err(reason) => ProductionPreparedCertifiedServeV1::Service(reason),
-                Ok((sender, authenticated_via)) => {
-                    match executor.authenticate_certified_body_request(request.clone(), sender) {
-                        Err(error) => match services.stage_certified_serve_rejection(
-                            iroha_crypto::HashOf::new(request),
-                            CertifiedServeNegativeOutcome::InvalidCertificate,
-                        ) {
-                            Ok(()) => {
-                                ProductionPreparedCertifiedServeV1::Rejected(error.to_string())
-                            }
-                            Err(reason) => ProductionPreparedCertifiedServeV1::Service(reason),
-                        },
-                        Ok(authenticated) if superseded => {
-                            let decided = terminal_subject
-                                .expect("superseded Serve has one durable Decision subject");
-                            match services.stage_certified_serve_rejection(
-                                authenticated.request_hash(),
-                                CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
-                            ) {
-                                Ok(()) => ProductionPreparedCertifiedServeV1::Rejected(
-                                    "certified body request was superseded by durable Decision"
-                                        .to_owned(),
-                                ),
-                                Err(reason) => ProductionPreparedCertifiedServeV1::Service(reason),
-                            }
-                        }
-                        Ok(authenticated) => {
-                            match services
-                                .prepare_certified_request(authenticated_via, authenticated)
-                            {
-                                Ok(admission) => {
-                                    ProductionPreparedCertifiedServeV1::Admitted(admission)
-                                }
-                                Err(CertifiedServePrepareError::Backpressure) => {
-                                    operation.complete();
-                                    drop(cut);
-                                    drop(runner);
-                                    return ProductionLifecycleIngressTurnV1::Selected(
-                                        ProductionLifecycleIngressSelectionV1::OrdinaryRetained,
-                                    );
-                                }
-                                Err(CertifiedServePrepareError::Rejected(reason)) => {
-                                    ProductionPreparedCertifiedServeV1::Rejected(reason)
-                                }
-                                Err(CertifiedServePrepareError::Service(reason)) => {
-                                    ProductionPreparedCertifiedServeV1::Service(reason)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    let prepared = prepare_current_certified_serve_pre_admission(
+        cut.selected_occurrence().inbound(),
+        executor.context().height,
+        terminal_subject,
+        |request, sender| {
+            executor
+                .authenticate_certified_body_request(request, sender)
+                .map_err(|error| error.to_string())
+        },
+    );
+    let prepared = match authorize_current_certified_serve_pre_dequeue(prepared, services) {
+        ProductionCurrentCertifiedServePreparationV1::Prepared(prepared) => prepared,
+        ProductionCurrentCertifiedServePreparationV1::Retain => {
+            operation.complete();
+            drop(cut);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::OrdinaryRetained,
+            );
         }
     };
 

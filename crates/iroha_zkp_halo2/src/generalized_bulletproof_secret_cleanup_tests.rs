@@ -1,3 +1,57 @@
+const CLEANUP_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
+const CLEANUP_CONTRACT_ASSET_LEN: usize = 51_205;
+const CLEANUP_CONTRACT_ASSET_SHA3_256: &str =
+    "ff6d489b386bec26e790bd929e4a4011d078ef82fafe4bd76cc49a7616398fca";
+const CLEANUP_CONTRACT_ASSET: &[u8] =
+    include_bytes!("generalized_bulletproof_secret_cleanup_contracts_v1.txt");
+
+fn cleanup_contracts() -> &'static std::collections::BTreeMap<String, Vec<String>> {
+    static CONTRACTS: std::sync::LazyLock<std::collections::BTreeMap<String, Vec<String>>> =
+        std::sync::LazyLock::new(|| {
+            assert_eq!(CLEANUP_CONTRACT_ASSET.len(), CLEANUP_CONTRACT_ASSET_LEN);
+            assert_eq!(
+                hex::encode(crate::hash::sha3_256(CLEANUP_CONTRACT_ASSET)),
+                CLEANUP_CONTRACT_ASSET_SHA3_256,
+                "secret-cleanup contract asset digest drift"
+            );
+            let source = std::str::from_utf8(CLEANUP_CONTRACT_ASSET)
+                .expect("secret-cleanup contract asset must be UTF-8");
+            let mut lines = source.lines();
+            assert_eq!(lines.next(), Some(CLEANUP_CONTRACT_ASSET_VERSION));
+            let mut contracts = std::collections::BTreeMap::<String, Vec<String>>::new();
+            let mut closed = std::collections::BTreeSet::new();
+            let mut active = "";
+            for line in lines {
+                let (id, encoded) = line.split_once('\t').expect("contract row separator");
+                assert!(!id.is_empty() && !encoded.is_empty(), "empty contract row");
+                assert!(
+                    encoded.bytes().all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f')),
+                    "contract values must use lowercase hexadecimal"
+                );
+                if id != active {
+                    assert!(closed.insert(active), "contract section is not contiguous");
+                    assert!(!closed.contains(id), "duplicate contract section {id}");
+                    active = id;
+                }
+                let value = String::from_utf8(hex::decode(encoded).expect("contract value hex"))
+                    .expect("contract value UTF-8");
+                assert!(!value.is_empty(), "empty contract value in {id}");
+                contracts.entry(id.to_owned()).or_default().push(value);
+            }
+            assert!(!contracts.is_empty(), "contract asset must not be empty");
+            contracts
+        });
+    std::sync::LazyLock::force(&CONTRACTS)
+}
+
+fn cleanup_contract_strings(id: &str) -> impl Iterator<Item = &'static str> {
+    cleanup_contracts()
+        .get(id)
+        .unwrap_or_else(|| panic!("missing secret-cleanup contract section `{id}`"))
+        .iter()
+        .map(String::as_str)
+}
+
 use super::*;
 use std::sync::{
     Mutex,
@@ -299,24 +353,7 @@ fn secret_scalar_owner_clears_constructor_and_transfer_slots() {
         constraint_precheck.matches("evaluation.is_zero()").count(),
         1
     );
-    for forbidden in [
-        "evaluation.expose_copy",
-        "*evaluation.expose_ref",
-        ".clone(",
-        ".cloned(",
-        ".copied(",
-        ".to_vec(",
-        "Vec::",
-        "alloc",
-        "random",
-        "rng",
-        "transcript",
-        "unsafe",
-        "callback",
-        "FnOnce",
-        "FnMut",
-        "?",
-    ] {
+    for forbidden in cleanup_contract_strings("secret_scalar_owner_clears_constructor_and_transfer_slots.1") {
         assert!(
             !constraint_precheck.contains(forbidden),
             "borrowed constraint zero-check {forbidden}"
@@ -628,14 +665,7 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         .expect("computed-value owner handoff")
         .1;
     let mut cursor = 0;
-    for step in [
-        "let mut retained = SecretMsmTerm",
-        "scalar: S::Scalar::ZERO,",
-        "point: S::Point::identity(),",
-        "core::mem::swap(&mut retained.scalar, &mut *self.scalar);",
-        "core::mem::swap(&mut retained.point, &mut *self.point);",
-        "retained",
-    ] {
+    for step in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.1") {
         let offset = handoff[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing owner-first MSM handoff step {step}"));
@@ -653,15 +683,7 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
     assert!(owned_push.contains("mut scalar: S::Scalar,"));
     assert!(owned_push.contains("mut point: S::Point,"));
     let mut cursor = 0;
-    for step in [
-        "let mut incoming = BorrowedSecretMsmTerm::<S>::new(&mut scalar, &mut point);",
-        "if self.terms.len() >= self.exact_capacity",
-        "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
-        "let retained = incoming.take_term();",
-        "self.terms.push(retained);",
-        "drop(incoming);",
-        "Ok(())",
-    ] {
+    for step in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.2") {
         let offset = owned_push[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing computed-term insertion step {step}"));
@@ -670,35 +692,7 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
     assert_eq!(owned_push.matches("incoming.take_term()").count(), 1);
     assert_eq!(owned_push.matches("self.terms.push(retained);").count(), 1);
     assert_eq!(owned_push.matches("drop(incoming);").count(), 1);
-    for forbidden in [
-        "scalar_copy",
-        "point_copy",
-        "scalar: *",
-        "point: *",
-        "expose_copy",
-        ".clone(",
-        ".cloned(",
-        ".copied(",
-        ".to_owned(",
-        "copy_from_slice",
-        "core::ptr",
-        "copy_nonoverlapping",
-        "core::mem::replace",
-        "unsafe",
-        "Vec::",
-        "vec![",
-        ".reserve(",
-        ".reserve_exact(",
-        ".try_reserve",
-        ".collect",
-        "callback",
-        "FnOnce",
-        "FnMut",
-        "random_scalar",
-        "rng",
-        "transcript",
-        "?",
-    ] {
+    for forbidden in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.3") {
         assert!(
             !handoff.contains(forbidden) && !owned_push.contains(forbidden),
             "owner-first computed-term path {forbidden}"
@@ -721,12 +715,7 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         .expect("prover P-term boundary");
     let p_terms = &prover[p_terms_start..p_terms_end];
     let mut cursor = 0;
-    for step in [
-        "let mut p_terms = SecretMultiexpBuilder::<S>::new(1 + (2 * n))?;",
-        "for (index, (left, right)) in l_eval.0.iter().zip(&r_eval.0).enumerate()",
-        "p_terms.push(left, &self.generators.g_bold[index])?;",
-        "p_terms.push_copy(y_inverse[index] * *right, self.generators.h_bold[index])?;",
-    ] {
+    for step in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.4") {
         let offset = p_terms[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing fixed P-term step {step}"));
@@ -752,11 +741,7 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         .expect("secret scalar encoding boundary")
         .0;
     let mut cursor = 0;
-    for step in [
-        "let mut encoding = SecretBytes(term.scalar.bits_le());",
-        "core::mem::swap(&mut encodings.0[index], &mut encoding.0);",
-        "drop(encoding);",
-    ] {
+    for step in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.5") {
         let offset = scalar_encodings[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing scalar-encoding owner-transfer step {step}"));
@@ -775,37 +760,7 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
     ] {
         assert_eq!(scalar_encodings.matches(needle).count(), expected);
     }
-    for forbidden in [
-        "encodings.0[index] = encoding.0;",
-        "copy",
-        "clone",
-        "*",
-        "unsafe",
-        "ptr",
-        "replace",
-        "Vec",
-        "vec!",
-        "reserve",
-        "push(",
-        "insert",
-        "resize",
-        "append",
-        "extend",
-        "collect",
-        "alloc",
-        "Box",
-        "String",
-        "format!",
-        "to_string",
-        "callback",
-        "Fn",
-        "|",
-        "random",
-        "rng",
-        "entropy",
-        "transcript",
-        "?",
-    ] {
+    for forbidden in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.6") {
         assert!(
             !scalar_encodings.contains(forbidden),
             "owner-first scalar-encoding path {forbidden}"
@@ -825,25 +780,7 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         "((*encoded_byte >> shift) & (SECRET_MSM_TABLE_ENTRIES_V1 as u8 - 1)) ^ candidate"
     ));
     assert!(nibble_comparator.contains("difference.wrapping_sub(1)"));
-    for forbidden in [
-        "let digit",
-        "digit:",
-        "left: u8",
-        "SecretBytes",
-        "clone",
-        "copy",
-        "unsafe",
-        "ptr",
-        "Vec",
-        "alloc",
-        "callback",
-        "Fn",
-        "random",
-        "rng",
-        "entropy",
-        "transcript",
-        "?",
-    ] {
+    for forbidden in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.7") {
         assert!(
             !nibble_comparator.contains(forbidden),
             "borrowed secret-window nibble comparator {forbidden}"
@@ -858,21 +795,7 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
         .expect("secret-window scan boundary")
         .0;
     let mut cursor = 0;
-    for step in [
-        "for window in (0..SECRET_MSM_WINDOWS_V1).rev()",
-        "for _ in 0..SECRET_MSM_WINDOW_BITS_V1",
-        "accumulator.double_assign();",
-        "let byte_index = window / 2;",
-        "let shift = (window % 2) * SECRET_MSM_WINDOW_BITS_V1;",
-        "for index in 0..terms.len()",
-        "let mut selected = SecretPoint::new(S::Point::identity());",
-        "for candidate in 0..SECRET_MSM_TABLE_ENTRIES_V1",
-        "ct_eq_window_nibble(",
-        "&encodings.0[index][byte_index],",
-        "shift,",
-        "candidate as u8",
-        "accumulator.add_assign_secret(selected);",
-    ] {
+    for step in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.8") {
         let offset = window_scan[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing fused secret-window scan step {step}"));
@@ -886,39 +809,7 @@ fn secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values() {
     ] {
         assert_eq!(window_scan.matches(needle).count(), expected);
     }
-    for forbidden in [
-        "SecretDigits",
-        "digits",
-        "let digit",
-        "ct_eq_u8",
-        "clone",
-        "copy",
-        "SecretBytes",
-        "Vec",
-        "vec!",
-        "reserve",
-        "push(",
-        "insert",
-        "resize",
-        "append",
-        "extend",
-        "collect",
-        "alloc",
-        "Box",
-        "String",
-        "format!",
-        "to_string",
-        "unsafe",
-        "ptr",
-        "replace",
-        "callback",
-        "Fn",
-        "random",
-        "rng",
-        "entropy",
-        "transcript",
-        "?",
-    ] {
+    for forbidden in cleanup_contract_strings("secret_builder_source_boundaries_copy_borrows_and_handoff_owned_values.9") {
         assert!(
             !window_scan.contains(forbidden),
             "fused secret-window scan {forbidden}"
@@ -1045,11 +936,7 @@ fn secret_msm_point_owner_and_borrowed_publication_boundary_are_static() {
         .expect("owned secret-point addition boundary")
         .0;
     let mut cursor = 0;
-    for step in [
-        "let mut sum = self.0 + rhs.0;",
-        "drop(rhs);",
-        "self.replace(&mut sum);",
-    ] {
+    for step in cleanup_contract_strings("secret_msm_point_owner_and_borrowed_publication_boundary_are_static.1") {
         let offset = owned_add[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing owned secret-point addition step {step}"));
@@ -1062,26 +949,7 @@ fn secret_msm_point_owner_and_borrowed_publication_boundary_are_static() {
     ] {
         assert_eq!(owned_add.matches(needle).count(), expected);
     }
-    for forbidden in [
-        "rhs: &Self",
-        "let mut rhs",
-        "BorrowedSecretPoint",
-        "expose_copy",
-        "clone",
-        "copy",
-        "core::mem",
-        "unsafe",
-        "ptr",
-        "Vec",
-        "alloc",
-        "callback",
-        "Fn",
-        "random",
-        "rng",
-        "entropy",
-        "transcript",
-        "?",
-    ] {
+    for forbidden in cleanup_contract_strings("secret_msm_point_owner_and_borrowed_publication_boundary_are_static.2") {
         assert!(
             !owned_add.contains(forbidden),
             "owned secret-point addition {forbidden}"
@@ -1107,13 +975,7 @@ fn secret_msm_point_owner_and_borrowed_publication_boundary_are_static() {
         .expect("owned scaled-pair point addition boundary")
         .0;
     let mut cursor = 0;
-    for step in [
-        "let mut updated =",
-        "left.0.scale(left_scalar) + self.0 + right.0.scale(right_scalar);",
-        "drop(right);",
-        "drop(left);",
-        "self.replace(&mut updated);",
-    ] {
+    for step in cleanup_contract_strings("secret_msm_point_owner_and_borrowed_publication_boundary_are_static.3") {
         let offset = owned_scaled_pair[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing owned scaled-pair addition step {step}"));
@@ -1131,27 +993,7 @@ fn secret_msm_point_owner_and_borrowed_publication_boundary_are_static() {
     ] {
         assert_eq!(owned_scaled_pair.matches(needle).count(), expected);
     }
-    for forbidden in [
-        "left_point",
-        "current_point",
-        "right_point",
-        "BorrowedSecretPoint",
-        "expose_copy",
-        "clone",
-        "copy",
-        "core::mem",
-        "unsafe",
-        "ptr",
-        "Vec",
-        "alloc",
-        "callback",
-        "Fn",
-        "random",
-        "rng",
-        "entropy",
-        "transcript",
-        "?",
-    ] {
+    for forbidden in cleanup_contract_strings("secret_msm_point_owner_and_borrowed_publication_boundary_are_static.4") {
         assert!(
             !owned_scaled_pair.contains(forbidden),
             "owned scaled-pair point addition {forbidden}"
@@ -1183,14 +1025,7 @@ fn secret_msm_point_owner_and_borrowed_publication_boundary_are_static() {
     assert!(transcript_trait.contains("point: &S::Point"));
     assert!(!transcript_trait.contains("point: S::Point"));
     assert_eq!(production.matches("transcript.push_point(").count(), 9);
-    for publication in [
-        "transcript.push_point(ai.expose_ref())?;",
-        "transcript.push_point(ao.expose_ref())?;",
-        "transcript.push_point(s_point.expose_ref())?;",
-        "transcript.push_point(commitment.expose_ref())?;",
-        "transcript.push_point(left.expose_ref())?;",
-        "transcript.push_point(right.expose_ref())?;",
-    ] {
+    for publication in cleanup_contract_strings("secret_msm_point_owner_and_borrowed_publication_boundary_are_static.5") {
         assert!(production.contains(publication));
     }
     assert_eq!(
@@ -1211,14 +1046,7 @@ fn secret_msm_point_owner_and_borrowed_publication_boundary_are_static() {
             .count(),
         2
     );
-    for forbidden in [
-        "transcript.push_point(ai)?",
-        "transcript.push_point(ao)?",
-        "transcript.push_point(s_point)?",
-        "transcript.push_point(commitment)?",
-        "transcript.push_point(left)?",
-        "transcript.push_point(right)?",
-    ] {
+    for forbidden in cleanup_contract_strings("secret_msm_point_owner_and_borrowed_publication_boundary_are_static.6") {
         assert!(!production.contains(forbidden));
     }
 }
@@ -1497,11 +1325,7 @@ fn prover_scalar_publication_borrows_every_private_response() {
     assert!(transcript_trait.contains("scalar: &S::Scalar"));
     assert!(!transcript_trait.contains("scalar: S::Scalar"));
     assert_eq!(production.matches("transcript.push_scalar(").count(), 7);
-    for publication in [
-        "transcript.push_scalar(tau_x.expose_ref())?;",
-        "transcript.push_scalar(u.expose_ref())?;",
-        "transcript.push_scalar(t_caret.expose_ref())?;",
-    ] {
+    for publication in cleanup_contract_strings("prover_scalar_publication_borrows_every_private_response.1") {
         assert!(production.contains(publication));
     }
     assert_eq!(
@@ -1516,13 +1340,7 @@ fn prover_scalar_publication_borrows_every_private_response() {
             .count(),
         2
     );
-    for forbidden in [
-        "transcript.push_scalar(tau_x.expose_copy())",
-        "transcript.push_scalar(u.expose_copy())",
-        "transcript.push_scalar(*t_caret.expose_ref())",
-        "transcript.push_scalar(a[0])",
-        "transcript.push_scalar(b[0])",
-    ] {
+    for forbidden in cleanup_contract_strings("prover_scalar_publication_borrows_every_private_response.2") {
         assert!(!production.contains(forbidden));
     }
 }
@@ -1922,24 +1740,7 @@ fn scalar_vector_borrowed_product_preallocates_and_clears_every_exit() {
         .expect("borrowed product owner boundary")
         .0;
     let mut cursor = 0;
-    for step in [
-        "if left.len() != right.len()",
-        "return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);",
-        "let exact_len = left.len();",
-        "let mut product = Self(Vec::new());",
-        ".try_reserve_exact(exact_len)",
-        ".map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;",
-        "let allocation_capacity = product.0.capacity();",
-        "if allocation_capacity < exact_len",
-        "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
-        "let allocation_pointer = product.0.as_ptr();",
-        "for _ in 0..exact_len",
-        "product.0.push(F::ZERO);",
-        "for ((output, left), right) in product.0.iter_mut().zip(&left.0).zip(&right.0)",
-        "*output = *left;",
-        "*output *= *right;",
-        "Ok(product)",
-    ] {
+    for step in cleanup_contract_strings("scalar_vector_borrowed_product_preallocates_and_clears_every_exit.1") {
         let offset = borrowed_product[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing borrowed-product step {step}"));
@@ -1967,26 +1768,7 @@ fn scalar_vector_borrowed_product_preallocates_and_clears_every_exit() {
             .count(),
         2
     );
-    for forbidden in [
-        ".clone(",
-        ".cloned(",
-        ".copied(",
-        ".to_vec(",
-        "Self::zero(",
-        "Vec::with_capacity",
-        "vec![",
-        "resize",
-        "copy_from_slice",
-        "extend_from_slice",
-        "collect",
-        "*output = *left * *right;",
-        "product.0.push(*left",
-        "core::mem",
-        "unsafe",
-        "callback",
-        "FnOnce",
-        "FnMut",
-    ] {
+    for forbidden in cleanup_contract_strings("scalar_vector_borrowed_product_preallocates_and_clears_every_exit.2") {
         assert!(
             !borrowed_product.contains(forbidden),
             "borrowed product path {forbidden}"
@@ -2194,23 +1976,7 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         .find("*result += *coefficient * *scalar;")
         .expect("borrowed scaled coordinate update");
     assert!(length_check < coordinate_loop && coordinate_loop < coordinate_update);
-    for forbidden in [
-        ".clone(",
-        ".cloned(",
-        ".copied(",
-        ".to_vec(",
-        "Vec::",
-        "vec![",
-        "reserve",
-        "collect",
-        "copy_from_slice",
-        "extend_from_slice",
-        "core::mem",
-        "unsafe",
-        "callback",
-        "FnOnce",
-        "FnMut",
-    ] {
+    for forbidden in cleanup_contract_strings("scalar_vector_borrowed_scaled_accumulation_source_boundary.1") {
         assert!(
             !accumulation.contains(forbidden),
             "borrowed scaled accumulation path {forbidden}"
@@ -2274,23 +2040,7 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
     assert!(result_owner < coefficient_loop && coefficient_loop < accumulation_call);
     assert!(accumulation_call < l_eval && l_eval < r_eval);
     assert!(r_eval < drop_l && drop_l < drop_r && drop_r < t_caret);
-    for forbidden in [
-        "coefficient.clone()",
-        ".cloned(",
-        ".copied(",
-        ".to_vec(",
-        "Vec::",
-        "vec![",
-        "reserve",
-        "collect",
-        "copy_from_slice",
-        "extend_from_slice",
-        "core::mem",
-        "unsafe",
-        "callback",
-        "FnOnce",
-        "FnMut",
-    ] {
+    for forbidden in cleanup_contract_strings("scalar_vector_borrowed_scaled_accumulation_source_boundary.2") {
         assert!(
             !polynomial_evaluation.contains(forbidden),
             "borrowed polynomial evaluation path {forbidden}"
@@ -2343,22 +2093,7 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         .0;
     assert_eq!(left_rehome_region.matches("Vec::new()").count(), 1);
     assert_eq!(left_rehome_region.matches("core::mem::replace").count(), 1);
-    for forbidden in [
-        ".clone(",
-        ".cloned(",
-        ".copied(",
-        ".to_vec(",
-        "Vec::with_capacity",
-        "vec![",
-        "reserve",
-        "collect",
-        "copy_from_slice",
-        "extend_from_slice",
-        "unsafe",
-        "callback",
-        "FnOnce",
-        "FnMut",
-    ] {
+    for forbidden in cleanup_contract_strings("scalar_vector_borrowed_scaled_accumulation_source_boundary.3") {
         assert!(
             !left_rehome_region.contains(forbidden),
             "left-witness rehome path {forbidden}"
@@ -2442,22 +2177,7 @@ fn scalar_vector_borrowed_scaled_accumulation_source_boundary() {
         right_handoff_region.matches("core::mem::replace").count(),
         1
     );
-    for forbidden in [
-        ".clone(",
-        ".cloned(",
-        ".copied(",
-        ".to_vec(",
-        "Vec::with_capacity",
-        "vec![",
-        "reserve",
-        "collect",
-        "copy_from_slice",
-        "extend_from_slice",
-        "unsafe",
-        "callback",
-        "FnOnce",
-        "FnMut",
-    ] {
+    for forbidden in cleanup_contract_strings("scalar_vector_borrowed_scaled_accumulation_source_boundary.4") {
         assert!(
             !right_handoff_region.contains(forbidden),
             "right-witness handoff path {forbidden}"

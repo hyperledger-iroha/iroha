@@ -14,6 +14,7 @@ import pytest
 from scripts import build_taira_rollout_candidate as candidate
 from scripts import deploy_taira_v21_reset as deploy
 from scripts import release_artifact_contract as contract
+from scripts import render_taira_validator_bundle as receipt_renderer
 from scripts import taira_rollout_admission as admission
 
 
@@ -22,6 +23,24 @@ DPN_COMMIT = "d" * 40
 WORKSPACE_SHA = "2" * 64
 CARGO_SHA = "3" * 64
 SOURCE = admission.SourceIdentity(COMMIT, DPN_COMMIT, CARGO_SHA, WORKSPACE_SHA)
+
+
+def _receipt_signers() -> dict[str, dict[str, object]]:
+    result: dict[str, dict[str, object]] = {}
+    for number, slug in enumerate(admission.SLUGS, start=1):
+        private_payload = number.to_bytes(32, "big")
+        public_payload = receipt_renderer._secp256k1_public_payload(private_payload)
+        public_key = receipt_renderer.RECEIPT_PUBLIC_KEY_PREFIX + (
+            public_payload.hex().upper()
+        )
+        result[slug] = {
+            "node_id": receipt_renderer.receipt_node_id(public_key),
+            "public_key": {
+                "algorithm": "secp256k1",
+                "payload_hex": public_payload.hex(),
+            },
+        }
+    return result
 
 
 def _write(path: Path, payload: bytes) -> str:
@@ -48,6 +67,7 @@ def _fixture(tmp_path: Path) -> tuple[argparse.Namespace, dict[str, object]]:
     now = int(time.time())
     start_hash = "4" * 64
     end_hash = "5" * 64
+    receipt_signers = _receipt_signers()
     body: dict[str, object] = {
         "artifact_handoff_sha256": "7" * 64,
         "end": {"block_hash": end_hash, "height": 102},
@@ -60,6 +80,9 @@ def _fixture(tmp_path: Path) -> tuple[argparse.Namespace, dict[str, object]]:
                 "final_height": 102,
                 "label": f"taira-validator-{number}",
                 "number": number,
+                "receipt_signer_node_id": receipt_signers[
+                    f"taira-validator-{number}"
+                ]["node_id"],
                 "restart_proof": "passed",
                 "source_commit": COMMIT,
                 "validator_binary_sha256": binary_sha,
@@ -68,6 +91,7 @@ def _fixture(tmp_path: Path) -> tuple[argparse.Namespace, dict[str, object]]:
             for number in range(1, 5)
         ],
         "platform": {"arch": "arm64", "os": "macos"},
+        "receipt_signers": receipt_signers,
         "reset_manifest_sha256": reset_sha,
         "restart_generation": "6" * 64,
         "schema": admission.MACOS_RECEIPT_SCHEMA,

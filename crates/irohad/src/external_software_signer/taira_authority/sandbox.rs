@@ -19,9 +19,51 @@ const WHEEL_ARTIFACT_V1: &str = "source/sdk/iroha_python_privacy_v1.whl";
 const WORKER_ARTIFACT_V1: &str = "source/worker/iroha_privacy_wallet_worker";
 const ABI_LIBRARY_ARTIFACT_V1: &str = "source/abi22/libconnect_norito_bridge.so";
 const MAX_PROBE_RESULT_BYTES_V1: usize = 256 * 1024;
+#[cfg(all(
+    target_os = "linux",
+    target_endian = "little",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
 const MAX_PROBE_DIAGNOSTIC_BYTES_V1: usize = 64 * 1024;
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_endian = "little",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
 const QUALIFICATION_SERVICE_ID_V1: u32 = 0;
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_endian = "little",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
 const QUALIFICATION_HOSTILE_ID_V1: u32 = 65_534;
+
+#[cfg(any(
+    test,
+    all(
+        target_os = "linux",
+        target_endian = "little",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    )
+))]
+const fn qualification_hostile_identity(
+    service_user_id: u32,
+    process_group_id: u32,
+) -> Option<(u32, u32)> {
+    if service_user_id == QUALIFICATION_SERVICE_ID_V1
+        && process_group_id == QUALIFICATION_SERVICE_ID_V1
+    {
+        Some((QUALIFICATION_HOSTILE_ID_V1, QUALIFICATION_HOSTILE_ID_V1))
+    } else {
+        None
+    }
+}
 const WHEEL_RESULT_FIELDS_V1: [&str; 7] = [
     "capability_binding",
     "capability_binding_sha256",
@@ -38,6 +80,41 @@ const PRIVACY_C_EXPORTS_V1: [&str; 5] = [
     "iroha_privacy_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
     "iroha_privacy_free_buffer",
+];
+const CAPABILITY_PROTOCOLS_V1: [&str; 12] = [
+    "zk-ace-pq-authorization-v0",
+    "anonymous-pgc-k-out-of-n-v1",
+    "verange-transparent-range-v1",
+    "iroha-zk-ams-v1",
+    "vega-existing-credential-zk-v0",
+    "iroha-zk-x509-stark-p256-v0",
+    "iroha-jindo-polynomial-commitment-v0",
+    "iroha-bootle-lantern-anoncred-v1",
+    "orchard-halo2-actions-v1",
+    "monero-fcmp-plus-plus-v1",
+    "iroha-ivm-private-note-stark-v1",
+    "pq-masp-stark-v0",
+];
+const CAPABILITY_TUPLE_FIELDS_V1: [&str; 19] = [
+    "activation_state",
+    "committed_height",
+    "compiled_profile_status",
+    "engine_id",
+    "engine_manifest_digest",
+    "execution_mode",
+    "limitation",
+    "manifest_digest",
+    "network_available",
+    "operation_schema",
+    "parameter_digest",
+    "parameter_id",
+    "privacy_feature_mask",
+    "proof_system_id",
+    "protocol_id",
+    "readiness",
+    "statement_schema_digest",
+    "unavailable_reason",
+    "verifier_digest",
 ];
 
 /// Validated role result inserted below
@@ -162,7 +239,7 @@ fn validate_artifact_descriptors(
 fn descriptor_sha256(file: &File, expected_size: u64) -> Result<[u8; 32], TairaAuthorityErrorV1> {
     let mut hasher = Sha256::new();
     let mut offset = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     while offset < expected_size {
         let remaining = expected_size - offset;
         let requested = usize::try_from(remaining.min(buffer.len() as u64))
@@ -324,41 +401,6 @@ fn validate_wheel_result(
 }
 
 fn validate_capability_binding(value: &Value) -> Result<(), TairaAuthorityErrorV1> {
-    const PROTOCOLS: [&str; 12] = [
-        "zk-ace-pq-authorization-v0",
-        "anonymous-pgc-k-out-of-n-v1",
-        "verange-transparent-range-v1",
-        "iroha-zk-ams-v1",
-        "vega-existing-credential-zk-v0",
-        "iroha-zk-x509-stark-p256-v0",
-        "iroha-jindo-polynomial-commitment-v0",
-        "iroha-bootle-lantern-anoncred-v1",
-        "orchard-halo2-actions-v1",
-        "monero-fcmp-plus-plus-v1",
-        "iroha-ivm-private-note-stark-v1",
-        "pq-masp-stark-v0",
-    ];
-    const TUPLE_FIELDS: [&str; 19] = [
-        "activation_state",
-        "committed_height",
-        "compiled_profile_status",
-        "engine_id",
-        "engine_manifest_digest",
-        "execution_mode",
-        "limitation",
-        "manifest_digest",
-        "network_available",
-        "operation_schema",
-        "parameter_digest",
-        "parameter_id",
-        "privacy_feature_mask",
-        "proof_system_id",
-        "protocol_id",
-        "readiness",
-        "statement_schema_digest",
-        "unavailable_reason",
-        "verifier_digest",
-    ];
     let object = exact_object(
         value,
         &[
@@ -384,83 +426,98 @@ fn validate_capability_binding(value: &Value) -> Result<(), TairaAuthorityErrorV
         .get("required_network_protocol_tuples")
         .and_then(Value::as_array)
         .ok_or(TairaAuthorityErrorV1::Rejected)?;
-    if admitted.len() != PROTOCOLS.len() || admitted != required {
+    if admitted.len() != CAPABILITY_PROTOCOLS_V1.len() || admitted != required {
         return Err(TairaAuthorityErrorV1::Rejected);
     }
     let mut shared_manifest_digest = None;
-    for ((row, expected_protocol), index) in admitted.iter().zip(PROTOCOLS).zip(0_usize..) {
-        let row = exact_object(row, &TUPLE_FIELDS)?;
-        let protocol = row
-            .get("protocol_id")
-            .and_then(Value::as_str)
-            .ok_or(TairaAuthorityErrorV1::Rejected)?;
-        let manifest_digest = row
-            .get("manifest_digest")
-            .and_then(Value::as_str)
-            .filter(|value| is_sha256_text(value))
-            .ok_or(TairaAuthorityErrorV1::Rejected)?;
-        if protocol != expected_protocol
-            || shared_manifest_digest.is_some_and(|digest| digest != manifest_digest)
-            || row.get("network_available").and_then(Value::as_bool) != Some(true)
-            || row.get("compiled_profile_status").and_then(Value::as_str) != Some("available")
-            || row.get("activation_state").and_then(Value::as_str) != Some("active")
-            || !row.get("unavailable_reason").is_some_and(Value::is_null)
-            || row
-                .get("committed_height")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                == 0
-            || !matches!(
-                row.get("privacy_feature_mask").and_then(Value::as_u64),
-                Some(_)
-            )
-        {
-            return Err(TairaAuthorityErrorV1::Rejected);
-        }
-        shared_manifest_digest = Some(manifest_digest);
-        let is_experimental = index == 6;
-        if row.get("readiness").and_then(Value::as_str)
-            != Some(if is_experimental {
-                "available-experimental"
-            } else {
-                "available"
-            })
-            || if is_experimental {
-                row.get("limitation").and_then(Value::as_str)
-                    != Some("missing-distribution-wide-knowledge-soundness-evidence")
-            } else {
-                !row.get("limitation").is_some_and(Value::is_null)
-            }
-        {
-            return Err(TairaAuthorityErrorV1::Rejected);
-        }
-        for field in [
-            "parameter_id",
-            "parameter_digest",
-            "verifier_digest",
-            "statement_schema_digest",
-            "engine_manifest_digest",
-        ] {
-            if !is_sha256_value(row.get(field)) {
-                return Err(TairaAuthorityErrorV1::Rejected);
-            }
-        }
-        for field in [
-            "operation_schema",
-            "execution_mode",
-            "proof_system_id",
-            "engine_id",
-        ] {
-            if !row
-                .get(field)
-                .and_then(Value::as_str)
-                .is_some_and(valid_trust_identifier)
-            {
-                return Err(TairaAuthorityErrorV1::Rejected);
-            }
-        }
+    for ((row, expected_protocol), index) in
+        admitted.iter().zip(CAPABILITY_PROTOCOLS_V1).zip(0_usize..)
+    {
+        shared_manifest_digest = Some(validate_capability_tuple(
+            row,
+            expected_protocol,
+            shared_manifest_digest,
+            index == 6,
+        )?);
     }
     Ok(())
+}
+
+fn validate_capability_tuple<'a>(
+    value: &'a Value,
+    expected_protocol: &str,
+    shared_manifest_digest: Option<&str>,
+    is_experimental: bool,
+) -> Result<&'a str, TairaAuthorityErrorV1> {
+    let row = exact_object(value, &CAPABILITY_TUPLE_FIELDS_V1)?;
+    let protocol = row
+        .get("protocol_id")
+        .and_then(Value::as_str)
+        .ok_or(TairaAuthorityErrorV1::Rejected)?;
+    let manifest_digest = row
+        .get("manifest_digest")
+        .and_then(Value::as_str)
+        .filter(|value| is_sha256_text(value))
+        .ok_or(TairaAuthorityErrorV1::Rejected)?;
+    if protocol != expected_protocol
+        || shared_manifest_digest.is_some_and(|digest| digest != manifest_digest)
+        || row.get("network_available").and_then(Value::as_bool) != Some(true)
+        || row.get("compiled_profile_status").and_then(Value::as_str) != Some("available")
+        || row.get("activation_state").and_then(Value::as_str) != Some("active")
+        || !row.get("unavailable_reason").is_some_and(Value::is_null)
+        || row
+            .get("committed_height")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            == 0
+        || row
+            .get("privacy_feature_mask")
+            .and_then(Value::as_u64)
+            .is_none()
+    {
+        return Err(TairaAuthorityErrorV1::Rejected);
+    }
+    if row.get("readiness").and_then(Value::as_str)
+        != Some(if is_experimental {
+            "available-experimental"
+        } else {
+            "available"
+        })
+        || if is_experimental {
+            row.get("limitation").and_then(Value::as_str)
+                != Some("missing-distribution-wide-knowledge-soundness-evidence")
+        } else {
+            !row.get("limitation").is_some_and(Value::is_null)
+        }
+    {
+        return Err(TairaAuthorityErrorV1::Rejected);
+    }
+    for field in [
+        "parameter_id",
+        "parameter_digest",
+        "verifier_digest",
+        "statement_schema_digest",
+        "engine_manifest_digest",
+    ] {
+        if !is_sha256_value(row.get(field)) {
+            return Err(TairaAuthorityErrorV1::Rejected);
+        }
+    }
+    for field in [
+        "operation_schema",
+        "execution_mode",
+        "proof_system_id",
+        "engine_id",
+    ] {
+        if !row
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(valid_trust_identifier)
+        {
+            return Err(TairaAuthorityErrorV1::Rejected);
+        }
+    }
+    Ok(manifest_digest)
 }
 
 fn exact_object<'a>(value: &'a Value, fields: &[&str]) -> Result<&'a Map, TairaAuthorityErrorV1> {
@@ -487,7 +544,7 @@ fn valid_native_member(value: &str) -> bool {
         return false;
     };
     !file.is_empty()
-        && value.ends_with(".so")
+        && file.strip_suffix(".so").is_some()
         && !value.contains("//")
         && !value.contains("..")
         && value
@@ -515,7 +572,7 @@ fn valid_trust_identifier(value: &str) -> bool {
 mod platform {
     use super::*;
     use std::{
-        ffi::{c_char, c_int, c_long, c_uint, c_void},
+        ffi::{c_int, c_long, c_uint, c_void},
         io::Read,
         os::{
             fd::{AsRawFd as _, RawFd},
@@ -561,10 +618,7 @@ mod platform {
         let parent_pid = unsafe { getpid() };
         let parent_uid = unsafe { geteuid() };
         let parent_gid = unsafe { getegid() };
-        if parent_pid <= 1
-            || parent_uid != QUALIFICATION_SERVICE_ID_V1
-            || parent_gid != QUALIFICATION_SERVICE_ID_V1
-        {
+        if parent_pid <= 1 || qualification_hostile_identity(parent_uid, parent_gid).is_none() {
             return Err(TairaAuthorityErrorV1::Rejected);
         }
 
@@ -827,24 +881,14 @@ mod platform {
     }
 
     fn enter_hostile_identity(parent_uid: c_uint, parent_gid: c_uint) -> std::io::Result<()> {
-        if parent_uid != QUALIFICATION_SERVICE_ID_V1 || parent_gid != QUALIFICATION_SERVICE_ID_V1 {
+        let Some((hostile_uid, hostile_gid)) =
+            qualification_hostile_identity(parent_uid, parent_gid)
+        else {
             return Err(std::io::Error::from_raw_os_error(EPERM));
-        }
+        };
         if unsafe { setgroups(0, std::ptr::null()) } != 0
-            || unsafe {
-                setresgid(
-                    QUALIFICATION_HOSTILE_ID_V1,
-                    QUALIFICATION_HOSTILE_ID_V1,
-                    QUALIFICATION_HOSTILE_ID_V1,
-                )
-            } != 0
-            || unsafe {
-                setresuid(
-                    QUALIFICATION_HOSTILE_ID_V1,
-                    QUALIFICATION_HOSTILE_ID_V1,
-                    QUALIFICATION_HOSTILE_ID_V1,
-                )
-            } != 0
+            || unsafe { setresgid(hostile_gid, hostile_gid, hostile_gid) } != 0
+            || unsafe { setresuid(hostile_uid, hostile_uid, hostile_uid) } != 0
         {
             return Err(last_error());
         }
@@ -858,8 +902,8 @@ mod platform {
         if unsafe { getgroups(0, std::ptr::null_mut()) } != 0
             || unsafe { getresuid(&mut real_uid, &mut effective_uid, &mut saved_uid) } != 0
             || unsafe { getresgid(&mut real_gid, &mut effective_gid, &mut saved_gid) } != 0
-            || [real_uid, effective_uid, saved_uid] != [QUALIFICATION_HOSTILE_ID_V1; 3]
-            || [real_gid, effective_gid, saved_gid] != [QUALIFICATION_HOSTILE_ID_V1; 3]
+            || [real_uid, effective_uid, saved_uid] != [hostile_uid; 3]
+            || [real_gid, effective_gid, saved_gid] != [hostile_gid; 3]
         {
             return Err(std::io::Error::from_raw_os_error(EPERM));
         }
@@ -1441,6 +1485,17 @@ mod tests {
         "pq-masp-stark-v0",
     ];
 
+    #[test]
+    fn qualification_uses_a_distinct_host_identity() {
+        assert_eq!(QUALIFICATION_SERVICE_ID_V1, 0);
+        assert_eq!(QUALIFICATION_HOSTILE_ID_V1, 65_534);
+        assert_ne!(QUALIFICATION_SERVICE_ID_V1, QUALIFICATION_HOSTILE_ID_V1);
+        assert_eq!(qualification_hostile_identity(0, 0), Some((65_534, 65_534)));
+        assert_eq!(qualification_hostile_identity(1_000, 1_000), None);
+        assert_eq!(qualification_hostile_identity(0, 1_000), None);
+        assert_eq!(qualification_hostile_identity(1_000, 0), None);
+    }
+
     fn manifest_entry(
         ordinal: u16,
         name: &str,
@@ -1455,16 +1510,12 @@ mod tests {
     }
 
     fn required_manifest(bytes: &[u8]) -> Vec<TairaAuthorityArtifactManifestEntryV1> {
-        [
-            CAPABILITY_ARTIFACT_V1,
-            WHEEL_ARTIFACT_V1,
-            WORKER_ARTIFACT_V1,
-            ABI_LIBRARY_ARTIFACT_V1,
+        vec![
+            manifest_entry(0, CAPABILITY_ARTIFACT_V1, bytes),
+            manifest_entry(1, WHEEL_ARTIFACT_V1, bytes),
+            manifest_entry(2, WORKER_ARTIFACT_V1, bytes),
+            manifest_entry(3, ABI_LIBRARY_ARTIFACT_V1, bytes),
         ]
-        .into_iter()
-        .enumerate()
-        .map(|(ordinal, name)| manifest_entry(ordinal as u16, name, bytes))
-        .collect()
     }
 
     fn valid_binding() -> Value {

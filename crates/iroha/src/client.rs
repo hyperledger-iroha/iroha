@@ -193,6 +193,274 @@ pub const CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1: usize = 3 * 1024 * 102
 /// Maximum canonical base64 bytes in one canonical V1 request-witness header.
 pub const CANONICAL_REQUEST_WITNESS_MAX_HEADER_BYTES_V1: usize = 1024 * 1024;
 pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SorafsEndpointMethod {
+    Get,
+    Post,
+}
+
+impl SorafsEndpointMethod {
+    fn http(self) -> HttpMethod {
+        match self {
+            Self::Get => HttpMethod::GET,
+            Self::Post => HttpMethod::POST,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SorafsEndpointAuth {
+    Anonymous,
+    Account,
+}
+
+/// Exact transport contract for one `SoraFS` HTTP endpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SorafsEndpoint<'a> {
+    path: &'a str,
+    method: SorafsEndpointMethod,
+    auth: SorafsEndpointAuth,
+    content_type: Option<&'static str>,
+    accept: &'static str,
+    max_response_bytes: Option<usize>,
+}
+
+impl<'a> SorafsEndpoint<'a> {
+    const fn anonymous_json_get(path: &'a str) -> Self {
+        Self {
+            path,
+            method: SorafsEndpointMethod::Get,
+            auth: SorafsEndpointAuth::Anonymous,
+            content_type: None,
+            accept: APPLICATION_JSON,
+            max_response_bytes: None,
+        }
+    }
+
+    const fn account_json_get(path: &'a str) -> Self {
+        Self {
+            auth: SorafsEndpointAuth::Account,
+            ..Self::anonymous_json_get(path)
+        }
+    }
+
+    const fn account_json_post(path: &'a str) -> Self {
+        Self {
+            path,
+            method: SorafsEndpointMethod::Post,
+            auth: SorafsEndpointAuth::Account,
+            content_type: Some(APPLICATION_JSON),
+            accept: APPLICATION_JSON,
+            max_response_bytes: None,
+        }
+    }
+
+    const fn anonymous_json_post(path: &'a str) -> Self {
+        Self {
+            auth: SorafsEndpointAuth::Anonymous,
+            ..Self::account_json_post(path)
+        }
+    }
+
+    const fn with_accept(self, accept: &'static str) -> Self {
+        Self { accept, ..self }
+    }
+
+    const fn with_content_type(self, content_type: &'static str) -> Self {
+        Self {
+            content_type: Some(content_type),
+            ..self
+        }
+    }
+
+    const fn with_max_response_bytes(self, max_response_bytes: usize) -> Self {
+        Self {
+            max_response_bytes: Some(max_response_bytes),
+            ..self
+        }
+    }
+}
+
+macro_rules! sorafs_transaction_methods {
+    ($submitter:ident; $($name:ident => $route:expr),+ $(,)?) => {
+        $(
+            #[doc = concat!("Submit the exact `", stringify!($route), "` `SoraFS` transaction.")]
+            /// # Errors
+            /// Returns errors from route validation, compatibility admission, or transport.
+            pub fn $name(
+                &self,
+                transaction: &SignedTransaction,
+            ) -> Result<HashOf<SignedTransaction>> {
+                self.$submitter($route, transaction)
+            }
+        )+
+    };
+}
+
+macro_rules! sorafs_transaction_submitter {
+    ($name:ident($route:ident: $route_type:ty), $validate:path, $path:expr, $error:literal) => {
+        #[doc = concat!("Submit a caller-signed transaction to one exact `", stringify!($route_type), "` route.")]
+        /// # Errors
+        /// Returns an error if route validation, compatibility admission, construction, or
+        /// transport fails.
+        pub fn $name(
+            &self,
+            $route: $route_type,
+            transaction: &SignedTransaction,
+        ) -> Result<HashOf<SignedTransaction>> {
+            $validate($route, transaction)?;
+            self.ensure_transaction_submit_compatibility()?;
+            let payload = Self::prepare_transaction_payload(transaction);
+            let hash = payload.hash();
+            let response = DefaultRequestBuilder::new(
+                HttpMethod::POST,
+                join_torii_url(&self.torii_url, $path),
+            )
+            .headers(self.transaction_headers_without_content_type())
+            .header("Content-Type", APPLICATION_NORITO)
+            .header("Accept", self.wire_format_preference.accept_header())
+            .body(payload.as_bytes().to_vec())
+            .build()?
+            .send()
+            .wrap_err_with(|| format!(concat!($error, " {:?}"), hash))?;
+            TransactionResponseHandler::handle(&response)?;
+            Ok(hash)
+        }
+    };
+}
+
+macro_rules! sorafs_signed_json_methods {
+    ($($name:ident => ($path:literal, $context:literal)),+ $(,)?) => {
+        $(
+            #[doc = concat!("Submit canonical signed JSON to `/", $path, "`.")]
+            /// # Errors
+            /// Returns an error for invalid JSON, signing, construction, or transport failure.
+            pub fn $name(&self, payload: &[u8]) -> Result<Response<Vec<u8>>> {
+                self.post_sorafs_signed_json($path, payload, $context)
+            }
+        )+
+    };
+}
+
+macro_rules! sorafs_filtered_get_methods {
+    ($($name:ident($filter:ident: $filter_type:ty) => $endpoint:expr),+ $(,)?) => {
+        $(
+            #[doc = concat!("Fetch the filtered `SoraFS` projection for `", stringify!($name), "`.")]
+            /// # Errors
+            /// Returns an error if request construction or transport fails.
+            pub fn $name(&self, $filter: $filter_type) -> Result<Response<Vec<u8>>> {
+                self.send_sorafs_endpoint(
+                    $endpoint,
+                    Vec::new(),
+                    |url| $filter.apply_to_url(url),
+                )
+            }
+        )+
+    };
+}
+
+macro_rules! sorafs_static_get_methods {
+    ($($name:ident => $endpoint:expr),+ $(,)?) => {
+        $(
+            #[doc = concat!("Fetch the static `SoraFS` projection for `", stringify!($name), "`.")]
+            /// # Errors
+            /// Returns an error if request construction, signing, or transport fails.
+            pub fn $name(&self) -> Result<Response<Vec<u8>>> {
+                self.send_sorafs_endpoint($endpoint, Vec::new(), |_| {})
+            }
+        )+
+    };
+}
+
+macro_rules! sorafs_typed_body_post_methods {
+    ($($name:ident($argument:ident: $argument_type:ty) =>
+        ($path:literal, $encode:path)),+ $(,)?) => {
+        $(
+            #[doc = concat!("Submit a typed signed JSON body to `/", $path, "`.")]
+            /// # Errors
+            /// Returns an error for body validation, serialization, signing, construction, or
+            /// transport failure.
+            pub fn $name(&self, $argument: &$argument_type) -> Result<Response<Vec<u8>>> {
+                let body = $encode($argument)?;
+                self.send_sorafs_endpoint(
+                    SorafsEndpoint::account_json_post($path),
+                    body,
+                    |_| {},
+                )
+            }
+        )+
+    };
+}
+
+macro_rules! sorafs_quarantine_post_methods {
+    ($($name:ident($request:ident: $request_type:ty) =>
+        ($suffix:literal, $encode:path)),+ $(,)?) => {
+        $(
+            #[doc = concat!("Submit a typed signed quarantine transition to `", $suffix, "`.")]
+            /// # Errors
+            /// Returns an error for an invalid quarantine identifier, body validation,
+            /// serialization, signing, construction, or transport failure.
+            pub fn $name(
+                &self,
+                quarantine_id_hex: &str,
+                $request: &$request_type,
+            ) -> Result<Response<Vec<u8>>> {
+                let quarantine_id_hex =
+                    normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
+                let path = format!(
+                    concat!("v1/sorafs/moderation/quarantine/{}/", $suffix), quarantine_id_hex,
+                );
+                let body = $encode($request)?;
+                self.send_sorafs_endpoint(SorafsEndpoint::account_json_post(&path), body, |_| {})
+            }
+        )+
+    };
+}
+
+macro_rules! sorafs_reserve_page_methods {
+    ($($name:ident($filter:ident: $filter_type:ty) =>
+        ($path:literal, $validate_request:path, $validate_response:path)),+ $(,)?) => {
+        $(
+            #[doc = concat!("Fetch the finalized reserve page at `/", $path, "`.")]
+            /// # Errors
+            /// Returns an error for an invalid filter, signing, construction, transport, or
+            /// response-validation failure.
+            pub fn $name(&self, $filter: $filter_type) -> Result<Response<Vec<u8>>> {
+                $validate_request(&$filter)?;
+                let mut url = join_torii_url(&self.torii_url, $path);
+                $filter.apply_to_url(&mut url);
+                self.send_sorafs_reserve_read(url)
+                    .and_then(|response| $validate_response(response, &$filter))
+            }
+        )+
+    };
+}
+
+macro_rules! sorafs_reserve_detail_methods {
+    ($($name:ident($id:ident, $field:literal) =>
+        ($base:literal, $kind:literal, $validate_response:path)),+ $(,)?) => {
+        $(
+            #[doc = concat!("Fetch one finalized reserve detail record from `/", $base, "/{id}`.")]
+            /// # Errors
+            /// Returns an error for an invalid identifier or anchor, signing, construction,
+            /// transport, or response-validation failure.
+            pub fn $name(
+                &self,
+                $id: &str,
+                finalized: SorafsReserveFinalizedAnchor<'_>,
+            ) -> Result<Response<Vec<u8>>> {
+                let $id = normalize_hex_lower::<32>($id, $field)?;
+                reserve::validate_detail_request(&$id, &finalized, $kind)?;
+                let path = format!(concat!($base, "/{}"), $id);
+                let mut url = join_torii_url(&self.torii_url, &path);
+                finalized.apply_to_url(&mut url);
+                self.send_sorafs_reserve_read(url)
+                    .and_then(|response| $validate_response(response, &$id, &finalized))
+            }
+        )+
+    };
+}
 #[derive(
     Clone,
     Debug,
@@ -4985,26 +5253,136 @@ fn require_non_empty_path_segment<'a>(value: &'a str, context: &str) -> Result<&
     }
     Ok(trimmed)
 }
-/// Optional finalized-block anchor for authoritative `SoraFS` pin pages.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsPinFinalizedAnchor<'a> {
-    /// Non-zero finalized block height.
-    pub expected_finalized_height: Option<u64>,
-    /// Canonical lowercase finalized block hash.
-    pub expected_finalized_block_hash_hex: Option<&'a str>,
-}
-impl SorafsPinFinalizedAnchor<'_> {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        if let Some(height) = self.expected_finalized_height {
-            req = req.param("expected_finalized_height", &height);
-        }
-        if let Some(block_hash) = self.expected_finalized_block_hash_hex {
-            req = req.param("expected_finalized_block_hash_hex", &block_hash);
-        }
-        req
+
+fn append_optional_query<T: ToString>(url: &mut Url, key: &str, value: Option<T>) {
+    if let Some(value) = value {
+        url.query_pairs_mut().append_pair(key, &value.to_string());
     }
 }
-/// Filters for the finalized `/v1/sorafs/pin` keyset page.
+
+macro_rules! sorafs_finalized_anchor {
+    ($name:ident) => {
+        #[doc = concat!("Optional finalized-block anchor carried by `", stringify!($name), "` reads.")]
+        #[derive(Debug, Default, Clone, Copy)]
+        pub struct $name<'a> {
+            /// Non-zero finalized block height.
+            pub expected_finalized_height: Option<u64>,
+            /// Canonical lowercase finalized block hash.
+            pub expected_finalized_block_hash_hex: Option<&'a str>,
+        }
+        impl $name<'_> {
+            fn apply_to_url(self, url: &mut Url) {
+                append_optional_query(
+                    url,
+                    "expected_finalized_height",
+                    self.expected_finalized_height,
+                );
+                append_optional_query(
+                    url,
+                    "expected_finalized_block_hash_hex",
+                    self.expected_finalized_block_hash_hex,
+                );
+            }
+        }
+    };
+}
+
+macro_rules! sorafs_finalized_id_filter {
+    ($name:ident, $anchor:ident, $cursor:ident, $query:literal) => {
+        #[doc = concat!("Finalized keyset-page filter for `", stringify!($name), "`.")]
+        #[derive(Debug, Default, Clone, Copy)]
+        pub struct $name<'a> {
+            /// Optional finalized-block anchor.
+            pub finalized: $anchor<'a>,
+            /// Maximum number of records to return.
+            pub limit: Option<u32>,
+            /// Canonical lowercase exclusive identifier cursor.
+            pub $cursor: Option<&'a str>,
+        }
+        impl $name<'_> {
+            fn apply_to_url(self, url: &mut Url) {
+                self.finalized.apply_to_url(url);
+                append_optional_query(url, "limit", self.limit);
+                append_optional_query(url, $query, self.$cursor);
+            }
+        }
+    };
+}
+
+macro_rules! sorafs_finalized_event_filter {
+    ($name:ident, $anchor:ident) => {
+        #[doc = concat!("Finalized event-page filter for `", stringify!($name), "`.")]
+        #[derive(Debug, Default, Clone, Copy)]
+        pub struct $name<'a> {
+            /// Optional finalized-block anchor.
+            pub finalized: $anchor<'a>,
+            /// Maximum number of committed events to return.
+            pub limit: Option<u32>,
+            /// Exclusive event sequence; all four `after_*` fields must be supplied together.
+            pub after_sequence: Option<u64>,
+            /// Committing block height for the exclusive cursor.
+            pub after_block_height: Option<u64>,
+            /// Canonical lowercase committing block hash for the exclusive cursor.
+            pub after_block_hash_hex: Option<&'a str>,
+            /// Event index within the committing block.
+            pub after_event_index: Option<u32>,
+        }
+        impl $name<'_> {
+            fn apply_to_url(self, url: &mut Url) {
+                self.finalized.apply_to_url(url);
+                append_optional_query(url, "limit", self.limit);
+                append_optional_query(url, "after_sequence", self.after_sequence);
+                append_optional_query(url, "after_block_height", self.after_block_height);
+                append_optional_query(url, "after_block_hash_hex", self.after_block_hash_hex);
+                append_optional_query(url, "after_event_index", self.after_event_index);
+            }
+        }
+    };
+}
+
+macro_rules! sorafs_limit_filter {
+    ($name:ident) => {
+        #[doc = concat!("Bounded list filter for `", stringify!($name), "`.")]
+        #[derive(Debug, Default, Clone, Copy)]
+        pub struct $name {
+            /// Maximum number of records to return.
+            pub limit: Option<u32>,
+        }
+        impl $name {
+            fn apply_to_url(self, url: &mut Url) {
+                append_optional_query(url, "limit", self.limit);
+            }
+        }
+    };
+}
+
+macro_rules! sorafs_offset_filter {
+    ($name:ident, $selector:ident, $selector_key:literal) => {
+        #[doc = concat!("Offset-based list filter for `", stringify!($name), "`.")]
+        #[derive(Debug, Default, Clone)]
+        pub struct $name<'a> {
+            /// Maximum number of records to return.
+            pub limit: Option<u32>,
+            /// Offset for pagination.
+            pub offset: Option<u32>,
+            /// Optional endpoint-specific selector.
+            pub $selector: Option<&'a str>,
+            /// Optional manifest digest filter (hex-encoded).
+            pub manifest_digest: Option<&'a str>,
+        }
+        impl $name<'_> {
+            fn apply_to_url(&self, url: &mut Url) {
+                append_optional_query(url, "limit", self.limit);
+                append_optional_query(url, "offset", self.offset);
+                append_optional_query(url, $selector_key, self.$selector);
+                append_optional_query(url, "manifest_digest", self.manifest_digest);
+            }
+        }
+    };
+}
+
+sorafs_finalized_anchor!(SorafsPinFinalizedAnchor);
+/// Filters for the finalized /v1/sorafs/pin keyset page.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SorafsPinListFilter<'a> {
     /// Optional finalized-block anchor shared by this page and its successor.
@@ -5019,207 +5397,35 @@ pub struct SorafsPinListFilter<'a> {
     pub status: Option<PinStatusKindV1>,
 }
 impl SorafsPinListFilter<'_> {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        req = self.finalized.apply(req);
-        if let Some(limit) = self.limit {
-            req = req.param("limit", &limit);
-        }
-        if let Some(max_bytes) = self.max_bytes {
-            req = req.param("max_bytes", &max_bytes);
-        }
-        if let Some(after_digest) = self.after_digest_hex {
-            req = req.param("after_digest_hex", &after_digest);
-        }
+    fn apply_to_url(self, url: &mut Url) {
+        self.finalized.apply_to_url(url);
+        append_optional_query(url, "limit", self.limit);
+        append_optional_query(url, "max_bytes", self.max_bytes);
+        append_optional_query(url, "after_digest_hex", self.after_digest_hex);
         if let Some(status) = self.status {
             let status = match status {
                 PinStatusKindV1::Pending => "pending",
                 PinStatusKindV1::Approved => "approved",
                 PinStatusKindV1::Retired => "retired",
             };
-            req = req.param("status", &status);
-        }
-        req
-    }
-}
-/// Filters for `/v1/sorafs/aliases` listing endpoint.
-#[derive(Debug, Default, Clone)]
-pub struct SorafsAliasListFilter<'a> {
-    /// Maximum number of aliases to return.
-    pub limit: Option<u32>,
-    /// Offset for pagination.
-    pub offset: Option<u32>,
-    /// Optional namespace filter.
-    pub namespace: Option<&'a str>,
-    /// Optional manifest digest filter (hex-encoded).
-    pub manifest_digest: Option<&'a str>,
-}
-impl SorafsAliasListFilter<'_> {
-    fn apply_to_url(&self, url: &mut Url) {
-        let mut query = url.query_pairs_mut();
-        if let Some(limit) = self.limit {
-            query.append_pair("limit", &limit.to_string());
-        }
-        if let Some(offset) = self.offset {
-            query.append_pair("offset", &offset.to_string());
-        }
-        if let Some(namespace) = self.namespace {
-            query.append_pair("namespace", namespace);
-        }
-        if let Some(digest) = self.manifest_digest {
-            query.append_pair("manifest_digest", digest);
+            append_optional_query(url, "status", Some(status));
         }
     }
 }
-/// Filters for `/v1/sorafs/replication` listing endpoint.
-#[derive(Debug, Default, Clone)]
-pub struct SorafsReplicationListFilter<'a> {
-    /// Maximum number of replication orders to return.
-    pub limit: Option<u32>,
-    /// Offset for pagination.
-    pub offset: Option<u32>,
-    /// Optional status filter (`pending`, `completed`, `expired`).
-    pub status: Option<&'a str>,
-    /// Optional manifest digest filter (hex-encoded).
-    pub manifest_digest: Option<&'a str>,
-}
-impl SorafsReplicationListFilter<'_> {
-    fn apply_to_url(&self, url: &mut Url) {
-        let mut query = url.query_pairs_mut();
-        if let Some(limit) = self.limit {
-            query.append_pair("limit", &limit.to_string());
-        }
-        if let Some(offset) = self.offset {
-            query.append_pair("offset", &offset.to_string());
-        }
-        if let Some(status) = self.status {
-            query.append_pair("status", status);
-        }
-        if let Some(digest) = self.manifest_digest {
-            query.append_pair("manifest_digest", digest);
-        }
-    }
-}
-/// Optional finalized-block anchor shared by authoritative `SoraFS` repair reads.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsRepairFinalizedAnchor<'a> {
-    /// Non-zero finalized block height.
-    pub expected_finalized_height: Option<u64>,
-    /// Canonical lowercase finalized block hash.
-    pub expected_finalized_block_hash_hex: Option<&'a str>,
-}
-impl SorafsRepairFinalizedAnchor<'_> {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        if let Some(height) = self.expected_finalized_height {
-            req = req.param("expected_finalized_height", &height);
-        }
-        if let Some(block_hash) = self.expected_finalized_block_hash_hex {
-            req = req.param("expected_finalized_block_hash_hex", &block_hash);
-        }
-        req
-    }
-}
-/// Filters for the finalized `/v1/sorafs/audit/repair/tasks` page.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsRepairTasksFilter<'a> {
-    /// Optional finalized-block anchor.
-    pub finalized: SorafsRepairFinalizedAnchor<'a>,
-    /// Bounded page size (1 through 500).
-    pub limit: Option<u32>,
-    /// Canonical lowercase exclusive task-id cursor.
-    pub after_task_id_hex: Option<&'a str>,
-}
-impl SorafsRepairTasksFilter<'_> {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        req = self.finalized.apply(req);
-        if let Some(limit) = self.limit {
-            req = req.param("limit", &limit);
-        }
-        if let Some(after) = self.after_task_id_hex {
-            req = req.param("after_task_id_hex", &after);
-        }
-        req
-    }
-}
-/// Filters for the finalized `/v1/sorafs/audit/repair/events` page.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsRepairEventsFilter<'a> {
-    /// Optional finalized-block anchor.
-    pub finalized: SorafsRepairFinalizedAnchor<'a>,
-    /// Bounded page size (1 through 500).
-    pub limit: Option<u32>,
-    /// Exclusive event sequence; all four `after_*` fields must be supplied together.
-    pub after_sequence: Option<u64>,
-    /// Committing block height for the exclusive cursor.
-    pub after_block_height: Option<u64>,
-    /// Canonical lowercase committing block hash for the exclusive cursor.
-    pub after_block_hash_hex: Option<&'a str>,
-    /// Event index within the committing block.
-    pub after_event_index: Option<u32>,
-}
-impl SorafsRepairEventsFilter<'_> {
-    fn apply(&self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        req = self.finalized.apply(req);
-        if let Some(limit) = self.limit {
-            req = req.param("limit", &limit);
-        }
-        if let Some(sequence) = self.after_sequence {
-            req = req.param("after_sequence", &sequence);
-        }
-        if let Some(height) = self.after_block_height {
-            req = req.param("after_block_height", &height);
-        }
-        if let Some(block_hash) = self.after_block_hash_hex {
-            req = req.param("after_block_hash_hex", &block_hash);
-        }
-        if let Some(index) = self.after_event_index {
-            req = req.param("after_event_index", &index);
-        }
-        req
-    }
-}
-/// Filters for `/v1/sorafs/moderation/quarantine` listing endpoint.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsModerationQuarantineFilter {
-    /// Maximum number of quarantine records to return.
-    pub limit: Option<u32>,
-}
-impl SorafsModerationQuarantineFilter {
-    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        if let Some(limit) = self.limit {
-            req = req.param("limit", &limit);
-        }
-        req
-    }
-}
-/// Filters for `/v1/sorafs/moderation/model-registry` listing endpoint.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsModerationModelRegistryFilter {
-    /// Maximum number of registry records to return from each registry section.
-    pub limit: Option<u32>,
-}
-impl SorafsModerationModelRegistryFilter {
-    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        if let Some(limit) = self.limit {
-            req = req.param("limit", &limit);
-        }
-        req
-    }
-}
-/// Filters for `/v1/sorafs/moderation/ballots` listing endpoint.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsModerationBallotsFilter {
-    /// Maximum number of ballots, commits, and reveals to return.
-    pub limit: Option<u32>,
-}
-impl SorafsModerationBallotsFilter {
-    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        if let Some(limit) = self.limit {
-            req = req.param("limit", &limit);
-        }
-        req
-    }
-}
-/// Filters for `/v1/sorafs/moderation/ballots/events` listing endpoint.
+sorafs_offset_filter!(SorafsAliasListFilter, namespace, "namespace");
+sorafs_offset_filter!(SorafsReplicationListFilter, status, "status");
+sorafs_finalized_anchor!(SorafsRepairFinalizedAnchor);
+sorafs_finalized_id_filter!(
+    SorafsRepairTasksFilter,
+    SorafsRepairFinalizedAnchor,
+    after_task_id_hex,
+    "after_task_id_hex"
+);
+sorafs_finalized_event_filter!(SorafsRepairEventsFilter, SorafsRepairFinalizedAnchor);
+sorafs_limit_filter!(SorafsModerationQuarantineFilter);
+sorafs_limit_filter!(SorafsModerationModelRegistryFilter);
+sorafs_limit_filter!(SorafsModerationBallotsFilter);
+/// Filters for /v1/sorafs/moderation/ballots/events listing endpoint.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SorafsModerationBallotEventsFilter {
     /// Optional event sequence to resume from.
@@ -5228,174 +5434,36 @@ pub struct SorafsModerationBallotEventsFilter {
     pub limit: Option<u32>,
 }
 impl SorafsModerationBallotEventsFilter {
-    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        if let Some(since) = self.since {
-            req = req.param("since", &since);
-        }
-        if let Some(limit) = self.limit {
-            req = req.param("limit", &limit);
-        }
-        req
-    }
-}
-/// Filters for `SoraFS` transparency readback endpoints.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsTransparencyReadbackFilter {
-    /// Maximum number of records to return.
-    pub limit: Option<u32>,
-}
-impl SorafsTransparencyReadbackFilter {
-    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        if let Some(limit) = self.limit {
-            req = req.param("limit", &limit);
-        }
-        req
-    }
-}
-/// Filters for `SoraFS` appeal finance readback endpoints.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsAppealFinanceReadbackFilter {
-    /// Maximum number of records to return.
-    pub limit: Option<u32>,
-}
-impl SorafsAppealFinanceReadbackFilter {
-    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        if let Some(limit) = self.limit {
-            req = req.param("limit", &limit);
-        }
-        req
-    }
-}
-/// Optional finalized-block anchor shared by authoritative `SoraFS` reserve reads.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsReserveFinalizedAnchor<'a> {
-    /// Non-zero finalized block height.
-    pub expected_finalized_height: Option<u64>,
-    /// Canonical lowercase finalized block hash.
-    pub expected_finalized_block_hash_hex: Option<&'a str>,
-}
-impl SorafsReserveFinalizedAnchor<'_> {
     fn apply_to_url(self, url: &mut Url) {
-        if let Some(height) = self.expected_finalized_height {
-            url.query_pairs_mut()
-                .append_pair("expected_finalized_height", &height.to_string());
-        }
-        if let Some(block_hash) = self.expected_finalized_block_hash_hex {
-            url.query_pairs_mut()
-                .append_pair("expected_finalized_block_hash_hex", block_hash);
-        }
+        append_optional_query(url, "since", self.since);
+        append_optional_query(url, "limit", self.limit);
     }
 }
-/// Filters for the finalized `/v1/sorafs/reserve/providers` page.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsReserveProvidersReadbackFilter<'a> {
-    /// Optional finalized-block anchor.
-    pub finalized: SorafsReserveFinalizedAnchor<'a>,
-    /// Maximum number of provider records to return.
-    pub limit: Option<u32>,
-    /// Canonical lowercase exclusive provider-id cursor.
-    pub after_provider_id_hex: Option<&'a str>,
-}
-impl SorafsReserveProvidersReadbackFilter<'_> {
-    fn apply_to_url(self, url: &mut Url) {
-        self.finalized.apply_to_url(url);
-        if let Some(limit) = self.limit {
-            url.query_pairs_mut()
-                .append_pair("limit", &limit.to_string());
-        }
-        if let Some(after) = self.after_provider_id_hex {
-            url.query_pairs_mut()
-                .append_pair("after_provider_id_hex", after);
-        }
-    }
-}
-/// Filters for the finalized `/v1/sorafs/reserve/movements` page.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsReserveMovementReadbackFilter<'a> {
-    /// Optional finalized-block anchor.
-    pub finalized: SorafsReserveFinalizedAnchor<'a>,
-    /// Maximum number of movement records to return.
-    pub limit: Option<u32>,
-    /// Canonical lowercase exclusive movement-id cursor.
-    pub after_movement_id_hex: Option<&'a str>,
-}
-impl SorafsReserveMovementReadbackFilter<'_> {
-    fn apply_to_url(self, url: &mut Url) {
-        self.finalized.apply_to_url(url);
-        if let Some(limit) = self.limit {
-            url.query_pairs_mut()
-                .append_pair("limit", &limit.to_string());
-        }
-        if let Some(after) = self.after_movement_id_hex {
-            url.query_pairs_mut()
-                .append_pair("after_movement_id_hex", after);
-        }
-    }
-}
-/// Filters for the finalized `/v1/sorafs/reserve/appeals` page.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsReserveAppealReadbackFilter<'a> {
-    /// Optional finalized-block anchor.
-    pub finalized: SorafsReserveFinalizedAnchor<'a>,
-    /// Maximum number of appeal records to return.
-    pub limit: Option<u32>,
-    /// Canonical lowercase exclusive appeal-id cursor.
-    pub after_appeal_id_hex: Option<&'a str>,
-}
-impl SorafsReserveAppealReadbackFilter<'_> {
-    fn apply_to_url(self, url: &mut Url) {
-        self.finalized.apply_to_url(url);
-        if let Some(limit) = self.limit {
-            url.query_pairs_mut()
-                .append_pair("limit", &limit.to_string());
-        }
-        if let Some(after) = self.after_appeal_id_hex {
-            url.query_pairs_mut()
-                .append_pair("after_appeal_id_hex", after);
-        }
-    }
-}
-/// Filters for the finalized `/v1/sorafs/reserve/events` page.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsReserveEventsReadbackFilter<'a> {
-    /// Optional finalized-block anchor.
-    pub finalized: SorafsReserveFinalizedAnchor<'a>,
-    /// Maximum number of committed events to return.
-    pub limit: Option<u32>,
-    /// Exclusive event sequence; all four `after_*` fields must be supplied together.
-    pub after_sequence: Option<u64>,
-    /// Committing block height for the exclusive cursor.
-    pub after_block_height: Option<u64>,
-    /// Canonical lowercase committing block hash for the exclusive cursor.
-    pub after_block_hash_hex: Option<&'a str>,
-    /// Event index within the committing block.
-    pub after_event_index: Option<u32>,
-}
-impl SorafsReserveEventsReadbackFilter<'_> {
-    fn apply_to_url(self, url: &mut Url) {
-        self.finalized.apply_to_url(url);
-        if let Some(limit) = self.limit {
-            url.query_pairs_mut()
-                .append_pair("limit", &limit.to_string());
-        }
-        if let Some(sequence) = self.after_sequence {
-            url.query_pairs_mut()
-                .append_pair("after_sequence", &sequence.to_string());
-        }
-        if let Some(height) = self.after_block_height {
-            url.query_pairs_mut()
-                .append_pair("after_block_height", &height.to_string());
-        }
-        if let Some(block_hash) = self.after_block_hash_hex {
-            url.query_pairs_mut()
-                .append_pair("after_block_hash_hex", block_hash);
-        }
-        if let Some(index) = self.after_event_index {
-            url.query_pairs_mut()
-                .append_pair("after_event_index", &index.to_string());
-        }
-    }
-}
+sorafs_limit_filter!(SorafsTransparencyReadbackFilter);
+sorafs_limit_filter!(SorafsAppealFinanceReadbackFilter);
+sorafs_finalized_anchor!(SorafsReserveFinalizedAnchor);
+sorafs_finalized_id_filter!(
+    SorafsReserveProvidersReadbackFilter,
+    SorafsReserveFinalizedAnchor,
+    after_provider_id_hex,
+    "after_provider_id_hex"
+);
+sorafs_finalized_id_filter!(
+    SorafsReserveMovementReadbackFilter,
+    SorafsReserveFinalizedAnchor,
+    after_movement_id_hex,
+    "after_movement_id_hex"
+);
+sorafs_finalized_id_filter!(
+    SorafsReserveAppealReadbackFilter,
+    SorafsReserveFinalizedAnchor,
+    after_appeal_id_hex,
+    "after_appeal_id_hex"
+);
+sorafs_finalized_event_filter!(
+    SorafsReserveEventsReadbackFilter,
+    SorafsReserveFinalizedAnchor
+);
 const SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1: u16 = 100;
 const SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1: usize = 1024 * 1024;
 const SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES_V1: usize = 22 * 1024 * 1024;
@@ -5422,80 +5490,53 @@ fn require_sorafs_hedging_billing_page_limit(limit: u16) -> Result<u16> {
     }
     Ok(limit)
 }
-/// Required exact-checkpoint filter for an owner-isolated billing statement page.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SorafsBillingStatementListFilter<'a> {
-    /// Non-zero canonical lowercase checkpoint fingerprint.
-    pub expected_checkpoint_fingerprint_hex: &'a str,
-    /// Optional exclusive non-zero canonical lowercase statement identifier.
-    pub after_statement_id_hex: Option<&'a str>,
-    /// Required bounded page size in the inclusive range 1 through 100.
-    pub limit: u16,
-}
-impl SorafsBillingStatementListFilter<'_> {
-    fn apply_to_url(self, url: &mut Url) -> Result<()> {
-        let checkpoint = require_nonzero_lower_hex32(
-            self.expected_checkpoint_fingerprint_hex,
-            "expected checkpoint fingerprint",
-        )?;
-        let limit = require_sorafs_hedging_billing_page_limit(self.limit)?;
-        url.query_pairs_mut()
-            .append_pair("expected_checkpoint_fingerprint", checkpoint);
-        if let Some(after) = self.after_statement_id_hex {
-            url.query_pairs_mut().append_pair(
-                "after_statement_id",
-                require_nonzero_lower_hex32(after, "after statement identifier")?,
-            );
+macro_rules! sorafs_checkpoint_filter {
+    ($name:ident, $after:ident, $after_key:literal, $after_context:literal) => {
+        #[doc = concat!("Required exact-checkpoint filter for `", stringify!($name), "`.")]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct $name<'a> {
+            /// Non-zero canonical lowercase checkpoint fingerprint.
+            pub expected_checkpoint_fingerprint_hex: &'a str,
+            /// Optional exclusive non-zero canonical lowercase cursor.
+            pub $after: Option<&'a str>,
+            /// Required bounded page size in the inclusive range 1 through 100.
+            pub limit: u16,
         }
-        url.query_pairs_mut()
-            .append_pair("limit", &limit.to_string());
-        Ok(())
-    }
-}
-/// Required exact-checkpoint filter for finalized hedging projection pages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SorafsHedgingProjectionFilter<'a> {
-    /// Non-zero canonical lowercase checkpoint fingerprint.
-    pub expected_checkpoint_fingerprint_hex: &'a str,
-    /// Optional exclusive non-zero canonical lowercase projection cursor.
-    pub after_hex: Option<&'a str>,
-    /// Required bounded page size in the inclusive range 1 through 100.
-    pub limit: u16,
-}
-impl SorafsHedgingProjectionFilter<'_> {
-    fn apply_to_url(self, url: &mut Url) -> Result<()> {
-        let checkpoint = require_nonzero_lower_hex32(
-            self.expected_checkpoint_fingerprint_hex,
-            "expected checkpoint fingerprint",
-        )?;
-        let limit = require_sorafs_hedging_billing_page_limit(self.limit)?;
-        url.query_pairs_mut()
-            .append_pair("expected_checkpoint_fingerprint", checkpoint);
-        if let Some(after) = self.after_hex {
-            url.query_pairs_mut().append_pair(
-                "after",
-                require_nonzero_lower_hex32(after, "hedging projection cursor")?,
-            );
+        impl $name<'_> {
+            fn apply_to_url(self, url: &mut Url) -> Result<()> {
+                let checkpoint = require_nonzero_lower_hex32(
+                    self.expected_checkpoint_fingerprint_hex,
+                    "expected checkpoint fingerprint",
+                )?;
+                let limit = require_sorafs_hedging_billing_page_limit(self.limit)?;
+                url.query_pairs_mut()
+                    .append_pair("expected_checkpoint_fingerprint", checkpoint);
+                if let Some(after) = self.$after {
+                    url.query_pairs_mut().append_pair(
+                        $after_key,
+                        require_nonzero_lower_hex32(after, $after_context)?,
+                    );
+                }
+                url.query_pairs_mut()
+                    .append_pair("limit", &limit.to_string());
+                Ok(())
+            }
         }
-        url.query_pairs_mut()
-            .append_pair("limit", &limit.to_string());
-        Ok(())
-    }
+    };
 }
-/// Filters for `/v1/sorafs/moderation/screening-results` listing endpoint.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SorafsModerationScreeningResultsFilter {
-    /// Maximum number of screening records to return.
-    pub limit: Option<u32>,
-}
-impl SorafsModerationScreeningResultsFilter {
-    fn apply(self, mut req: DefaultRequestBuilder) -> DefaultRequestBuilder {
-        if let Some(limit) = self.limit {
-            req = req.param("limit", &limit);
-        }
-        req
-    }
-}
+sorafs_checkpoint_filter!(
+    SorafsBillingStatementListFilter,
+    after_statement_id_hex,
+    "after_statement_id",
+    "after statement identifier"
+);
+sorafs_checkpoint_filter!(
+    SorafsHedgingProjectionFilter,
+    after_hex,
+    "after",
+    "hedging projection cursor"
+);
+sorafs_limit_filter!(SorafsModerationScreeningResultsFilter);
 /// Request body for submitting authenticated moderation screening evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SorafsModerationScreeningResultRequest<'a> {
@@ -12139,6 +12180,55 @@ impl Client {
         let request = builder.build()?;
         self.send_prepared_request(request)
     }
+
+    fn send_sorafs_endpoint(
+        &self,
+        endpoint: SorafsEndpoint<'_>,
+        body: Vec<u8>,
+        configure_url: impl FnOnce(&mut Url),
+    ) -> Result<Response<Vec<u8>>> {
+        let mut url = join_torii_url(&self.torii_url, endpoint.path);
+        configure_url(&mut url);
+        self.send_sorafs_url(endpoint, url, body)
+    }
+
+    fn send_sorafs_url(
+        &self,
+        endpoint: SorafsEndpoint<'_>,
+        url: Url,
+        body: Vec<u8>,
+    ) -> Result<Response<Vec<u8>>> {
+        let mut builder = match endpoint.auth {
+            SorafsEndpointAuth::Anonymous => {
+                let builder = self.default_request(endpoint.method.http(), url);
+                if body.is_empty() {
+                    builder
+                } else {
+                    builder.body(body)
+                }
+            }
+            SorafsEndpointAuth::Account => {
+                self.account_signed_request(endpoint.method.http(), url, body)?
+            }
+        };
+        if let Some(content_type) = endpoint.content_type {
+            builder = builder.header("Content-Type", content_type);
+        }
+        builder = builder.header("Accept", endpoint.accept);
+        if let Some(max_response_bytes) = endpoint.max_response_bytes {
+            builder = builder.max_response_bytes(max_response_bytes);
+        }
+        match endpoint.auth {
+            SorafsEndpointAuth::Anonymous => builder.build()?.send(),
+            SorafsEndpointAuth::Account => self.send_builder(builder),
+        }
+    }
+
+    fn send_sorafs_reserve_read(&self, url: Url) -> Result<Response<Vec<u8>>> {
+        let builder = self.account_signed_request(HttpMethod::GET, url, Vec::new())?;
+        self.send_builder(reserve::finalized_json_request(builder))
+    }
+
     fn send_prepared_request(&self, request: DefaultRequest) -> Result<Response<Vec<u8>>> {
         let response = request.send()?;
         self.enforce_alias_policy(&response)?;
@@ -15257,22 +15347,19 @@ impl Client {
         Ok(decoded)
     }
     /// Convenience: GET `/v1/sorafs/pin` to list manifests in the pin registry.
-    ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_pin_registry(
         &self,
         filter: &SorafsPinListFilter<'_>,
     ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/pin");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
+        self.send_sorafs_endpoint(
+            SorafsEndpoint::anonymous_json_get("v1/sorafs/pin"),
+            Vec::new(),
+            |url| filter.apply_to_url(url),
+        )
     }
     /// Convenience: GET `/v1/sorafs/pin/{digest}` to inspect a specific manifest record.
-    ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_pin_manifest(&self, digest_hex: &str) -> Result<Response<Vec<u8>>> {
@@ -15287,14 +15374,8 @@ impl Client {
         Ok(response)
     }
     /// Convenience: POST `/v1/sorafs/pin/register` to submit a manifest to the pin registry.
-    ///
-    /// The client builds, fee-quotes, and signs exactly one native `RegisterPinManifest`
-    /// instruction locally. Torii receives only the versioned signed transaction; the client's
-    /// private key never enters the request body.
-    ///
     /// # Errors
-    /// Returns an error if the manifest payload is not exact canonical Norito, the local
-    /// transaction cannot be quoted or signed, request construction fails, or Torii rejects it.
+    /// Returns an error for invalid Norito, local signing, construction, or Torii rejection.
     pub fn post_sorafs_pin_register(
         &self,
         params: SorafsPinRegisterArgs<'_>,
@@ -16126,36 +16207,12 @@ impl Client {
             successor_of,
         ))
     }
-    /// Convenience: GET `/v1/sorafs/aliases` to list manifest alias bindings.
-    ///
-    /// # Errors
-    /// Returns an error if canonical request signing, request construction, or the HTTP call fails.
-    pub fn get_sorafs_aliases(
-        &self,
-        filter: &SorafsAliasListFilter<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        let mut url = join_torii_url(&self.torii_url, "v1/sorafs/aliases");
-        filter.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
-    }
-    /// Convenience: GET `/v1/sorafs/replication` to list replication orders.
-    ///
-    /// # Errors
-    /// Returns an error if canonical request signing, request construction, or the HTTP call fails.
-    pub fn get_sorafs_replication_orders(
-        &self,
-        filter: &SorafsReplicationListFilter<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        let mut url = join_torii_url(&self.torii_url, "v1/sorafs/replication");
-        filter.apply_to_url(&mut url);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
-    }
+    sorafs_filtered_get_methods!(
+        get_sorafs_aliases(filter: &SorafsAliasListFilter<'_>) =>
+            SorafsEndpoint::account_json_get("v1/sorafs/aliases"),
+        get_sorafs_replication_orders(filter: &SorafsReplicationListFilter<'_>) =>
+            SorafsEndpoint::account_json_get("v1/sorafs/replication"),
+    );
     /// Fetch chain-authoritative `SoraFS` repair counters at an optional finalized anchor.
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
@@ -16163,13 +16220,12 @@ impl Client {
         &self,
         finalized: &SorafsRepairFinalizedAnchor<'_>,
     ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/status");
-        finalized
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-            .and_then(|response| repair::validate_status_response(response, finalized))
+        self.send_sorafs_endpoint(
+            SorafsEndpoint::anonymous_json_get("v1/sorafs/audit/repair/status"),
+            Vec::new(),
+            |url| finalized.apply_to_url(url),
+        )
+        .and_then(|response| repair::validate_status_response(response, finalized))
     }
     /// Fetch a bounded finalized page of chain-authoritative `SoraFS` repair tasks.
     /// # Errors
@@ -16178,13 +16234,12 @@ impl Client {
         &self,
         filter: &SorafsRepairTasksFilter<'_>,
     ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/tasks");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-            .and_then(|response| repair::validate_tasks_response(response, filter))
+        self.send_sorafs_endpoint(
+            SorafsEndpoint::anonymous_json_get("v1/sorafs/audit/repair/tasks"),
+            Vec::new(),
+            |url| filter.apply_to_url(url),
+        )
+        .and_then(|response| repair::validate_tasks_response(response, filter))
     }
     /// Fetch one chain-authoritative `SoraFS` repair task by canonical ticket ID.
     /// # Errors
@@ -16199,13 +16254,12 @@ impl Client {
             .validate()
             .map_err(|error| eyre!("invalid SoraFS repair ticket identifier: {error}"))?;
         let path = format!("v1/sorafs/audit/repair/tasks/{}", ticket_id.0);
-        let url = join_torii_url(&self.torii_url, &path);
-        finalized
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-            .and_then(|response| repair::validate_task_response(response, &ticket_id.0, finalized))
+        self.send_sorafs_endpoint(
+            SorafsEndpoint::anonymous_json_get(&path),
+            Vec::new(),
+            |url| finalized.apply_to_url(url),
+        )
+        .and_then(|response| repair::validate_task_response(response, &ticket_id.0, finalized))
     }
     /// Fetch a bounded finalized page of committed `SoraFS` repair events.
     /// # Errors
@@ -16214,159 +16268,52 @@ impl Client {
         &self,
         filter: &SorafsRepairEventsFilter<'_>,
     ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/audit/repair/events");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-            .and_then(|response| repair::validate_events_response(response, filter))
-    }
-    /// Submit a caller-signed transaction to one exact `SoraFS` repair command route.
-    ///
-    /// Torii requires exactly one route-matching native repair instruction and uses the same
-    /// strict durable admission contract as the canonical transaction endpoint.
-    ///
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
-    pub fn post_sorafs_repair_transaction(
-        &self,
-        route: SorafsRepairCommandRoute,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        repair::validate_transaction_route(route, transaction)?;
-        self.ensure_transaction_submit_compatibility()?;
-        let payload = Self::prepare_transaction_payload(transaction);
-        let hash = payload.hash();
-        let response = DefaultRequestBuilder::new(
-            HttpMethod::POST,
-            join_torii_url(&self.torii_url, route.path()),
+        self.send_sorafs_endpoint(
+            SorafsEndpoint::anonymous_json_get("v1/sorafs/audit/repair/events"),
+            Vec::new(),
+            |url| filter.apply_to_url(url),
         )
-        .headers(self.transaction_headers_without_content_type())
-        .header("Content-Type", APPLICATION_NORITO)
-        .header("Accept", self.wire_format_preference.accept_header())
-        .body(payload.as_bytes().to_vec())
-        .build()?
-        .send()
-        .wrap_err_with(|| format!("Failed to submit SoraFS repair transaction {hash:?}"))?;
-        TransactionResponseHandler::handle(&response)?;
-        Ok(hash)
+        .and_then(|response| repair::validate_events_response(response, filter))
     }
-    /// Submit one `SubmitSorafsRepairTask` transaction.
-    ///
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
-    pub fn post_sorafs_repair_report(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_repair_transaction(SorafsRepairCommandRoute::Report, transaction)
-    }
-    /// Submit one `ApplySorafsRepairTaskAction::Escalate` transaction.
-    ///
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
-    pub fn post_sorafs_repair_slash(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_repair_transaction(SorafsRepairCommandRoute::Slash, transaction)
-    }
-    /// Submit one `ApplySorafsRepairTaskAction::Claim` transaction.
-    ///
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
-    pub fn post_sorafs_repair_claim(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_repair_transaction(SorafsRepairCommandRoute::Claim, transaction)
-    }
-    /// Submit one `ApplySorafsRepairTaskAction::Renew` transaction.
-    ///
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
-    pub fn post_sorafs_repair_heartbeat(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_repair_transaction(SorafsRepairCommandRoute::Heartbeat, transaction)
-    }
-    /// Submit one `ApplySorafsRepairTaskAction::Complete` transaction.
-    ///
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
-    pub fn post_sorafs_repair_complete(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_repair_transaction(SorafsRepairCommandRoute::Complete, transaction)
-    }
-    /// Submit one `ApplySorafsRepairTaskAction::Fail` transaction.
-    ///
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
-    pub fn post_sorafs_repair_fail(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_repair_transaction(SorafsRepairCommandRoute::Fail, transaction)
-    }
-    /// Submit one `SubmitSorafsRepairAppeal` transaction.
-    ///
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
-    pub fn post_sorafs_repair_appeal(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_repair_transaction(SorafsRepairCommandRoute::Appeal, transaction)
-    }
-    /// Fetch the supervised `SoraFS` billing projector status.
-    ///
-    /// # Errors
-    /// Returns an error if canonical request signing, request construction, the HTTP call fails,
-    /// or the response exceeds the 1 MiB JSON bound.
-    pub fn get_sorafs_billing_status(&self) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/billing/status");
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON)
-                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
-        )
-    }
+    sorafs_transaction_submitter!(
+        post_sorafs_repair_transaction(route: SorafsRepairCommandRoute),
+        repair::validate_transaction_route,
+        route.path(),
+        "Failed to submit SoraFS repair transaction"
+    );
+    sorafs_transaction_methods!(post_sorafs_repair_transaction;
+        post_sorafs_repair_report => SorafsRepairCommandRoute::Report,
+        post_sorafs_repair_slash => SorafsRepairCommandRoute::Slash,
+        post_sorafs_repair_claim => SorafsRepairCommandRoute::Claim,
+        post_sorafs_repair_heartbeat => SorafsRepairCommandRoute::Heartbeat,
+        post_sorafs_repair_complete => SorafsRepairCommandRoute::Complete,
+        post_sorafs_repair_fail => SorafsRepairCommandRoute::Fail,
+        post_sorafs_repair_appeal => SorafsRepairCommandRoute::Appeal,
+    );
+    sorafs_static_get_methods!(
+        get_sorafs_billing_status => SorafsEndpoint::account_json_get(
+            "v1/sorafs/billing/status"
+        ).with_max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
+    );
     /// Fetch one exact-checkpoint owner-isolated page of published billing statements.
-    ///
     /// # Errors
-    /// Returns an error if the checkpoint, cursor, or limit is noncanonical, canonical request
-    /// signing or request construction fails, the HTTP call fails, or the response exceeds the
-    /// 1 MiB JSON bound.
+    /// Returns an error for invalid filters, signing, transport, or an oversized response.
     pub fn get_sorafs_billing_statements(
         &self,
         filter: SorafsBillingStatementListFilter<'_>,
     ) -> Result<Response<Vec<u8>>> {
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/billing/statements");
         filter.apply_to_url(&mut url)?;
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON)
-                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
+        self.send_sorafs_url(
+            SorafsEndpoint::account_json_get("v1/sorafs/billing/statements")
+                .with_max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
+            url,
+            Vec::new(),
         )
     }
     /// Fetch one exact owned published billing statement as canonical Norito bytes.
-    ///
     /// # Errors
-    /// Returns an error if the statement identifier or checkpoint fingerprint is noncanonical,
-    /// canonical request signing or request construction fails, the HTTP call fails, or the
-    /// response exceeds the 22 MiB canonical statement bound.
+    /// Returns an error for invalid identifiers, signing, transport, or an oversized response.
     pub fn get_sorafs_billing_statement(
         &self,
         statement_id_hex: &str,
@@ -16385,18 +16332,17 @@ impl Client {
         );
         url.query_pairs_mut()
             .append_pair("expected_checkpoint_fingerprint", checkpoint);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_NORITO)
-                .max_response_bytes(SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES_V1),
+        self.send_sorafs_url(
+            SorafsEndpoint::account_json_get("v1/sorafs/billing/statements")
+                .with_accept(APPLICATION_NORITO)
+                .with_max_response_bytes(SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES_V1),
+            url,
+            Vec::new(),
         )
     }
     /// Submit one canonical owner acknowledgement for a published billing statement.
-    ///
     /// # Errors
-    /// Returns an error if identifiers or proof fields are noncanonical, Norito serialization or
-    /// canonical request signing fails, request construction or the HTTP call fails, or the
-    /// response exceeds the 1 MiB JSON bound.
+    /// Returns an error for invalid proof data, encoding, signing, transport, or response size.
     pub fn post_sorafs_billing_statement_acknowledgement(
         &self,
         statement_id_hex: &str,
@@ -16419,34 +16365,22 @@ impl Client {
         );
         url.query_pairs_mut()
             .append_pair("expected_checkpoint_fingerprint", checkpoint);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_NORITO)
-                .header("Accept", APPLICATION_JSON)
-                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
+        self.send_sorafs_url(
+            SorafsEndpoint::account_json_post("v1/sorafs/billing/statements")
+                .with_content_type(APPLICATION_NORITO)
+                .with_max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
+            url,
+            body,
         )
     }
-    /// Fetch payload-free `SoraFS` billing delivery reconciliation status.
-    ///
-    /// # Errors
-    /// Returns an error if canonical request signing, request construction, the HTTP call fails,
-    /// or the response exceeds the 1 MiB JSON bound.
-    pub fn get_sorafs_billing_reconciliation(&self) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/billing/reconciliation");
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON)
-                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
-        )
-    }
+    sorafs_static_get_methods!(
+        get_sorafs_billing_reconciliation => SorafsEndpoint::account_json_get(
+            "v1/sorafs/billing/reconciliation"
+        ).with_max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
+    );
     /// Fetch one exact-checkpoint page of finalized `SoraFS` hedging exposure.
-    ///
-    /// Automatic hedge execution is not exposed by this read-only client method.
-    ///
     /// # Errors
-    /// Returns an error if the checkpoint, cursor, or limit is noncanonical, canonical request
-    /// signing or request construction fails, the HTTP call fails, or the response exceeds the
-    /// 1 MiB JSON bound.
+    /// Returns an error for invalid filters, signing, transport, or an oversized response.
     pub fn get_sorafs_hedging_exposure(
         &self,
         filter: SorafsHedgingProjectionFilter<'_>,
@@ -16454,13 +16388,8 @@ impl Client {
         self.get_sorafs_hedging_projection("v1/sorafs/hedging/exposure", filter)
     }
     /// Fetch one exact-checkpoint page of governed `SoraFS` hedge intents.
-    ///
-    /// This method returns intent projections only and cannot submit hedge execution.
-    ///
     /// # Errors
-    /// Returns an error if the checkpoint, cursor, or limit is noncanonical, canonical request
-    /// signing or request construction fails, the HTTP call fails, or the response exceeds the
-    /// 1 MiB JSON bound.
+    /// Returns an error for invalid filters, signing, transport, or an oversized response.
     pub fn get_sorafs_hedging_intents(
         &self,
         filter: SorafsHedgingProjectionFilter<'_>,
@@ -16474,103 +16403,34 @@ impl Client {
     ) -> Result<Response<Vec<u8>>> {
         let mut url = join_torii_url(&self.torii_url, route);
         filter.apply_to_url(&mut url)?;
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON)
-                .max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
+        self.send_sorafs_url(
+            SorafsEndpoint::account_json_get(route)
+                .with_max_response_bytes(SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1),
+            url,
+            Vec::new(),
         )
     }
-    /// Convenience: GET `/v1/sorafs/moderation/quarantine` to list local moderation quarantine records.
-    ///
-    /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
-    pub fn get_sorafs_moderation_quarantine(
-        &self,
-        filter: SorafsModerationQuarantineFilter,
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/quarantine");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-    }
-    /// Convenience: GET `/v1/sorafs/moderation/model-registry` to list local model registry records.
-    ///
-    /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
-    pub fn get_sorafs_moderation_model_registry(
-        &self,
-        filter: SorafsModerationModelRegistryFilter,
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/model-registry");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-    }
-    /// Convenience: signed POST `/v1/sorafs/moderation/model-registry/repro-manifests`.
-    ///
-    /// `manifest_bytes` must be the canonical Norito reproducibility manifest bytes.
-    ///
-    /// # Errors
-    /// Returns an error if the payload is empty, request construction,
-    /// serialization, signing, or the HTTP call fails.
-    pub fn post_sorafs_moderation_model_registry_repro_manifest(
-        &self,
-        manifest_bytes: &[u8],
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(
-            &self.torii_url,
+    sorafs_filtered_get_methods!(
+        get_sorafs_moderation_quarantine(filter: SorafsModerationQuarantineFilter)
+            => SorafsEndpoint::anonymous_json_get("v1/sorafs/moderation/quarantine"),
+        get_sorafs_moderation_model_registry(filter: SorafsModerationModelRegistryFilter)
+            => SorafsEndpoint::anonymous_json_get("v1/sorafs/moderation/model-registry"),
+    );
+    sorafs_typed_body_post_methods!(
+        post_sorafs_moderation_model_registry_repro_manifest(manifest_bytes: [u8]) => (
             "v1/sorafs/moderation/model-registry/repro-manifests",
-        );
-        let body = Self::sorafs_moderation_model_registry_manifest_body(manifest_bytes)?;
-        self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )
-    }
-    /// Convenience: signed POST `/v1/sorafs/moderation/model-registry/corpora`.
-    ///
-    /// `manifest_bytes` must be the canonical Norito adversarial corpus manifest bytes.
-    ///
-    /// # Errors
-    /// Returns an error if the payload is empty, request construction,
-    /// serialization, signing, or the HTTP call fails.
-    pub fn post_sorafs_moderation_model_registry_corpus(
-        &self,
-        manifest_bytes: &[u8],
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(
-            &self.torii_url,
+            Self::sorafs_moderation_model_registry_manifest_body
+        ),
+        post_sorafs_moderation_model_registry_corpus(manifest_bytes: [u8]) => (
             "v1/sorafs/moderation/model-registry/corpora",
-        );
-        let body = Self::sorafs_moderation_model_registry_manifest_body(manifest_bytes)?;
-        self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )
-    }
-    /// Fetch a bounded page of finalized chain-authoritative moderation cases.
-    ///
-    /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
-    pub fn get_sorafs_moderation_ballots(
-        &self,
-        filter: SorafsModerationBallotsFilter,
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/ballots");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-    }
+            Self::sorafs_moderation_model_registry_manifest_body
+        ),
+    );
+    sorafs_filtered_get_methods!(
+        get_sorafs_moderation_ballots(filter: SorafsModerationBallotsFilter)
+            => SorafsEndpoint::anonymous_json_get("v1/sorafs/moderation/ballots"),
+    );
     /// Fetch one finalized chain-authoritative moderation case projection.
-    ///
     /// # Errors
     /// Returns an error if identifiers are blank, request construction, or the HTTP call fails.
     pub fn get_sorafs_moderation_ballot(
@@ -16581,19 +16441,18 @@ impl Client {
     ) -> Result<Response<Vec<u8>>> {
         let case_id = require_non_empty_path_segment(case_id, "case_id")?;
         let round_id = require_non_empty_path_segment(round_id, "round_id")?;
-        let url = join_torii_url_with_path_segments(
+        let mut url = join_torii_url_with_path_segments(
             &self.torii_url,
             "v1/sorafs/moderation/ballots",
             &[case_id, round_id],
         );
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
+        filter.apply_to_url(&mut url);
+        self.default_request(HttpMethod::GET, url)
             .header("Accept", APPLICATION_JSON)
             .build()?
             .send()
     }
     /// Fetch the payload-free no-show projection for one finalized moderation case.
-    ///
     /// # Errors
     /// Returns an error if identifiers are blank, request construction, or the HTTP call fails.
     pub fn get_sorafs_moderation_ballot_no_show_plan(
@@ -16613,23 +16472,11 @@ impl Client {
             .build()?
             .send()
     }
-    /// Fetch a bounded page of typed committed moderation events.
-    ///
-    /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
-    pub fn get_sorafs_moderation_ballot_events(
-        &self,
-        filter: SorafsModerationBallotEventsFilter,
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/ballots/events");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-    }
+    sorafs_filtered_get_methods!(
+        get_sorafs_moderation_ballot_events(filter: SorafsModerationBallotEventsFilter)
+            => SorafsEndpoint::anonymous_json_get("v1/sorafs/moderation/ballots/events"),
+    );
     /// Build an exact caller-signed native `SoraFS` moderation transaction.
-    ///
     /// # Errors
     /// Returns an error if the configured signing key cannot sign the exact V1 envelope.
     pub fn try_build_sorafs_moderation_transaction<I>(
@@ -16650,100 +16497,24 @@ impl Client {
         self.try_sign_transaction(builder)
             .wrap_err("sign exact caller-owned native SoraFS moderation transaction")
     }
-    /// Submit a caller-signed transaction to one exact `SoraFS` moderation command route.
-    ///
-    /// Torii requires one route-matching native instruction, the V1 TTL, no
-    /// nonce, empty metadata, and a signature whose authority matches the
-    /// instruction's caller role.
-    ///
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
-    pub fn post_sorafs_moderation_transaction(
-        &self,
-        route: SorafsModerationCommandRoute,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        moderation::validate_transaction_route(route, transaction)?;
-        self.ensure_transaction_submit_compatibility()?;
-        let payload = Self::prepare_transaction_payload(transaction);
-        let hash = payload.hash();
-        let response = DefaultRequestBuilder::new(
-            HttpMethod::POST,
-            join_torii_url(&self.torii_url, route.path()),
-        )
-        .headers(self.transaction_headers_without_content_type())
-        .header("Content-Type", APPLICATION_NORITO)
-        .header("Accept", self.wire_format_preference.accept_header())
-        .body(payload.as_bytes().to_vec())
-        .build()?
-        .send()
-        .wrap_err_with(|| format!("Failed to submit SoraFS moderation transaction {hash:?}"))?;
-        TransactionResponseHandler::handle(&response)?;
-        Ok(hash)
-    }
-    /// Submit one `SubmitSorafsModerationCommit` transaction.
-    ///
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
-    pub fn post_sorafs_moderation_ballot_commit(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_moderation_transaction(
-            SorafsModerationCommandRoute::SubmitCommit,
-            transaction,
-        )
-    }
-    /// Submit one `SubmitSorafsModerationReveal` transaction.
-    ///
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
-    pub fn post_sorafs_moderation_ballot_reveal(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_moderation_transaction(
-            SorafsModerationCommandRoute::SubmitReveal,
-            transaction,
-        )
-    }
-    /// Submit one governed `FinalizeSorafsModerationCase` transaction.
-    ///
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
-    pub fn post_sorafs_moderation_ballot_tally(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_moderation_transaction(
-            SorafsModerationCommandRoute::FinalizeCase,
-            transaction,
-        )
-    }
-    /// Convenience: GET `/v1/sorafs/transparency/cycles`.
-    ///
-    /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
-    pub fn get_sorafs_transparency_cycles(
-        &self,
-        filter: SorafsTransparencyReadbackFilter,
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/transparency/cycles");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-    }
+    sorafs_transaction_submitter!(
+        post_sorafs_moderation_transaction(route: SorafsModerationCommandRoute),
+        moderation::validate_transaction_route,
+        route.path(),
+        "Failed to submit SoraFS moderation transaction"
+    );
+    sorafs_transaction_methods!(post_sorafs_moderation_transaction;
+        post_sorafs_moderation_ballot_commit => SorafsModerationCommandRoute::SubmitCommit,
+        post_sorafs_moderation_ballot_reveal => SorafsModerationCommandRoute::SubmitReveal,
+        post_sorafs_moderation_ballot_tally => SorafsModerationCommandRoute::FinalizeCase,
+    );
+    sorafs_filtered_get_methods!(
+        get_sorafs_transparency_cycles(filter: SorafsTransparencyReadbackFilter)
+            => SorafsEndpoint::anonymous_json_get("v1/sorafs/transparency/cycles"),
+    );
     /// Convenience: GET `/v1/sorafs/transparency/cycles/{cycle_id_hex}`.
-    ///
     /// # Errors
-    /// Returns an error if the cycle id is malformed, request construction,
-    /// or the HTTP call fails.
+    /// Returns an error for an invalid cycle id, construction, or transport failure.
     pub fn get_sorafs_transparency_cycle(
         &self,
         cycle_id_hex: &str,
@@ -16751,18 +16522,15 @@ impl Client {
     ) -> Result<Response<Vec<u8>>> {
         let cycle_id_hex = normalize_hex_lower::<16>(cycle_id_hex, "cycle_id_hex")?;
         let path = format!("v1/sorafs/transparency/cycles/{cycle_id_hex}");
-        let url = join_torii_url(&self.torii_url, &path);
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
+        self.send_sorafs_endpoint(
+            SorafsEndpoint::anonymous_json_get(&path),
+            Vec::new(),
+            |url| filter.apply_to_url(url),
+        )
     }
     /// Convenience: GET `/v1/sorafs/transparency/cycles/{cycle_id_hex}/entries/{entry_id_hex}`.
-    ///
     /// # Errors
-    /// Returns an error if either id is malformed, request construction,
-    /// or the HTTP call fails.
+    /// Returns an error for an invalid id, construction, or transport failure.
     pub fn get_sorafs_transparency_cycle_entry(
         &self,
         cycle_id_hex: &str,
@@ -16771,132 +16539,45 @@ impl Client {
         let cycle_id_hex = normalize_hex_lower::<16>(cycle_id_hex, "cycle_id_hex")?;
         let entry_id_hex = normalize_hex_lower::<16>(entry_id_hex, "entry_id_hex")?;
         let path = format!("v1/sorafs/transparency/cycles/{cycle_id_hex}/entries/{entry_id_hex}");
-        let url = join_torii_url(&self.torii_url, &path);
-        self.default_request(HttpMethod::GET, url)
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
+        self.send_sorafs_endpoint(
+            SorafsEndpoint::anonymous_json_get(&path),
+            Vec::new(),
+            |_| {},
+        )
     }
-    /// Convenience: GET `/v1/sorafs/transparency/explorer`.
-    ///
-    /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
-    pub fn get_sorafs_transparency_explorer(
-        &self,
-        filter: SorafsTransparencyReadbackFilter,
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/transparency/explorer");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-    }
-    /// Convenience: GET `/v1/sorafs/transparency/tokens`.
-    ///
-    /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
-    pub fn get_sorafs_transparency_token_issuances(
-        &self,
-        filter: SorafsTransparencyReadbackFilter,
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/transparency/tokens");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-    }
-    /// Convenience: signed POST `/v1/sorafs/transparency/tokens/issuances`.
-    ///
-    /// # Errors
-    /// Returns an error if the payload is not JSON, request construction fails,
-    /// signing fails, or the HTTP call fails.
-    pub fn post_sorafs_transparency_token_issuance_json(
-        &self,
-        payload: &[u8],
-    ) -> Result<Response<Vec<u8>>> {
-        self.post_sorafs_signed_json(
+    sorafs_filtered_get_methods!(
+        get_sorafs_transparency_explorer(filter: SorafsTransparencyReadbackFilter)
+            => SorafsEndpoint::anonymous_json_get("v1/sorafs/transparency/explorer"),
+        get_sorafs_transparency_token_issuances(filter: SorafsTransparencyReadbackFilter)
+            => SorafsEndpoint::anonymous_json_get("v1/sorafs/transparency/tokens"),
+    );
+    sorafs_signed_json_methods!(
+        post_sorafs_transparency_token_issuance_json => (
             "v1/sorafs/transparency/tokens/issuances",
-            payload,
-            "transparency proof-token issuance",
-        )
-    }
-    /// Convenience: signed POST `/v1/sorafs/transparency/privacy-aggregates/source-events`.
-    ///
-    /// # Errors
-    /// Returns an error if the payload is not JSON, request construction fails,
-    /// signing fails, or the HTTP call fails.
-    pub fn post_sorafs_transparency_privacy_aggregate_source_event_json(
-        &self,
-        payload: &[u8],
-    ) -> Result<Response<Vec<u8>>> {
-        self.post_sorafs_signed_json(
+            "transparency proof-token issuance"
+        ),
+        post_sorafs_transparency_privacy_aggregate_source_event_json => (
             "v1/sorafs/transparency/privacy-aggregates/source-events",
-            payload,
-            "transparency privacy aggregate source event",
-        )
-    }
-    /// Convenience: signed POST `/v1/sorafs/transparency/privacy-aggregates/publish-due`.
-    ///
-    /// # Errors
-    /// Returns an error if the payload is not JSON, request construction fails,
-    /// signing fails, or the HTTP call fails.
-    pub fn post_sorafs_transparency_privacy_aggregate_publish_due_json(
-        &self,
-        payload: &[u8],
-    ) -> Result<Response<Vec<u8>>> {
-        self.post_sorafs_signed_json(
+            "transparency privacy aggregate source event"
+        ),
+        post_sorafs_transparency_privacy_aggregate_publish_due_json => (
             "v1/sorafs/transparency/privacy-aggregates/publish-due",
-            payload,
-            "transparency privacy aggregate publish-due",
-        )
-    }
-    /// Submit a caller-signed transaction to one exact `SoraFS` reserve command route.
-    /// Torii accepts one route-matching native instruction under canonical durable admission.
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or HTTP fails.
-    pub fn post_sorafs_reserve_transaction(
-        &self,
-        route: SorafsReserveCommandRoute,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        reserve::validate_transaction_route(route, transaction)?;
-        self.ensure_transaction_submit_compatibility()?;
-        let payload = Self::prepare_transaction_payload(transaction);
-        let hash = payload.hash();
-        let response = DefaultRequestBuilder::new(
-            HttpMethod::POST,
-            join_torii_url(&self.torii_url, &route.path()),
-        )
-        .headers(self.transaction_headers_without_content_type())
-        .header("Content-Type", APPLICATION_NORITO)
-        .header("Accept", self.wire_format_preference.accept_header())
-        .body(payload.as_bytes().to_vec())
-        .build()?
-        .send()
-        .wrap_err_with(|| format!("Failed to submit SoraFS reserve transaction {hash:?}"))?;
-        TransactionResponseHandler::handle(&response)?;
-        Ok(hash)
-    }
-    /// Submit one reserve top-up request transaction.
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or HTTP fails.
-    pub fn post_sorafs_reserve_top_up(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_reserve_transaction(SorafsReserveCommandRoute::TopUp, transaction)
-    }
-    /// Submit one reserve withdrawal request transaction.
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or HTTP fails.
-    pub fn post_sorafs_reserve_withdrawal(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_reserve_transaction(SorafsReserveCommandRoute::Withdrawal, transaction)
-    }
+            "transparency privacy aggregate publish-due"
+        ),
+    );
+    sorafs_transaction_submitter!(
+        post_sorafs_reserve_transaction(route: SorafsReserveCommandRoute),
+        reserve::validate_transaction_route,
+        &route.path(),
+        "Failed to submit SoraFS reserve transaction"
+    );
+    sorafs_transaction_methods!(post_sorafs_reserve_transaction;
+        post_sorafs_reserve_top_up => SorafsReserveCommandRoute::TopUp,
+        post_sorafs_reserve_withdrawal => SorafsReserveCommandRoute::Withdrawal,
+        post_sorafs_reserve_credit_draw => SorafsReserveCommandRoute::CreditDraw,
+        post_sorafs_reserve_credit_repayment => SorafsReserveCommandRoute::CreditRepay,
+        post_sorafs_reserve_appeal => SorafsReserveCommandRoute::Appeal,
+    );
     /// Submit one governed reserve movement-decision transaction.
     /// # Errors
     /// Returns an error if compatibility validation, request construction, admission, or HTTP fails.
@@ -16909,33 +16590,6 @@ impl Client {
             SorafsReserveCommandRoute::MovementDecision(movement_id),
             transaction,
         )
-    }
-    /// Submit one governed reserve credit-draw transaction.
-    /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or HTTP fails.
-    pub fn post_sorafs_reserve_credit_draw(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_reserve_transaction(SorafsReserveCommandRoute::CreditDraw, transaction)
-    }
-    /// Submit one provider-authenticated reserve credit-repayment transaction.
-    /// # Errors
-    /// Returns an error if validation, request construction, admission, or the HTTP call fails.
-    pub fn post_sorafs_reserve_credit_repayment(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_reserve_transaction(SorafsReserveCommandRoute::CreditRepay, transaction)
-    }
-    /// Submit one provider-authenticated reserve appeal transaction.
-    /// # Errors
-    /// Returns an error if validation, request construction, admission, or the HTTP call fails.
-    pub fn post_sorafs_reserve_appeal(
-        &self,
-        transaction: &SignedTransaction,
-    ) -> Result<HashOf<SignedTransaction>> {
-        self.post_sorafs_reserve_transaction(SorafsReserveCommandRoute::Appeal, transaction)
     }
     /// Submit one governed reserve appeal-decision transaction.
     /// # Errors
@@ -16951,7 +16605,6 @@ impl Client {
         )
     }
     /// Fetch the active chain-authoritative reserve policy at an optional finalized anchor.
-    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_policy(
@@ -16961,398 +16614,144 @@ impl Client {
         reserve::validate_anchor_request(&finalized, "policy")?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/policy");
         finalized.apply_to_url(&mut url);
-        self.send_builder(reserve::finalized_json_request(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
-        ))
-        .and_then(|response| reserve::validate_policy_response(response, &finalized))
+        self.send_sorafs_reserve_read(url)
+            .and_then(|response| reserve::validate_policy_response(response, &finalized))
     }
-    /// Fetch a finalized page of chain-authoritative provider reserve accounts.
-    ///
-    /// # Errors
-    /// Returns an error if request construction, signing, or the HTTP call fails.
-    pub fn get_sorafs_reserve_providers(
-        &self,
-        filter: SorafsReserveProvidersReadbackFilter<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        reserve::validate_providers_request(&filter)?;
-        let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/providers");
-        filter.apply_to_url(&mut url);
-        self.send_builder(reserve::finalized_json_request(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
-        ))
-        .and_then(|response| reserve::validate_providers_response(response, &filter))
-    }
-    /// Fetch one chain-authoritative provider reserve account.
-    ///
-    /// # Errors
-    /// Returns an error if the provider ID is malformed, request construction, signing, or the
-    /// HTTP call fails.
-    pub fn get_sorafs_reserve_provider(
-        &self,
-        provider_id_hex: &str,
-        finalized: SorafsReserveFinalizedAnchor<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        let provider_id_hex = normalize_hex_lower::<32>(provider_id_hex, "provider_id_hex")?;
-        reserve::validate_detail_request(&provider_id_hex, &finalized, "provider")?;
-        let path = format!("v1/sorafs/reserve/providers/{provider_id_hex}");
-        let mut url = join_torii_url(&self.torii_url, &path);
-        finalized.apply_to_url(&mut url);
-        self.send_builder(reserve::finalized_json_request(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
-        ))
-        .and_then(|response| {
-            reserve::validate_provider_response(response, &provider_id_hex, &finalized)
-        })
-    }
-    /// Fetch a finalized page of chain-authoritative reserve movements.
-    ///
-    /// # Errors
-    /// Returns an error if request construction, signing, or the HTTP call fails.
-    pub fn get_sorafs_reserve_movements(
-        &self,
-        filter: SorafsReserveMovementReadbackFilter<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        reserve::validate_movements_request(&filter)?;
-        let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/movements");
-        filter.apply_to_url(&mut url);
-        self.send_builder(reserve::finalized_json_request(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
-        ))
-        .and_then(|response| reserve::validate_movements_response(response, &filter))
-    }
-    /// Fetch one chain-authoritative reserve movement.
-    ///
-    /// # Errors
-    /// Returns an error if the movement ID is malformed, request construction, signing, or the
-    /// HTTP call fails.
-    pub fn get_sorafs_reserve_movement(
-        &self,
-        movement_id_hex: &str,
-        finalized: SorafsReserveFinalizedAnchor<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        let movement_id_hex = normalize_hex_lower::<32>(movement_id_hex, "movement_id_hex")?;
-        reserve::validate_detail_request(&movement_id_hex, &finalized, "movement")?;
-        let path = format!("v1/sorafs/reserve/movements/{movement_id_hex}");
-        let mut url = join_torii_url(&self.torii_url, &path);
-        finalized.apply_to_url(&mut url);
-        self.send_builder(reserve::finalized_json_request(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
-        ))
-        .and_then(|response| {
-            reserve::validate_movement_response(response, &movement_id_hex, &finalized)
-        })
-    }
-    /// Fetch a finalized page of chain-authoritative reserve appeals.
-    ///
-    /// # Errors
-    /// Returns an error if request construction, signing, or the HTTP call fails.
-    pub fn get_sorafs_reserve_appeals(
-        &self,
-        filter: SorafsReserveAppealReadbackFilter<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        reserve::validate_appeals_request(&filter)?;
-        let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/appeals");
-        filter.apply_to_url(&mut url);
-        self.send_builder(reserve::finalized_json_request(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
-        ))
-        .and_then(|response| reserve::validate_appeals_response(response, &filter))
-    }
-    /// Fetch one chain-authoritative reserve appeal.
-    ///
-    /// # Errors
-    /// Returns an error if the appeal ID is malformed, request construction, signing, or the
-    /// HTTP call fails.
-    pub fn get_sorafs_reserve_appeal(
-        &self,
-        appeal_id_hex: &str,
-        finalized: SorafsReserveFinalizedAnchor<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        let appeal_id_hex = normalize_hex_lower::<32>(appeal_id_hex, "appeal_id_hex")?;
-        reserve::validate_detail_request(&appeal_id_hex, &finalized, "appeal")?;
-        let path = format!("v1/sorafs/reserve/appeals/{appeal_id_hex}");
-        let mut url = join_torii_url(&self.torii_url, &path);
-        finalized.apply_to_url(&mut url);
-        self.send_builder(reserve::finalized_json_request(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
-        ))
-        .and_then(|response| {
-            reserve::validate_appeal_response(response, &appeal_id_hex, &finalized)
-        })
-    }
-    /// Fetch a finalized page of committed reserve-ledger events.
-    ///
-    /// # Errors
-    /// Returns an error if request construction, signing, or the HTTP call fails.
-    pub fn get_sorafs_reserve_events(
-        &self,
-        filter: SorafsReserveEventsReadbackFilter<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        reserve::validate_events_request(&filter)?;
-        let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/events");
-        filter.apply_to_url(&mut url);
-        self.send_builder(reserve::finalized_json_request(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?,
-        ))
-        .and_then(|response| reserve::validate_events_response(response, &filter))
-    }
-    /// Convenience: GET `/v1/sorafs/appeals/pricing/config`.
-    ///
-    /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
-    pub fn get_sorafs_appeal_pricing_config(&self) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/appeals/pricing/config");
-        self.default_request(HttpMethod::GET, url)
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-    }
-    /// Convenience: GET `/v1/sorafs/appeals/pricing/status`.
-    ///
-    /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
-    pub fn get_sorafs_appeal_pricing_status(&self) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/appeals/pricing/status");
-        self.default_request(HttpMethod::GET, url)
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-    }
+    sorafs_reserve_page_methods!(
+        get_sorafs_reserve_providers(filter: SorafsReserveProvidersReadbackFilter<'_>) => (
+            "v1/sorafs/reserve/providers",
+            reserve::validate_providers_request,
+            reserve::validate_providers_response
+        ),
+    );
+    sorafs_reserve_detail_methods!(
+        get_sorafs_reserve_provider(provider_id_hex, "provider_id_hex") => (
+            "v1/sorafs/reserve/providers",
+            "provider",
+            reserve::validate_provider_response
+        ),
+    );
+    sorafs_reserve_page_methods!(
+        get_sorafs_reserve_movements(filter: SorafsReserveMovementReadbackFilter<'_>) => (
+            "v1/sorafs/reserve/movements",
+            reserve::validate_movements_request,
+            reserve::validate_movements_response
+        ),
+    );
+    sorafs_reserve_detail_methods!(
+        get_sorafs_reserve_movement(movement_id_hex, "movement_id_hex") => (
+            "v1/sorafs/reserve/movements",
+            "movement",
+            reserve::validate_movement_response
+        ),
+    );
+    sorafs_reserve_page_methods!(
+        get_sorafs_reserve_appeals(filter: SorafsReserveAppealReadbackFilter<'_>) => (
+            "v1/sorafs/reserve/appeals",
+            reserve::validate_appeals_request,
+            reserve::validate_appeals_response
+        ),
+    );
+    sorafs_reserve_detail_methods!(
+        get_sorafs_reserve_appeal(appeal_id_hex, "appeal_id_hex") => (
+            "v1/sorafs/reserve/appeals",
+            "appeal",
+            reserve::validate_appeal_response
+        ),
+    );
+    sorafs_reserve_page_methods!(
+        get_sorafs_reserve_events(filter: SorafsReserveEventsReadbackFilter<'_>) => (
+            "v1/sorafs/reserve/events",
+            reserve::validate_events_request,
+            reserve::validate_events_response
+        ),
+    );
+    sorafs_static_get_methods!(
+        get_sorafs_appeal_pricing_config => SorafsEndpoint::anonymous_json_get(
+            "v1/sorafs/appeals/pricing/config"
+        ),
+        get_sorafs_appeal_pricing_status => SorafsEndpoint::anonymous_json_get(
+            "v1/sorafs/appeals/pricing/status"
+        ),
+    );
     /// Convenience: POST `/v1/sorafs/appeals/pricing/quote`.
-    ///
     /// # Errors
-    /// Returns an error if the payload is not JSON, request construction, or
-    /// the HTTP call fails.
+    /// Returns an error for invalid JSON, construction, or transport failure.
     pub fn post_sorafs_appeal_pricing_quote_json(
         &self,
         payload: &[u8],
     ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/appeals/pricing/quote");
         let payload = Self::sorafs_json_request_body(payload, "appeal pricing quote")?;
-        self.default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(payload)
-            .build()?
-            .send()
+        self.send_sorafs_endpoint(
+            SorafsEndpoint::anonymous_json_post("v1/sorafs/appeals/pricing/quote"),
+            payload,
+            |_| {},
+        )
     }
-    /// Convenience: signed POST `/v1/sorafs/appeals/finance/deposits`.
-    ///
-    /// # Errors
-    /// Returns an error if the payload is not JSON, request construction fails,
-    /// signing fails, or the HTTP call fails.
-    pub fn post_sorafs_appeal_finance_deposit_json(
-        &self,
-        payload: &[u8],
-    ) -> Result<Response<Vec<u8>>> {
-        self.post_sorafs_signed_json(
+    sorafs_signed_json_methods!(
+        post_sorafs_appeal_finance_deposit_json => (
             "v1/sorafs/appeals/finance/deposits",
-            payload,
-            "appeal finance deposit",
-        )
-    }
-    /// Convenience: signed POST `/v1/sorafs/appeals/finance/deposits/confirm`.
-    ///
-    /// # Errors
-    /// Returns an error if the payload is not JSON, request construction fails,
-    /// signing fails, or the HTTP call fails.
-    pub fn post_sorafs_appeal_finance_deposit_confirm_json(
-        &self,
-        payload: &[u8],
-    ) -> Result<Response<Vec<u8>>> {
-        self.post_sorafs_signed_json(
+            "appeal finance deposit"
+        ),
+        post_sorafs_appeal_finance_deposit_confirm_json => (
             "v1/sorafs/appeals/finance/deposits/confirm",
-            payload,
-            "appeal finance deposit confirmation",
-        )
-    }
+            "appeal finance deposit confirmation"
+        ),
+    );
     /// Convenience: signed GET `/v1/sorafs/appeals/finance/deposits/{escrow_id_hex}`.
-    ///
     /// # Errors
-    /// Returns an error if the escrow id is malformed, request construction
-    /// fails, signing fails, or the HTTP call fails.
+    /// Returns an error for an invalid id, signing, construction, or transport failure.
     pub fn get_sorafs_appeal_finance_deposit(
         &self,
         escrow_id_hex: &str,
     ) -> Result<Response<Vec<u8>>> {
         let escrow_id_hex = normalize_hex_lower::<32>(escrow_id_hex, "escrow_id_hex")?;
         let path = format!("v1/sorafs/appeals/finance/deposits/{escrow_id_hex}");
-        let url = join_torii_url(&self.torii_url, &path);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_sorafs_endpoint(SorafsEndpoint::account_json_get(&path), Vec::new(), |_| {})
     }
-    /// Convenience: signed POST `/v1/sorafs/appeals/finance/deposits/settle`.
-    ///
-    /// # Errors
-    /// Returns an error if the payload is not JSON, request construction fails,
-    /// signing fails, or the HTTP call fails.
-    pub fn post_sorafs_appeal_finance_deposit_settle_json(
-        &self,
-        payload: &[u8],
-    ) -> Result<Response<Vec<u8>>> {
-        self.post_sorafs_signed_json(
+    sorafs_signed_json_methods!(
+        post_sorafs_appeal_finance_deposit_settle_json => (
             "v1/sorafs/appeals/finance/deposits/settle",
-            payload,
-            "appeal finance deposit settlement",
-        )
-    }
-    /// Convenience: signed POST `/v1/sorafs/appeals/finance/deposits/reconcile`.
-    ///
-    /// # Errors
-    /// Returns an error if the payload is not JSON, request construction fails,
-    /// signing fails, or the HTTP call fails.
-    pub fn post_sorafs_appeal_finance_deposit_reconcile_json(
-        &self,
-        payload: &[u8],
-    ) -> Result<Response<Vec<u8>>> {
-        self.post_sorafs_signed_json(
+            "appeal finance deposit settlement"
+        ),
+        post_sorafs_appeal_finance_deposit_reconcile_json => (
             "v1/sorafs/appeals/finance/deposits/reconcile",
-            payload,
-            "appeal finance deposit settlement reconciliation",
-        )
-    }
-    /// Convenience: signed POST `/v1/sorafs/appeals/finance/deposits/submit-settlement`.
-    ///
-    /// # Errors
-    /// Returns an error if the payload is not JSON, request construction fails,
-    /// signing fails, or the HTTP call fails.
-    pub fn post_sorafs_appeal_finance_deposit_submit_settlement_json(
-        &self,
-        payload: &[u8],
-    ) -> Result<Response<Vec<u8>>> {
-        self.post_sorafs_signed_json(
+            "appeal finance deposit settlement reconciliation"
+        ),
+        post_sorafs_appeal_finance_deposit_submit_settlement_json => (
             "v1/sorafs/appeals/finance/deposits/submit-settlement",
-            payload,
-            "appeal finance deposit settlement submission",
-        )
-    }
-    /// Convenience: GET `/v1/sorafs/appeals/finance/reports`.
-    ///
-    /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
-    pub fn get_sorafs_appeal_finance_reports(
-        &self,
-        filter: SorafsAppealFinanceReadbackFilter,
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/appeals/finance/reports");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-    }
-    /// Convenience: GET `/v1/sorafs/appeals/finance/weekly-rollups`.
-    ///
-    /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
-    pub fn get_sorafs_appeal_finance_weekly_rollups(
-        &self,
-        filter: SorafsAppealFinanceReadbackFilter,
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/appeals/finance/weekly-rollups");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-    }
-    /// Convenience: GET `/v1/sorafs/appeals/finance/settlement-receipts`.
-    ///
-    /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
-    pub fn get_sorafs_appeal_finance_settlement_receipts(
-        &self,
-        filter: SorafsAppealFinanceReadbackFilter,
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(
-            &self.torii_url,
-            "v1/sorafs/appeals/finance/settlement-receipts",
-        );
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-    }
-    /// Convenience: GET `/v1/sorafs/moderation/screening-results` to list local screening records.
-    ///
-    /// # Errors
-    /// Returns an error if request construction or the HTTP call fails.
-    pub fn get_sorafs_moderation_screening_results(
-        &self,
-        filter: SorafsModerationScreeningResultsFilter,
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/screening-results");
-        filter
-            .apply(self.default_request(HttpMethod::GET, url))
-            .header("Accept", APPLICATION_JSON)
-            .build()?
-            .send()
-    }
-    /// Convenience: signed POST `/v1/sorafs/moderation/screening-results`.
-    ///
-    /// # Errors
-    /// Returns an error if request construction, validation, serialization,
-    /// signing, or the HTTP call fails.
-    pub fn post_sorafs_moderation_screening_result(
-        &self,
-        request: &SorafsModerationScreeningResultRequest<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, "v1/sorafs/moderation/screening-results");
-        let body = Self::sorafs_moderation_screening_result_body(request)?;
-        self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )
-    }
-    /// Convenience: signed POST `/v1/sorafs/moderation/quarantine/{id}/review`.
-    ///
-    /// # Errors
-    /// Returns an error if the quarantine id is malformed, request construction
-    /// or serialization fails, signing fails, or the HTTP call fails.
-    pub fn post_sorafs_moderation_quarantine_review(
-        &self,
-        quarantine_id_hex: &str,
-        request: &SorafsModerationQuarantineReviewRequest<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
-        let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review");
-        let url = join_torii_url(&self.torii_url, &path);
-        let body = Self::sorafs_moderation_quarantine_review_body(request)?;
-        self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )
-    }
-    /// Convenience: signed POST `/v1/sorafs/moderation/quarantine/{id}/release`.
-    ///
-    /// # Errors
-    /// Returns an error if the quarantine id is malformed, request construction
-    /// or serialization fails, signing fails, or the HTTP call fails.
-    pub fn post_sorafs_moderation_quarantine_release(
-        &self,
-        quarantine_id_hex: &str,
-        request: &SorafsModerationQuarantineReleaseRequest<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
-        let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release");
-        let url = join_torii_url(&self.torii_url, &path);
-        let body = Self::sorafs_moderation_quarantine_release_body(request)?;
-        self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )
-    }
+            "appeal finance deposit settlement submission"
+        ),
+    );
+    sorafs_filtered_get_methods!(
+        get_sorafs_appeal_finance_reports(filter: SorafsAppealFinanceReadbackFilter)
+            => SorafsEndpoint::anonymous_json_get("v1/sorafs/appeals/finance/reports"),
+        get_sorafs_appeal_finance_weekly_rollups(filter: SorafsAppealFinanceReadbackFilter)
+            => SorafsEndpoint::anonymous_json_get("v1/sorafs/appeals/finance/weekly-rollups"),
+        get_sorafs_appeal_finance_settlement_receipts(filter: SorafsAppealFinanceReadbackFilter)
+            => SorafsEndpoint::anonymous_json_get("v1/sorafs/appeals/finance/settlement-receipts"),
+        get_sorafs_moderation_screening_results(filter: SorafsModerationScreeningResultsFilter)
+            => SorafsEndpoint::anonymous_json_get("v1/sorafs/moderation/screening-results"),
+    );
+    sorafs_typed_body_post_methods!(
+        post_sorafs_moderation_screening_result(
+            request: SorafsModerationScreeningResultRequest<'_>
+        ) => (
+            "v1/sorafs/moderation/screening-results",
+            Self::sorafs_moderation_screening_result_body
+        ),
+    );
+    sorafs_quarantine_post_methods!(
+        post_sorafs_moderation_quarantine_review(
+            request: SorafsModerationQuarantineReviewRequest<'_>
+        ) => ("review", Self::sorafs_moderation_quarantine_review_body),
+        post_sorafs_moderation_quarantine_release(
+            request: SorafsModerationQuarantineReleaseRequest<'_>
+        ) => ("release", Self::sorafs_moderation_quarantine_release_body),
+    );
     /// Convenience: signed POST `/v1/sorafs/moderation/quarantine/{id}/appeal-handoff`.
-    ///
     /// # Errors
-    /// Returns an error if the quarantine id is malformed, payload validation
-    /// fails, request construction fails, signing fails, or the HTTP call fails.
+    /// Returns an error for invalid input, signing, construction, or transport failure.
     pub fn post_sorafs_moderation_quarantine_appeal_handoff_json(
         &self,
         quarantine_id_hex: &str,
@@ -17360,20 +16759,13 @@ impl Client {
     ) -> Result<Response<Vec<u8>>> {
         let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
         let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff");
-        let url = join_torii_url(&self.torii_url, &path);
         let payload =
             Self::sorafs_json_request_body(payload, "moderation quarantine appeal handoff")?;
-        self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, payload)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_sorafs_endpoint(SorafsEndpoint::account_json_post(&path), payload, |_| {})
     }
     /// Convenience: signed GET `/v1/sorafs/moderation/quarantine/{id}/operator-panel`.
-    ///
     /// # Errors
-    /// Returns an error if the quarantine id is malformed, request construction
-    /// fails, signing fails, or the HTTP call fails.
+    /// Returns an error for an invalid id, signing, construction, or transport failure.
     pub fn get_sorafs_moderation_quarantine_operator_panel(
         &self,
         quarantine_id_hex: &str,
@@ -17381,52 +16773,25 @@ impl Client {
     ) -> Result<Response<Vec<u8>>> {
         let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
         let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel");
-        let mut url = join_torii_url(&self.torii_url, &path);
-        if let Some(limit) = filter.limit {
-            url.query_pairs_mut()
-                .append_pair("limit", &limit.to_string());
-        }
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_sorafs_endpoint(SorafsEndpoint::account_json_get(&path), Vec::new(), |url| {
+            filter.apply_to_url(url)
+        })
     }
-    /// Convenience: signed POST `/v1/sorafs/moderation/quarantine/{id}/object`.
-    ///
-    /// # Errors
-    /// Returns an error if the quarantine id is malformed, request construction
-    /// or serialization fails, signing fails, or the HTTP call fails.
-    pub fn post_sorafs_moderation_quarantine_object(
-        &self,
-        quarantine_id_hex: &str,
-        request: &SorafsModerationQuarantineObjectStoreRequest<'_>,
-    ) -> Result<Response<Vec<u8>>> {
-        let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
-        let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object");
-        let url = join_torii_url(&self.torii_url, &path);
-        let body = Self::sorafs_moderation_quarantine_object_store_body(request)?;
-        self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, body)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )
-    }
+    sorafs_quarantine_post_methods!(
+        post_sorafs_moderation_quarantine_object(
+            request: SorafsModerationQuarantineObjectStoreRequest<'_>
+        ) => ("object", Self::sorafs_moderation_quarantine_object_store_body),
+    );
     /// Convenience: signed GET `/v1/sorafs/moderation/quarantine/{id}/object`.
-    ///
     /// # Errors
-    /// Returns an error if the quarantine id is malformed, request construction
-    /// fails, signing fails, or the HTTP call fails.
+    /// Returns an error for an invalid id, signing, construction, or transport failure.
     pub fn get_sorafs_moderation_quarantine_object(
         &self,
         quarantine_id_hex: &str,
     ) -> Result<Response<Vec<u8>>> {
         let quarantine_id_hex = normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
         let path = format!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object");
-        let url = join_torii_url(&self.torii_url, &path);
-        self.send_builder(
-            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_sorafs_endpoint(SorafsEndpoint::account_json_get(&path), Vec::new(), |_| {})
     }
     fn sorafs_required_text(value: &str, field: &str) -> Result<String> {
         let trimmed = value.trim();
@@ -17440,16 +16805,21 @@ impl Client {
             .map(|text| Self::sorafs_required_text(text, field))
             .transpose()
     }
+    fn sorafs_json_object<const N: usize>(fields: [(&str, JsonValue); N]) -> Result<Vec<u8>> {
+        let map: JsonMap = fields
+            .into_iter()
+            .map(|(key, value)| (key.to_owned(), value))
+            .collect();
+        Ok(norito::json::to_vec(&JsonValue::Object(map))?)
+    }
     fn sorafs_moderation_model_registry_manifest_body(manifest_bytes: &[u8]) -> Result<Vec<u8>> {
         if manifest_bytes.is_empty() {
             return Err(eyre!("manifest_bytes must not be empty"));
         }
-        let mut map = JsonMap::new();
-        map.insert(
-            "manifest_b64".into(),
+        Self::sorafs_json_object([(
+            "manifest_b64",
             JsonValue::from(base64::engine::general_purpose::STANDARD.encode(manifest_bytes)),
-        );
-        Ok(norito::json::to_vec(&JsonValue::Object(map))?)
+        )])
     }
     fn sorafs_json_request_body(payload: &[u8], context: &str) -> Result<Vec<u8>> {
         if payload.is_empty() {
@@ -17465,32 +16835,24 @@ impl Client {
         payload: &[u8],
         context: &str,
     ) -> Result<Response<Vec<u8>>> {
-        let url = join_torii_url(&self.torii_url, path);
         let payload = Self::sorafs_json_request_body(payload, context)?;
-        self.send_builder(
-            self.account_signed_request(HttpMethod::POST, url, payload)?
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON),
-        )
+        self.send_sorafs_endpoint(SorafsEndpoint::account_json_post(path), payload, |_| {})
     }
     fn sorafs_moderation_quarantine_review_body(
         request: &SorafsModerationQuarantineReviewRequest<'_>,
     ) -> Result<Vec<u8>> {
         let reviewed_by = Self::sorafs_required_text(request.reviewed_by, "reviewed_by")?;
         let notes = Self::sorafs_optional_text(request.notes, "notes")?;
-        let mut map = JsonMap::new();
-        map.insert("reviewed_by".into(), JsonValue::from(reviewed_by));
-        map.insert(
-            "reviewed_at_unix".into(),
-            request
-                .reviewed_at_unix
-                .map_or(JsonValue::Null, JsonValue::from),
-        );
-        map.insert(
-            "notes".into(),
-            notes.map_or(JsonValue::Null, JsonValue::from),
-        );
-        Ok(norito::json::to_vec(&JsonValue::Object(map))?)
+        Self::sorafs_json_object([
+            ("reviewed_by", JsonValue::from(reviewed_by)),
+            (
+                "reviewed_at_unix",
+                request
+                    .reviewed_at_unix
+                    .map_or(JsonValue::Null, JsonValue::from),
+            ),
+            ("notes", notes.map_or(JsonValue::Null, JsonValue::from)),
+        ])
     }
     fn sorafs_moderation_screening_result_body(
         request: &SorafsModerationScreeningResultRequest<'_>,
@@ -17546,21 +16908,15 @@ impl Client {
                 Ok(JsonValue::from(encoded.clone()))
             })
             .collect::<Result<Vec<_>>>()?;
-        let mut map = JsonMap::new();
-        map.insert(
-            "idempotency_key_hex".into(),
-            JsonValue::from(idempotency_key_hex),
-        );
-        map.insert("evidence_kind".into(), JsonValue::from(evidence_kind));
-        map.insert(
-            "authority_b64".into(),
-            JsonValue::from(request.authority_b64),
-        );
-        map.insert(
-            "committee_member_results_b64".into(),
-            JsonValue::Array(committee_member_results_b64),
-        );
-        Ok(norito::json::to_vec(&JsonValue::Object(map))?)
+        Self::sorafs_json_object([
+            ("idempotency_key_hex", JsonValue::from(idempotency_key_hex)),
+            ("evidence_kind", JsonValue::from(evidence_kind)),
+            ("authority_b64", JsonValue::from(request.authority_b64)),
+            (
+                "committee_member_results_b64",
+                JsonValue::Array(committee_member_results_b64),
+            ),
+        ])
     }
     fn sorafs_moderation_quarantine_release_body(
         request: &SorafsModerationQuarantineReleaseRequest<'_>,
@@ -17568,22 +16924,16 @@ impl Client {
         let release_authority =
             Self::sorafs_required_text(request.release_authority, "release_authority")?;
         let notes = Self::sorafs_optional_text(request.notes, "notes")?;
-        let mut map = JsonMap::new();
-        map.insert(
-            "release_authority".into(),
-            JsonValue::from(release_authority),
-        );
-        map.insert(
-            "released_at_unix".into(),
-            request
-                .released_at_unix
-                .map_or(JsonValue::Null, JsonValue::from),
-        );
-        map.insert(
-            "notes".into(),
-            notes.map_or(JsonValue::Null, JsonValue::from),
-        );
-        Ok(norito::json::to_vec(&JsonValue::Object(map))?)
+        Self::sorafs_json_object([
+            ("release_authority", JsonValue::from(release_authority)),
+            (
+                "released_at_unix",
+                request
+                    .released_at_unix
+                    .map_or(JsonValue::Null, JsonValue::from),
+            ),
+            ("notes", notes.map_or(JsonValue::Null, JsonValue::from)),
+        ])
     }
     fn sorafs_moderation_quarantine_object_store_body(
         request: &SorafsModerationQuarantineObjectStoreRequest<'_>,
@@ -17593,29 +16943,25 @@ impl Client {
         }
         let content_type = Self::sorafs_optional_text(request.content_type, "content_type")?;
         let notes = Self::sorafs_optional_text(request.notes, "notes")?;
-        let mut map = JsonMap::new();
-        map.insert(
-            "payload_b64".into(),
-            JsonValue::from(base64::engine::general_purpose::STANDARD.encode(request.payload)),
-        );
-        map.insert(
-            "captured_at_unix".into(),
-            request
-                .captured_at_unix
-                .map_or(JsonValue::Null, JsonValue::from),
-        );
-        map.insert(
-            "content_type".into(),
-            content_type.map_or(JsonValue::Null, JsonValue::from),
-        );
-        map.insert(
-            "notes".into(),
-            notes.map_or(JsonValue::Null, JsonValue::from),
-        );
-        Ok(norito::json::to_vec(&JsonValue::Object(map))?)
+        Self::sorafs_json_object([
+            (
+                "payload_b64",
+                JsonValue::from(base64::engine::general_purpose::STANDARD.encode(request.payload)),
+            ),
+            (
+                "captured_at_unix",
+                request
+                    .captured_at_unix
+                    .map_or(JsonValue::Null, JsonValue::from),
+            ),
+            (
+                "content_type",
+                content_type.map_or(JsonValue::Null, JsonValue::from),
+            ),
+            ("notes", notes.map_or(JsonValue::Null, JsonValue::from)),
+        ])
     }
     /// Convenience: POST `/v1/sorafs/storage/token` to mint a stream token.
-    ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
     pub fn post_sorafs_storage_token(
@@ -28987,7 +28333,7 @@ mod tests {
     #[test]
     fn sorafs_pin_filter_sets_query_params() {
         let client = Client::new(config_factory());
-        let url = join_torii_url(&client.torii_url, "v1/sorafs/pin");
+        let mut url = join_torii_url(&client.torii_url, "v1/sorafs/pin");
         let block_hash = "11".repeat(32);
         let after_digest = "22".repeat(32);
         let filter = SorafsPinListFilter {
@@ -29000,12 +28346,9 @@ mod tests {
             after_digest_hex: Some(&after_digest),
             status: Some(PinStatusKindV1::Approved),
         };
-        let request = filter
-            .apply(client.default_request(HttpMethod::GET, url))
-            .build()
-            .expect("build request");
+        filter.apply_to_url(&mut url);
         assert_eq!(
-            request.uri().query(),
+            url.query(),
             Some(
                 format!(
                     "expected_finalized_height=7&expected_finalized_block_hash_hex={block_hash}&limit=25&max_bytes=16384&after_digest_hex={after_digest}&status=approved"
@@ -29019,12 +28362,9 @@ mod tests {
             #[test]
             fn $name() {
                 let client = Client::new(config_factory());
-                let url = join_torii_url(&client.torii_url, $path);
-                let request = $filter
-                    .apply(client.default_request(HttpMethod::GET, url))
-                    .build()
-                    .expect("build request");
-                assert_eq!(request.uri().query(), Some($expected));
+                let mut url = join_torii_url(&client.torii_url, $path);
+                $filter.apply_to_url(&mut url);
+                assert_eq!(url.query(), Some($expected));
             }
         };
     }
@@ -29157,55 +28497,62 @@ mod tests {
                 .expect("hedging intents request");
         });
         let snapshots = store.lock().expect("snapshot store");
-        assert_eq!(snapshots.len(), 7);
+        let json_bound = SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1;
+        let paths = [
+            "/v1/sorafs/billing/status".to_owned(),
+            "/v1/sorafs/billing/statements".to_owned(),
+            format!("/v1/sorafs/billing/statements/{statement_id}"),
+            format!("/v1/sorafs/billing/statements/{statement_id}/acknowledgements"),
+            "/v1/sorafs/billing/reconciliation".to_owned(),
+            "/v1/sorafs/hedging/exposure".to_owned(),
+            "/v1/sorafs/hedging/intents".to_owned(),
+        ];
+        let queries = [
+            None,
+            Some(format!(
+                "expected_checkpoint_fingerprint={checkpoint}&after_statement_id={after_statement_id}&limit=25"
+            )),
+            Some(format!("expected_checkpoint_fingerprint={checkpoint}")),
+            Some(format!("expected_checkpoint_fingerprint={checkpoint}")),
+            None,
+            Some(format!(
+                "expected_checkpoint_fingerprint={checkpoint}&after={projection_cursor}&limit=50"
+            )),
+            Some(format!(
+                "expected_checkpoint_fingerprint={checkpoint}&limit=100"
+            )),
+        ];
+        assert_eq!(snapshots.len(), paths.len());
         for (index, snapshot) in snapshots.iter().enumerate() {
             assert_canonical_account_signed_request(&client, snapshot);
             assert_eq!(
+                snapshot.method,
+                if index == 3 {
+                    HttpMethod::POST
+                } else {
+                    HttpMethod::GET
+                }
+            );
+            assert_eq!(snapshot.url.path(), paths[index]);
+            assert_eq!(snapshot.url.query(), queries[index].as_deref());
+            let is_statement = index == 2;
+            assert_single_accept_header(
+                snapshot,
+                if is_statement {
+                    APPLICATION_NORITO
+                } else {
+                    APPLICATION_JSON
+                },
+            );
+            assert_eq!(
                 snapshot.max_response_bytes,
-                if index == 2 {
+                if is_statement {
                     SORAFS_BILLING_STATEMENT_RESPONSE_MAX_BYTES_V1
                 } else {
-                    SORAFS_HEDGING_BILLING_JSON_RESPONSE_MAX_BYTES_V1
-                },
-                "route {index} must retain its endpoint-specific response bound",
+                    json_bound
+                }
             );
         }
-        assert_eq!(snapshots[0].method, HttpMethod::GET);
-        assert_eq!(snapshots[0].url.path(), "/v1/sorafs/billing/status");
-        assert_eq!(snapshots[0].url.query(), None);
-        assert_single_accept_header(&snapshots[0], APPLICATION_JSON);
-        assert_eq!(snapshots[1].method, HttpMethod::GET);
-        assert_eq!(snapshots[1].url.path(), "/v1/sorafs/billing/statements");
-        assert_eq!(
-            snapshots[1].url.query(),
-            Some(
-                format!(
-                    "expected_checkpoint_fingerprint={checkpoint}&after_statement_id={after_statement_id}&limit=25"
-                )
-                .as_str()
-            )
-        );
-        assert_single_accept_header(&snapshots[1], APPLICATION_JSON);
-        assert_eq!(snapshots[2].method, HttpMethod::GET);
-        assert_eq!(
-            snapshots[2].url.path(),
-            format!("/v1/sorafs/billing/statements/{statement_id}")
-        );
-        assert_eq!(
-            snapshots[2].url.query(),
-            Some(format!("expected_checkpoint_fingerprint={checkpoint}").as_str())
-        );
-        assert_single_accept_header(&snapshots[2], APPLICATION_NORITO);
-        assert_eq!(snapshots[3].method, HttpMethod::POST);
-        assert_eq!(
-            snapshots[3].url.path(),
-            format!("/v1/sorafs/billing/statements/{statement_id}/acknowledgements")
-        );
-        assert_eq!(
-            snapshots[3].url.query(),
-            Some(format!("expected_checkpoint_fingerprint={checkpoint}").as_str())
-        );
-        assert_single_accept_header(&snapshots[3], APPLICATION_JSON);
         let acknowledgement_headers: HashMap<_, _> = snapshots[3].headers.iter().cloned().collect();
         assert_eq!(
             acknowledgement_headers.get("content-type"),
@@ -29215,29 +28562,6 @@ mod tests {
             snapshots[3].body,
             norito::to_bytes(&proof).expect("encode expected acknowledgement proof")
         );
-        assert_eq!(snapshots[4].method, HttpMethod::GET);
-        assert_eq!(snapshots[4].url.path(), "/v1/sorafs/billing/reconciliation");
-        assert_eq!(snapshots[4].url.query(), None);
-        assert_single_accept_header(&snapshots[4], APPLICATION_JSON);
-        assert_eq!(snapshots[5].method, HttpMethod::GET);
-        assert_eq!(snapshots[5].url.path(), "/v1/sorafs/hedging/exposure");
-        assert_eq!(
-            snapshots[5].url.query(),
-            Some(
-                format!(
-                    "expected_checkpoint_fingerprint={checkpoint}&after={projection_cursor}&limit=50"
-                )
-                .as_str()
-            )
-        );
-        assert_single_accept_header(&snapshots[5], APPLICATION_JSON);
-        assert_eq!(snapshots[6].method, HttpMethod::GET);
-        assert_eq!(snapshots[6].url.path(), "/v1/sorafs/hedging/intents");
-        assert_eq!(
-            snapshots[6].url.query(),
-            Some(format!("expected_checkpoint_fingerprint={checkpoint}&limit=100").as_str())
-        );
-        assert_single_accept_header(&snapshots[6], APPLICATION_JSON);
     }
     #[test]
     fn sorafs_hedging_billing_inputs_are_strict_and_bounded() {
@@ -29251,64 +28575,56 @@ mod tests {
             "00".repeat(32),
             "11".repeat(31),
         ] {
-            let list_error = client
-                .get_sorafs_billing_statements(SorafsBillingStatementListFilter {
+            assert_error_contains(
+                client.get_sorafs_billing_statements(SorafsBillingStatementListFilter {
                     expected_checkpoint_fingerprint_hex: &invalid,
                     after_statement_id_hex: None,
                     limit: 1,
-                })
-                .expect_err("noncanonical checkpoint must fail before sending");
-            assert!(
-                list_error.to_string().contains("checkpoint fingerprint"),
-                "unexpected checkpoint error for {invalid:?}: {list_error}"
+                }),
+                "checkpoint fingerprint",
             );
-            let statement_error = client
-                .get_sorafs_billing_statement(&invalid, &checkpoint)
-                .expect_err("noncanonical statement identifier must fail before sending");
-            assert!(
-                statement_error.to_string().contains("statement identifier"),
-                "unexpected statement error for {invalid:?}: {statement_error}"
+            assert_error_contains(
+                client.get_sorafs_billing_statement(&invalid, &checkpoint),
+                "statement identifier",
             );
         }
         for limit in [0, 101] {
-            let error = client
-                .get_sorafs_hedging_exposure(SorafsHedgingProjectionFilter {
+            assert_error_contains(
+                client.get_sorafs_hedging_exposure(SorafsHedgingProjectionFilter {
                     expected_checkpoint_fingerprint_hex: &checkpoint,
                     after_hex: None,
                     limit,
-                })
-                .expect_err("out-of-range page limit must fail before sending");
-            assert!(error.to_string().contains("page limit"));
+                }),
+                "page limit",
+            );
         }
         let uppercase_cursor = "AA".repeat(32);
-        let cursor_error = client
-            .get_sorafs_hedging_intents(SorafsHedgingProjectionFilter {
+        assert_error_contains(
+            client.get_sorafs_hedging_intents(SorafsHedgingProjectionFilter {
                 expected_checkpoint_fingerprint_hex: &checkpoint,
                 after_hex: Some(&uppercase_cursor),
                 limit: 1,
-            })
-            .expect_err("uppercase cursor must fail before sending");
-        assert!(cursor_error.to_string().contains("projection cursor"));
-        let empty_proof = SorafsBillingAcknowledgementProof::try_from_hex(&checkpoint, Vec::new())
-            .expect_err("empty acknowledgement proof must fail");
-        assert!(empty_proof.to_string().contains("authentication proof"));
-        let zero_nonce = SorafsBillingAcknowledgementProof::try_from_hex(&"00".repeat(32), vec![1])
-            .expect_err("zero acknowledgement nonce must fail");
-        assert!(zero_nonce.to_string().contains("request nonce"));
+            }),
+            "projection cursor",
+        );
+        assert_error_contains(
+            SorafsBillingAcknowledgementProof::try_from_hex(&checkpoint, Vec::new()),
+            "authentication proof",
+        );
+        assert_error_contains(
+            SorafsBillingAcknowledgementProof::try_from_hex(&"00".repeat(32), vec![1]),
+            "request nonce",
+        );
         let proof = SorafsBillingAcknowledgementProof::try_from_hex(&checkpoint, vec![1])
             .expect("valid proof");
         let uppercase_checkpoint = "AA".repeat(32);
-        let acknowledgement_error = client
-            .post_sorafs_billing_statement_acknowledgement(
+        assert_error_contains(
+            client.post_sorafs_billing_statement_acknowledgement(
                 &statement_id,
                 &uppercase_checkpoint,
                 &proof,
-            )
-            .expect_err("uppercase acknowledgement anchor must fail before sending");
-        assert!(
-            acknowledgement_error
-                .to_string()
-                .contains("checkpoint fingerprint")
+            ),
+            "checkpoint fingerprint",
         );
     }
     sorafs_filter_query_test!(
@@ -29406,6 +28722,62 @@ mod tests {
         SorafsModerationModelRegistryFilter { limit: Some(25) },
         "limit=25",
     );
+
+    fn capture_sorafs_endpoint(
+        status: StatusCode,
+        response_body: &str,
+        send: impl FnOnce(&Client) -> Result<Response<Vec<u8>>>,
+    ) -> (Client, RequestSnapshot) {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        with_mock_http(
+            respond_with(&store, json_response(status, response_body)),
+            || send(&client),
+        )
+        .expect("SoraFS endpoint request");
+        let snapshot = store
+            .lock()
+            .expect("snapshot store")
+            .first()
+            .cloned()
+            .expect("SoraFS request snapshot");
+        (client, snapshot)
+    }
+
+    fn assert_signed_json_snapshot(
+        snapshot: &RequestSnapshot,
+        path: &str,
+        require_json_headers: bool,
+    ) {
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), path);
+        if require_json_headers {
+            assert_signed_json_headers(snapshot);
+        } else {
+            assert_signed_headers(snapshot);
+        }
+    }
+
+    fn assert_signed_json_endpoint(
+        status: StatusCode,
+        path: &str,
+        require_json_headers: bool,
+        expected_body: &[u8],
+        send: impl FnOnce(&Client) -> Result<Response<Vec<u8>>>,
+    ) -> RequestSnapshot {
+        let (_, snapshot) = capture_sorafs_endpoint(status, "{}", send);
+        assert_signed_json_snapshot(&snapshot, path, require_json_headers);
+        assert_eq!(snapshot.body, expected_body);
+        snapshot
+    }
+
+    fn assert_error_contains<T, E: fmt::Display>(result: Result<T, E>, expected: &str) {
+        let Err(error) = result else {
+            panic!("request unexpectedly succeeded")
+        };
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+
     #[test]
     fn sorafs_moderation_model_registry_uploads_send_signed_requests() {
         let client = client_with_base_url(base_url());
@@ -29642,116 +29014,35 @@ mod tests {
     );
     #[test]
     fn sorafs_transparency_token_issuance_sends_signed_json_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(
+        let payload = br#"{"token_b64":"proof-token-frame"}"#.to_vec();
+        assert_signed_json_endpoint(
             StatusCode::ACCEPTED,
-            r#"{"schema":"sorafs.transparency.proof_token_issuance.ingest.v1"}"#,
-        );
-        let payload = norito::json::to_vec(&norito::json!({
-            "token_b64": "proof-token-frame",
-            "signer_key_hex": ("a1".repeat(32)),
-            "evidence_digest_hex": ("b2".repeat(32)),
-            "policy_digest_hex": ("c3".repeat(32)),
-            "metadata": [
-                { "key": "producer", "value": "gateway-a" }
-            ]
-        }))
-        .expect("encode proof-token issuance payload");
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_sorafs_transparency_token_issuance_json(&payload)
-                .expect("proof-token issuance request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
-            "/v1/sorafs/transparency/tokens/issuances"
-        );
-        assert_signed_json_headers(snapshot);
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(
-            body.get("token_b64").and_then(JsonValue::as_str),
-            Some("proof-token-frame")
-        );
-        assert_eq!(
-            body.get("signer_key_hex").and_then(JsonValue::as_str),
-            Some("a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1")
+            "/v1/sorafs/transparency/tokens/issuances",
+            true,
+            &payload,
+            |client| client.post_sorafs_transparency_token_issuance_json(&payload),
         );
     }
     #[test]
     fn sorafs_transparency_privacy_aggregate_source_event_sends_signed_json_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"source-event"}"#);
-        let payload = norito::json::to_vec(&norito::json!({
-            "event_id": "privacy-event-1",
-            "occurred_at_unix": 1_800_000_500_u64,
-            "population_label": "moderation.global",
-            "subject_digest_hex": ("b2".repeat(32)),
-            "metrics": [
-                { "key": "quarantined", "value": 3_u64, "unit": "count" }
-            ],
-            "policy_digest_hex": ("a1".repeat(32)),
-        }))
-        .expect("encode privacy aggregate source-event payload");
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_sorafs_transparency_privacy_aggregate_source_event_json(&payload)
-                .expect("privacy aggregate source-event request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
-            "/v1/sorafs/transparency/privacy-aggregates/source-events"
-        );
-        assert_signed_json_headers(snapshot);
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(
-            body.get("event_id").and_then(JsonValue::as_str),
-            Some("privacy-event-1")
-        );
-        assert_eq!(
-            body.get("population_label").and_then(JsonValue::as_str),
-            Some("moderation.global")
+        let payload = br#"{"event_id":"privacy-event-1"}"#.to_vec();
+        assert_signed_json_endpoint(
+            StatusCode::ACCEPTED,
+            "/v1/sorafs/transparency/privacy-aggregates/source-events",
+            true,
+            &payload,
+            |client| client.post_sorafs_transparency_privacy_aggregate_source_event_json(&payload),
         );
     }
     #[test]
     fn sorafs_transparency_privacy_aggregate_publish_due_sends_signed_json_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, r#"{"schema":"publish-due"}"#);
-        let payload = norito::json::to_vec(&norito::json!({
-            "now_unix": 1_800_000_800_u64,
-            "previous_block_hash_hex": ("d4".repeat(32)),
-        }))
-        .expect("encode privacy aggregate publish-due payload");
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_sorafs_transparency_privacy_aggregate_publish_due_json(&payload)
-                .expect("privacy aggregate publish-due request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
-            "/v1/sorafs/transparency/privacy-aggregates/publish-due"
-        );
-        assert_signed_headers(snapshot);
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert!(body.get("cycle_prf_output_hex").is_none());
-        assert_eq!(
-            body.get("previous_block_hash_hex")
-                .and_then(JsonValue::as_str),
-            Some("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4")
+        let payload = br#"{"now_unix":1800000800}"#.to_vec();
+        assert_signed_json_endpoint(
+            StatusCode::OK,
+            "/v1/sorafs/transparency/privacy-aggregates/publish-due",
+            false,
+            &payload,
+            |client| client.post_sorafs_transparency_privacy_aggregate_publish_due_json(&payload),
         );
     }
     sorafs_filter_query_test!(
@@ -29762,9 +29053,6 @@ mod tests {
     );
     #[test]
     fn sorafs_moderation_screening_submit_sends_signed_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"screening"}"#);
         let idempotency_key = "AA".repeat(32);
         let idempotency_key_lower = idempotency_key.to_ascii_lowercase();
         let authority_b64 =
@@ -29775,38 +29063,20 @@ mod tests {
             authority_b64: &authority_b64,
             committee_member_results_b64: &[],
         };
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_sorafs_moderation_screening_result(&request)
-                .expect("moderation screening submit request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
-            "/v1/sorafs/moderation/screening-results"
+        let body = Client::sorafs_moderation_screening_result_body(&request)
+            .expect("canonical screening body");
+        let snapshot = assert_signed_json_endpoint(
+            StatusCode::ACCEPTED,
+            "/v1/sorafs/moderation/screening-results",
+            true,
+            &body,
+            |client| client.post_sorafs_moderation_screening_result(&request),
         );
-        assert_signed_json_headers(snapshot);
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(
-            body.get("idempotency_key_hex").and_then(JsonValue::as_str),
-            Some(idempotency_key_lower.as_str())
-        );
-        assert_eq!(
-            body.get("evidence_kind").and_then(JsonValue::as_str),
-            Some("signed_result")
-        );
-        assert_eq!(
-            body.get("authority_b64").and_then(JsonValue::as_str),
-            Some(authority_b64.as_str())
-        );
-        assert_eq!(
-            body.get("committee_member_results_b64")
-                .and_then(JsonValue::as_array)
-                .map(Vec::len),
-            Some(0)
+        assert!(
+            snapshot
+                .body
+                .windows(idempotency_key_lower.len())
+                .any(|bytes| { bytes == idempotency_key_lower.as_bytes() })
         );
     }
     #[test]
@@ -29826,137 +29096,71 @@ mod tests {
     }
     #[test]
     fn sorafs_moderation_quarantine_review_sends_signed_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"review"}"#);
         let quarantine_id = "AB".repeat(16);
         let request = SorafsModerationQuarantineReviewRequest {
             reviewed_by: " operator@moderation ",
             reviewed_at_unix: Some(1_800_000_210),
             notes: Some(" verified evidence "),
         };
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_sorafs_moderation_quarantine_review(&quarantine_id, &request)
-                .expect("moderation quarantine review request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
+        let body = Client::sorafs_moderation_quarantine_review_body(&request)
+            .expect("canonical review body");
+        assert_signed_json_endpoint(
+            StatusCode::ACCEPTED,
             &format!(
                 "/v1/sorafs/moderation/quarantine/{}/review",
                 quarantine_id.to_ascii_lowercase()
-            )
-        );
-        assert_signed_json_headers(snapshot);
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(
-            body.get("reviewed_by").and_then(JsonValue::as_str),
-            Some("operator@moderation")
-        );
-        assert_eq!(
-            body.get("reviewed_at_unix").and_then(JsonValue::as_u64),
-            Some(1_800_000_210)
-        );
-        assert_eq!(
-            body.get("notes").and_then(JsonValue::as_str),
-            Some("verified evidence")
+            ),
+            true,
+            &body,
+            |client| client.post_sorafs_moderation_quarantine_review(&quarantine_id, &request),
         );
     }
     #[test]
     fn sorafs_moderation_quarantine_release_sends_signed_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"release"}"#);
         let quarantine_id = "CD".repeat(16);
         let request = SorafsModerationQuarantineReleaseRequest {
             release_authority: "release-authority@moderation",
             released_at_unix: Some(1_800_000_220),
             notes: None,
         };
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_sorafs_moderation_quarantine_release(&quarantine_id, &request)
-                .expect("moderation quarantine release request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
+        let body = Client::sorafs_moderation_quarantine_release_body(&request)
+            .expect("canonical release body");
+        assert_signed_json_endpoint(
+            StatusCode::ACCEPTED,
             &format!(
                 "/v1/sorafs/moderation/quarantine/{}/release",
                 quarantine_id.to_ascii_lowercase()
-            )
+            ),
+            false,
+            &body,
+            |client| client.post_sorafs_moderation_quarantine_release(&quarantine_id, &request),
         );
-        assert_signed_headers(snapshot);
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(
-            body.get("release_authority").and_then(JsonValue::as_str),
-            Some("release-authority@moderation")
-        );
-        assert_eq!(
-            body.get("released_at_unix").and_then(JsonValue::as_u64),
-            Some(1_800_000_220)
-        );
-        assert!(body.get("notes").is_some_and(JsonValue::is_null));
     }
     #[test]
     fn sorafs_moderation_quarantine_appeal_handoff_sends_signed_json_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, r#"{"schema":"appeal_handoff"}"#);
         let quarantine_id = "9A".repeat(16);
-        let payload = norito::json::to_vec(&norito::json!({
-            "class": "content",
-            "backlog": 3_u64,
-            "evidence_size_mb": 9_u64,
-            "payer_account": "payer",
-            "destination_account": "treasury",
-            "asset_definition_id": "xor#wonderland"
-        }))
-        .expect("encode appeal handoff payload");
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_sorafs_moderation_quarantine_appeal_handoff_json(&quarantine_id, &payload)
-                .expect("moderation quarantine appeal handoff request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
+        let payload = br#"{"class":"content"}"#.to_vec();
+        assert_signed_json_endpoint(
+            StatusCode::OK,
             &format!(
                 "/v1/sorafs/moderation/quarantine/{}/appeal-handoff",
                 quarantine_id.to_ascii_lowercase()
-            )
-        );
-        assert_signed_json_headers(snapshot);
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        assert_eq!(
-            body.get("class").and_then(JsonValue::as_str),
-            Some("content")
+            ),
+            true,
+            &payload,
+            |client| {
+                client
+                    .post_sorafs_moderation_quarantine_appeal_handoff_json(&quarantine_id, &payload)
+            },
         );
     }
     #[test]
     fn sorafs_moderation_quarantine_operator_panel_sends_signed_get_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, r#"{"schema":"operator_panel"}"#);
         let quarantine_id = "B8".repeat(16);
         let filter = SorafsModerationQuarantineFilter { limit: Some(3) };
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .get_sorafs_moderation_quarantine_operator_panel(&quarantine_id, filter)
-                .expect("moderation quarantine operator panel request");
+        let (client, snapshot) = capture_sorafs_endpoint(StatusCode::OK, "{}", |client| {
+            client.get_sorafs_moderation_quarantine_operator_panel(&quarantine_id, filter)
         });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(
             snapshot.url.path(),
@@ -29967,42 +29171,12 @@ mod tests {
         );
         assert_eq!(snapshot.url.query(), Some("limit=3"));
         assert!(snapshot.body.is_empty());
-        let headers = assert_signed_headers(snapshot);
+        let headers = assert_signed_headers(&snapshot);
         assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
-        let timestamp_ms = headers
-            .get(HEADER_TIMESTAMP_MS)
-            .expect("timestamp header")
-            .parse::<u64>()
-            .expect("timestamp header should parse");
-        let nonce = headers.get(HEADER_NONCE).expect("nonce header");
-        let signature_bytes = base64::engine::general_purpose::STANDARD
-            .decode(
-                headers
-                    .get(HEADER_SIGNATURE)
-                    .expect("signature header")
-                    .as_bytes(),
-            )
-            .expect("signature header should decode");
-        let signature = Signature::try_from_bytes(&signature_bytes)
-            .expect("operator-panel signature header must pass checked admission");
-        let signed_message = Client::exact_network_request_message(
-            &client.network_id,
-            &HttpMethod::GET,
-            &snapshot.url,
-            &[],
-            timestamp_ms,
-            nonce,
-        )
-        .expect("bounded operator-panel signature message");
-        signature
-            .verify(client.key_pair.public_key(), &signed_message)
-            .expect("signature must cover filtered operator-panel URL");
+        assert_canonical_account_signed_request(&client, &snapshot);
     }
     #[test]
     fn sorafs_moderation_quarantine_object_store_sends_signed_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"object"}"#);
         let quarantine_id = "EF".repeat(16);
         let request = SorafsModerationQuarantineObjectStoreRequest {
             payload: b"quarantine payload fixture",
@@ -30010,63 +29184,32 @@ mod tests {
             content_type: Some(" application/octet-stream "),
             notes: Some(" sealed locally "),
         };
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .post_sorafs_moderation_quarantine_object(&quarantine_id, &request)
-                .expect("moderation quarantine object store request");
-        });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
-        assert_eq!(snapshot.method, HttpMethod::POST);
-        assert_eq!(
-            snapshot.url.path(),
+        let body = Client::sorafs_moderation_quarantine_object_store_body(&request)
+            .expect("canonical quarantine object body");
+        assert_signed_json_endpoint(
+            StatusCode::ACCEPTED,
             &format!(
                 "/v1/sorafs/moderation/quarantine/{}/object",
                 quarantine_id.to_ascii_lowercase()
-            )
-        );
-        assert_signed_json_headers(snapshot);
-        let body: JsonValue =
-            norito::json::from_slice(&snapshot.body).expect("decode request body");
-        let expected_payload_b64 =
-            base64::engine::general_purpose::STANDARD.encode(request.payload);
-        assert_eq!(
-            body.get("payload_b64").and_then(JsonValue::as_str),
-            Some(expected_payload_b64.as_str())
-        );
-        assert_eq!(
-            body.get("captured_at_unix").and_then(JsonValue::as_u64),
-            Some(1_800_000_310)
-        );
-        assert_eq!(
-            body.get("content_type").and_then(JsonValue::as_str),
-            Some("application/octet-stream")
-        );
-        assert_eq!(
-            body.get("notes").and_then(JsonValue::as_str),
-            Some("sealed locally")
+            ),
+            true,
+            &body,
+            |client| client.post_sorafs_moderation_quarantine_object(&quarantine_id, &request),
         );
     }
     #[test]
     fn sorafs_moderation_quarantine_object_read_sends_signed_request() {
-        let client = client_with_base_url(base_url());
-        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, r#"{"schema":"object.payload"}"#);
         let quarantine_id = "12".repeat(16);
-        with_mock_http(respond_with(&store, response), || {
-            client
-                .get_sorafs_moderation_quarantine_object(&quarantine_id)
-                .expect("moderation quarantine object read request");
+        let (_, snapshot) = capture_sorafs_endpoint(StatusCode::OK, "{}", |client| {
+            client.get_sorafs_moderation_quarantine_object(&quarantine_id)
         });
-        let snapshots = store.lock().expect("snapshot store");
-        let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(
             snapshot.url.path(),
             &format!("/v1/sorafs/moderation/quarantine/{quarantine_id}/object")
         );
         assert!(snapshot.body.is_empty());
-        let headers = assert_signed_headers(snapshot);
+        let headers = assert_signed_headers(&snapshot);
         assert_eq!(headers.get("accept"), Some(&APPLICATION_JSON.to_owned()));
     }
     #[test]

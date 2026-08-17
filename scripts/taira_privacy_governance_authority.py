@@ -2,15 +2,15 @@
 """Fail-closed shared authority contract for Exact12 governance setup.
 
 This module deliberately implements no signer and no transport.  It fixes the
-public contract a future native signer broker must implement without allowing
+public contract implemented by the installed native signer service without allowing
 Python structure checks, caller-provided paths, environment markers, or
 candidate-controlled keys to become governance authority.
 
 The release controller is root-owned, while its validator/action-driver child
 runs as a deliberately hostile runtime UID.  A provisioned broker must be a
 distinct service behind the fixed Unix socket and root-installed public
-binding named below.  The kernel-reported client UID, never a request field,
-must authenticate only the root controller/authority closer before request
+binding named below.  The binding's kernel-reported client UID, never a request
+field, must authenticate only the controller/authority closer before request
 decoding.  The hostile runtime UID must be rejected even for a byte-perfect
 request.  A distinct service UID owns the socket and replay journal; a distinct
 administrator UID provisions and rotates the encrypted genesis-authority key.
@@ -86,7 +86,6 @@ FIXED_REQUEST_SOCKET = GOVERNANCE_ROLE.request_socket
 SERVICE_ID = GOVERNANCE_ROLE.service_id
 ADMINISTRATOR_ID = GOVERNANCE_ROLE.administrator_id
 ROLE = GOVERNANCE_ROLE.role
-AUTHORIZED_CONTROLLER_PEER_UID = 0
 REQUEST_ID_DOMAIN = b"iroha.taira.privacy_governance_authority_request.v1\0"
 MAX_ACTIVATION_BYTES = 4 * 1024 * 1024
 MAX_REQUEST_BYTES = 8 * 1024 * 1024
@@ -133,16 +132,29 @@ def _fail(message: str) -> NoReturn:
     raise PrivacyGovernanceAuthorityError(message)
 
 
-def _require_provisioned_privacy_governance_authority_v1() -> None:
+def _require_provisioned_privacy_governance_authority_v1(
+    *, require_signing: bool = True
+) -> int:
     """Authenticate the fixed privacy-governance binding and live service."""
 
     try:
-        taira_authority_client.preflight("privacy-governance")
+        status = taira_authority_client.preflight(
+            "privacy-governance", require_signing=require_signing
+        )
     except taira_authority_client.TairaAuthorityClientError as error:
         raise PrivacyGovernanceAuthorityError(
             f"{PROVISIONING_BARRIER}: fixed {AUTHORITY_ENVELOPE_SCHEMA} "
             f"authority and {REPLAY_NAMESPACE} service are unavailable: {error}"
         ) from error
+    client_uid = status.get("client_uid")
+    if (
+        isinstance(client_uid, bool)
+        or not isinstance(client_uid, int)
+        or client_uid <= 0
+        or client_uid >= MAX_UID_U32
+    ):
+        _fail("authenticated privacy-governance binding omitted its client UID")
+    return client_uid
 
 
 def _sha256(value: object, label: str, *, nonzero: bool = True) -> str:
@@ -804,6 +816,8 @@ _RECEIPT_FIELDS = (
 def _validate_untrusted_governance_authority_receipt_structure_v1(
     request: UntrustedGovernanceAuthorityRequestV1,
     receipt_payload: bytes,
+    *,
+    authenticated_client_uid: int,
 ) -> UntrustedGovernanceAuthorityReceiptV1:
     """Validate self-consistent receipt structure without granting authority."""
 
@@ -840,9 +854,13 @@ def _validate_untrusted_governance_authority_receipt_structure_v1(
         _bounded_nonnegative_int(
             value["kernel_peer_uid"], "kernel peer UID", MAX_UID_U32
         )
-        != AUTHORIZED_CONTROLLER_PEER_UID
+        != _bounded_positive_int(
+            authenticated_client_uid,
+            "authenticated binding client UID",
+            MAX_UID_U32,
+        )
     ):
-        _fail("receipt was not issued to the root controller peer UID")
+        _fail("receipt was not issued to the authenticated binding client UID")
     signed_transaction_sha256 = _sha256(
         value["signed_transaction_sha256"], "signed transaction sha256"
     )
@@ -913,7 +931,7 @@ def request_authenticated_governance_transaction_v1(
 ) -> AuthenticatedGovernanceAuthorityResultV1:
     """Request the exact validated transaction from the fixed native authority."""
 
-    _require_provisioned_privacy_governance_authority_v1()
+    client_uid = _require_provisioned_privacy_governance_authority_v1()
     subject = _validated_untrusted_request_value_v1(request)
     try:
         result = taira_authority_client.authorize(
@@ -925,7 +943,7 @@ def request_authenticated_governance_transaction_v1(
         ) from error
     receipt = _canonical(result.durable_receipt)
     structural = _validate_untrusted_governance_authority_receipt_structure_v1(
-        request, receipt
+        request, receipt, authenticated_client_uid=client_uid
     )
     return AuthenticatedGovernanceAuthorityResultV1(
         authority_envelope=result.authority_envelope_bytes,
@@ -942,11 +960,15 @@ def validate_authenticated_governance_receipt_v1(
 ) -> UntrustedGovernanceAuthorityReceiptV1:
     """Historically verify one receipt without replay consumption or re-signing."""
 
-    _require_provisioned_privacy_governance_authority_v1()
+    client_uid = _require_provisioned_privacy_governance_authority_v1(
+        require_signing=False
+    )
     if authority_envelope_payload is None:
         _fail("governance authority envelope sidecar is required")
     structural = _validate_untrusted_governance_authority_receipt_structure_v1(
-        request, receipt_payload
+        request,
+        receipt_payload,
+        authenticated_client_uid=client_uid,
     )
     subject = _validated_untrusted_request_value_v1(request)
     receipt = _strict_object(

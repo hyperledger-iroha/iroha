@@ -5,8 +5,12 @@ Stable Cargo cannot emit its internal unit graph.  This producer therefore does
 not approximate one from ``cargo metadata``.  It accepts a canonical normalized
 Cargo unit-graph artifact plus an execution policy only when a separate SSH
 controller has signed an exact authorization binding those artifacts to the
-reviewed clean source closure.  Every source fact in the resulting projection
-is still derived locally from the verified signed commit.
+reviewed clean source closure.  The exact V1 execution policy binds direct tool
+identities, capture semantics, and raw/normalized graph digests. The producer
+authenticates both supplied graph artifacts against independent pins and that
+policy; truthful Cargo capture and normalization remain the external
+controller's explicit trust responsibility. Every source fact in the resulting
+projection is still derived locally from the verified signed commit.
 """
 
 from __future__ import annotations
@@ -22,6 +26,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import secrets
 import stat
 import subprocess
 import tempfile
@@ -43,11 +49,68 @@ PRODUCTION_RECEIPT_SCHEMA = (
 )
 REQUEST_RECEIPT_SCHEMA = "iroha.kagemusha.source_seal_projection_request_receipt.v1"
 SIGNATURE_NAMESPACE = "iroha-kagemusha-source-seal-projection-v1"
+EXECUTION_POLICY_SCHEMA = (
+    "iroha.kagemusha.source_seal_projection_execution_policy.v1"
+)
 MAX_AUTHORIZATION_BYTES = 64 * 1024
-MAX_EXECUTION_POLICY_BYTES = 16 * 1024 * 1024
+MAX_EXECUTION_POLICY_BYTES = 64 * 1024
 MAX_UNIT_GRAPH_BYTES = 16 * 1024 * 1024
 MAX_SIGNATURE_BYTES = 64 * 1024
 MAX_GRAPH_STRING_BYTES = 4096
+MAX_TOOL_BINARY_BYTES = 512 * 1024 * 1024
+MAX_TOOL_VERSION_LINES = 32
+EXECUTION_POLICY_KEYS = {"cargo", "rustc", "schema", "unit_graph"}
+TOOL_IDENTITY_KEYS = {
+    "binary_sha256",
+    "binary_size_bytes",
+    "version_argv",
+    "version_stdout_lines",
+}
+EXECUTION_POLICY_UNIT_GRAPH_KEYS = {
+    "capture_argv",
+    "capture_environment",
+    "normalization",
+    "normalized_sha256",
+    "normalized_size_bytes",
+    "raw_sha256",
+    "raw_size_bytes",
+}
+UNIT_GRAPH_CAPTURE_ARGV = (
+    "<DIRECT_CARGO>",
+    "-Z",
+    "unstable-options",
+    "build",
+    "--unit-graph",
+    "--release",
+    "--locked",
+    "--offline",
+    "--target",
+    builder.SOURCE_SEAL_TARGET,
+    "--target-dir",
+    "<FRESH_EXTERNAL_TARGET_DIR>",
+    "-p",
+    "iroha_core",
+    "--features",
+    ",".join(builder.CANDIDATE_BUILD_FEATURES),
+    "--bin",
+    builder.BINARY_NAME,
+    "--jobs",
+    "1",
+)
+UNIT_GRAPH_CAPTURE_ENVIRONMENT = {
+    "CARGO_ENCODED_RUSTFLAGS": "",
+    "CARGO_HOME": "<OWNER_CONTROLLED_CACHE_ONLY_CARGO_HOME>",
+    "CARGO_NET_OFFLINE": "true",
+    "HOME": "/var/empty",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "PATH": "/usr/bin:/bin",
+    "RUSTC": "<DIRECT_RUSTC>",
+    "RUSTC_WRAPPER": "",
+    "RUSTC_WORKSPACE_WRAPPER": "",
+    "RUSTFLAGS": "",
+    "TZ": "UTC",
+}
 UNIT_GRAPH_KEYS = {"roots", "units", "version"}
 UNIT_KEYS = {
     "dependencies",
@@ -143,7 +206,7 @@ class DerivedProjectionInputs:
     identity: source_seal.SourceIdentity
     authorization: dict[str, Any]
     authorization_bytes: bytes
-    execution_policy: bytes
+    execution_policy: dict[str, Any]
     unit_graph: dict[str, Any]
 
 
@@ -237,6 +300,23 @@ def _relative_source_path(value: Any, label: str) -> str:
     return path
 
 
+def _normalized_package_id(value: Any, label: str) -> str:
+    package_id = _bounded_ascii(value, label)
+    if "path+file:///" in package_id or (
+        "path+file://" in package_id
+        and "path+file://<PACKAGE_ROOT>" not in package_id
+    ):
+        raise ProjectionProductionError(
+            f"{label} contains an unnormalized absolute path package identity"
+        )
+    scrubbed = package_id.replace("<PACKAGE_ROOT>", "").replace(
+        "<SOURCE_CACHE>", ""
+    )
+    if "<" in scrubbed or ">" in scrubbed:
+        raise ProjectionProductionError(f"{label} contains an unknown placeholder")
+    return package_id
+
+
 def _string_list(value: Any, label: str) -> list[str]:
     if not isinstance(value, list):
         raise ProjectionProductionError(f"{label} is not a JSON string array")
@@ -246,15 +326,138 @@ def _string_list(value: Any, label: str) -> list[str]:
     return result
 
 
+def _bounded_integer(value: Any, minimum: int, maximum: int, label: str) -> int:
+    if type(value) is not int or not minimum <= value <= maximum:
+        raise ProjectionProductionError(f"{label} is outside its integer bound")
+    return value
+
+
+def _validate_tool_identity(
+    value: Any,
+    *,
+    tool: str,
+    version_argv: tuple[str, ...],
+) -> dict[str, Any]:
+    """Validate one exact direct tool identity and captured verbose version."""
+
+    identity = _object(value, TOOL_IDENTITY_KEYS, f"execution-policy {tool}")
+    _digest(identity["binary_sha256"], 64, f"execution-policy {tool} binary SHA-256")
+    _bounded_integer(
+        identity["binary_size_bytes"],
+        1,
+        MAX_TOOL_BINARY_BYTES,
+        f"execution-policy {tool} binary size",
+    )
+    if identity["version_argv"] != list(version_argv):
+        raise ProjectionProductionError(
+            f"execution-policy {tool} version argv is not exact"
+        )
+    lines = identity["version_stdout_lines"]
+    if not isinstance(lines, list) or not 1 <= len(lines) <= MAX_TOOL_VERSION_LINES:
+        raise ProjectionProductionError(
+            f"execution-policy {tool} version output is outside its line bound"
+        )
+    parsed_lines = [
+        _bounded_ascii(line, f"execution-policy {tool} version line")
+        for line in lines
+    ]
+    version_pattern = rf"{re.escape(tool)} 1\.93\.[0-9]+(?:[-+ ][ -~]*)?"
+    if re.fullmatch(version_pattern, parsed_lines[0]) is None:
+        raise ProjectionProductionError(
+            f"execution-policy {tool} version is not Cargo toolchain 1.93"
+        )
+    return identity
+
+
+def _validate_execution_policy(
+    payload: bytes,
+    raw_unit_graph: bytes,
+    normalized_unit_graph: bytes,
+) -> dict[str, Any]:
+    """Validate the exact V1 toolchain and unit-graph capture policy."""
+
+    policy = _object(
+        _strict_canonical_json(payload, "projection execution policy"),
+        EXECUTION_POLICY_KEYS,
+        "projection execution policy",
+    )
+    if policy["schema"] != EXECUTION_POLICY_SCHEMA:
+        raise ProjectionProductionError("projection execution-policy schema differs")
+    _validate_tool_identity(
+        policy["cargo"],
+        tool="cargo",
+        version_argv=("<DIRECT_CARGO>", "-Vv"),
+    )
+    _validate_tool_identity(
+        policy["rustc"],
+        tool="rustc",
+        version_argv=("<DIRECT_RUSTC>", "-Vv"),
+    )
+    graph = _object(
+        policy["unit_graph"],
+        EXECUTION_POLICY_UNIT_GRAPH_KEYS,
+        "execution-policy unit graph",
+    )
+    if graph["capture_argv"] != list(UNIT_GRAPH_CAPTURE_ARGV):
+        raise ProjectionProductionError(
+            "execution-policy unit-graph capture argv is not exact"
+        )
+    if graph["capture_environment"] != UNIT_GRAPH_CAPTURE_ENVIRONMENT:
+        raise ProjectionProductionError(
+            "execution-policy unit-graph capture environment is not exact"
+        )
+    if graph["normalization"] != builder.SOURCE_SEAL_UNIT_GRAPH_NORMALIZATION:
+        raise ProjectionProductionError(
+            "execution-policy unit-graph normalization differs"
+        )
+    raw_sha256 = _digest(
+        graph["raw_sha256"], 64, "execution-policy raw unit-graph SHA-256"
+    )
+    raw_size = _bounded_integer(
+        graph["raw_size_bytes"],
+        1,
+        MAX_UNIT_GRAPH_BYTES,
+        "execution-policy raw unit-graph size",
+    )
+    if (
+        raw_sha256 != hashlib.sha256(raw_unit_graph).hexdigest()
+        or raw_size != len(raw_unit_graph)
+    ):
+        raise ProjectionProductionError(
+            "execution-policy raw unit graph differs from the supplied graph"
+        )
+    normalized_sha256 = _digest(
+        graph["normalized_sha256"],
+        64,
+        "execution-policy normalized unit-graph SHA-256",
+    )
+    normalized_size = _bounded_integer(
+        graph["normalized_size_bytes"],
+        1,
+        MAX_UNIT_GRAPH_BYTES,
+        "execution-policy normalized unit-graph size",
+    )
+    if (
+        normalized_sha256 != hashlib.sha256(normalized_unit_graph).hexdigest()
+        or normalized_size != len(normalized_unit_graph)
+    ):
+        raise ProjectionProductionError(
+            "execution-policy normalized unit graph differs from the supplied graph"
+        )
+    return policy
+
+
 def _require_projection_byte_bound(payload: bytes) -> None:
     """Enforce the single 16 KiB producer, consumer, and promotion bound."""
 
     if not 1 <= len(payload) <= builder.MAX_AUTHENTICATED_SOURCE_SEAL_PROJECTION_BYTES:
-        raise ProjectionProductionError("produced source projection exceeds its byte bound")
+        raise ProjectionProductionError(
+            "produced source projection exceeds its byte bound"
+        )
 
 
 def _validate_normalized_unit_graph(payload: bytes) -> dict[str, Any]:
-    """Validate structural facts available from a genuine normalized graph.
+    """Validate structural facts in an externally attested normalized graph.
 
     Cargo documents ``pkg_id`` as opaque.  The exact selected root nevertheless
     identifies the ``iroha_core`` package instance because the sealed semantic
@@ -271,14 +474,18 @@ def _validate_normalized_unit_graph(payload: bytes) -> dict[str, Any]:
         raise ProjectionProductionError("normalized Cargo unit-graph version is not 1")
     units = graph["units"]
     if not isinstance(units, list) or not 1 <= len(units) <= 100_000:
-        raise ProjectionProductionError("normalized Cargo unit count is outside its bound")
+        raise ProjectionProductionError(
+            "normalized Cargo unit count is outside its bound"
+        )
     roots = graph["roots"]
     if not isinstance(roots, list) or not roots:
         raise ProjectionProductionError("normalized Cargo unit graph has no root")
     if any(type(index) is not int or not 0 <= index < len(units) for index in roots):
         raise ProjectionProductionError("normalized Cargo root index is invalid")
     if roots != sorted(set(roots)):
-        raise ProjectionProductionError("normalized Cargo roots are not unique and sorted")
+        raise ProjectionProductionError(
+            "normalized Cargo roots are not unique and sorted"
+        )
     if len(roots) != 1:
         raise ProjectionProductionError("Kagemusha Cargo unit graph must have one root")
 
@@ -292,7 +499,9 @@ def _validate_normalized_unit_graph(payload: bytes) -> dict[str, Any]:
             raise ProjectionProductionError(
                 f"normalized Cargo unit {unit_index} fields are not exact"
             )
-        pkg_id = _bounded_ascii(raw_unit["pkg_id"], f"unit {unit_index} pkg_id")
+        pkg_id = _normalized_package_id(
+            raw_unit["pkg_id"], f"unit {unit_index} pkg_id"
+        )
         packages.add(pkg_id)
         target = raw_unit["target"]
         if not isinstance(target, dict) or not (
@@ -303,7 +512,7 @@ def _validate_normalized_unit_graph(payload: bytes) -> dict[str, Any]:
                 f"normalized Cargo unit {unit_index} target fields are not exact"
             )
         kinds = _string_list(target["kind"], f"unit {unit_index} target kinds")
-        _string_list(
+        crate_types = _string_list(
             target["crate_types"], f"unit {unit_index} target crate types"
         )
         target_name = _bounded_ascii(
@@ -336,17 +545,20 @@ def _validate_normalized_unit_graph(payload: bytes) -> dict[str, Any]:
         _bounded_ascii(profile["opt_level"], f"unit {unit_index} profile opt level")
         _bounded_ascii(profile["lto"], f"unit {unit_index} profile LTO")
         _bounded_ascii(profile["panic"], f"unit {unit_index} profile panic")
-        _bounded_ascii(profile["strip"]["resolved"]["Named"], f"unit {unit_index} profile strip") if (
-            isinstance(profile["strip"], dict)
-            and set(profile["strip"]) == {"resolved"}
-            and isinstance(profile["strip"]["resolved"], dict)
-            and set(profile["strip"]["resolved"]) == {"Named"}
-        ) else (_ for _ in ()).throw(
-            ProjectionProductionError(
+        strip = profile["strip"]
+        if not (
+            isinstance(strip, dict)
+            and set(strip) == {"resolved"}
+            and isinstance(strip["resolved"], dict)
+            and set(strip["resolved"]) == {"Named"}
+        ):
+            raise ProjectionProductionError(
                 f"normalized Cargo unit {unit_index} profile strip is invalid"
             )
+        strip_name = _bounded_ascii(
+            strip["resolved"]["Named"], f"unit {unit_index} profile strip"
         )
-        if profile["strip"]["resolved"]["Named"] not in (
+        if strip_name not in (
             "none",
             "debuginfo",
             "symbols",
@@ -362,9 +574,12 @@ def _validate_normalized_unit_graph(payload: bytes) -> dict[str, Any]:
                 )
         for optional_integer in ("codegen_units", "debuginfo"):
             value = profile[optional_integer]
-            if value is not None and (type(value) is not int or not 0 <= value <= 2**31 - 1):
+            if value is not None and (
+                type(value) is not int or not 0 <= value <= 2**31 - 1
+            ):
                 raise ProjectionProductionError(
-                    f"normalized Cargo unit {unit_index} profile {optional_integer} is invalid"
+                    f"normalized Cargo unit {unit_index} profile "
+                    f"{optional_integer} is invalid"
                 )
         for boolean in (
             "debug_assertions",
@@ -396,7 +611,8 @@ def _validate_normalized_unit_graph(payload: bytes) -> dict[str, Any]:
         for dependency_index, dependency in enumerate(dependencies):
             if not isinstance(dependency, dict) or set(dependency) != DEPENDENCY_KEYS:
                 raise ProjectionProductionError(
-                    f"unit {unit_index} dependency {dependency_index} fields are not exact"
+                    f"unit {unit_index} dependency {dependency_index} "
+                    "fields are not exact"
                 )
             target_index = dependency["index"]
             if (
@@ -414,7 +630,8 @@ def _validate_normalized_unit_graph(payload: bytes) -> dict[str, Any]:
             for boolean in ("noprelude", "public"):
                 if type(dependency[boolean]) is not bool:
                     raise ProjectionProductionError(
-                        f"unit {unit_index} dependency {dependency_index} {boolean} is not boolean"
+                        f"unit {unit_index} dependency {dependency_index} "
+                        f"{boolean} is not boolean"
                     )
             dependency_indices.append(target_index)
             dependency_order.append((target_index, extern_name))
@@ -425,6 +642,10 @@ def _validate_normalized_unit_graph(payload: bytes) -> dict[str, Any]:
         edges.append(dependency_indices)
         parsed_units.append(
             {
+                "crate_types": crate_types,
+                "doc": target["doc"],
+                "doctest": target["doctest"],
+                "edition": target["edition"],
                 "features": raw_unit["features"],
                 "kinds": kinds,
                 "mode": mode,
@@ -433,6 +654,7 @@ def _validate_normalized_unit_graph(payload: bytes) -> dict[str, Any]:
                 "profile": profile,
                 "required_features": required_features,
                 "target_name": target_name,
+                "test": target["test"],
             }
         )
         if "custom-build" in kinds or mode == "run-custom-build":
@@ -448,17 +670,29 @@ def _validate_normalized_unit_graph(payload: bytes) -> dict[str, Any]:
         reachable.add(index)
         pending.extend(edges[index])
     if len(reachable) != len(units):
-        raise ProjectionProductionError("normalized Cargo unit graph contains unreachable units")
+        raise ProjectionProductionError(
+            "normalized Cargo unit graph contains unreachable units"
+        )
 
     root = parsed_units[roots[0]]
     if (
         root["target_name"] != builder.BINARY_NAME
         or root["kinds"] != ["bin"]
+        or root["crate_types"] != ["bin"]
+        or root["doc"] is not True
+        or root["doctest"] is not False
+        or root["edition"] != "2024"
+        or root["test"] is not True
         or root["mode"] != "build"
         or root["platform"] != builder.SOURCE_SEAL_TARGET
         or root["profile"].get("name") != "release"
         or root["profile"].get("opt_level") != "3"
         or root["profile"].get("debug_assertions") is not False
+        or root["profile"].get("overflow_checks") is not False
+        or root["profile"].get("codegen_backend") is not None
+        or root["profile"].get("split_debuginfo") is not None
+        or root["profile"].get("strip")
+        != {"resolved": {"Named": "debuginfo"}}
         or root["required_features"] != list(ROOT_REQUIRED_FEATURES)
         or root["features"] != list(builder.SOURCE_SEAL_RESOLVED_FEATURES)
     ):
@@ -588,6 +822,8 @@ def _derive_projection_inputs(
     reviewed_source_closure_sha256: str,
     execution_policy_path: Path,
     execution_policy_sha256: str,
+    raw_unit_graph_path: Path,
+    raw_unit_graph_sha256: str,
     unit_graph_path: Path,
     unit_graph_sha256: str,
     identity_reader: Callable[
@@ -604,7 +840,9 @@ def _derive_projection_inputs(
         reviewed_source_closure_sha256,
     )
     if identity.source_repo_dirty:
-        raise ProjectionProductionError("source projection requires a clean source identity")
+        raise ProjectionProductionError(
+            "source projection requires a clean source identity"
+        )
     execution_policy = _read_pinned_file(
         execution_policy_path,
         execution_policy_sha256,
@@ -612,13 +850,24 @@ def _derive_projection_inputs(
         MAX_EXECUTION_POLICY_BYTES,
         allow_empty=False,
     )
-    _strict_canonical_json(execution_policy, "projection execution policy")
+    raw_unit_graph_bytes = _read_pinned_file(
+        raw_unit_graph_path,
+        raw_unit_graph_sha256,
+        "raw Cargo unit graph",
+        MAX_UNIT_GRAPH_BYTES,
+        allow_empty=False,
+    )
     unit_graph_bytes = _read_pinned_file(
         unit_graph_path,
         unit_graph_sha256,
         "normalized Cargo unit graph",
         MAX_UNIT_GRAPH_BYTES,
         allow_empty=False,
+    )
+    execution_policy_value = _validate_execution_policy(
+        execution_policy,
+        raw_unit_graph_bytes,
+        unit_graph_bytes,
     )
     unit_graph = _validate_normalized_unit_graph(unit_graph_bytes)
     closure_bytes = builder._canonical_json_line(identity.reviewed_source_closure)
@@ -635,7 +884,7 @@ def _derive_projection_inputs(
         identity=identity,
         authorization=authorization,
         authorization_bytes=builder._canonical_json_line(authorization),
-        execution_policy=execution_policy,
+        execution_policy=execution_policy_value,
         unit_graph=unit_graph,
     )
 
@@ -647,6 +896,8 @@ def construct_authorization_request(
     reviewed_source_closure_sha256: str,
     execution_policy_path: Path,
     execution_policy_sha256: str,
+    raw_unit_graph_path: Path,
+    raw_unit_graph_sha256: str,
     unit_graph_path: Path,
     unit_graph_sha256: str,
     identity_reader: Callable[
@@ -661,6 +912,8 @@ def construct_authorization_request(
         reviewed_source_closure_sha256=reviewed_source_closure_sha256,
         execution_policy_path=execution_policy_path,
         execution_policy_sha256=execution_policy_sha256,
+        raw_unit_graph_path=raw_unit_graph_path,
+        raw_unit_graph_sha256=raw_unit_graph_sha256,
         unit_graph_path=unit_graph_path,
         unit_graph_sha256=unit_graph_sha256,
         identity_reader=identity_reader,
@@ -683,6 +936,8 @@ def construct_projection(
     controller_revocation_sha256: str,
     execution_policy_path: Path,
     execution_policy_sha256: str,
+    raw_unit_graph_path: Path,
+    raw_unit_graph_sha256: str,
     unit_graph_path: Path,
     unit_graph_sha256: str,
     identity_reader: Callable[
@@ -700,6 +955,8 @@ def construct_projection(
         reviewed_source_closure_sha256=reviewed_source_closure_sha256,
         execution_policy_path=execution_policy_path,
         execution_policy_sha256=execution_policy_sha256,
+        raw_unit_graph_path=raw_unit_graph_path,
+        raw_unit_graph_sha256=raw_unit_graph_sha256,
         unit_graph_path=unit_graph_path,
         unit_graph_sha256=unit_graph_sha256,
         identity_reader=identity_reader,
@@ -763,7 +1020,8 @@ def construct_projection(
     expected_authorization = derived.authorization
     if authorization != expected_authorization:
         raise ProjectionProductionError(
-            "controller authorization differs from the verified source and policy inputs"
+            "controller authorization differs from the verified source and "
+            "policy inputs"
         )
 
     projection = {
@@ -818,6 +1076,9 @@ def construct_projection(
 
     receipt = {
         "authorization_sha256": hashlib.sha256(authorization_bytes).hexdigest(),
+        "cargo_binary_sha256": derived.execution_policy["cargo"][
+            "binary_sha256"
+        ],
         "controller_allowed_signers_sha256": controller.allowed_signers_sha256,
         "controller_principal": controller.principal,
         "controller_public_key_sha256": controller.public_key_sha256,
@@ -828,6 +1089,15 @@ def construct_projection(
         ],
         "projection_hex": projection_bytes.hex(),
         "projection_sha256": projection_sha256,
+        "raw_unit_graph_sha256": derived.execution_policy["unit_graph"][
+            "raw_sha256"
+        ],
+        "raw_unit_graph_size_bytes": derived.execution_policy["unit_graph"][
+            "raw_size_bytes"
+        ],
+        "rustc_binary_sha256": derived.execution_policy["rustc"][
+            "binary_sha256"
+        ],
         "schema": PRODUCTION_RECEIPT_SCHEMA,
         "source_commit": identity.source_commit,
         "source_tree_sha256": identity.source_tree_sha256,
@@ -842,12 +1112,28 @@ def construct_projection(
 
 
 def _write_new_private_file(path: Path, payload: bytes) -> None:
-    """Publish one new projection without following or replacing a path."""
+    """Atomically publish complete bytes without following or replacing a path."""
 
     path_text = os.fspath(path)
-    if not path.is_absolute() or os.path.normpath(path_text) != path_text:
-        raise ProjectionProductionError("projection output path must be absolute and normalized")
+    name = path.name
+    if (
+        not path.is_absolute()
+        or os.path.normpath(path_text) != path_text
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", name) is None
+        or not isinstance(payload, bytes)
+        or not payload
+    ):
+        raise ProjectionProductionError(
+            "projection output path or payload is not canonical"
+        )
     parent = path.parent
+    parent_descriptor = -1
+    temporary_descriptor = -1
+    final_descriptor = -1
+    temporary_name: str | None = None
+    linked = False
+    failure: Exception | None = None
+    cleanup_failure: OSError | None = None
     try:
         parent_metadata = parent.lstat()
         if (
@@ -860,41 +1146,184 @@ def _write_new_private_file(path: Path, payload: bytes) -> None:
             raise ProjectionProductionError(
                 "projection output parent must be an owner-private canonical directory"
             )
-        flags = (
-            os.O_WRONLY
+        directory_flags = (
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        parent_descriptor = os.open(parent, directory_flags)
+        opened_parent = os.fstat(parent_descriptor)
+        if not os.path.samestat(parent_metadata, opened_parent):
+            raise ProjectionProductionError(
+                "projection output parent changed while opened"
+            )
+        temporary_flags = (
+            os.O_RDWR
             | os.O_CREAT
             | os.O_EXCL
             | getattr(os, "O_CLOEXEC", 0)
             | getattr(os, "O_NOFOLLOW", 0)
         )
-        descriptor = os.open(path, flags, 0o600)
-        try:
-            offset = 0
-            while offset < len(payload):
-                written = os.write(descriptor, payload[offset:])
-                if written <= 0:
-                    raise ProjectionProductionError("could not publish source projection")
-                offset += written
-            os.fsync(descriptor)
-            metadata = os.fstat(descriptor)
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_nlink != 1
-                or metadata.st_uid != os.geteuid()
-                or stat.S_IMODE(metadata.st_mode) != 0o600
-                or metadata.st_size != len(payload)
-            ):
-                raise ProjectionProductionError(
-                    "published source projection has unsafe metadata"
+        for _ in range(32):
+            candidate = f".{name}.tmp-{secrets.token_hex(16)}"
+            try:
+                temporary_descriptor = os.open(
+                    candidate,
+                    temporary_flags,
+                    0o600,
+                    dir_fd=parent_descriptor,
                 )
-        finally:
-            os.close(descriptor)
-    except ProjectionProductionError:
-        raise
-    except OSError as error:
+            except FileExistsError:
+                continue
+            temporary_name = candidate
+            break
+        if temporary_name is None or temporary_descriptor < 0:
+            raise ProjectionProductionError(
+                "could not allocate a private publication temporary"
+            )
+        offset = 0
+        while offset < len(payload):
+            written = os.write(temporary_descriptor, payload[offset:])
+            if written <= 0:
+                raise ProjectionProductionError(
+                    "could not complete the source-projection temporary"
+                )
+            offset += written
+        os.fsync(temporary_descriptor)
+        temporary_metadata = os.fstat(temporary_descriptor)
+        if (
+            not stat.S_ISREG(temporary_metadata.st_mode)
+            or temporary_metadata.st_nlink != 1
+            or temporary_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(temporary_metadata.st_mode) != 0o600
+            or temporary_metadata.st_size != len(payload)
+        ):
+            raise ProjectionProductionError(
+                "completed source-projection temporary has unsafe metadata"
+            )
+        os.link(
+            temporary_name,
+            name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+            follow_symlinks=False,
+        )
+        linked = True
+        os.fsync(parent_descriptor)
+        final_descriptor = os.open(
+            name,
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_descriptor,
+        )
+        final_metadata = os.fstat(final_descriptor)
+        temporary_after_link = os.fstat(temporary_descriptor)
+        if not (
+            os.path.samestat(temporary_after_link, final_metadata)
+            and temporary_after_link.st_nlink == 2
+            and final_metadata.st_nlink == 2
+            and stat.S_ISREG(final_metadata.st_mode)
+            and final_metadata.st_uid == os.geteuid()
+            and stat.S_IMODE(final_metadata.st_mode) == 0o600
+            and final_metadata.st_size == len(payload)
+        ):
+            raise ProjectionProductionError(
+                "published source projection is not the completed temporary inode"
+            )
+        observed: list[bytes] = []
+        offset = 0
+        while offset < len(payload):
+            chunk = os.pread(
+                final_descriptor,
+                min(64 * 1024, len(payload) - offset),
+                offset,
+            )
+            if not chunk:
+                raise ProjectionProductionError(
+                    "published source projection became truncated"
+                )
+            observed.append(chunk)
+            offset += len(chunk)
+        if b"".join(observed) != payload:
+            raise ProjectionProductionError(
+                "published source projection bytes differ from the completed temporary"
+            )
+        os.unlink(temporary_name, dir_fd=parent_descriptor)
+        temporary_name = None
+        os.fsync(parent_descriptor)
+        final_after_cleanup = os.fstat(final_descriptor)
+        named_after_cleanup = os.stat(
+            name, dir_fd=parent_descriptor, follow_symlinks=False
+        )
+        parent_after_cleanup = parent.lstat()
+        path_after_cleanup = path.lstat()
+        if not (
+            os.path.samestat(final_after_cleanup, named_after_cleanup)
+            and os.path.samestat(final_after_cleanup, path_after_cleanup)
+            and os.path.samestat(opened_parent, parent_after_cleanup)
+            and final_after_cleanup.st_nlink == 1
+            and final_after_cleanup.st_size == len(payload)
+            and stat.S_IMODE(final_after_cleanup.st_mode) == 0o600
+        ):
+            raise ProjectionProductionError(
+                "published source projection changed after durable cleanup"
+            )
+    except Exception as error:  # cleanup and classify after descriptor release
+        failure = error
+    finally:
+        if temporary_name is not None and parent_descriptor >= 0:
+            try:
+                os.unlink(temporary_name, dir_fd=parent_descriptor)
+                os.fsync(parent_descriptor)
+            except OSError as error:
+                cleanup_failure = error
+        for descriptor in (
+            final_descriptor,
+            temporary_descriptor,
+            parent_descriptor,
+        ):
+            if descriptor >= 0:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+    if failure is not None:
+        if linked:
+            raise ProjectionProductionError(
+                "source-projection publication reached commit-uncertain state; "
+                "authenticate the final path before continuing"
+            ) from failure
+        if isinstance(failure, ProjectionProductionError):
+            raise failure
         raise ProjectionProductionError(
             "projection output is unavailable or already exists"
-        ) from error
+        ) from failure
+    if cleanup_failure is not None:
+        raise ProjectionProductionError(
+            "source-projection temporary cleanup failed"
+        ) from cleanup_failure
+
+
+def verify_reconstructed_projection(
+    production: ProjectionProduction,
+    projection_path: Path,
+    projection_sha256: str,
+) -> None:
+    """Reject a pinned projection unless reconstruction yields identical bytes."""
+
+    supplied = _read_pinned_file(
+        projection_path,
+        projection_sha256,
+        "authenticated source-seal projection",
+        builder.MAX_AUTHENTICATED_SOURCE_SEAL_PROJECTION_BYTES,
+        allow_empty=False,
+    )
+    if supplied != production.projection_bytes:
+        raise ProjectionProductionError(
+            "supplied source projection differs from deterministic reconstruction"
+        )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -913,6 +1342,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--controller-revocation-sha256")
     parser.add_argument("--execution-policy", type=Path, required=True)
     parser.add_argument("--execution-policy-sha256", required=True)
+    parser.add_argument("--raw-unit-graph", type=Path, required=True)
+    parser.add_argument("--raw-unit-graph-sha256", required=True)
     parser.add_argument("--unit-graph", type=Path, required=True)
     parser.add_argument("--unit-graph-sha256", required=True)
     parser.add_argument("--output", type=Path)
@@ -951,6 +1382,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             reviewed_source_closure_sha256=args.reviewed_source_closure_sha256,
             execution_policy_path=args.execution_policy,
             execution_policy_sha256=args.execution_policy_sha256,
+            raw_unit_graph_path=args.raw_unit_graph,
+            raw_unit_graph_sha256=args.raw_unit_graph_sha256,
             unit_graph_path=args.unit_graph,
             unit_graph_sha256=args.unit_graph_sha256,
         )
@@ -973,7 +1406,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise ProjectionProductionError(
                 "produce requires --output and forbids verify projection inputs"
             )
-    elif args.output is not None or args.projection is None or not args.projection_sha256:
+    elif (
+        args.output is not None
+        or args.projection is None
+        or not args.projection_sha256
+    ):
         raise ProjectionProductionError(
             "verify requires --projection and --projection-sha256 and forbids --output"
         )
@@ -999,6 +1436,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         controller_revocation_sha256=args.controller_revocation_sha256,
         execution_policy_path=args.execution_policy,
         execution_policy_sha256=args.execution_policy_sha256,
+        raw_unit_graph_path=args.raw_unit_graph,
+        raw_unit_graph_sha256=args.raw_unit_graph_sha256,
         unit_graph_path=args.unit_graph,
         unit_graph_sha256=args.unit_graph_sha256,
     )
@@ -1007,17 +1446,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write_new_private_file(args.output, production.projection_bytes)
     else:
         assert args.projection is not None and args.projection_sha256 is not None
-        supplied = _read_pinned_file(
+        verify_reconstructed_projection(
+            production,
             args.projection,
             args.projection_sha256,
-            "authenticated source-seal projection",
-            builder.MAX_AUTHENTICATED_SOURCE_SEAL_PROJECTION_BYTES,
-            allow_empty=False,
         )
-        if supplied != production.projection_bytes:
-            raise ProjectionProductionError(
-                "supplied source projection differs from deterministic reconstruction"
-            )
     sys.stdout.buffer.write(builder._canonical_json_line(production.receipt))
     return 0
 
@@ -1031,5 +1464,8 @@ if __name__ == "__main__":
         builder.CandidateBuildError,
         source_seal.SourceSealError,
     ) as error:
-        print(f"Kagemusha source-projection production failed: {error}", file=sys.stderr)
+        print(
+            f"Kagemusha source-projection production failed: {error}",
+            file=sys.stderr,
+        )
         raise SystemExit(1) from error

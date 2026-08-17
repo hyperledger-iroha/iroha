@@ -1,4 +1,4 @@
-//! Peer-authenticated Unix transport, SCM_RIGHTS framing, fixed client, and CLI.
+//! Peer-authenticated Unix transport, `SCM_RIGHTS` framing, fixed client, and CLI.
 
 use super::super::{SoftwareSignerWrappingKeyV1, load_software_signer_wrapping_key_from_fd_v1};
 use super::{
@@ -8,12 +8,15 @@ use super::{
         FRAME_AUTHORIZE_RESPONSE_V1, FRAME_QUALIFY_REQUEST_V1, FRAME_QUALIFY_RESPONSE_V1,
         FRAME_VERIFY_REQUEST_V1, FRAME_VERIFY_RESPONSE_V1, OperationResponseV1, OperationStatusV1,
         QualifyRequestV1, QualifyResponseV1, TAIRA_AUTHORITY_MAX_ARTIFACTS_V1,
-        TAIRA_AUTHORITY_MAX_FRAME_BYTES_V1, TairaAuthorityPublicBindingV1, TairaAuthorityRoleV1,
-        VerifyRequestV1, decode_body, decode_frame, encode_frame, qualify_response_digest,
+        TAIRA_AUTHORITY_MAX_FRAME_BYTES_V1, TairaAuthorityInstallationV1,
+        TairaAuthorityPublicBindingV1, TairaAuthorityRoleV1, VerifyRequestV1, decode_body,
+        decode_frame, encode_frame, qualify_response_digest,
+        validate_taira_authority_installations_v1,
     },
     service::{
         TairaAuthorityErrorV1, TairaAuthorityProvisioningV1, TairaAuthorityServiceV1,
         now_unix_millis, parse_digest, response_for_error,
+        rotation_handoff_matches_installed_successor, verify_rotation_handoff_json,
     },
 };
 use crate::external_software_signer::{
@@ -34,10 +37,17 @@ use std::{
     mem::MaybeUninit,
     os::{
         fd::{AsFd as _, BorrowedFd, OwnedFd},
-        unix::fs::{FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _},
-        unix::net::UnixStream,
+        unix::{
+            fs::{
+                DirBuilderExt as _, FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _,
+                PermissionsExt as _,
+            },
+            net::UnixStream,
+            process::CommandExt as _,
+        },
     },
     path::{Component, Path, PathBuf},
+    process::Command as ProcessCommand,
     sync::Arc,
     time::Duration,
 };
@@ -45,6 +55,7 @@ use std::{
 const IO_TIMEOUT_V1: Duration = Duration::from_secs(10);
 const MAX_SESSIONS_V1: usize = 64;
 const MAX_PUBLIC_BINDING_BYTES_V1: usize = 128 * 1024;
+const PENDING_BINDING_NAME_V1: &str = "binding-install-v1.norito";
 
 /// Exact service sockets and reviewed public binding used by a role.
 #[derive(Clone, Debug)]
@@ -59,6 +70,11 @@ pub struct TairaAuthorityEndpointPolicyV1 {
 
 impl TairaAuthorityEndpointPolicyV1 {
     /// Validate endpoint paths and the complete public binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TairaAuthorityErrorV1::Binding`] when the binding or either
+    /// endpoint path is invalid.
     pub fn try_new(
         request_socket: impl Into<PathBuf>,
         administrator_socket: impl Into<PathBuf>,
@@ -97,11 +113,21 @@ impl TairaAuthorityClientV1 {
     }
 
     /// Authenticate service availability before caller-controlled input is read.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the endpoint cannot be reached or its authenticated
+    /// response does not match the installed binding.
     pub fn qualify(&self) -> Result<(), TairaAuthorityErrorV1> {
         self.qualify_status().map(drop)
     }
 
     /// Authenticate the request-side service and return its signed status object.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the endpoint cannot be reached or its authenticated
+    /// status response is invalid.
     pub fn status(&self) -> Result<Vec<u8>, TairaAuthorityErrorV1> {
         self.qualify_status()
     }
@@ -141,6 +167,11 @@ impl TairaAuthorityClientV1 {
     }
 
     /// Send one canonical authorization package and ordered artifact descriptors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request exchange fails or the authority rejects
+    /// the package.
     pub fn authorize(
         &self,
         request_json: Vec<u8>,
@@ -163,6 +194,11 @@ impl TairaAuthorityClientV1 {
     }
 
     /// Perform non-mutating historical receipt verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request exchange fails or the authority rejects
+    /// the receipt.
     pub fn verify_receipt(
         &self,
         request_json: Vec<u8>,
@@ -237,19 +273,34 @@ pub struct TairaAuthorityServerV1 {
 
 impl TairaAuthorityServerV1 {
     /// Bind a service to its reviewed public identity and endpoint policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the service binding cannot be recovered or does not
+    /// match the endpoint policy and effective service identity.
     pub fn try_new(
         service: Arc<TairaAuthorityServiceV1>,
         policy: TairaAuthorityEndpointPolicyV1,
     ) -> Result<Self, TairaAuthorityErrorV1> {
-        if service.public_binding()? != policy.binding
-            || rustix::process::geteuid().as_raw() != policy.binding.signer.service_uid
-        {
+        let current = service.public_binding()?;
+        if current != policy.binding {
+            // A crash after the old-key-attested journal rotation but before
+            // root installs the successor must still allow the exact rotation
+            // handoff to be recovered through the old fixed binding.
+            service.recover_rotation_handoff_from_predecessor(&policy.binding)?;
+        }
+        if rustix::process::geteuid().as_raw() != current.signer.service_uid {
             return Err(TairaAuthorityErrorV1::Binding);
         }
         Ok(Self { service, policy })
     }
 
     /// Serve authenticated one-request sessions until SIGINT or SIGTERM.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when endpoint binding, runtime setup, session handling,
+    /// or endpoint cleanup fails.
     pub fn serve(self) -> Result<(), TairaAuthorityErrorV1> {
         let (request_listener, request_guard) = bind_endpoint(
             &self.policy.request_socket,
@@ -267,7 +318,7 @@ impl TairaAuthorityServerV1 {
             request_guard,
             administrator_guard,
             self.service,
-            self.policy,
+            &self.policy,
         )
     }
 }
@@ -278,7 +329,7 @@ fn serve_listeners(
     request_guard: BoundEndpointV1,
     administrator_guard: BoundEndpointV1,
     service: Arc<TairaAuthorityServiceV1>,
-    policy: TairaAuthorityEndpointPolicyV1,
+    policy: &TairaAuthorityEndpointPolicyV1,
 ) -> Result<(), TairaAuthorityErrorV1> {
     request_listener
         .set_nonblocking(true)
@@ -403,9 +454,7 @@ fn serve_one(
         }
         let request: AuthorityAdminRequestV1 =
             decode_body(&frame.body).map_err(|()| TairaAuthorityErrorV1::Rejected)?;
-        if request.binding_sha256 != binding_sha256 {
-            return Err(TairaAuthorityErrorV1::Binding);
-        }
+        service.binding_for_admin_request(request.binding_sha256, &request.command)?;
         let response = service
             .administer(request.command, now_unix_millis()?)
             .unwrap_or_else(response_for_error);
@@ -468,6 +517,16 @@ fn serve_one(
     };
     let encoded = encode_frame(kind, &response).map_err(|()| TairaAuthorityErrorV1::State)?;
     write_frame(&mut stream, &encoded)
+}
+
+#[cfg(test)]
+pub(super) fn serve_one_for_test(
+    stream: UnixStream,
+    administrator: bool,
+    authenticated_uid: u32,
+    service: &TairaAuthorityServiceV1,
+) -> Result<(), TairaAuthorityErrorV1> {
+    serve_one(stream, administrator, authenticated_uid, service)
 }
 
 fn exchange<Request, Response>(
@@ -694,32 +753,311 @@ fn fixed_paths(role: TairaAuthorityRoleV1) -> (PathBuf, PathBuf, PathBuf, PathBu
         configuration.join(role).join("binding-v1.norito"),
         runtime.join(role).join("request-v1.sock"),
         runtime.join(role).join("administrator-v1.sock"),
-        state.join(role),
+        state.join(role).join("state-v1"),
     )
+}
+
+fn fixed_service_id(role: TairaAuthorityRoleV1) -> String {
+    format!("taira-authority-{}-v1", role.as_str())
+}
+
+fn fixed_pending_binding_path(role: TairaAuthorityRoleV1) -> PathBuf {
+    fixed_paths(role).3.join(PENDING_BINDING_NAME_V1)
+}
+
+fn fixed_administrator_id(role: TairaAuthorityRoleV1) -> String {
+    format!("taira-authority-{}-administrator-v1", role.as_str())
+}
+
+fn validate_fixed_binding_identity(
+    role: TairaAuthorityRoleV1,
+    binding: &TairaAuthorityPublicBindingV1,
+) -> Result<(), TairaAuthorityErrorV1> {
+    if binding.role != role
+        || binding.signer.service_id != fixed_service_id(role)
+        || binding.signer.administrator_id != fixed_administrator_id(role)
+    {
+        return Err(TairaAuthorityErrorV1::Binding);
+    }
+    Ok(())
+}
+
+fn load_fixed_installations() -> Result<Vec<TairaAuthorityInstallationV1>, TairaAuthorityErrorV1> {
+    let mut installations = Vec::with_capacity(TairaAuthorityRoleV1::ALL.len());
+    for role in TairaAuthorityRoleV1::ALL {
+        let (binding_path, request_socket, administrator_socket, state_directory) =
+            fixed_paths(role);
+        let binding = read_public_binding(&binding_path, BindingOwnerPolicyV1::Root)?;
+        validate_fixed_binding_identity(role, &binding)?;
+        installations.push(TairaAuthorityInstallationV1 {
+            binding,
+            state_directory,
+            request_socket,
+            administrator_socket,
+        });
+    }
+    validate_taira_authority_installations_v1(&installations)
+        .map_err(|()| TairaAuthorityErrorV1::Binding)?;
+    Ok(installations)
+}
+
+fn validate_fixed_command_paths(
+    role: TairaAuthorityRoleV1,
+    binding: &Path,
+    request_socket: Option<&Path>,
+    administrator_socket: Option<&Path>,
+    state_directory: &Path,
+) -> Result<(), &'static str> {
+    let (expected_binding, expected_request, expected_administrator, expected_state) =
+        fixed_paths(role);
+    if binding != expected_binding
+        || state_directory != expected_state
+        || request_socket.is_some_and(|path| path != expected_request)
+        || administrator_socket.is_some_and(|path| path != expected_administrator)
+    {
+        return Err("authority command failed");
+    }
+    Ok(())
+}
+
+fn validate_provisioning_against_installed(args: &ProvisionArgs) -> Result<(), &'static str> {
+    if rustix::process::geteuid().as_raw() != args.service_uid
+        || args.service_id != fixed_service_id(args.role)
+        || args.administrator_id != fixed_administrator_id(args.role)
+        || args.service_uid == args.client_uid
+        || args.service_uid == args.administrator_uid
+        || args.client_uid == args.administrator_uid
+        || (args.role == TairaAuthorityRoleV1::Qualification) != (args.service_uid == 0)
+        || args.client_uid == 0
+        || args.administrator_uid == 0
+    {
+        return Err("authority command failed");
+    }
+    let expected_state = fixed_paths(args.role).3;
+    if args.state_directory != expected_state
+        || args.binding_out != fixed_pending_binding_path(args.role)
+    {
+        return Err("authority command failed");
+    }
+
+    let requested_uids = [args.service_uid, args.client_uid, args.administrator_uid];
+    for role in TairaAuthorityRoleV1::ALL {
+        let binding_path = fixed_paths(role).0;
+        match fs::symlink_metadata(&binding_path) {
+            Ok(_) => {
+                let binding = read_public_binding(&binding_path, BindingOwnerPolicyV1::Root)
+                    .map_err(cli_error)?;
+                validate_fixed_binding_identity(role, &binding).map_err(cli_error)?;
+                if role == args.role
+                    || requested_uids.contains(&binding.signer.service_uid)
+                    || requested_uids.contains(&binding.signer.client_uid)
+                    || requested_uids.contains(&binding.signer.administrator_uid)
+                {
+                    return Err("authority command failed");
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("authority command failed"),
+        }
+    }
+    Ok(())
+}
+
+fn validate_binding_against_installed(
+    candidate: &TairaAuthorityPublicBindingV1,
+) -> Result<(), &'static str> {
+    validate_fixed_binding_identity(candidate.role, candidate).map_err(cli_error)?;
+    let candidate_uids = [
+        candidate.signer.service_uid,
+        candidate.signer.client_uid,
+        candidate.signer.administrator_uid,
+    ];
+    for role in TairaAuthorityRoleV1::ALL {
+        let binding_path = fixed_paths(role).0;
+        match fs::symlink_metadata(&binding_path) {
+            Ok(_) => {
+                let installed = read_public_binding(&binding_path, BindingOwnerPolicyV1::Root)
+                    .map_err(cli_error)?;
+                validate_fixed_binding_identity(role, &installed).map_err(cli_error)?;
+                if installed.role == candidate.role {
+                    if installed != *candidate {
+                        return Err("authority command failed");
+                    }
+                    continue;
+                }
+                if installed.signer.handle == candidate.signer.handle
+                    || installed.signer.service_id == candidate.signer.service_id
+                    || installed.signer.administrator_id == candidate.signer.administrator_id
+                    || installed.signer.public_key_digest == candidate.signer.public_key_digest
+                    || candidate_uids.contains(&installed.signer.service_uid)
+                    || candidate_uids.contains(&installed.signer.client_uid)
+                    || candidate_uids.contains(&installed.signer.administrator_uid)
+                {
+                    return Err("authority command failed");
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err("authority command failed"),
+        }
+    }
+    Ok(())
+}
+
+fn secure_root_owned_directory_chain(path: &Path) -> Result<(), &'static str> {
+    let mut current = Some(path);
+    while let Some(directory) = current {
+        let metadata = fs::symlink_metadata(directory).map_err(|_| "authority output failed")?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err("authority output failed");
+        }
+        if directory == Path::new("/") {
+            break;
+        }
+        current = directory.parent();
+    }
+    Ok(())
+}
+
+fn validate_pending_binding_parent(
+    path: &Path,
+    binding: &TairaAuthorityPublicBindingV1,
+) -> Result<(), &'static str> {
+    if !absolute_normal(path) || path != fixed_pending_binding_path(binding.role) {
+        return Err("authority output failed");
+    }
+    let parent = path.parent().ok_or("authority output failed")?;
+    let metadata = fs::symlink_metadata(parent).map_err(|_| "authority output failed")?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || metadata.uid() != binding.signer.service_uid
+        || metadata.mode() & 0o7777 != 0o700
+    {
+        return Err("authority output failed");
+    }
+    for ancestor in parent.ancestors().skip(1) {
+        let metadata = fs::symlink_metadata(ancestor).map_err(|_| "authority output failed")?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+            || (metadata.uid() != 0 && metadata.uid() != binding.signer.service_uid)
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err("authority output failed");
+        }
+    }
+    Ok(())
+}
+
+fn fixed_registry_is_complete() -> Result<bool, &'static str> {
+    for role in TairaAuthorityRoleV1::ALL {
+        match fs::symlink_metadata(fixed_paths(role).0) {
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(_) => return Err("authority command failed"),
+        }
+    }
+    Ok(true)
 }
 
 fn load_fixed_client(
     role: TairaAuthorityRoleV1,
 ) -> Result<TairaAuthorityClientV1, TairaAuthorityErrorV1> {
-    let (binding_path, request_socket, administrator_socket, _) = fixed_paths(role);
-    let binding = read_public_binding(&binding_path, BindingOwnerPolicyV1::Root)?;
-    let expected_service_id = format!("taira-authority-{}-v1", role.as_str());
-    let expected_administrator_id = format!("taira-authority-{}-administrator-v1", role.as_str());
-    if binding.role != role
-        || binding.signer.service_id != expected_service_id
-        || binding.signer.administrator_id != expected_administrator_id
+    let installation = load_fixed_installations()?
+        .into_iter()
+        .find(|installation| installation.binding.role == role)
+        .ok_or(TairaAuthorityErrorV1::Binding)?;
+    Ok(TairaAuthorityClientV1::new(
+        TairaAuthorityEndpointPolicyV1::try_new(
+            installation.request_socket,
+            installation.administrator_socket,
+            installation.binding,
+        )?,
+    ))
+}
+
+fn load_fixed_request_client(
+    role: TairaAuthorityRoleV1,
+) -> Result<TairaAuthorityClientV1, TairaAuthorityErrorV1> {
+    let client = load_fixed_client(role)?;
+    let client_uid = client.policy.binding.signer.client_uid;
+    if request_client_identity_plan(rustix::process::geteuid().as_raw(), client_uid)?
+        != RequestClientIdentityPlanV1::AlreadyBound
     {
         return Err(TairaAuthorityErrorV1::Binding);
     }
-    Ok(TairaAuthorityClientV1::new(
-        TairaAuthorityEndpointPolicyV1::try_new(request_socket, administrator_socket, binding)?,
-    ))
+    Ok(client)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RequestClientIdentityPlanV1 {
+    AlreadyBound,
+    ReexecAs(u32),
+}
+
+fn request_client_identity_plan(
+    current_uid: u32,
+    client_uid: u32,
+) -> Result<RequestClientIdentityPlanV1, TairaAuthorityErrorV1> {
+    if client_uid == 0 || client_uid == u32::MAX {
+        return Err(TairaAuthorityErrorV1::Binding);
+    }
+    match current_uid {
+        uid if uid == client_uid => Ok(RequestClientIdentityPlanV1::AlreadyBound),
+        0 => Ok(RequestClientIdentityPlanV1::ReexecAs(client_uid)),
+        _ => Err(TairaAuthorityErrorV1::Binding),
+    }
+}
+
+fn request_client_role(command: &Command) -> Option<TairaAuthorityRoleV1> {
+    match command {
+        Command::Authorize(args) | Command::VerifyReceipt(args) => Some(args.role),
+        Command::Status(args) => Some(args.role),
+        Command::PrepareRole(_)
+        | Command::Provision(_)
+        | Command::InstallBinding(_)
+        | Command::Serve(_)
+        | Command::AssignRun(_)
+        | Command::Recover(_)
+        | Command::Rotate(_)
+        | Command::InstallRotation(_)
+        | Command::Revoke(_) => None,
+    }
+}
+
+fn reexec_root_request_client(command: &Command) -> Result<(), TairaAuthorityErrorV1> {
+    if rustix::process::geteuid().as_raw() != 0 {
+        return Ok(());
+    }
+    let Some(role) = request_client_role(command) else {
+        return Ok(());
+    };
+    let client = load_fixed_client(role)?;
+    let RequestClientIdentityPlanV1::ReexecAs(client_uid) =
+        request_client_identity_plan(0, client.policy.binding.signer.client_uid)?
+    else {
+        return Err(TairaAuthorityErrorV1::Binding);
+    };
+    let executable = std::env::current_exe().map_err(|_| TairaAuthorityErrorV1::State)?;
+    let _exec_error = ProcessCommand::new(executable)
+        .args(std::env::args_os().skip(1))
+        .uid(client_uid)
+        .env_clear()
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .env("PATH", "/usr/bin:/bin")
+        .current_dir("/")
+        .exec();
+    Err(TairaAuthorityErrorV1::State)
 }
 
 #[derive(Clone, Copy)]
 enum BindingOwnerPolicyV1 {
     Root,
-    RootOrEffectiveUser,
+    Exact(u32),
+    BindingService,
 }
 
 fn read_public_binding(
@@ -731,15 +1069,14 @@ fn read_public_binding(
     }
     let mut file = OpenOptions::new()
         .read(true)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
         .open(path)
         .map_err(|_| TairaAuthorityErrorV1::State)?;
     let before = file.metadata().map_err(|_| TairaAuthorityErrorV1::State)?;
     let valid_owner = match owner_policy {
         BindingOwnerPolicyV1::Root => before.uid() == 0,
-        BindingOwnerPolicyV1::RootOrEffectiveUser => {
-            before.uid() == 0 || before.uid() == rustix::process::geteuid().as_raw()
-        }
+        BindingOwnerPolicyV1::Exact(uid) => before.uid() == uid,
+        BindingOwnerPolicyV1::BindingService => true,
     };
     if !before.is_file()
         || !valid_owner
@@ -771,6 +1108,11 @@ fn read_public_binding(
     binding
         .validate()
         .map_err(|()| TairaAuthorityErrorV1::Binding)?;
+    if matches!(owner_policy, BindingOwnerPolicyV1::BindingService)
+        && before.uid() != binding.signer.service_uid
+    {
+        return Err(TairaAuthorityErrorV1::Binding);
+    }
     Ok(binding)
 }
 
@@ -783,7 +1125,11 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Prepare the three fixed role-owned parent directories as root.
+    PrepareRole(PrepareRoleArgs),
     Provision(ProvisionArgs),
+    /// Install a service-created immutable binding at its root-owned fixed path.
+    InstallBinding(RoleArgs),
     Serve(ServeArgs),
     AssignRun(RoleArgs),
     Authorize(ArtifactArgs),
@@ -791,6 +1137,8 @@ enum Command {
     VerifyReceipt(ArtifactArgs),
     Status(RoleArgs),
     Rotate(RotateArgs),
+    /// Atomically install an old-key-attested successor at the fixed root path.
+    InstallRotation(RoleArgs),
     Revoke(RevokeArgs),
 }
 
@@ -798,6 +1146,14 @@ enum Command {
 struct RoleArgs {
     #[arg(long)]
     role: TairaAuthorityRoleV1,
+}
+
+#[derive(Debug, Args)]
+struct PrepareRoleArgs {
+    #[arg(long)]
+    role: TairaAuthorityRoleV1,
+    #[arg(long)]
+    service_uid: u32,
 }
 
 #[derive(Debug, Args)]
@@ -845,6 +1201,8 @@ struct ProvisionArgs {
 #[derive(Debug, Args)]
 struct ServeArgs {
     #[arg(long)]
+    role: TairaAuthorityRoleV1,
+    #[arg(long)]
     state_directory: PathBuf,
     #[arg(long)]
     binding: PathBuf,
@@ -858,6 +1216,8 @@ struct ServeArgs {
 
 #[derive(Debug, Args)]
 struct RecoverArgs {
+    #[arg(long)]
+    role: TairaAuthorityRoleV1,
     #[arg(long)]
     state_directory: PathBuf,
     #[arg(long)]
@@ -899,8 +1259,12 @@ struct RevokeArgs {
 }
 
 pub(super) fn run_cli() -> Result<(), &'static str> {
-    match Cli::parse().command {
+    let command = Cli::parse().command;
+    reexec_root_request_client(&command).map_err(cli_error)?;
+    match command {
+        Command::PrepareRole(args) => cli_prepare_role(&args),
         Command::Provision(args) => cli_provision(args),
+        Command::InstallBinding(args) => cli_install_binding(args.role),
         Command::Serve(args) => cli_serve(args),
         Command::AssignRun(args) => {
             let client = load_fixed_client(args.role).map_err(cli_error)?;
@@ -915,11 +1279,11 @@ pub(super) fn run_cli() -> Result<(), &'static str> {
                 .map_err(cli_error)?;
             write_stdout(&output)
         }
-        Command::Authorize(args) => cli_artifact_operation(args, false),
-        Command::VerifyReceipt(args) => cli_artifact_operation(args, true),
+        Command::Authorize(args) => cli_artifact_operation(&args, false),
+        Command::VerifyReceipt(args) => cli_artifact_operation(&args, true),
         Command::Recover(args) => cli_recover(args),
         Command::Status(args) => {
-            let client = load_fixed_client(args.role).map_err(cli_error)?;
+            let client = load_fixed_request_client(args.role).map_err(cli_error)?;
             let output = client.status().map_err(cli_error)?;
             write_stdout(&output)
         }
@@ -941,6 +1305,7 @@ pub(super) fn run_cli() -> Result<(), &'static str> {
                 .map_err(cli_error)?;
             write_stdout(&output)
         }
+        Command::InstallRotation(args) => cli_install_rotation(args.role),
         Command::Revoke(args) => {
             let client = load_fixed_client(args.role).map_err(cli_error)?;
             client
@@ -960,7 +1325,126 @@ pub(super) fn run_cli() -> Result<(), &'static str> {
     }
 }
 
+fn cli_install_rotation(role: TairaAuthorityRoleV1) -> Result<(), &'static str> {
+    if rustix::process::geteuid().as_raw() != 0 {
+        return Err("authority command failed");
+    }
+    let (binding_path, _, _, _) = fixed_paths(role);
+    let previous =
+        read_public_binding(&binding_path, BindingOwnerPolicyV1::Root).map_err(cli_error)?;
+    if previous.role != role {
+        return Err("authority command failed");
+    }
+    let handoff = read_stdin_bounded().map_err(cli_error)?;
+    let successor = match verify_rotation_handoff_json(&previous, &handoff) {
+        Ok(successor) => successor,
+        Err(_) if rotation_handoff_matches_installed_successor(&handoff, &previous) => {
+            return write_stdout(&handoff);
+        }
+        Err(error) => return Err(cli_error(error)),
+    };
+    let expected_service_id = format!("taira-authority-{}-v1", role.as_str());
+    let expected_administrator_id = format!("taira-authority-{}-administrator-v1", role.as_str());
+    if successor.role != role
+        || successor.signer.service_id != expected_service_id
+        || successor.signer.administrator_id != expected_administrator_id
+    {
+        return Err("authority command failed");
+    }
+    install_fixed_successor_binding(&binding_path, &previous, &successor)?;
+    write_stdout(&handoff)
+}
+
+fn cli_prepare_role(args: &PrepareRoleArgs) -> Result<(), &'static str> {
+    if rustix::process::geteuid().as_raw() != 0
+        || args.service_uid == u32::MAX
+        || (args.role == TairaAuthorityRoleV1::Qualification) != (args.service_uid == 0)
+    {
+        return Err("authority command failed");
+    }
+    let (binding, request_socket, _, state) = fixed_paths(args.role);
+    prepare_fixed_directory(
+        binding.parent().ok_or("authority command failed")?,
+        0,
+        0o755,
+    )?;
+    prepare_fixed_directory(
+        request_socket.parent().ok_or("authority command failed")?,
+        args.service_uid,
+        0o711,
+    )?;
+    prepare_fixed_directory(
+        state.parent().ok_or("authority command failed")?,
+        args.service_uid,
+        0o700,
+    )
+}
+
+fn prepare_fixed_directory(path: &Path, owner_uid: u32, mode: u32) -> Result<(), &'static str> {
+    let parent = path.parent().ok_or("authority command failed")?;
+    secure_root_owned_directory_chain(parent)?;
+    match fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut builder = fs::DirBuilder::new();
+            builder.mode(mode);
+            builder
+                .create(path)
+                .map_err(|_| "authority command failed")?;
+            rustix::fs::chown(path, Some(rustix::process::Uid::from_raw(owner_uid)), None)
+                .map_err(|_| "authority command failed")?;
+            fs::set_permissions(path, fs::Permissions::from_mode(mode))
+                .map_err(|_| "authority command failed")?;
+            File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|_| "authority command failed")?;
+        }
+        Err(_) => return Err("authority command failed"),
+    }
+    let metadata = fs::symlink_metadata(path).map_err(|_| "authority command failed")?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || metadata.uid() != owner_uid
+        || metadata.mode() & 0o7777 != mode
+    {
+        return Err("authority command failed");
+    }
+    Ok(())
+}
+
+fn cli_install_binding(role: TairaAuthorityRoleV1) -> Result<(), &'static str> {
+    if rustix::process::geteuid().as_raw() != 0 {
+        return Err("authority command failed");
+    }
+    let pending_path = fixed_pending_binding_path(role);
+    let pending = read_public_binding(&pending_path, BindingOwnerPolicyV1::BindingService)
+        .map_err(cli_error)?;
+    validate_fixed_binding_identity(role, &pending).map_err(cli_error)?;
+    validate_pending_binding_parent(&pending_path, &pending)?;
+    validate_binding_against_installed(&pending)?;
+    let installed_path = fixed_paths(role).0;
+    match fs::symlink_metadata(&installed_path) {
+        Ok(_) => {
+            let installed = read_public_binding(&installed_path, BindingOwnerPolicyV1::Root)
+                .map_err(cli_error)?;
+            if installed != pending {
+                return Err("authority command failed");
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            write_binding_new(&installed_path, &pending)?;
+        }
+        Err(_) => return Err("authority command failed"),
+    }
+    if fixed_registry_is_complete()? {
+        load_fixed_installations().map_err(cli_error)?;
+    }
+    let encoded = norito::encode_canonical(&pending).map_err(|_| "authority command failed")?;
+    write_stdout(&encoded)
+}
+
 fn cli_provision(args: ProvisionArgs) -> Result<(), &'static str> {
+    validate_provisioning_against_installed(&args)?;
     let wrapping_key = load_wrapping_key(args.wrapping_key_fd).map_err(cli_error)?;
     let provisioning = TairaAuthorityProvisioningV1 {
         role: args.role,
@@ -990,6 +1474,19 @@ fn cli_provision(args: ProvisionArgs) -> Result<(), &'static str> {
         }
         (TairaAuthorityRoleV1::PublicSoakReplayAdmission, None, Some(descriptor)) => {
             let observation = load_inherited_public_binding(descriptor).map_err(cli_error)?;
+            let installed_observation = read_public_binding(
+                &fixed_paths(TairaAuthorityRoleV1::PublicSoakObservation).0,
+                BindingOwnerPolicyV1::Root,
+            )
+            .map_err(cli_error)?;
+            validate_fixed_binding_identity(
+                TairaAuthorityRoleV1::PublicSoakObservation,
+                &installed_observation,
+            )
+            .map_err(cli_error)?;
+            if observation != installed_observation {
+                return Err("authority command failed");
+            }
             TairaAuthorityServiceV1::provision_with_public_soak_observation_binding(
                 args.state_directory,
                 provisioning,
@@ -997,8 +1494,12 @@ fn cli_provision(args: ProvisionArgs) -> Result<(), &'static str> {
                 observation,
             )
         }
-        (TairaAuthorityRoleV1::PrivacyGovernance, _, _)
-        | (TairaAuthorityRoleV1::PublicSoakReplayAdmission, _, _)
+        (
+            TairaAuthorityRoleV1::PrivacyGovernance
+            | TairaAuthorityRoleV1::PublicSoakReplayAdmission,
+            _,
+            _,
+        )
         | (_, Some(_), _)
         | (_, _, Some(_)) => {
             return Err("authority command failed");
@@ -1008,7 +1509,7 @@ fn cli_provision(args: ProvisionArgs) -> Result<(), &'static str> {
         }
     }
     .map_err(cli_error)?;
-    write_binding_new(
+    write_pending_binding_new(
         &args.binding_out,
         &service.public_binding().map_err(cli_error)?,
     )
@@ -1052,8 +1553,23 @@ fn load_retained_genesis_key(fd: i32) -> Result<KeyPair, TairaAuthorityErrorV1> 
 }
 
 fn cli_serve(args: ServeArgs) -> Result<(), &'static str> {
-    let binding = read_public_binding(&args.binding, BindingOwnerPolicyV1::RootOrEffectiveUser)
-        .map_err(cli_error)?;
+    validate_fixed_command_paths(
+        args.role,
+        &args.binding,
+        Some(&args.request_socket),
+        Some(&args.administrator_socket),
+        &args.state_directory,
+    )?;
+    let installations = load_fixed_installations().map_err(cli_error)?;
+    let installed = installations
+        .into_iter()
+        .find(|installation| installation.binding.role == args.role)
+        .ok_or("authority command failed")?;
+    let binding =
+        read_public_binding(&args.binding, BindingOwnerPolicyV1::Root).map_err(cli_error)?;
+    if binding != installed.binding {
+        return Err("authority command failed");
+    }
     let wrapping_key = load_wrapping_key(args.wrapping_key_fd).map_err(cli_error)?;
     let service = Arc::new(
         TairaAuthorityServiceV1::open(args.state_directory, wrapping_key).map_err(cli_error)?,
@@ -1070,19 +1586,48 @@ fn cli_serve(args: ServeArgs) -> Result<(), &'static str> {
 }
 
 fn cli_recover(args: RecoverArgs) -> Result<(), &'static str> {
-    let binding = read_public_binding(&args.binding, BindingOwnerPolicyV1::RootOrEffectiveUser)
-        .map_err(cli_error)?;
+    validate_fixed_command_paths(args.role, &args.binding, None, None, &args.state_directory)?;
     let wrapping_key = load_wrapping_key(args.wrapping_key_fd).map_err(cli_error)?;
     let service =
         TairaAuthorityServiceV1::open(args.state_directory, wrapping_key).map_err(cli_error)?;
-    if service.public_binding().map_err(cli_error)? != binding {
-        return Err("authority command failed");
+    let current = service.public_binding().map_err(cli_error)?;
+    validate_fixed_binding_identity(args.role, &current).map_err(cli_error)?;
+    match fs::symlink_metadata(&args.binding) {
+        Ok(_) => {
+            let binding = read_public_binding(&args.binding, BindingOwnerPolicyV1::Root)
+                .map_err(cli_error)?;
+            if current != binding {
+                service
+                    .recover_rotation_handoff_from_predecessor(&binding)
+                    .map_err(cli_error)?;
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let pending_path = fixed_pending_binding_path(args.role);
+            match fs::symlink_metadata(&pending_path) {
+                Ok(_) => {
+                    let pending = read_public_binding(
+                        &pending_path,
+                        BindingOwnerPolicyV1::Exact(current.signer.service_uid),
+                    )
+                    .map_err(cli_error)?;
+                    if pending != current {
+                        return Err("authority command failed");
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    write_pending_binding_new(&pending_path, &current)?;
+                }
+                Err(_) => return Err("authority command failed"),
+            }
+        }
+        Err(_) => return Err("authority command failed"),
     }
     write_stdout(&service.status_json().map_err(cli_error)?)
 }
 
-fn cli_artifact_operation(args: ArtifactArgs, verify: bool) -> Result<(), &'static str> {
-    let client = load_fixed_client(args.role).map_err(cli_error)?;
+fn cli_artifact_operation(args: &ArtifactArgs, verify: bool) -> Result<(), &'static str> {
+    let client = load_fixed_request_client(args.role).map_err(cli_error)?;
     client.qualify().map_err(cli_error)?;
     let input = read_stdin_bounded().map_err(cli_error)?;
     let descriptors = duplicate_inherited_descriptors(&args.artifact_fds).map_err(cli_error)?;
@@ -1119,12 +1664,22 @@ fn duplicate_inherited_descriptor(value: i32) -> Result<OwnedFd, TairaAuthorityE
     if value <= 2 {
         return Err(TairaAuthorityErrorV1::Rejected);
     }
-    let namespace = if cfg!(target_os = "linux") {
-        "/proc/self/fd"
-    } else {
-        "/dev/fd"
-    };
-    File::open(format!("{namespace}/{value}"))
+    #[cfg(target_os = "linux")]
+    {
+        let process = rustix::process::pidfd_open(
+            rustix::process::getpid(),
+            rustix::process::PidfdFlags::empty(),
+        )
+        .map_err(|_| TairaAuthorityErrorV1::Rejected)?;
+        return rustix::process::pidfd_getfd(
+            process,
+            value,
+            rustix::process::PidfdGetfdFlags::empty(),
+        )
+        .map_err(|_| TairaAuthorityErrorV1::Rejected);
+    }
+    #[cfg(not(target_os = "linux"))]
+    File::open(format!("/dev/fd/{value}"))
         .map(OwnedFd::from)
         .map_err(|_| TairaAuthorityErrorV1::Rejected)
 }
@@ -1151,25 +1706,226 @@ fn write_stdout(bytes: &[u8]) -> Result<(), &'static str> {
         .map_err(|_| "authority output failed")
 }
 
+fn write_pending_binding_new(
+    path: &Path,
+    binding: &TairaAuthorityPublicBindingV1,
+) -> Result<(), &'static str> {
+    if rustix::process::geteuid().as_raw() != binding.signer.service_uid {
+        return Err("authority output failed");
+    }
+    validate_fixed_binding_identity(binding.role, binding).map_err(cli_error)?;
+    validate_pending_binding_parent(path, binding)?;
+    let bytes = norito::encode_canonical(binding).map_err(|_| "authority output failed")?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
+        .open(path)
+        .map_err(|_| "authority output failed")?;
+    file.write_all(&bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|_| "authority output failed")?;
+    let parent = path.parent().ok_or("authority output failed")?;
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "authority output failed")?;
+    let installed = read_public_binding(
+        path,
+        BindingOwnerPolicyV1::Exact(binding.signer.service_uid),
+    )
+    .map_err(cli_error)?;
+    if installed != *binding {
+        return Err("authority output failed");
+    }
+    Ok(())
+}
+
 fn write_binding_new(
     path: &Path,
     binding: &TairaAuthorityPublicBindingV1,
 ) -> Result<(), &'static str> {
-    if !absolute_normal(path) {
+    if rustix::process::geteuid().as_raw() != 0
+        || !absolute_normal(path)
+        || path != fixed_paths(binding.role).0
+    {
         return Err("authority output failed");
     }
+    validate_fixed_binding_identity(binding.role, binding).map_err(cli_error)?;
+    let parent = path.parent().ok_or("authority output failed")?;
+    secure_root_owned_directory_chain(parent)?;
     let bytes = norito::encode_canonical(binding).map_err(|_| "authority output failed")?;
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o644)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
         .open(path)
         .map_err(|_| "authority output failed")?;
     file.write_all(&bytes)
         .and_then(|()| file.sync_all())
-        .map_err(|_| "authority output failed")
+        .map_err(|_| "authority output failed")?;
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "authority output failed")?;
+    let installed = read_public_binding(path, BindingOwnerPolicyV1::Root).map_err(cli_error)?;
+    if installed != *binding {
+        return Err("authority output failed");
+    }
+    Ok(())
+}
+
+fn install_fixed_successor_binding(
+    path: &Path,
+    previous: &TairaAuthorityPublicBindingV1,
+    successor: &TairaAuthorityPublicBindingV1,
+) -> Result<(), &'static str> {
+    let expected_path = fixed_paths(previous.role).0;
+    if rustix::process::geteuid().as_raw() != 0
+        || !absolute_normal(path)
+        || path != expected_path
+        || previous.role != successor.role
+        || previous.signer.handle != successor.signer.handle
+        || previous.signer.service_id != successor.signer.service_id
+        || previous.signer.administrator_id != successor.signer.administrator_id
+        || previous.signer.service_uid != successor.signer.service_uid
+        || previous.signer.client_uid != successor.signer.client_uid
+        || previous.signer.administrator_uid != successor.signer.administrator_uid
+        || previous.signer.audit_genesis_digest != successor.signer.audit_genesis_digest
+        || successor.signer.key_revision <= previous.signer.key_revision
+        || successor.signer.policy_revision <= previous.signer.policy_revision
+    {
+        return Err("authority binding installation failed");
+    }
+    let parent = path
+        .parent()
+        .ok_or("authority binding installation failed")?;
+    let parent_metadata =
+        fs::symlink_metadata(parent).map_err(|_| "authority binding installation failed")?;
+    if parent_metadata.file_type().is_symlink()
+        || !parent_metadata.is_dir()
+        || parent_metadata.uid() != 0
+        || parent_metadata.mode() & 0o022 != 0
+    {
+        return Err("authority binding installation failed");
+    }
+    let pending = parent.join(".binding-v1.rotation-pending");
+    let encoded =
+        norito::encode_canonical(successor).map_err(|_| "authority binding installation failed")?;
+    if pending.exists() {
+        let recovered =
+            read_public_binding(&pending, BindingOwnerPolicyV1::Root).map_err(cli_error)?;
+        if recovered != *successor {
+            return Err("authority binding installation failed");
+        }
+    } else {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
+            .open(&pending)
+            .map_err(|_| "authority binding installation failed")?;
+        file.write_all(&encoded)
+            .and_then(|()| file.sync_all())
+            .map_err(|_| "authority binding installation failed")?;
+        let recovered =
+            read_public_binding(&pending, BindingOwnerPolicyV1::Root).map_err(cli_error)?;
+        if recovered != *successor {
+            return Err("authority binding installation failed");
+        }
+    }
+    fs::rename(&pending, path).map_err(|_| "authority binding installation failed")?;
+    File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|_| "authority binding installation failed")?;
+    let installed = read_public_binding(path, BindingOwnerPolicyV1::Root).map_err(cli_error)?;
+    if installed != *successor {
+        return Err("authority binding installation failed");
+    }
+    Ok(())
 }
 
 const fn cli_error(_: TairaAuthorityErrorV1) -> &'static str {
     "Taira release authority failed closed"
+}
+
+#[cfg(test)]
+mod request_client_identity_tests {
+    use std::{
+        fs,
+        io::{Read as _, Seek as _, SeekFrom, Write as _},
+        os::{
+            fd::AsRawFd as _,
+            unix::fs::{MetadataExt as _, PermissionsExt as _},
+        },
+    };
+
+    use super::{
+        RequestClientIdentityPlanV1, TairaAuthorityErrorV1, duplicate_inherited_descriptor,
+        request_client_identity_plan,
+    };
+
+    #[test]
+    fn bound_client_uid_connects_without_a_credential_transition() {
+        let client_uid = 4_101;
+        assert_eq!(
+            request_client_identity_plan(client_uid, client_uid),
+            Ok(RequestClientIdentityPlanV1::AlreadyBound)
+        );
+    }
+
+    #[test]
+    fn root_request_children_reexec_as_distinct_role_uids() {
+        for client_uid in [4_101, 4_102] {
+            assert_eq!(
+                request_client_identity_plan(0, client_uid),
+                Ok(RequestClientIdentityPlanV1::ReexecAs(client_uid))
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_uid_and_invalid_bound_uids_fail_before_transition() {
+        for (current_uid, client_uid) in [(4_103, 4_101), (0, 0), (0, u32::MAX)] {
+            assert_eq!(
+                request_client_identity_plan(current_uid, client_uid),
+                Err(TairaAuthorityErrorV1::Binding)
+            );
+        }
+    }
+
+    #[test]
+    fn read_only_inherited_descriptor_survives_root_child_reexec_planning() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("artifact");
+        let mut original = fs::File::create(&path).expect("create inherited artifact");
+        original
+            .write_all(b"root-owned read-only artifact")
+            .expect("write inherited artifact");
+        original
+            .seek(SeekFrom::Start(0))
+            .expect("rewind inherited artifact");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o400))
+            .expect("make inherited artifact read-only");
+        let metadata = fs::metadata(&path).expect("stat inherited artifact");
+        if rustix::process::geteuid().as_raw() == 0 {
+            assert_eq!(metadata.uid(), 0);
+        }
+
+        assert_eq!(
+            request_client_identity_plan(0, 4_101),
+            Ok(RequestClientIdentityPlanV1::ReexecAs(4_101))
+        );
+
+        fs::remove_file(&path).expect("remove artifact path before descriptor duplication");
+        let duplicate = duplicate_inherited_descriptor(original.as_raw_fd())
+            .expect("descriptor duplication must not reopen its path");
+        let mut duplicate = fs::File::from(duplicate);
+        let mut payload = Vec::new();
+        duplicate
+            .read_to_end(&mut payload)
+            .expect("read duplicated inherited descriptor");
+        assert_eq!(payload, b"root-owned read-only artifact");
+    }
 }

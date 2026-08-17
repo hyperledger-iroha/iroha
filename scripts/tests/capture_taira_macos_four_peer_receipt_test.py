@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 from pathlib import Path
@@ -11,7 +12,9 @@ import pytest
 
 from scripts import capture_taira_macos_four_peer_receipt as capture
 from scripts import deploy_taira_v21_reset as deploy
+from scripts import taira_rollout_admission as admission
 from scripts import taira_peer_supervisor as supervisor
+from scripts.tests.taira_receipt_signer_test_support import receipt_signer_map
 
 
 class FakeProcess:
@@ -200,3 +203,48 @@ def test_capture_accepts_only_root_controlled_supervisor_source(
     monkeypatch.setattr(capture.deploy, "require_root_controlled_file", reject)
     with pytest.raises(capture.MacosFourPeerCaptureError, match="root-controlled"):
         capture._root_controlled_supervisor(source.resolve())
+
+
+def test_capture_receipt_binds_ordered_signers_to_exact_peer_rows() -> None:
+    signers = deploy.require_receipt_signer_map(
+        receipt_signer_map(), "capture fixture receipt signers"
+    )
+    peers = tuple(
+        SimpleNamespace(
+            config_sha256=f"{number}" * 64,
+            label=f"io.soramitsu.taira.validator-{number}",
+            number=number,
+            slug=slug,
+        )
+        for number, slug in enumerate(deploy.SLUGS, start=1)
+    )
+    bundle = SimpleNamespace(
+        manifest_sha256="8" * 64,
+        peers=peers,
+        receipt_signers=signers,
+    )
+    source = admission.SourceIdentity("a" * 40, "b" * 40, "c" * 64, "d" * 64)
+    receipt = capture._receipt(
+        source=source,
+        bundle=bundle,
+        binary_sha256="3" * 64,
+        artifact_handoff_sha256="2" * 64,
+        supervisor_sha256="7" * 64,
+        restart_generation="6" * 64,
+        start=SimpleNamespace(block_hash="4" * 64, height=101),
+        end=SimpleNamespace(block_hash="5" * 64, height=102),
+        issued_at=1_000,
+    )
+
+    assert list(receipt["receipt_signers"]) == list(deploy.SLUGS)
+    assert [row["receipt_signer_node_id"] for row in receipt["peers"]] == [
+        receipt["receipt_signers"][slug]["node_id"] for slug in deploy.SLUGS
+    ]
+    assert "812620" not in json.dumps(receipt)
+    assert admission._validate_macos_receipt(
+        admission.canonical_json_bytes(receipt),
+        expected_source=source,
+        expected_receipt_id=receipt["receipt_id"],
+        consumed_receipt_ids=set(),
+        now_unix=1_000,
+    )["receipt_signers"] == receipt["receipt_signers"]

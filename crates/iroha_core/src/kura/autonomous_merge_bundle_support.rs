@@ -2313,35 +2313,16 @@ impl Kura {
             decision: ProductionInFlightFirstReleaseDecisionProjection::default(),
             release: ProductionInFlightFirstReleaseReleaseProjection::default(),
         };
-        // The source reader observes an already-durable input. PersistExecutionInput
-        // is therefore an idempotent named step for one authenticated READY/Commit
-        // witness, while the following two steps extract the durable QC and lane
-        // decision carried by the exact same source bytes.
-        let mut input_after = trace_base;
-        input_after.carrier.execution_input_durable |= lane_commit_actor;
-        input_after.history.ever_execution_input_durable |= lane_commit_actor;
-        let input_projection = ProductionInFlightFirstReleaseTransitionProjection {
-            action: IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT,
-            actor: lane_commit_actor,
-            target: 0,
-            before: trace_base,
-            after: input_after,
-        };
-        let checked_input = check_production_in_flight_first_release_transition(input_projection)
-            .ok_or(
-            "durable execution input failed the composed first-release transition gate",
-        )?;
-        if checked_input.into_projection() != input_projection {
-            return Err("checked durable execution-input projection changed before admission");
-        }
-        let mut ready_qc_after = input_after;
+        // The source reader has already validated exact durable execution input.
+        // Extract the READY and lane decisions carried by those same source bytes.
+        let mut ready_qc_after = trace_base;
         ready_qc_after.carrier.ready_qc_durable = true;
         ready_qc_after.history.ever_ready_qc_durable = true;
         let ready_qc_projection = ProductionInFlightFirstReleaseTransitionProjection {
             action: IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC,
             actor: 0,
             target: 0,
-            before: input_after,
+            before: trace_base,
             after: ready_qc_after,
         };
         let checked_ready_qc =

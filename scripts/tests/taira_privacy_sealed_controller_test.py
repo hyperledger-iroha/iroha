@@ -1130,6 +1130,7 @@ def _qualification_case_plan_fixture(
         manifest_sha256="aa" * 32,
         manifest_identity=(1, 2, 3),
         signed_genesis_identity=(4, 5, 6),
+        receipt_signers=(),
         peers=tuple(peers),
         bundle_bytes=1,
         free_bytes=1,

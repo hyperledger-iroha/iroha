@@ -16,6 +16,12 @@ use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 use sha2::Digest;
 /// Metadata key binding the structured AXT FASTPQ payload into the proof trace.
 pub const AXT_FASTPQ_BINDING_METADATA_KEY: &str = "axt_fastpq_binding";
+/// Metadata key binding an optional AXT amount into the `FastPQ` proof trace.
+///
+/// The value is the exact little-endian `u128` carried by
+/// [`AxtProofEnvelope::committed_amount`]. It is inserted before the batch seal
+/// is derived, so changing the outer envelope amount invalidates verification.
+pub const AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY: &str = "axt_fastpq_committed_amount_v1";
 /// Metadata key sealing a concrete FASTPQ batch to its AXT statement.
 ///
 /// The seal is computed over the carried batch after AXT metadata has been
@@ -127,6 +133,7 @@ pub fn axt_proof_envelope_from_bound_batch(
     da_commitment: Option<[u8; 32]>,
 ) -> Result<AxtProofEnvelope> {
     let binding = embedded_axt_binding(batch)?;
+    let committed_amount = proof_bound_committed_amount(batch)?;
     verify(batch, &proof)?;
     Ok(AxtProofEnvelope {
         dsid: DataSpaceId::new(binding.source_dsid),
@@ -134,7 +141,7 @@ pub fn axt_proof_envelope_from_bound_batch(
         da_commitment,
         proof: encode_axt_fastpq_payload(batch, proof)?,
         fastpq_binding: Some(binding),
-        committed_amount: None,
+        committed_amount,
         amount_commitment: None,
     })
 }
@@ -155,17 +162,41 @@ pub fn axt_proof_blob_from_bound_batch(
         expiry_slot,
     })
 }
-/// Bind an already-captured FASTPQ batch to an AXT statement.
+/// Bind an already-captured FASTPQ batch to an AXT statement without an amount.
 ///
-/// This helper inserts the canonical AXT metadata and batch seal required by
-/// [`verify_axt_proof_envelope`]. Call it only after the batch transitions and public inputs have
-/// been finalized and the batch already carries the execution `entry_hash` metadata matching
-/// `source_tx_commitment`; changing the batch after this call invalidates the seal.
+/// This compatibility wrapper preserves the original API and delegates to
+/// [`bind_axt_batch_with_committed_amount`] with no committed amount.
 ///
 /// # Errors
 /// Returns [`Error::InvalidAxtBinding`] when the binding is malformed or does not match the batch
 /// parameter/public dataspace, and [`Error::Encode`] when Norito serialization fails.
 pub fn bind_axt_batch(batch: &mut TransitionBatch, binding: &AxtFastpqBinding) -> Result<()> {
+    bind_axt_batch_with_committed_amount(batch, binding, None)
+}
+/// Bind an already-captured FASTPQ batch and optional amount to an AXT statement.
+///
+/// This helper inserts the canonical AXT metadata, the optional fixed-width
+/// committed amount, and the batch seal required by
+/// [`verify_axt_proof_envelope`]. Call it only after the batch transitions and
+/// public inputs have been finalized and the batch already carries the
+/// execution `entry_hash` metadata matching `source_tx_commitment`; changing
+/// the batch after this call invalidates the proof-bound seal.
+///
+/// # Errors
+/// Returns [`Error::InvalidAxtBinding`] when the binding is malformed, the
+/// committed amount is zero, or the binding does not match the batch
+/// parameter/public dataspace, and [`Error::Encode`] when Norito serialization
+/// fails.
+pub fn bind_axt_batch_with_committed_amount(
+    batch: &mut TransitionBatch,
+    binding: &AxtFastpqBinding,
+    committed_amount: Option<u128>,
+) -> Result<()> {
+    if committed_amount == Some(0) {
+        return Err(Error::InvalidAxtBinding {
+            details: "AXT committed_amount must be non-zero".into(),
+        });
+    }
     let canonical = canonicalize_binding(binding)?;
     let context = BindingContext::from_binding(&canonical)?;
     if batch.parameter != canonical.parameter {
@@ -180,7 +211,16 @@ pub fn bind_axt_batch(batch: &mut TransitionBatch, binding: &AxtFastpqBinding) -
     }
     require_concrete_execution_batch(batch, &context)?;
     batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
+    batch
+        .metadata
+        .remove(AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY);
     insert_binding_metadata(batch, &context)?;
+    if let Some(amount) = committed_amount {
+        batch.metadata.insert(
+            AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY.into(),
+            amount.to_le_bytes().to_vec(),
+        );
+    }
     let seal = axt_batch_seal(batch, &canonical)?;
     batch
         .metadata
@@ -216,6 +256,14 @@ pub fn verify_axt_proof_envelope(envelope: &AxtProofEnvelope) -> Result<AxtVerif
     let payload = decode_canonical_axt_fastpq_payload(&envelope.proof)?;
     let batch = transition_batch_from_model(&payload.batch);
     verify_batch_matches_binding(&batch, binding)?;
+    let proof_bound_amount = proof_bound_committed_amount(&batch)?;
+    if envelope.committed_amount != proof_bound_amount {
+        return Err(Error::InvalidAxtBinding {
+            details:
+                "AXT proof envelope committed_amount does not match proof-bound batch metadata"
+                    .into(),
+        });
+    }
     verify(&batch, &payload.proof)?;
     Ok(AxtVerifiedProof {
         statement_digest: axt_statement_digest(envelope, binding, &payload.batch)?,
@@ -389,6 +437,7 @@ fn verify_batch_matches_binding(batch: &TransitionBatch, binding: &AxtFastpqBind
     if !canonical.corridor.is_empty() {
         require_metadata_eq(batch, "corridor", canonical.corridor.as_bytes())?;
     }
+    let _ = proof_bound_committed_amount(batch)?;
     let seal = axt_batch_seal(batch, &canonical)?;
     require_metadata_eq(batch, AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, &seal)?;
     require_transfer_claim_witnesses(batch, &context, canonical.claim_type.as_str())?;
@@ -412,6 +461,27 @@ fn require_metadata_eq(batch: &TransitionBatch, key: &str, expected: &[u8]) -> R
             details: format!("FastPQ batch metadata `{key}` does not match AXT binding"),
         })
     }
+}
+fn proof_bound_committed_amount(batch: &TransitionBatch) -> Result<Option<u128>> {
+    let Some(encoded) = batch.metadata.get(AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY) else {
+        return Ok(None);
+    };
+    let bytes: [u8; core::mem::size_of::<u128>()] =
+        encoded
+            .as_slice()
+            .try_into()
+            .map_err(|_| Error::MetadataLength {
+                key: AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY.to_owned(),
+                expected: core::mem::size_of::<u128>(),
+                actual: encoded.len(),
+            })?;
+    let amount = u128::from_le_bytes(bytes);
+    if amount == 0 {
+        return Err(Error::InvalidAxtBinding {
+            details: "proof-bound AXT committed_amount must be non-zero".into(),
+        });
+    }
+    Ok(Some(amount))
 }
 fn require_concrete_execution_batch(
     batch: &TransitionBatch,
@@ -1658,6 +1728,106 @@ mod tests {
         assert_eq!(verified.old_root, batch.public_inputs.old_root);
         assert_eq!(verified.new_root, batch.public_inputs.new_root);
         assert_eq!(verified.tx_set_hash, batch.public_inputs.tx_set_hash);
+    }
+    #[test]
+    fn verify_axt_envelope_binds_committed_amount_to_fastpq_proof() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        bind_axt_batch_with_committed_amount(&mut batch, &binding, Some(50))
+            .expect("bind proof amount");
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        let mut envelope =
+            axt_proof_envelope_from_bound_batch(&batch, proof, [0x42; 32], Some([0x24; 32]))
+                .expect("package amount-bound proof");
+        assert_eq!(envelope.committed_amount, Some(50));
+        verify_axt_proof_envelope(&envelope).expect("proof-bound amount verifies");
+
+        let mut missing_outer_amount = envelope.clone();
+        missing_outer_amount.committed_amount = None;
+        let err = verify_axt_proof_envelope(&missing_outer_amount)
+            .expect_err("proof-bound amount requires the outer envelope field");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("committed_amount") && details.contains("proof-bound"))
+        );
+
+        envelope.committed_amount = Some(51);
+        let err = verify_axt_proof_envelope(&envelope)
+            .expect_err("mutated outer amount must not reuse the proof");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("committed_amount") && details.contains("proof-bound"))
+        );
+    }
+    #[test]
+    fn verify_axt_envelope_rejects_outer_amount_without_proof_metadata() {
+        let binding = sample_binding();
+        let batch = real_authorization_batch(&binding);
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let mut envelope = envelope_with_payload(binding, payload);
+        envelope.committed_amount = Some(50);
+        let err = verify_axt_proof_envelope(&envelope)
+            .expect_err("outer amount without proof-bound metadata must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("committed_amount") && details.contains("proof-bound"))
+        );
+    }
+    #[test]
+    fn verify_axt_envelope_rejects_malformed_or_zero_amount_metadata() {
+        let binding = sample_binding();
+        let mut batch = real_authorization_batch(&binding);
+        bind_axt_batch_with_committed_amount(&mut batch, &binding, Some(50))
+            .expect("bind proof amount");
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof");
+
+        let mut malformed = batch.clone();
+        malformed.metadata.insert(
+            AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY.into(),
+            vec![0_u8; 15],
+        );
+        let payload = encode_axt_fastpq_payload(&malformed, proof.clone()).expect("payload");
+        let mut envelope = envelope_with_payload(binding.clone(), payload);
+        envelope.committed_amount = Some(50);
+        let err = verify_axt_proof_envelope(&envelope)
+            .expect_err("malformed committed amount metadata must fail");
+        assert!(matches!(
+            err,
+            Error::MetadataLength {
+                key,
+                expected: 16,
+                actual: 15,
+            } if key == AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY
+        ));
+
+        let mut zero_metadata = batch;
+        zero_metadata.metadata.insert(
+            AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY.into(),
+            0_u128.to_le_bytes().to_vec(),
+        );
+        let payload = encode_axt_fastpq_payload(&zero_metadata, proof).expect("payload");
+        let mut envelope = envelope_with_payload(binding.clone(), payload);
+        envelope.committed_amount = Some(0);
+        let err = verify_axt_proof_envelope(&envelope)
+            .expect_err("zero committed amount metadata must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("non-zero"))
+        );
+
+        let mut batch = real_authorization_batch(&binding);
+        let err = bind_axt_batch_with_committed_amount(&mut batch, &binding, Some(0))
+            .expect_err("binder must reject a zero amount");
+        assert!(matches!(
+            err,
+            Error::InvalidAxtBinding { details } if details.contains("non-zero")
+        ));
     }
     #[test]
     fn verify_axt_envelope_statement_digest_binds_optional_da_commitment() {

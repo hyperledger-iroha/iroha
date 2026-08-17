@@ -340,6 +340,19 @@ pub(crate) struct KagemushaCachedReleaseV4 {
     qualified_candidate_sha256: [u8; 32],
     resolved: ResolvedKagemushaTerminalVerifierV4,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+struct KagemushaCatalogReleaseConsensusIdentityV1 {
+    manifest_sha256: [u8; 32],
+    release_record_sha256: [u8; 32],
+    qualification_receipt_sha256: [u8; 32],
+    qualified_candidate_sha256: [u8; 32],
+}
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+struct KagemushaCatalogConsensusIdentityV1 {
+    version: u16,
+    configured_policy_sha256: [u8; 32],
+    releases: Vec<KagemushaCatalogReleaseConsensusIdentityV1>,
+}
 /// Immutable startup catalog keyed by canonical V4 manifest digest.
 ///
 /// The catalog owns qualified pinned read-only artifact handles and one source-backed verifier
@@ -348,6 +361,7 @@ pub(crate) struct KagemushaCachedReleaseV4 {
 #[derive(Default)]
 pub struct KagemushaReleaseCatalogV4 {
     configured_policy_sha256: Option<[u8; 32]>,
+    consensus_policy_digest: Option<[u8; 32]>,
     releases: BTreeMap<[u8; 32], Arc<KagemushaCachedReleaseV4>>,
 }
 include!("kagemusha_terminal_registry_v4_release_catalog_impl.rs");
@@ -4055,7 +4069,47 @@ mod tests {
         let catalog = KagemushaReleaseCatalogV4::empty();
         assert!(!catalog.is_configured());
         assert_eq!(catalog.configured_policy_sha256(), None);
+        assert_eq!(catalog.consensus_policy_digest(), None);
         assert!(catalog.is_empty());
+    }
+    #[test]
+    fn catalog_consensus_identity_binds_inventory_with_stable_ordering() {
+        let release_identity = |seed| KagemushaCatalogReleaseConsensusIdentityV1 {
+            manifest_sha256: [seed; 32],
+            release_record_sha256: [seed.wrapping_add(1); 32],
+            qualification_receipt_sha256: [seed.wrapping_add(2); 32],
+            qualified_candidate_sha256: [seed.wrapping_add(3); 32],
+        };
+        let policy_sha256 = [0x41; 32];
+        let release_a = release_identity(0x10);
+        let release_b = release_identity(0x20);
+        let ordered = kagemusha_catalog_consensus_policy_digest_from_identities_v1(
+            policy_sha256,
+            vec![release_a.clone(), release_b.clone()],
+        );
+        let reordered = kagemusha_catalog_consensus_policy_digest_from_identities_v1(
+            policy_sha256,
+            vec![release_b.clone(), release_a.clone()],
+        );
+        assert_eq!(ordered, reordered, "catalog iteration order must be stable");
+        assert_ne!(
+            ordered,
+            kagemusha_catalog_consensus_policy_digest_from_identities_v1(
+                policy_sha256,
+                vec![release_a.clone()],
+            ),
+            "different authenticated release inventories must not share an identity"
+        );
+        let mut changed_release = release_a;
+        changed_release.release_record_sha256[0] ^= 1;
+        assert_ne!(
+            kagemusha_catalog_consensus_policy_digest_from_identities_v1(
+                policy_sha256,
+                vec![release_b, changed_release],
+            ),
+            ordered,
+            "consensus-relevant cached release identity must be bound"
+        );
     }
     #[cfg(all(
         unix,

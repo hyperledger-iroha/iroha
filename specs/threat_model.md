@@ -82,8 +82,8 @@ Each area lists **Current controls** (implemented today) and **Outstanding gaps*
 - Signed proposal manifests and the frozen Reed-Solomon-16 layout bind body
   reconstruction; validators vote only after exact durable validation.
 - View-zero deadlines derive as ten signed cadence intervals, retransmission as
-  one fifth of that value, and later certified views use linear backoff. There
-  is no local timer policy.
+  one fifth of that value, and later certified views use linear backoff capped
+  at ten base deadlines. There is no local timer policy.
 - Sign-once/lock rules and exact v2 equivocation evidence fail closed before a
   conflicting certified body can be applied.
 

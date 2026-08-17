@@ -33,6 +33,26 @@ def _pretty(value: object) -> bytes:
     return publisher.canonical_json_bytes(value)
 
 
+def _receipt_signers() -> dict[str, dict[str, object]]:
+    result: dict[str, dict[str, object]] = {}
+    x = 1
+    for slug in publisher.admission.SLUGS:
+        while True:
+            payload = "02" + format(x, "064x")
+            try:
+                node_id = publisher.admission._receipt_node_id(payload, "test signer")
+            except publisher.admission.TairaRolloutAdmissionError:
+                x += 1
+                continue
+            break
+        result[slug] = {
+            "node_id": node_id,
+            "public_key": {"algorithm": "secp256k1", "payload_hex": payload},
+        }
+        x += 1
+    return result
+
+
 def _write(path: Path, payload: bytes, mode: int) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     path.write_bytes(payload)
@@ -283,15 +303,19 @@ def _admission_result(
 ) -> dict[str, object]:
     digest = _sha(archive_path.read_bytes())
     fixed = _sha(b"fixed")
+    receipt_signers = _receipt_signers()
     return {
         "artifact_handoff_sha256": fixed,
         "archive_sha256": digest,
+        "boi_artifact_inventory_sha256": fixed,
         "deployment_performed": False,
         "linux_authority_manifest_sha256": fixed,
         "macos_end_block_hash": fixed,
         "macos_end_height": 2,
         "peer_count": 4,
+        "privacy_protocol_receipt_id": fixed,
         "receipt_id": expected_receipt_id,
+        "receipt_signers": receipt_signers,
         "release_manifest_sha256": fixed,
         "release_manifest_verifier_sha256": (
             trusted_release_manifest_verifier_sha256
@@ -834,6 +858,81 @@ def test_old_admission_result_cannot_be_reused_for_current_pulled_subject(
 
     monkeypatch.setattr(publisher.admission, "verify_admission", admit)
     _rejects_without_handoff(harness, match="admission differs")
+
+
+def test_current_admission_shape_is_preserved_in_publication_binding(
+    harness: Harness,
+    tmp_path: Path,
+) -> None:
+    archive = next((harness.candidate / "admission").iterdir())
+    scratch = tmp_path / "current-admission-shape"
+    scratch.mkdir(mode=0o700)
+
+    payload = publisher._admission_bytes(
+        archive,
+        harness.candidate / "authority",
+        harness.request,
+        scratch,
+        1_800_000_000,
+        "current",
+    )
+
+    result = json.loads(payload)
+    assert result["boi_artifact_inventory_sha256"] == _sha(b"fixed")
+    assert result["privacy_protocol_receipt_id"] == _sha(b"fixed")
+    assert result["receipt_signers"] == _receipt_signers()
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        "omit-boi-inventory",
+        "omit-privacy-receipt",
+        "omit-receipt-signers",
+        "malformed-boi-inventory",
+        "malformed-privacy-receipt",
+        "tampered-receipt-signer",
+    ),
+)
+def test_incomplete_or_tampered_current_admission_shape_is_rejected(
+    harness: Harness,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+) -> None:
+    archive = next((harness.candidate / "admission").iterdir())
+    original = publisher.admission.verify_admission
+
+    def admit(**kwargs):
+        result = original(**kwargs)
+        if mutation == "omit-boi-inventory":
+            result.pop("boi_artifact_inventory_sha256")
+        elif mutation == "omit-privacy-receipt":
+            result.pop("privacy_protocol_receipt_id")
+        elif mutation == "omit-receipt-signers":
+            result.pop("receipt_signers")
+        elif mutation == "malformed-boi-inventory":
+            result["boi_artifact_inventory_sha256"] = "not-a-digest"
+        elif mutation == "malformed-privacy-receipt":
+            result["privacy_protocol_receipt_id"] = "not-a-digest"
+        else:
+            result["receipt_signers"][publisher.admission.SLUGS[0]]["node_id"] = (
+                "taira-node:receipt-signer:secp256k1:sha256:" + "0" * 64
+            )
+        return result
+
+    monkeypatch.setattr(publisher.admission, "verify_admission", admit)
+    scratch = tmp_path / f"invalid-{mutation}"
+    scratch.mkdir(mode=0o700)
+    with pytest.raises(publisher.TairaPublicationError):
+        publisher._admission_bytes(
+            archive,
+            harness.candidate / "authority",
+            harness.request,
+            scratch,
+            1_800_000_000,
+            "invalid",
+        )
 
 
 def test_executable_and_config_toctou_are_detected(

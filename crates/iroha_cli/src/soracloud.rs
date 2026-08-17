@@ -18527,27 +18527,138 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
         );
         assert!(!renew_payload.contains_key("base_fee_nanos"));
     }
-    #[test]
-    fn training_job_start_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("training_job_start_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
-        let response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/training/job/start".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode training start response"),
-            },
-        )]));
-        let key_pair = soracloud_fixture_key_pair(0x18);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = TrainingJobStartArgs {
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
+    macro_rules! manifest_pair_submission_service_name_case {
+        (
+            $name:ident,
+            temp: $temp:literal,
+            endpoint: $endpoint:literal,
+            response_label: $response_label:literal,
+            seed: $seed:literal,
+            args: $args:ident { $($field:ident: $value:expr),* $(,)? },
+            success: $success:literal,
+            request_label: $request_label:literal,
+            decode_label: $decode_label:literal $(,)?
+        ) => {
+            #[test]
+            fn $name() {
+                let dir = temp_dir($temp);
+                InitArgs {
+                    output_dir: dir.clone(),
+                    service_name: "echo_console".to_owned(),
+                    service_version: "1.0.0".to_owned(),
+                    template: InitTemplate::HttpService,
+                    overwrite: false,
+                }
+                .run()
+                .expect("http-service init should succeed");
+                let response = norito::json!({ "tx_instructions": [] });
+                let server = MockHttpServer::start(BTreeMap::from([(
+                    $endpoint.to_owned(),
+                    MockHttpResponse {
+                        content_type: "application/json",
+                        body: json::to_vec(&response).expect($response_label),
+                    },
+                )]));
+                let key_pair = soracloud_fixture_key_pair($seed);
+                let authority = AccountId::new(key_pair.public_key().clone());
+                install_mock_submission_config(&authority, &key_pair);
+                let output = $args {
+                    service_name: None,
+                    container: Some(dir.join("container_manifest.json")),
+                    service: Some(dir.join("service_manifest.json")),
+                    $($field: $value,)*
+                    torii_url: Some(server.base_url.clone()),
+                    api_token: None,
+                    timeout_secs: 5,
+                }
+                .run(&authority, &key_pair)
+                .expect($success);
+                assert_manifest_pair_service_plan(&output);
+                let request = server
+                    .requests()
+                    .into_iter()
+                    .find(|request| request.method == "POST" && request.path == $endpoint)
+                    .expect($request_label);
+                let body: norito::json::Value =
+                    json::from_slice(&request.body).expect($decode_label);
+                assert_eq!(
+                    body.get("payload")
+                        .and_then(norito::json::Value::as_object)
+                        .and_then(|payload| payload.get("service_name"))
+                        .and_then(norito::json::Value::as_str),
+                    Some("echo_console")
+                );
+            }
+        };
+    }
+
+    macro_rules! manifest_pair_status_service_name_case {
+        (
+            $name:ident,
+            temp: $temp:literal,
+            endpoint: $endpoint:literal,
+            response: $response:expr,
+            response_label: $response_label:literal,
+            args: $args:ident { $($field:ident: $value:expr),* $(,)? },
+            success: $success:literal,
+            request_label: $request_label:literal $(,)?
+        ) => {
+            #[test]
+            fn $name() {
+                let dir = temp_dir($temp);
+                InitArgs {
+                    output_dir: dir.clone(),
+                    service_name: "echo_console".to_owned(),
+                    service_version: "1.0.0".to_owned(),
+                    template: InitTemplate::HttpService,
+                    overwrite: false,
+                }
+                .run()
+                .expect("http-service init should succeed");
+                let response = $response;
+                let server = MockHttpServer::start(BTreeMap::from([(
+                    $endpoint.to_owned(),
+                    MockHttpResponse {
+                        content_type: "application/json",
+                        body: json::to_vec(&response).expect($response_label),
+                    },
+                )]));
+                install_mock_protected_read_signer();
+                let output = $args {
+                    service_name: None,
+                    container: Some(dir.join("container_manifest.json")),
+                    service: Some(dir.join("service_manifest.json")),
+                    $($field: $value,)*
+                    torii_url: Some(server.base_url.clone()),
+                    api_token: None,
+                    timeout_secs: 5,
+                }
+                .run()
+                .expect($success);
+                assert_eq!(
+                    output
+                        .get("service_name")
+                        .and_then(norito::json::Value::as_str),
+                    Some("echo_console")
+                );
+                assert_manifest_pair_service_plan(&output);
+                let request = server
+                    .requests()
+                    .into_iter()
+                    .find(|request| request.method == "GET")
+                    .expect($request_label);
+                assert_eq!(request.path, $endpoint);
+            }
+        };
+    }
+
+    manifest_pair_submission_service_name_case!(
+        training_job_start_args_can_resolve_service_name_from_manifest_pair,
+        temp: "training_job_start_service_name_from_manifest_pair",
+        endpoint: "/v1/soracloud/training/job/start",
+        response_label: "encode training start response",
+        seed: 0x18,
+        args: TrainingJobStartArgs {
             model_name: "fare-model".to_owned(),
             job_id: "job-1".to_owned(),
             worker_group_size: 1,
@@ -18557,194 +18668,64 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             step_compute_units: 10,
             compute_budget_units: 1_000,
             storage_budget_bytes: 1_024,
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("training-job-start should succeed");
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/training/job/start"
-            })
-            .expect("training job start request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode training job start request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-    }
-    #[test]
-    fn training_job_checkpoint_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("training_job_checkpoint_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
-        let response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/training/job/checkpoint".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode training checkpoint response"),
-            },
-        )]));
-        let key_pair = soracloud_fixture_key_pair(0x19);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = TrainingJobCheckpointArgs {
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
+        },
+        success: "training-job-start should succeed",
+        request_label: "training job start request",
+        decode_label: "decode training job start request",
+    );
+    manifest_pair_submission_service_name_case!(
+        training_job_checkpoint_args_can_resolve_service_name_from_manifest_pair,
+        temp: "training_job_checkpoint_service_name_from_manifest_pair",
+        endpoint: "/v1/soracloud/training/job/checkpoint",
+        response_label: "encode training checkpoint response",
+        seed: 0x19,
+        args: TrainingJobCheckpointArgs {
             job_id: "job-1".to_owned(),
             completed_step: 10,
             checkpoint_size_bytes: 1_024,
             metrics_hash: Hash::new(b"metrics"),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("training-job-checkpoint should succeed");
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/training/job/checkpoint"
-            })
-            .expect("training job checkpoint request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode training job checkpoint request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-    }
-    #[test]
-    fn training_job_retry_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("training_job_retry_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
-        let response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/training/job/retry".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode training retry response"),
-            },
-        )]));
-        let key_pair = soracloud_fixture_key_pair(0x1A);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = TrainingJobRetryArgs {
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
+        },
+        success: "training-job-checkpoint should succeed",
+        request_label: "training job checkpoint request",
+        decode_label: "decode training job checkpoint request",
+    );
+    manifest_pair_submission_service_name_case!(
+        training_job_retry_args_can_resolve_service_name_from_manifest_pair,
+        temp: "training_job_retry_service_name_from_manifest_pair",
+        endpoint: "/v1/soracloud/training/job/retry",
+        response_label: "encode training retry response",
+        seed: 0x1A,
+        args: TrainingJobRetryArgs {
             job_id: "job-1".to_owned(),
             reason: "transient failure".to_owned(),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("training-job-retry should succeed");
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/training/job/retry"
-            })
-            .expect("training job retry request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode training job retry request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-    }
-    #[test]
-    fn training_job_status_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("training_job_status_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
-        let response = norito::json!({
+        },
+        success: "training-job-retry should succeed",
+        request_label: "training job retry request",
+        decode_label: "decode training job retry request",
+    );
+    manifest_pair_status_service_name_case!(
+        training_job_status_args_can_resolve_service_name_from_manifest_pair,
+        temp: "training_job_status_service_name_from_manifest_pair",
+        endpoint: "/v1/soracloud/training/job/status?service_name=echo_console&job_id=job-1",
+        response: norito::json!({
             "service_name": "echo_console",
             "job_id": "job-1",
             "status": "running"
-        });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/training/job/status?service_name=echo_console&job_id=job-1".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode training status response"),
-            },
-        )]));
-        install_mock_protected_read_signer();
-        let output = TrainingJobStatusArgs {
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
+        }),
+        response_label: "encode training status response",
+        args: TrainingJobStatusArgs {
             job_id: "job-1".to_owned(),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run()
-        .expect("training-job-status should succeed");
-        assert_eq!(
-            output
-                .get("service_name")
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| request.method == "GET")
-            .expect("training job status request");
-        assert_eq!(
-            request.path,
-            "/v1/soracloud/training/job/status?service_name=echo_console&job_id=job-1"
-        );
-    }
-    #[test]
-    fn model_artifact_register_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_artifact_register_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
-        let response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/artifact/register".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode model artifact response"),
-            },
-        )]));
-        let key_pair = soracloud_fixture_key_pair(0x1B);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = ModelArtifactRegisterArgs {
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
+        },
+        success: "training-job-status should succeed",
+        request_label: "training job status request",
+    );
+    manifest_pair_submission_service_name_case!(
+        model_artifact_register_args_can_resolve_service_name_from_manifest_pair,
+        temp: "model_artifact_register_service_name_from_manifest_pair",
+        endpoint: "/v1/soracloud/model/artifact/register",
+        response_label: "encode model artifact response",
+        seed: 0x1B,
+        args: ModelArtifactRegisterArgs {
             model_name: "fare-model".to_owned(),
             training_job_id: "job-1".to_owned(),
             weight_artifact_hash: Hash::new(b"weights"),
@@ -18752,99 +18733,34 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             training_config_hash: Hash::new(b"training-config"),
             reproducibility_hash: Hash::new(b"reproducibility"),
             provenance_attestation_hash: Hash::new(b"provenance"),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("model artifact-register should succeed");
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/model/artifact/register"
-            })
-            .expect("model artifact register request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode model artifact register request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-    }
-    #[test]
-    fn model_artifact_status_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_artifact_status_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
-        let response = norito::json!({
+        },
+        success: "model artifact-register should succeed",
+        request_label: "model artifact register request",
+        decode_label: "decode model artifact register request",
+    );
+    manifest_pair_status_service_name_case!(
+        model_artifact_status_args_can_resolve_service_name_from_manifest_pair,
+        temp: "model_artifact_status_service_name_from_manifest_pair",
+        endpoint: "/v1/soracloud/model/artifact/status?service_name=echo_console&training_job_id=job-1",
+        response: norito::json!({
             "service_name": "echo_console",
             "training_job_id": "job-1",
             "artifact_status": "registered"
-        });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/artifact/status?service_name=echo_console&training_job_id=job-1"
-                .to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode model artifact status response"),
-            },
-        )]));
-        install_mock_protected_read_signer();
-        let output = ModelArtifactStatusArgs {
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
+        }),
+        response_label: "encode model artifact status response",
+        args: ModelArtifactStatusArgs {
             training_job_id: "job-1".to_owned(),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run()
-        .expect("model artifact-status should succeed");
-        assert_eq!(
-            output
-                .get("service_name")
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| request.method == "GET")
-            .expect("model artifact status request");
-        assert_eq!(
-            request.path,
-            "/v1/soracloud/model/artifact/status?service_name=echo_console&training_job_id=job-1"
-        );
-    }
-    #[test]
-    fn model_weight_register_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_weight_register_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
-        let response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/weight/register".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode model weight register response"),
-            },
-        )]));
-        let key_pair = soracloud_fixture_key_pair(0x1C);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = ModelWeightRegisterArgs {
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
+        },
+        success: "model artifact-status should succeed",
+        request_label: "model artifact status request",
+    );
+    manifest_pair_submission_service_name_case!(
+        model_weight_register_args_can_resolve_service_name_from_manifest_pair,
+        temp: "model_weight_register_service_name_from_manifest_pair",
+        endpoint: "/v1/soracloud/model/weight/register",
+        response_label: "encode model weight register response",
+        seed: 0x1C,
+        args: ModelWeightRegisterArgs {
             model_name: "fare-model".to_owned(),
             weight_version: "v1".to_owned(),
             training_job_id: "job-1".to_owned(),
@@ -18854,226 +18770,77 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             training_config_hash: Hash::new(b"training-config"),
             reproducibility_hash: Hash::new(b"reproducibility"),
             provenance_attestation_hash: Hash::new(b"provenance"),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("model weight-register should succeed");
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/model/weight/register"
-            })
-            .expect("model weight register request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode model weight register request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-    }
-    #[test]
-    fn model_weight_promote_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_weight_promote_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
-        let response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/weight/promote".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode model weight promote response"),
-            },
-        )]));
-        let key_pair = soracloud_fixture_key_pair(0x1D);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = ModelWeightPromoteArgs {
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
+        },
+        success: "model weight-register should succeed",
+        request_label: "model weight register request",
+        decode_label: "decode model weight register request",
+    );
+    manifest_pair_submission_service_name_case!(
+        model_weight_promote_args_can_resolve_service_name_from_manifest_pair,
+        temp: "model_weight_promote_service_name_from_manifest_pair",
+        endpoint: "/v1/soracloud/model/weight/promote",
+        response_label: "encode model weight promote response",
+        seed: 0x1D,
+        args: ModelWeightPromoteArgs {
             model_name: "fare-model".to_owned(),
             weight_version: "v1".to_owned(),
             gate_approved: true,
             gate_report_hash: Hash::new(b"gate-report"),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("model weight-promote should succeed");
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/model/weight/promote"
-            })
-            .expect("model weight promote request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode model weight promote request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-    }
-    #[test]
-    fn model_weight_rollback_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_weight_rollback_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
-        let response = norito::json!({ "tx_instructions": [] });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/weight/rollback".to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode model weight rollback response"),
-            },
-        )]));
-        let key_pair = soracloud_fixture_key_pair(0x1E);
-        let authority = AccountId::new(key_pair.public_key().clone());
-        install_mock_submission_config(&authority, &key_pair);
-        let output = ModelWeightRollbackArgs {
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
+        },
+        success: "model weight-promote should succeed",
+        request_label: "model weight promote request",
+        decode_label: "decode model weight promote request",
+    );
+    manifest_pair_submission_service_name_case!(
+        model_weight_rollback_args_can_resolve_service_name_from_manifest_pair,
+        temp: "model_weight_rollback_service_name_from_manifest_pair",
+        endpoint: "/v1/soracloud/model/weight/rollback",
+        response_label: "encode model weight rollback response",
+        seed: 0x1E,
+        args: ModelWeightRollbackArgs {
             model_name: "fare-model".to_owned(),
             target_version: "v0".to_owned(),
             reason: "failed eval".to_owned(),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run(&authority, &key_pair)
-        .expect("model weight-rollback should succeed");
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| {
-                request.method == "POST" && request.path == "/v1/soracloud/model/weight/rollback"
-            })
-            .expect("model weight rollback request");
-        let body: norito::json::Value =
-            json::from_slice(&request.body).expect("decode model weight rollback request");
-        assert_eq!(
-            body.get("payload")
-                .and_then(norito::json::Value::as_object)
-                .and_then(|payload| payload.get("service_name"))
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-    }
-    #[test]
-    fn model_weight_status_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_weight_status_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
-        let response = norito::json!({
+        },
+        success: "model weight-rollback should succeed",
+        request_label: "model weight rollback request",
+        decode_label: "decode model weight rollback request",
+    );
+    manifest_pair_status_service_name_case!(
+        model_weight_status_args_can_resolve_service_name_from_manifest_pair,
+        temp: "model_weight_status_service_name_from_manifest_pair",
+        endpoint: "/v1/soracloud/model/weight/status?service_name=echo_console&model_name=fare-model",
+        response: norito::json!({
             "service_name": "echo_console",
             "model_name": "fare-model",
             "current_weight_version": "v1"
-        });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/weight/status?service_name=echo_console&model_name=fare-model"
-                .to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode model weight status response"),
-            },
-        )]));
-        install_mock_protected_read_signer();
-        let output = ModelWeightStatusArgs {
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
+        }),
+        response_label: "encode model weight status response",
+        args: ModelWeightStatusArgs {
             model_name: "fare-model".to_owned(),
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run()
-        .expect("model weight-status should succeed");
-        assert_eq!(
-            output
-                .get("service_name")
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| request.method == "GET")
-            .expect("model weight status request");
-        assert_eq!(
-            request.path,
-            "/v1/soracloud/model/weight/status?service_name=echo_console&model_name=fare-model"
-        );
-    }
-    #[test]
-    fn model_upload_status_args_can_resolve_service_name_from_manifest_pair() {
-        let dir = temp_dir("model_upload_status_service_name_from_manifest_pair");
-        service_scaffold_args(dir.clone(), "echo_console", InitTemplate::HttpService)
-            .run()
-            .expect("http-service init should succeed");
-        let response = norito::json!({
+        },
+        success: "model weight-status should succeed",
+        request_label: "model weight status request",
+    );
+    manifest_pair_status_service_name_case!(
+        model_upload_status_args_can_resolve_service_name_from_manifest_pair,
+        temp: "model_upload_status_service_name_from_manifest_pair",
+        endpoint: "/v1/soracloud/model/upload/status?service_name=echo_console&weight_version=v1&model_name=fare-model",
+        response: norito::json!({
             "service_name": "echo_console",
             "weight_version": "v1",
             "model_name": "fare-model"
-        });
-        let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/model/upload/status?service_name=echo_console&weight_version=v1&model_name=fare-model"
-                .to_owned(),
-            MockHttpResponse {
-                content_type: "application/json",
-                body: json::to_vec(&response).expect("encode model upload status response"),
-            },
-        )]));
-        install_mock_protected_read_signer();
-        let output = ModelUploadStatusArgs {
-            service_name: None,
-            container: Some(dir.join("container_manifest.json")),
-            service: Some(dir.join("service_manifest.json")),
+        }),
+        response_label: "encode model upload status response",
+        args: ModelUploadStatusArgs {
             weight_version: "v1".to_owned(),
             model_id: None,
             model_name: Some("fare-model".to_owned()),
             bundle_root: None,
-            torii_url: Some(server.base_url.clone()),
-            api_token: None,
-            timeout_secs: 5,
-        }
-        .run()
-        .expect("model upload-status should succeed");
-        assert_eq!(
-            output
-                .get("service_name")
-                .and_then(norito::json::Value::as_str),
-            Some("echo_console")
-        );
-        assert_manifest_pair_service_plan(&output);
-        let request = server
-            .requests()
-            .into_iter()
-            .find(|request| request.method == "GET")
-            .expect("model upload status request");
-        assert_eq!(
-            request.path,
-            "/v1/soracloud/model/upload/status?service_name=echo_console&weight_version=v1&model_name=fare-model"
-        );
-    }
+        },
+        success: "model upload-status should succeed",
+        request_label: "model upload status request",
+    );
     #[test]
     fn model_upload_encryption_recipient_args_can_attach_service_plan_from_manifest_pair() {
         let dir = temp_dir("model_upload_encryption_recipient_service_plan_from_manifest_pair");

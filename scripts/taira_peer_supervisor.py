@@ -4,12 +4,15 @@
 This helper is installed by ``migrate_taira_peer_supervision.py`` and is not
 intended to be started by hand.  It preserves the validated binary, config,
 and storage-directory identities from the migration plan, forwards shutdown
-signals to the validator, and applies bounded exponential restart backoff.
+signals to the validator, and applies bounded exponential restart backoff. Its
+required peer identity binds a durable local lifecycle journal for a separately
+protected four-peer evidence collector.
 """
 
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import math
@@ -22,7 +25,7 @@ import sys
 import time
 from pathlib import Path
 from types import FrameType
-from typing import Any
+from typing import Any, Callable
 
 
 class IdentityError(RuntimeError):
@@ -64,6 +67,75 @@ HIGH_ENTROPY_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{40,}={0,2}" r"(?![A-Za-z0-9+/_-])"
 )
 DECIMAL_RE = re.compile(r"\b[0-9]+\b")
+LIFECYCLE_STATE_SCHEMA = "iroha.taira.peer-supervisor-lifecycle-state.v1"
+LIFECYCLE_RAW_WINDOW_SCHEMA = "iroha.taira.peer-supervisor-raw-window.v1"
+LIFECYCLE_CHAIN_DOMAIN = b"iroha.taira.peer-supervisor-lifecycle-chain.v1\0"
+LIFECYCLE_BINDING_DOMAIN = b"iroha.taira.peer-supervisor-lifecycle-binding.v1\0"
+LIFECYCLE_STATE_MAX_BYTES = 16 * 1024
+LIFECYCLE_JOURNAL_MAX_BYTES = 16 * 1024 * 1024
+LIFECYCLE_RECORD_MAX_BYTES = 4 * 1024
+DEFAULT_LIFECYCLE_HEALTHY_INTERVAL_SECONDS = 60.0
+LIFECYCLE_STATE_FIELDS = {
+    "schema",
+    "schema_version",
+    "binding_sha256",
+    "validator_id",
+    "node_id",
+    "restart_generation",
+    "supervisor_generation",
+    "process_generation",
+    "restart_count",
+    "unexpected_exit_total",
+    "journal_sequence",
+    "journal_chain_sha256",
+    "journal_record_count",
+    "journal_size_bytes",
+    "journal_sha256",
+    "pending_record",
+}
+LIFECYCLE_RECORD_FIELDS = {
+    "index",
+    "journal_sequence",
+    "observed_at_unix_ms",
+    "validator_id",
+    "node_id",
+    "event",
+    "restart_count",
+    "supervisor_generation",
+    "process_generation",
+    "unexpected_exit_total",
+}
+LIFECYCLE_CHECKPOINT_FIELDS = {
+    "captured_at_unix_ms",
+    "journal_sequence",
+    "journal_chain_sha256",
+    "validators",
+}
+LIFECYCLE_RAW_WINDOW_FIELDS = {
+    "schema",
+    "schema_version",
+    "binding_sha256",
+    "validator_id",
+    "node_id",
+    "baseline",
+    "terminal",
+    "record_count",
+    "records_sha256",
+}
+LIFECYCLE_VALIDATOR_FIELDS = {
+    "validator_id",
+    "node_id",
+    "restart_count",
+    "supervisor_generation",
+    "process_generation",
+    "unexpected_exit_total",
+}
+LIFECYCLE_EVENTS = frozenset({"healthy", "restart", "unexpected_exit"})
+LIFECYCLE_VALIDATOR_RE = re.compile(r"taira-validator-[1-4]")
+LIFECYCLE_NODE_ID_RE = re.compile(
+    r"taira-node:receipt-signer:secp256k1:sha256:[0-9a-f]{64}"
+)
+LOWER_SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def metadata_identity(info: os.stat_result) -> tuple[int, ...]:
@@ -131,6 +203,1326 @@ def fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def canonical_json_line(value: object) -> bytes:
+    """Encode one bounded, ASCII, canonical JSON line."""
+
+    return (
+        json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    ).encode("ascii")
+
+
+def lifecycle_binding_sha256(
+    args: argparse.Namespace, validator_id: str, node_id: str
+) -> str:
+    """Bind one local journal to the exact deployed peer identity."""
+
+    payload = {
+        "node_id": node_id,
+        "restart_generation": args.restart_generation,
+        "runtime_binding_sha256": terminal_binding_sha256(args),
+        "schema": LIFECYCLE_STATE_SCHEMA,
+        "validator_id": validator_id,
+    }
+    return hashlib.sha256(
+        LIFECYCLE_BINDING_DOMAIN + canonical_json_line(payload)
+    ).hexdigest()
+
+
+def _lifecycle_initial_chain(binding_sha256: str) -> str:
+    """Return the domain-separated chain root for one peer binding."""
+
+    return hashlib.sha256(
+        LIFECYCLE_CHAIN_DOMAIN + bytes.fromhex(binding_sha256)
+    ).hexdigest()
+
+
+def _lifecycle_next_chain(prior: str, record: dict[str, object]) -> str:
+    """Extend the local journal chain with one canonical verifier-shaped row."""
+
+    return hashlib.sha256(
+        LIFECYCLE_CHAIN_DOMAIN
+        + bytes.fromhex(prior)
+        + canonical_json_line(record)
+    ).hexdigest()
+
+
+def _require_nonnegative_integer(value: object, label: str) -> int:
+    """Return one exact nonnegative integer, rejecting booleans."""
+
+    if type(value) is not int or value < 0:
+        raise IdentityError(f"{label} is not an exact nonnegative integer")
+    return value
+
+
+def _require_positive_integer(value: object, label: str) -> int:
+    """Return one exact positive integer, rejecting booleans."""
+
+    result = _require_nonnegative_integer(value, label)
+    if result == 0:
+        raise IdentityError(f"{label} is not positive")
+    return result
+
+
+def _require_lifecycle_regular_file(
+    path: Path, label: str, maximum_bytes: int
+) -> tuple[bytes, os.stat_result]:
+    """Read one stable owner-private lifecycle file without following links."""
+
+    before = require_acl_free_path(path, label)
+    if (
+        stat.S_ISLNK(before.st_mode)
+        or not stat.S_ISREG(before.st_mode)
+        or before.st_uid != os.geteuid()
+        or stat.S_IMODE(before.st_mode) != 0o600
+        or before.st_nlink != 1
+        or before.st_size > maximum_bytes
+    ):
+        raise IdentityError(f"{label} has unsafe metadata")
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if exact_file_identity(opened) != exact_file_identity(before):
+            raise IdentityError(f"{label} changed while opening")
+        body = bytearray()
+        while len(body) <= maximum_bytes:
+            chunk = os.read(descriptor, min(64 * 1024, maximum_bytes + 1 - len(body)))
+            if not chunk:
+                break
+            body.extend(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    named = path.lstat()
+    if (
+        len(body) > maximum_bytes
+        or exact_file_identity(after) != exact_file_identity(opened)
+        or exact_file_identity(named) != exact_file_identity(after)
+    ):
+        raise IdentityError(f"{label} changed while reading")
+    return bytes(body), after
+
+
+def _publish_lifecycle_file(
+    path: Path,
+    body: bytes,
+    label: str,
+    maximum_bytes: int,
+    *,
+    allow_empty: bool = False,
+) -> str:
+    """Atomically publish and durably verify one owner-private lifecycle file."""
+
+    if (not body and not allow_empty) or len(body) > maximum_bytes:
+        raise IdentityError(f"{label} has an invalid publication size")
+    parent_info = require_private_directory(path.parent, f"{label} directory")
+    try:
+        _require_lifecycle_regular_file(path, label, maximum_bytes)
+    except FileNotFoundError:
+        pass
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+        0o600,
+    )
+    published = False
+    try:
+        os.fchmod(descriptor, 0o600)
+        temporary_info = os.fstat(descriptor)
+        clear_inherited_acl(temporary, temporary_info, f"{label} staging file")
+        offset = 0
+        while offset < len(body):
+            written = os.write(descriptor, body[offset:])
+            if written <= 0:
+                raise OSError(f"short {label} write")
+            offset += written
+        os.fsync(descriptor)
+        staged = os.fstat(descriptor)
+        if (
+            staged.st_uid != os.geteuid()
+            or stat.S_IMODE(staged.st_mode) != 0o600
+            or staged.st_nlink != 1
+            or staged.st_size != len(body)
+        ):
+            raise IdentityError(f"{label} staging file has unsafe metadata")
+        current_parent = require_private_directory(path.parent, f"{label} directory")
+        if (current_parent.st_dev, current_parent.st_ino) != (
+            parent_info.st_dev,
+            parent_info.st_ino,
+        ):
+            raise IdentityError(f"{label} directory changed during publication")
+        os.replace(temporary, path)
+        published = True
+        fsync_directory(path.parent)
+    finally:
+        os.close(descriptor)
+        if not published:
+            try:
+                staged = temporary.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                if (staged.st_dev, staged.st_ino) == (
+                    temporary_info.st_dev,
+                    temporary_info.st_ino,
+                ):
+                    temporary.unlink()
+                    fsync_directory(path.parent)
+    actual, _ = _require_lifecycle_regular_file(path, label, maximum_bytes)
+    if actual != body:
+        raise IdentityError(f"{label} failed publication verification")
+    return hashlib.sha256(body).hexdigest()
+
+
+def _open_lifecycle_lock(
+    root: Path, filename: str, label: str, *, nonblocking: bool
+) -> tuple[int, os.stat_result]:
+    """Open and acquire one stable owner-private lifecycle lock inode."""
+
+    path = root / filename
+    existed = True
+    try:
+        before = require_acl_free_path(path, label)
+    except FileNotFoundError:
+        existed = False
+        before = None
+    if before is not None and (
+        stat.S_ISLNK(before.st_mode)
+        or not stat.S_ISREG(before.st_mode)
+        or before.st_uid != os.geteuid()
+        or stat.S_IMODE(before.st_mode) != 0o600
+        or before.st_nlink != 1
+        or before.st_size != 0
+    ):
+        raise IdentityError(f"{label} has unsafe metadata")
+    descriptor = os.open(
+        path,
+        os.O_RDWR
+        | os.O_CREAT
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0),
+        0o600,
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if not existed:
+            os.fchmod(descriptor, 0o600)
+            os.fsync(descriptor)
+            clear_inherited_acl(path, opened, label)
+            fsync_directory(root)
+            opened = os.fstat(descriptor)
+        named = require_acl_free_path(path, label)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_uid != os.geteuid()
+            or stat.S_IMODE(opened.st_mode) != 0o600
+            or opened.st_nlink != 1
+            or opened.st_size != 0
+            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+        ):
+            raise IdentityError(f"{label} changed while opening")
+        flags = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
+        try:
+            fcntl.flock(descriptor, flags)
+        except BlockingIOError as error:
+            raise IdentityError(f"{label} is already held") from error
+        named = path.lstat()
+        current = os.fstat(descriptor)
+        if (current.st_dev, current.st_ino) != (named.st_dev, named.st_ino):
+            raise IdentityError(f"{label} path changed while locking")
+        return descriptor, current
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _confirm_lifecycle_path(
+    path: Path, descriptor: int, expected: os.stat_result, label: str
+) -> None:
+    """Require a held lock descriptor to remain the exact named inode."""
+
+    opened = os.fstat(descriptor)
+    named = path.lstat()
+    if (
+        (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino)
+        or (named.st_dev, named.st_ino) != (expected.st_dev, expected.st_ino)
+        or opened.st_nlink != 1
+        or named.st_nlink != 1
+    ):
+        raise IdentityError(f"{label} path changed while active")
+
+
+def _decode_lifecycle_state(body: bytes) -> dict[str, object]:
+    """Decode one exact canonical local lifecycle state snapshot."""
+
+    if not body or len(body) > LIFECYCLE_STATE_MAX_BYTES:
+        raise IdentityError("lifecycle state has an invalid size")
+    try:
+        value = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise IdentityError("lifecycle state is not canonical JSON") from error
+    if (
+        not isinstance(value, dict)
+        or set(value) != LIFECYCLE_STATE_FIELDS
+        or canonical_json_line(value) != body
+        or value.get("schema") != LIFECYCLE_STATE_SCHEMA
+        or type(value.get("schema_version")) is not int
+        or value.get("schema_version") != 1
+    ):
+        raise IdentityError("lifecycle state is not canonical")
+    for field in ("binding_sha256", "restart_generation", "journal_chain_sha256", "journal_sha256"):
+        if not isinstance(value[field], str) or LOWER_SHA256_RE.fullmatch(value[field]) is None:
+            raise IdentityError(f"lifecycle state {field} is invalid")
+    if (
+        not isinstance(value["validator_id"], str)
+        or LIFECYCLE_VALIDATOR_RE.fullmatch(value["validator_id"]) is None
+        or not isinstance(value["node_id"], str)
+        or LIFECYCLE_NODE_ID_RE.fullmatch(value["node_id"]) is None
+    ):
+        raise IdentityError("lifecycle state peer identity is invalid")
+    for field in (
+        "supervisor_generation",
+        "process_generation",
+        "restart_count",
+        "unexpected_exit_total",
+        "journal_sequence",
+        "journal_record_count",
+        "journal_size_bytes",
+    ):
+        _require_nonnegative_integer(value[field], f"lifecycle state {field}")
+    if value["supervisor_generation"] == 0:
+        raise IdentityError("lifecycle supervisor generation is not positive")
+    pending = value["pending_record"]
+    if pending is not None and (
+        not isinstance(pending, dict)
+        or set(pending) != {"record", "journal_chain_sha256"}
+        or not isinstance(pending["record"], dict)
+        or set(pending["record"]) != LIFECYCLE_RECORD_FIELDS
+        or not isinstance(pending["journal_chain_sha256"], str)
+        or LOWER_SHA256_RE.fullmatch(pending["journal_chain_sha256"]) is None
+    ):
+        raise IdentityError("lifecycle pending record is invalid")
+    return value
+
+
+def _decode_lifecycle_records(body: bytes) -> list[dict[str, object]]:
+    """Decode an exact canonical local record stream."""
+
+    if len(body) > LIFECYCLE_JOURNAL_MAX_BYTES:
+        raise IdentityError("lifecycle journal exceeds its bound")
+    if body and not body.endswith(b"\n"):
+        raise IdentityError("lifecycle journal has a partial record")
+    records: list[dict[str, object]] = []
+    for index, line in enumerate(body.splitlines(keepends=True)):
+        if len(line) > LIFECYCLE_RECORD_MAX_BYTES:
+            raise IdentityError("lifecycle journal record exceeds its bound")
+        try:
+            value = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise IdentityError("lifecycle journal record is not JSON") from error
+        if (
+            not isinstance(value, dict)
+            or set(value) != LIFECYCLE_RECORD_FIELDS
+            or canonical_json_line(value) != line
+        ):
+            raise IdentityError("lifecycle journal record is not canonical")
+        if _require_nonnegative_integer(value["index"], "lifecycle record index") != index:
+            raise IdentityError("lifecycle journal indexes are not contiguous")
+        if _require_positive_integer(
+            value["journal_sequence"], "lifecycle record sequence"
+        ) != index + 1:
+            raise IdentityError("lifecycle journal sequences are not contiguous")
+        _require_positive_integer(
+            value["observed_at_unix_ms"], "lifecycle record observation"
+        )
+        if (
+            not isinstance(value["validator_id"], str)
+            or LIFECYCLE_VALIDATOR_RE.fullmatch(value["validator_id"]) is None
+            or not isinstance(value["node_id"], str)
+            or LIFECYCLE_NODE_ID_RE.fullmatch(value["node_id"]) is None
+            or value["event"] not in LIFECYCLE_EVENTS
+        ):
+            raise IdentityError("lifecycle journal record identity is invalid")
+        for field in (
+            "restart_count",
+            "supervisor_generation",
+            "process_generation",
+            "unexpected_exit_total",
+        ):
+            _require_nonnegative_integer(value[field], f"lifecycle record {field}")
+        if value["supervisor_generation"] == 0 or value["process_generation"] == 0:
+            raise IdentityError("lifecycle record generations are not positive")
+        records.append(value)
+    return records
+
+
+def _validate_lifecycle_snapshot(
+    binding_sha256: str,
+    validator_id: str,
+    node_id: str,
+    state: dict[str, object],
+    body: bytes,
+    records: list[dict[str, object]],
+) -> None:
+    """Require state, chain, records, generations, and counters to cohere."""
+
+    digest = hashlib.sha256(body).hexdigest()
+    if (
+        state["journal_record_count"] != len(records)
+        or state["journal_sequence"] != len(records)
+        or state["journal_size_bytes"] != len(body)
+        or state["journal_sha256"] != digest
+    ):
+        raise IdentityError("lifecycle state does not bind the journal bytes")
+    chain = _lifecycle_initial_chain(binding_sha256)
+    prior: dict[str, object] | None = None
+    for record in records:
+        if record["validator_id"] != validator_id or record["node_id"] != node_id:
+            raise IdentityError("lifecycle journal peer identity changed")
+        if prior is not None:
+            if record["observed_at_unix_ms"] < prior["observed_at_unix_ms"]:
+                raise IdentityError("lifecycle journal wall clock regressed")
+            if record["supervisor_generation"] < prior["supervisor_generation"]:
+                raise IdentityError("lifecycle supervisor generation regressed")
+            expected_restart = prior["restart_count"]
+            expected_process = prior["process_generation"]
+            expected_exits = prior["unexpected_exit_total"]
+            if record["event"] == "restart":
+                expected_restart += 1
+                expected_process += 1
+            elif record["event"] == "unexpected_exit":
+                expected_exits += 1
+            if (
+                record["restart_count"] != expected_restart
+                or record["process_generation"] != expected_process
+                or record["unexpected_exit_total"] != expected_exits
+            ):
+                raise IdentityError("lifecycle journal counters are incoherent")
+        elif not (
+            record["restart_count"] == 0
+            and record["process_generation"] == 1
+            and (
+                (
+                    record["event"] == "healthy"
+                    and record["unexpected_exit_total"] == 0
+                )
+                or (
+                    record["event"] == "unexpected_exit"
+                    and record["unexpected_exit_total"] == 1
+                )
+            )
+        ):
+            raise IdentityError("lifecycle journal first process transition is invalid")
+        chain = _lifecycle_next_chain(chain, record)
+        prior = record
+    if state["journal_chain_sha256"] != chain:
+        raise IdentityError("lifecycle journal chain digest is wrong")
+    if prior is None:
+        if (
+            state["process_generation"] != 0
+            or state["restart_count"] != 0
+            or state["unexpected_exit_total"] != 0
+        ):
+            raise IdentityError("empty lifecycle journal has nonzero counters")
+    elif (
+        state["process_generation"] != prior["process_generation"]
+        or state["restart_count"] != prior["restart_count"]
+        or state["unexpected_exit_total"] != prior["unexpected_exit_total"]
+        or state["supervisor_generation"] < prior["supervisor_generation"]
+    ):
+        raise IdentityError("lifecycle state counters differ from its journal tip")
+
+
+class LifecycleJournal:
+    """Process-held, durable local journal for one supervised Taira peer.
+
+    This journal is a collection input, not an observation authority. Its
+    records deliberately match the public-soak verifier row schema, but a
+    separately protected collector must capture four peers, construct the
+    evidence window, and obtain the independent native-verifier receipt.
+    """
+
+    # TODO: Install the four-peer collector behind the protected public-soak
+    # controller and provision the independent native verifier that signs off
+    # on its globally resequenced journal and exact deployed-runtime bindings.
+
+    OWNER_LOCK = "owner.lock"
+    STATE_LOCK = "state.lock"
+    STATE_FILE = "state.json"
+    JOURNAL_FILE = "journal.jsonl"
+    ENTRIES = frozenset({OWNER_LOCK, STATE_LOCK, STATE_FILE, JOURNAL_FILE})
+
+    def __init__(
+        self, root: Path, binding_sha256: str, validator_id: str, node_id: str,
+        restart_generation: str,
+    ) -> None:
+        if not root.is_absolute() or ".." in root.parts:
+            raise IdentityError("lifecycle journal root is not canonical and absolute")
+        if LOWER_SHA256_RE.fullmatch(binding_sha256) is None:
+            raise IdentityError("lifecycle binding is not a lowercase SHA-256 digest")
+        if LIFECYCLE_VALIDATOR_RE.fullmatch(validator_id) is None:
+            raise IdentityError("lifecycle validator ID is not canonical")
+        if LIFECYCLE_NODE_ID_RE.fullmatch(node_id) is None:
+            raise IdentityError("lifecycle node ID is not canonical")
+        if LOWER_SHA256_RE.fullmatch(restart_generation) is None:
+            raise IdentityError("lifecycle restart generation is invalid")
+        try:
+            root.mkdir(mode=0o700)
+            fsync_directory(root.parent)
+        except FileExistsError:
+            pass
+        root_info = require_private_directory(root, "lifecycle journal root")
+        unexpected = {entry.name for entry in root.iterdir()} - self.ENTRIES
+        if unexpected:
+            raise IdentityError("lifecycle journal root contains unexpected entries")
+        self.root = root
+        self.root_info = root_info
+        self.binding_sha256 = binding_sha256
+        self.validator_id = validator_id
+        self.node_id = node_id
+        self.restart_generation = restart_generation
+        self.owner_fd, self.owner_info = _open_lifecycle_lock(
+            root, self.OWNER_LOCK, "lifecycle owner lock", nonblocking=True
+        )
+        try:
+            self.state_fd, self.state_lock_info = _open_lifecycle_lock(
+                root, self.STATE_LOCK, "lifecycle state lock", nonblocking=False
+            )
+        except BaseException:
+            os.close(self.owner_fd)
+            raise
+        self.closed = False
+        self._state_sha256 = ""
+        try:
+            self._lock_state()
+            try:
+                self._initialize_or_resume()
+            finally:
+                self._unlock_state()
+        except BaseException:
+            self.close()
+            raise
+
+    @property
+    def state_path(self) -> Path:
+        """Return the fixed local state path."""
+
+        return self.root / self.STATE_FILE
+
+    @property
+    def journal_path(self) -> Path:
+        """Return the fixed local record-stream path."""
+
+        return self.root / self.JOURNAL_FILE
+
+    def _confirm_lock_paths(self) -> None:
+        """Require both held lock descriptors to remain the exact named inodes."""
+
+        _confirm_lifecycle_path(
+            self.root / self.OWNER_LOCK,
+            self.owner_fd,
+            self.owner_info,
+            "lifecycle owner lock",
+        )
+        _confirm_lifecycle_path(
+            self.root / self.STATE_LOCK,
+            self.state_fd,
+            self.state_lock_info,
+            "lifecycle state lock",
+        )
+
+    def _confirm_root(self) -> None:
+        current = require_private_directory(self.root, "lifecycle journal root")
+        if (current.st_dev, current.st_ino) != (
+            self.root_info.st_dev,
+            self.root_info.st_ino,
+        ):
+            raise IdentityError("lifecycle journal root changed while active")
+        if {entry.name for entry in self.root.iterdir()} != self.ENTRIES:
+            raise IdentityError("lifecycle journal root entries changed while active")
+        self._confirm_lock_paths()
+
+    def _lock_state(self) -> None:
+        if self.closed:
+            raise IdentityError("lifecycle journal is closed")
+        self._confirm_lock_paths()
+        fcntl.flock(self.state_fd, fcntl.LOCK_EX)
+        self._confirm_lock_paths()
+
+    def _unlock_state(self) -> None:
+        fcntl.flock(self.state_fd, fcntl.LOCK_UN)
+
+    def _read_state(self) -> tuple[dict[str, object], bytes]:
+        body, _ = _require_lifecycle_regular_file(
+            self.state_path, "lifecycle state", LIFECYCLE_STATE_MAX_BYTES
+        )
+        if self._state_sha256 and hashlib.sha256(body).hexdigest() != self._state_sha256:
+            raise IdentityError("lifecycle state changed outside the active writer")
+        state = _decode_lifecycle_state(body)
+        if (
+            state["binding_sha256"] != self.binding_sha256
+            or state["validator_id"] != self.validator_id
+            or state["node_id"] != self.node_id
+            or state["restart_generation"] != self.restart_generation
+        ):
+            raise IdentityError("lifecycle state binding changed")
+        return state, body
+
+    def _read_journal(self) -> tuple[bytes, list[dict[str, object]]]:
+        body, _ = _require_lifecycle_regular_file(
+            self.journal_path, "lifecycle journal", LIFECYCLE_JOURNAL_MAX_BYTES
+        )
+        return body, _decode_lifecycle_records(body)
+
+    def _validate_committed(
+        self, state: dict[str, object], body: bytes, records: list[dict[str, object]]
+    ) -> None:
+        _validate_lifecycle_snapshot(
+            self.binding_sha256,
+            self.validator_id,
+            self.node_id,
+            state,
+            body,
+            records,
+        )
+
+    def _publish_state(
+        self, state: dict[str, object], *, initializing: bool = False
+    ) -> None:
+        body = canonical_json_line(state)
+        if initializing:
+            self._confirm_root_after_lock_creation()
+        else:
+            self._confirm_root()
+        self._state_sha256 = _publish_lifecycle_file(
+            self.state_path, body, "lifecycle state", LIFECYCLE_STATE_MAX_BYTES
+        )
+        self._confirm_root()
+
+    def _initialize_or_resume(self) -> None:
+        self._confirm_root_after_lock_creation()
+        try:
+            state_body, _ = _require_lifecycle_regular_file(
+                self.state_path, "lifecycle state", LIFECYCLE_STATE_MAX_BYTES
+            )
+            journal_body, _ = _require_lifecycle_regular_file(
+                self.journal_path, "lifecycle journal", LIFECYCLE_JOURNAL_MAX_BYTES
+            )
+        except FileNotFoundError:
+            if self.state_path.exists() or self.journal_path.exists():
+                raise IdentityError("lifecycle journal is only partially initialized")
+            journal_body = b""
+            _publish_lifecycle_file(
+                self.journal_path,
+                journal_body,
+                "lifecycle journal",
+                LIFECYCLE_JOURNAL_MAX_BYTES,
+                allow_empty=True,
+            )
+            self._confirm_root_after_lock_creation()
+            journal_sha256 = hashlib.sha256(b"").hexdigest()
+            state = {
+                "schema": LIFECYCLE_STATE_SCHEMA,
+                "schema_version": 1,
+                "binding_sha256": self.binding_sha256,
+                "validator_id": self.validator_id,
+                "node_id": self.node_id,
+                "restart_generation": self.restart_generation,
+                "supervisor_generation": 1,
+                "process_generation": 0,
+                "restart_count": 0,
+                "unexpected_exit_total": 0,
+                "journal_sequence": 0,
+                "journal_chain_sha256": _lifecycle_initial_chain(
+                    self.binding_sha256
+                ),
+                "journal_record_count": 0,
+                "journal_size_bytes": 0,
+                "journal_sha256": journal_sha256,
+                "pending_record": None,
+            }
+            self._publish_state(state, initializing=True)
+            return
+        self._state_sha256 = hashlib.sha256(state_body).hexdigest()
+        state = _decode_lifecycle_state(state_body)
+        if (
+            state["binding_sha256"] != self.binding_sha256
+            or state["validator_id"] != self.validator_id
+            or state["node_id"] != self.node_id
+            or state["restart_generation"] != self.restart_generation
+        ):
+            raise IdentityError("lifecycle state belongs to another peer binding")
+        records = _decode_lifecycle_records(journal_body)
+        self._confirm_root()
+        self._recover_pending(state, journal_body, records)
+        state, _ = self._read_state()
+        journal_body, records = self._read_journal()
+        self._validate_committed(state, journal_body, records)
+        state["supervisor_generation"] += 1
+        self._publish_state(state)
+        self._confirm_root()
+
+    def _confirm_root_after_lock_creation(self) -> None:
+        current = require_private_directory(self.root, "lifecycle journal root")
+        if (current.st_dev, current.st_ino) != (
+            self.root_info.st_dev,
+            self.root_info.st_ino,
+        ):
+            raise IdentityError("lifecycle journal root changed during lock creation")
+        entries = {entry.name for entry in self.root.iterdir()}
+        if not entries.issubset(self.ENTRIES) or not {
+            self.OWNER_LOCK,
+            self.STATE_LOCK,
+        }.issubset(entries):
+            raise IdentityError("lifecycle journal root entries are unsafe")
+        self._confirm_lock_paths()
+
+    def _recover_pending(
+        self,
+        state: dict[str, object],
+        journal_body: bytes,
+        records: list[dict[str, object]],
+    ) -> None:
+        pending = state["pending_record"]
+        if pending is None:
+            self._validate_committed(state, journal_body, records)
+            return
+        assert isinstance(pending, dict)
+        record = pending["record"]
+        assert isinstance(record, dict)
+        committed_size = state["journal_size_bytes"]
+        committed_sha = state["journal_sha256"]
+        assert isinstance(committed_size, int) and isinstance(committed_sha, str)
+        record_line = canonical_json_line(record)
+        if (
+            len(journal_body) == committed_size
+            and hashlib.sha256(journal_body).hexdigest() == committed_sha
+        ):
+            committed_records = records
+            self._validate_committed(state, journal_body, committed_records)
+            self._validate_pending_record(state, record, committed_records)
+            next_body = journal_body + record_line
+            _publish_lifecycle_file(
+                self.journal_path,
+                next_body,
+                "lifecycle journal",
+                LIFECYCLE_JOURNAL_MAX_BYTES,
+            )
+            self._confirm_root()
+            journal_body = next_body
+        elif (
+            len(journal_body) == committed_size + len(record_line)
+            and journal_body.endswith(record_line)
+            and hashlib.sha256(journal_body[:-len(record_line)]).hexdigest()
+            == committed_sha
+        ):
+            if not records or records[-1] != record:
+                raise IdentityError("lifecycle pending record differs from journal tip")
+            committed_records = records[:-1]
+            self._validate_committed(
+                state, journal_body[:-len(record_line)], committed_records
+            )
+            self._validate_pending_record(state, record, committed_records)
+        else:
+            raise IdentityError("lifecycle pending transition is irreconcilable")
+        final_records = _decode_lifecycle_records(journal_body)
+        if len(final_records) != len(committed_records) + 1 or final_records[-1] != record:
+            raise IdentityError("lifecycle pending transition did not append exactly once")
+        final = dict(state)
+        final["supervisor_generation"] = record["supervisor_generation"]
+        final["process_generation"] = record["process_generation"]
+        final["restart_count"] = record["restart_count"]
+        final["unexpected_exit_total"] = record["unexpected_exit_total"]
+        final["journal_sequence"] = record["journal_sequence"]
+        final["journal_chain_sha256"] = pending["journal_chain_sha256"]
+        final["journal_record_count"] = len(final_records)
+        final["journal_size_bytes"] = len(journal_body)
+        final["journal_sha256"] = hashlib.sha256(journal_body).hexdigest()
+        final["pending_record"] = None
+        self._publish_state(final)
+
+    def _validate_pending_record(
+        self,
+        state: dict[str, object],
+        record: dict[str, object],
+        records: list[dict[str, object]],
+    ) -> None:
+        """Require a prepared record to be the sole legal next transition."""
+
+        if set(record) != LIFECYCLE_RECORD_FIELDS:
+            raise IdentityError("lifecycle pending record shape is wrong")
+        if (
+            record["index"] != len(records)
+            or record["journal_sequence"] != state["journal_sequence"] + 1
+            or record["validator_id"] != self.validator_id
+            or record["node_id"] != self.node_id
+            or record["event"] not in LIFECYCLE_EVENTS
+            or record["supervisor_generation"] != state["supervisor_generation"]
+        ):
+            raise IdentityError("lifecycle pending record identity is wrong")
+        _require_positive_integer(
+            record["observed_at_unix_ms"], "lifecycle pending observation"
+        )
+        if records and record["observed_at_unix_ms"] < records[-1]["observed_at_unix_ms"]:
+            raise IdentityError("lifecycle pending observation regressed")
+        process_generation = state["process_generation"]
+        restart_count = state["restart_count"]
+        unexpected_exit_total = state["unexpected_exit_total"]
+        if record["event"] == "healthy" and process_generation == 0:
+            process_generation = 1
+        elif record["event"] == "restart":
+            if process_generation == 0:
+                raise IdentityError("initial lifecycle process cannot restart")
+            process_generation += 1
+            restart_count += 1
+        elif record["event"] == "unexpected_exit":
+            if process_generation == 0:
+                process_generation = 1
+            unexpected_exit_total += 1
+        if (
+            record["process_generation"] != process_generation
+            or record["restart_count"] != restart_count
+            or record["unexpected_exit_total"] != unexpected_exit_total
+        ):
+            raise IdentityError("lifecycle pending counters are incoherent")
+        pending = state["pending_record"]
+        assert isinstance(pending, dict)
+        if pending["journal_chain_sha256"] != _lifecycle_next_chain(
+            str(state["journal_chain_sha256"]), record
+        ):
+            raise IdentityError("lifecycle pending chain digest is wrong")
+
+    def record(
+        self, event: str, *, observed_at_unix_ms: int | None = None
+    ) -> dict[str, object]:
+        """Durably append one exact healthy/restart/unexpected-exit record."""
+
+        if event not in LIFECYCLE_EVENTS:
+            raise IdentityError("lifecycle event is not exact")
+        observed = (
+            time.time_ns() // 1_000_000
+            if observed_at_unix_ms is None
+            else _require_positive_integer(
+                observed_at_unix_ms, "lifecycle observation time"
+            )
+        )
+        self._lock_state()
+        try:
+            self._confirm_root()
+            state, _ = self._read_state()
+            journal_body, records = self._read_journal()
+            if state["pending_record"] is not None:
+                raise IdentityError("lifecycle state has an active pending record")
+            self._validate_committed(state, journal_body, records)
+            if records and observed < records[-1]["observed_at_unix_ms"]:
+                raise IdentityError("lifecycle observation wall clock regressed")
+            process_generation = state["process_generation"]
+            restart_count = state["restart_count"]
+            unexpected_exit_total = state["unexpected_exit_total"]
+            if event == "healthy" and process_generation == 0:
+                process_generation = 1
+            elif event == "restart":
+                if process_generation == 0:
+                    raise IdentityError("initial process start is not a restart")
+                process_generation += 1
+                restart_count += 1
+            elif event == "unexpected_exit":
+                if process_generation == 0:
+                    process_generation = 1
+                unexpected_exit_total += 1
+            record: dict[str, object] = {
+                "index": len(records),
+                "journal_sequence": state["journal_sequence"] + 1,
+                "observed_at_unix_ms": observed,
+                "validator_id": self.validator_id,
+                "node_id": self.node_id,
+                "event": event,
+                "restart_count": restart_count,
+                "supervisor_generation": state["supervisor_generation"],
+                "process_generation": process_generation,
+                "unexpected_exit_total": unexpected_exit_total,
+            }
+            if len(canonical_json_line(record)) > LIFECYCLE_RECORD_MAX_BYTES:
+                raise IdentityError("lifecycle record exceeds its bound")
+            next_chain = _lifecycle_next_chain(
+                str(state["journal_chain_sha256"]), record
+            )
+            prepared = dict(state)
+            prepared["pending_record"] = {
+                "record": record,
+                "journal_chain_sha256": next_chain,
+            }
+            self._publish_state(prepared)
+            next_body = journal_body + canonical_json_line(record)
+            _publish_lifecycle_file(
+                self.journal_path,
+                next_body,
+                "lifecycle journal",
+                LIFECYCLE_JOURNAL_MAX_BYTES,
+            )
+            self._confirm_root()
+            final = dict(prepared)
+            final["supervisor_generation"] = record["supervisor_generation"]
+            final["process_generation"] = process_generation
+            final["restart_count"] = restart_count
+            final["unexpected_exit_total"] = unexpected_exit_total
+            final["journal_sequence"] = record["journal_sequence"]
+            final["journal_chain_sha256"] = next_chain
+            final["journal_record_count"] = len(records) + 1
+            final["journal_size_bytes"] = len(next_body)
+            final["journal_sha256"] = hashlib.sha256(next_body).hexdigest()
+            final["pending_record"] = None
+            self._publish_state(final)
+            self._confirm_root()
+            return dict(record)
+        finally:
+            self._unlock_state()
+
+    def process_has_started(self) -> bool:
+        """Return whether this binding already recorded an initial child start."""
+
+        self._lock_state()
+        try:
+            self._confirm_root()
+            state, _ = self._read_state()
+            journal_body, records = self._read_journal()
+            self._validate_committed(state, journal_body, records)
+            return bool(state["process_generation"])
+        finally:
+            self._unlock_state()
+
+    def checkpoint(
+        self, *, captured_at_unix_ms: int | None = None
+    ) -> dict[str, object]:
+        """Capture one stable per-peer cursor shaped for lifecycle aggregation."""
+
+        captured = (
+            time.time_ns() // 1_000_000
+            if captured_at_unix_ms is None
+            else _require_positive_integer(
+                captured_at_unix_ms, "lifecycle checkpoint time"
+            )
+        )
+        self._lock_state()
+        try:
+            self._confirm_root()
+            state, _ = self._read_state()
+            journal_body, records = self._read_journal()
+            if state["pending_record"] is not None:
+                raise IdentityError("cannot capture a pending lifecycle transition")
+            self._validate_committed(state, journal_body, records)
+            if state["process_generation"] == 0:
+                raise IdentityError("cannot capture lifecycle before initial health")
+            if records and state["supervisor_generation"] != records[-1]["supervisor_generation"]:
+                raise IdentityError(
+                    "cannot capture lifecycle before this supervisor records its child"
+                )
+            if records and captured < records[-1]["observed_at_unix_ms"]:
+                raise IdentityError("lifecycle checkpoint predates its journal tip")
+            return {
+                "captured_at_unix_ms": captured,
+                "journal_sequence": state["journal_sequence"],
+                "journal_chain_sha256": state["journal_chain_sha256"],
+                "validators": [
+                    {
+                        "validator_id": self.validator_id,
+                        "node_id": self.node_id,
+                        "restart_count": state["restart_count"],
+                        "supervisor_generation": state["supervisor_generation"],
+                        "process_generation": state["process_generation"],
+                        "unexpected_exit_total": state["unexpected_exit_total"],
+                    }
+                ],
+            }
+        finally:
+            self._unlock_state()
+
+    def export_window(
+        self,
+        baseline: dict[str, object],
+        terminal: dict[str, object],
+        target: Path,
+    ) -> dict[str, object]:
+        """Publish canonical raw input for a protected four-peer aggregator.
+
+        The rows use the public verifier's exact field set. The file is not a
+        public lifecycle inventory: independent peers have colliding local
+        sequences, so a protected collector must globally resequence and bind
+        all four checkpoints before native verification.
+        """
+
+        self._lock_state()
+        try:
+            self._confirm_root()
+            state, _ = self._read_state()
+            journal_body, records = self._read_journal()
+            self._validate_committed(state, journal_body, records)
+            _validate_lifecycle_checkpoint(baseline, self.validator_id, self.node_id)
+            _validate_lifecycle_checkpoint(terminal, self.validator_id, self.node_id)
+            _validate_checkpoint_cursor(baseline, records)
+            _validate_checkpoint_cursor(terminal, records)
+            baseline_sequence = baseline["journal_sequence"]
+            terminal_sequence = terminal["journal_sequence"]
+            assert isinstance(baseline_sequence, int)
+            assert isinstance(terminal_sequence, int)
+            if not (0 <= baseline_sequence < terminal_sequence <= len(records)):
+                raise IdentityError("lifecycle export window is not exact")
+            selected_records = records[baseline_sequence:terminal_sequence]
+            if (
+                baseline["captured_at_unix_ms"]
+                > selected_records[0]["observed_at_unix_ms"]
+                or selected_records[-1]["observed_at_unix_ms"]
+                > terminal["captured_at_unix_ms"]
+            ):
+                raise IdentityError("lifecycle export observations escape the window")
+            chains = [_lifecycle_initial_chain(self.binding_sha256)]
+            for record in records:
+                chains.append(_lifecycle_next_chain(chains[-1], record))
+            if (
+                baseline["journal_chain_sha256"] != chains[baseline_sequence]
+                or terminal["journal_chain_sha256"] != chains[terminal_sequence]
+            ):
+                raise IdentityError("lifecycle export checkpoint chain is wrong")
+            selected = []
+            for index, original in enumerate(
+                selected_records
+            ):
+                row = dict(original)
+                row["index"] = index
+                selected.append(row)
+            record_bytes = b"".join(canonical_json_line(row) for row in selected)
+            records_sha256 = hashlib.sha256(
+                b"iroha.taira.peer-supervisor-raw-window-records.v1\0"
+                + record_bytes
+            ).hexdigest()
+            header = {
+                "baseline": baseline,
+                "binding_sha256": self.binding_sha256,
+                "node_id": self.node_id,
+                "record_count": len(selected),
+                "records_sha256": records_sha256,
+                "schema": LIFECYCLE_RAW_WINDOW_SCHEMA,
+                "schema_version": 1,
+                "terminal": terminal,
+                "validator_id": self.validator_id,
+            }
+            if set(header) != LIFECYCLE_RAW_WINDOW_FIELDS:
+                raise IdentityError("lifecycle raw export header shape is not exact")
+            body = canonical_json_line(header) + record_bytes
+            if not target.is_absolute() or ".." in target.parts:
+                raise IdentityError("lifecycle export path is not canonical and absolute")
+            digest = _publish_lifecycle_file(
+                target,
+                body,
+                "lifecycle export",
+                LIFECYCLE_JOURNAL_MAX_BYTES,
+            )
+            return {
+                "record_count": len(selected),
+                "raw_records_sha256": records_sha256,
+                "schema": LIFECYCLE_RAW_WINDOW_SCHEMA,
+                "sha256": digest,
+                "size_bytes": len(body),
+            }
+        finally:
+            self._unlock_state()
+
+    def close(self) -> None:
+        """Release this process's exact peer-writer lease."""
+
+        if getattr(self, "closed", True):
+            return
+        self.closed = True
+        try:
+            fcntl.flock(self.state_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(self.state_fd)
+        try:
+            fcntl.flock(self.owner_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(self.owner_fd)
+
+
+def _validate_lifecycle_checkpoint(
+    checkpoint: dict[str, object], validator_id: str, node_id: str
+) -> None:
+    """Validate one exact single-peer checkpoint before window export."""
+
+    if not isinstance(checkpoint, dict) or set(checkpoint) != LIFECYCLE_CHECKPOINT_FIELDS:
+        raise IdentityError("lifecycle checkpoint shape is not exact")
+    _require_positive_integer(
+        checkpoint["captured_at_unix_ms"], "lifecycle checkpoint capture time"
+    )
+    _require_nonnegative_integer(
+        checkpoint["journal_sequence"], "lifecycle checkpoint sequence"
+    )
+    chain = checkpoint["journal_chain_sha256"]
+    if not isinstance(chain, str) or LOWER_SHA256_RE.fullmatch(chain) is None:
+        raise IdentityError("lifecycle checkpoint chain digest is invalid")
+    validators = checkpoint["validators"]
+    if not isinstance(validators, list) or len(validators) != 1:
+        raise IdentityError("per-peer lifecycle checkpoint must have one validator")
+    row = validators[0]
+    if (
+        not isinstance(row, dict)
+        or set(row) != LIFECYCLE_VALIDATOR_FIELDS
+        or row["validator_id"] != validator_id
+        or row["node_id"] != node_id
+    ):
+        raise IdentityError("lifecycle checkpoint peer identity is wrong")
+    for field in ("restart_count", "unexpected_exit_total"):
+        _require_nonnegative_integer(row[field], f"lifecycle checkpoint {field}")
+    for field in ("supervisor_generation", "process_generation"):
+        _require_positive_integer(row[field], f"lifecycle checkpoint {field}")
+
+
+def _validate_checkpoint_cursor(
+    checkpoint: dict[str, object], records: list[dict[str, object]]
+) -> None:
+    """Bind a checkpoint row and capture time to its exact local chain cursor."""
+
+    sequence = checkpoint["journal_sequence"]
+    assert isinstance(sequence, int)
+    if sequence <= 0 or sequence > len(records):
+        raise IdentityError("lifecycle checkpoint sequence is outside the journal")
+    record = records[sequence - 1]
+    if checkpoint["captured_at_unix_ms"] < record["observed_at_unix_ms"]:
+        raise IdentityError("lifecycle checkpoint predates its cursor record")
+    validators = checkpoint["validators"]
+    assert isinstance(validators, list) and isinstance(validators[0], dict)
+    row = validators[0]
+    for field in (
+        "restart_count",
+        "supervisor_generation",
+        "process_generation",
+        "unexpected_exit_total",
+    ):
+        if row[field] != record[field]:
+            raise IdentityError("lifecycle checkpoint counters differ from its cursor")
+
+
+def _checkpoint_from_lifecycle_state(
+    state: dict[str, object], captured_at_unix_ms: int
+) -> dict[str, object]:
+    """Project one validated local state into the aggregator checkpoint shape."""
+
+    return {
+        "captured_at_unix_ms": captured_at_unix_ms,
+        "journal_sequence": state["journal_sequence"],
+        "journal_chain_sha256": state["journal_chain_sha256"],
+        "validators": [
+            {
+                "validator_id": state["validator_id"],
+                "node_id": state["node_id"],
+                "restart_count": state["restart_count"],
+                "supervisor_generation": state["supervisor_generation"],
+                "process_generation": state["process_generation"],
+                "unexpected_exit_total": state["unexpected_exit_total"],
+            }
+        ],
+    }
+
+
+def _inspect_lifecycle_snapshot(
+    root: Path, binding_sha256: str, validator_id: str, node_id: str
+) -> tuple[dict[str, object], bytes, list[dict[str, object]]]:
+    """Read one quiescent peer snapshot while holding its exact state lock."""
+
+    if not root.is_absolute() or ".." in root.parts:
+        raise IdentityError("lifecycle journal root is not canonical and absolute")
+    if (
+        LOWER_SHA256_RE.fullmatch(binding_sha256) is None
+        or LIFECYCLE_VALIDATOR_RE.fullmatch(validator_id) is None
+        or LIFECYCLE_NODE_ID_RE.fullmatch(node_id) is None
+    ):
+        raise IdentityError("lifecycle inspection identity is not canonical")
+    root_info = require_private_directory(root, "lifecycle journal root")
+    if {entry.name for entry in root.iterdir()} != LifecycleJournal.ENTRIES:
+        raise IdentityError("lifecycle journal root entries are not exact")
+    descriptor, lock_info = _open_lifecycle_lock(
+        root,
+        LifecycleJournal.STATE_LOCK,
+        "lifecycle state lock",
+        nonblocking=True,
+    )
+    try:
+        _confirm_lifecycle_path(
+            root / LifecycleJournal.STATE_LOCK,
+            descriptor,
+            lock_info,
+            "lifecycle state lock",
+        )
+        state_body, _ = _require_lifecycle_regular_file(
+            root / LifecycleJournal.STATE_FILE,
+            "lifecycle state",
+            LIFECYCLE_STATE_MAX_BYTES,
+        )
+        journal_body, _ = _require_lifecycle_regular_file(
+            root / LifecycleJournal.JOURNAL_FILE,
+            "lifecycle journal",
+            LIFECYCLE_JOURNAL_MAX_BYTES,
+        )
+        state = _decode_lifecycle_state(state_body)
+        records = _decode_lifecycle_records(journal_body)
+        if (
+            state["pending_record"] is not None
+            or state["binding_sha256"] != binding_sha256
+            or state["validator_id"] != validator_id
+            or state["node_id"] != node_id
+        ):
+            raise IdentityError("lifecycle snapshot binding or phase is wrong")
+        _validate_lifecycle_snapshot(
+            binding_sha256,
+            validator_id,
+            node_id,
+            state,
+            journal_body,
+            records,
+        )
+        current_root = require_private_directory(root, "lifecycle journal root")
+        _confirm_lifecycle_path(
+            root / LifecycleJournal.STATE_LOCK,
+            descriptor,
+            lock_info,
+            "lifecycle state lock",
+        )
+        if (
+            (current_root.st_dev, current_root.st_ino)
+            != (root_info.st_dev, root_info.st_ino)
+            or {entry.name for entry in root.iterdir()} != LifecycleJournal.ENTRIES
+        ):
+            raise IdentityError("lifecycle journal root changed during inspection")
+        return state, journal_body, records
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def capture_lifecycle_checkpoint(
+    root: Path,
+    binding_sha256: str,
+    validator_id: str,
+    node_id: str,
+    *,
+    captured_at_unix_ms: int | None = None,
+) -> dict[str, object]:
+    """Capture a stable local cursor without taking the supervisor owner lease."""
+
+    captured = (
+        time.time_ns() // 1_000_000
+        if captured_at_unix_ms is None
+        else _require_positive_integer(
+            captured_at_unix_ms, "lifecycle checkpoint time"
+        )
+    )
+    state, _journal_body, records = _inspect_lifecycle_snapshot(
+        root, binding_sha256, validator_id, node_id
+    )
+    if state["process_generation"] == 0:
+        raise IdentityError("cannot capture lifecycle before initial health")
+    if records and state["supervisor_generation"] != records[-1]["supervisor_generation"]:
+        raise IdentityError(
+            "cannot capture lifecycle before this supervisor records its child"
+        )
+    if records and captured < records[-1]["observed_at_unix_ms"]:
+        raise IdentityError("lifecycle checkpoint predates its journal tip")
+    return _checkpoint_from_lifecycle_state(state, captured)
+
+
+def export_lifecycle_raw_window(
+    root: Path,
+    binding_sha256: str,
+    validator_id: str,
+    node_id: str,
+    baseline: dict[str, object],
+    terminal: dict[str, object],
+    target: Path,
+) -> dict[str, object]:
+    """Export peer-local raw rows for the future protected four-peer collector."""
+
+    _state, _journal_body, records = _inspect_lifecycle_snapshot(
+        root, binding_sha256, validator_id, node_id
+    )
+    _validate_lifecycle_checkpoint(baseline, validator_id, node_id)
+    _validate_lifecycle_checkpoint(terminal, validator_id, node_id)
+    _validate_checkpoint_cursor(baseline, records)
+    _validate_checkpoint_cursor(terminal, records)
+    baseline_sequence = baseline["journal_sequence"]
+    terminal_sequence = terminal["journal_sequence"]
+    assert isinstance(baseline_sequence, int)
+    assert isinstance(terminal_sequence, int)
+    if not (0 <= baseline_sequence < terminal_sequence <= len(records)):
+        raise IdentityError("lifecycle raw export window is not exact")
+    selected_records = records[baseline_sequence:terminal_sequence]
+    if (
+        baseline["captured_at_unix_ms"]
+        > selected_records[0]["observed_at_unix_ms"]
+        or selected_records[-1]["observed_at_unix_ms"]
+        > terminal["captured_at_unix_ms"]
+    ):
+        raise IdentityError("lifecycle raw export observations escape the window")
+    chains = [_lifecycle_initial_chain(binding_sha256)]
+    for record in records:
+        chains.append(_lifecycle_next_chain(chains[-1], record))
+    if (
+        baseline["journal_chain_sha256"] != chains[baseline_sequence]
+        or terminal["journal_chain_sha256"] != chains[terminal_sequence]
+    ):
+        raise IdentityError("lifecycle raw export checkpoint chain is wrong")
+    selected: list[dict[str, object]] = []
+    for index, original in enumerate(selected_records):
+        row = dict(original)
+        row["index"] = index
+        selected.append(row)
+    record_bytes = b"".join(canonical_json_line(row) for row in selected)
+    records_sha256 = hashlib.sha256(
+        b"iroha.taira.peer-supervisor-raw-window-records.v1\0" + record_bytes
+    ).hexdigest()
+    header = {
+        "baseline": baseline,
+        "binding_sha256": binding_sha256,
+        "node_id": node_id,
+        "record_count": len(selected),
+        "records_sha256": records_sha256,
+        "schema": LIFECYCLE_RAW_WINDOW_SCHEMA,
+        "schema_version": 1,
+        "terminal": terminal,
+        "validator_id": validator_id,
+    }
+    if set(header) != LIFECYCLE_RAW_WINDOW_FIELDS:
+        raise IdentityError("lifecycle raw export header shape is not exact")
+    body = canonical_json_line(header) + record_bytes
+    if not target.is_absolute() or ".." in target.parts:
+        raise IdentityError("lifecycle raw export path is not canonical and absolute")
+    digest = _publish_lifecycle_file(
+        target,
+        body,
+        "lifecycle raw export",
+        LIFECYCLE_JOURNAL_MAX_BYTES,
+    )
+    return {
+        "record_count": len(selected),
+        "raw_records_sha256": records_sha256,
+        "schema": LIFECYCLE_RAW_WINDOW_SCHEMA,
+        "sha256": digest,
+        "size_bytes": len(body),
+    }
 
 
 def require_private_directory(path: Path, label: str) -> os.stat_result:
@@ -627,8 +2019,12 @@ class BoundedStderrCapture:
             if excess > 0:
                 del self.buffer[:excess]
 
-    def wait(self, child: subprocess.Popen[bytes]) -> int:
-        """Wait while continuously draining the nonblocking child pipe."""
+    def wait(
+        self,
+        child: subprocess.Popen[bytes],
+        periodic: Callable[[], None] | None = None,
+    ) -> int:
+        """Wait while draining stderr and running one bounded periodic hook."""
 
         while True:
             self._drain()
@@ -636,6 +2032,8 @@ class BoundedStderrCapture:
             if return_code is not None:
                 self._drain()
                 return return_code
+            if periodic is not None:
+                periodic()
             time.sleep(0.01)
 
     def finish(self) -> bytes:
@@ -879,6 +2277,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pid-file", required=True)
     parser.add_argument("--terminal-unhealthy-file", required=True)
     parser.add_argument("--restart-generation", required=True)
+    parser.add_argument("--lifecycle-journal-root", required=True)
+    parser.add_argument("--validator-id", required=True)
+    parser.add_argument("--node-id", required=True)
+    parser.add_argument(
+        "--lifecycle-healthy-interval-seconds",
+        type=float,
+        default=DEFAULT_LIFECYCLE_HEALTHY_INTERVAL_SECONDS,
+    )
     parser.add_argument("--initial-backoff-seconds", type=float, default=1.0)
     parser.add_argument("--maximum-backoff-seconds", type=float, default=30.0)
     parser.add_argument("--stable-uptime-seconds", type=float, default=120.0)
@@ -915,6 +2321,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--rapid-fatal-uptime-seconds must be positive")
     if re.fullmatch(r"[0-9a-f]{64}", args.restart_generation) is None:
         parser.error("--restart-generation must be one lowercase SHA-256 digest")
+    if (
+        not math.isfinite(args.lifecycle_healthy_interval_seconds)
+        or args.lifecycle_healthy_interval_seconds <= 0
+    ):
+        parser.error("--lifecycle-healthy-interval-seconds must be positive")
     terminal_file = Path(args.terminal_unhealthy_file)
     pid_file = Path(args.pid_file)
     if (
@@ -925,6 +2336,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error(
             "--terminal-unhealthy-file must be a distinct canonical absolute path"
         )
+    lifecycle_root = Path(args.lifecycle_journal_root)
+    if (
+        not lifecycle_root.is_absolute()
+        or ".." in lifecycle_root.parts
+        or lifecycle_root in {terminal_file, pid_file}
+        or LIFECYCLE_VALIDATOR_RE.fullmatch(args.validator_id) is None
+        or LIFECYCLE_NODE_ID_RE.fullmatch(args.node_id) is None
+    ):
+        parser.error("lifecycle journal identity or path is not canonical")
     return args
 
 
@@ -979,16 +2399,38 @@ def run(argv: list[str] | None = None) -> int:
     except (IdentityError, OSError) as exc:
         print(f"taira supervisor identity refusal: {exc}", file=sys.stderr, flush=True)
         return 78
+    try:
+        lifecycle = LifecycleJournal(
+            Path(args.lifecycle_journal_root),
+            lifecycle_binding_sha256(args, args.validator_id, args.node_id),
+            args.validator_id,
+            args.node_id,
+            args.restart_generation,
+        )
+    except (IdentityError, OSError) as exc:
+        print(
+            f"taira supervisor lifecycle refusal: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 78
+
+    def finish(result: int) -> int:
+        lifecycle.close()
+        return result
+
     binding = terminal_binding_sha256(args)
     try:
         if existing_terminal_latch(terminal_file, binding):
             persisted = read_terminal_payload(terminal_file)
             assert persisted is not None
-            return hold_terminal_unhealthy(
-                str(persisted[0]["fatal_fingerprint_sha256"])
+            return finish(
+                hold_terminal_unhealthy(
+                    str(persisted[0]["fatal_fingerprint_sha256"])
+                )
             )
     except (IdentityError, OSError):
-        return hold_terminal_unhealthy(None)
+        return finish(hold_terminal_unhealthy(None))
 
     backoff = args.initial_backoff_seconds
     fatal_tracker = RapidFatalExitTracker()
@@ -999,7 +2441,7 @@ def run(argv: list[str] | None = None) -> int:
             print(
                 f"taira supervisor identity refusal: {exc}", file=sys.stderr, flush=True
             )
-            return 78
+            return finish(78)
 
         if stopping_signal is not None:
             break
@@ -1047,8 +2489,56 @@ def run(argv: list[str] | None = None) -> int:
             stderr_capture.wait(child)
             stderr_capture.finish()
             raise
+        try:
+            already_started = lifecycle.process_has_started()
+            if already_started:
+                lifecycle.record("restart")
+            elif child.poll() is None:
+                lifecycle.record("healthy")
+        except (IdentityError, OSError) as exc:
+            try:
+                child.terminate()
+            except ProcessLookupError:
+                pass
+            stderr_capture.wait(child)
+            stderr_capture.finish()
+            remove_owned_pid(pid_file, child.pid)
+            child = None
+            print(
+                f"taira supervisor lifecycle refusal: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return finish(78)
         print(f"taira validator started pid={child.pid}", flush=True)
-        return_code = stderr_capture.wait(child)
+        next_healthy_at = (
+            time.monotonic() + args.lifecycle_healthy_interval_seconds
+        )
+
+        def record_periodic_health() -> None:
+            nonlocal next_healthy_at
+            now = time.monotonic()
+            if now >= next_healthy_at:
+                lifecycle.record("healthy")
+                next_healthy_at = now + args.lifecycle_healthy_interval_seconds
+
+        try:
+            return_code = stderr_capture.wait(child, record_periodic_health)
+        except (IdentityError, OSError) as exc:
+            try:
+                child.terminate()
+            except ProcessLookupError:
+                pass
+            return_code = stderr_capture.wait(child)
+            stderr_capture.finish()
+            remove_owned_pid(pid_file, child.pid)
+            child = None
+            print(
+                f"taira supervisor lifecycle refusal: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return finish(78)
         stderr_tail = stderr_capture.finish()
         uptime = time.monotonic() - started
         remove_owned_pid(pid_file, child.pid)
@@ -1059,7 +2549,7 @@ def run(argv: list[str] | None = None) -> int:
                 f"taira validator stopped signal={stopping_signal} rc={return_code}",
                 flush=True,
             )
-            return 0
+            return finish(0)
 
         if restart_requested:
             restart_requested = False
@@ -1070,6 +2560,16 @@ def run(argv: list[str] | None = None) -> int:
                 flush=True,
             )
             continue
+
+        try:
+            lifecycle.record("unexpected_exit")
+        except (IdentityError, OSError) as exc:
+            print(
+                f"taira supervisor lifecycle refusal: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return finish(78)
 
         if uptime >= args.stable_uptime_seconds:
             backoff = args.initial_backoff_seconds
@@ -1088,8 +2588,8 @@ def run(argv: list[str] | None = None) -> int:
                     fatal_fingerprint,
                 )
             except (IdentityError, OSError):
-                return hold_terminal_unhealthy(None)
-            return hold_terminal_unhealthy(fatal_fingerprint)
+                return finish(hold_terminal_unhealthy(None))
+            return finish(hold_terminal_unhealthy(fatal_fingerprint))
         print(
             "taira validator exited "
             f"rc={return_code} uptime_seconds={uptime:.3f} "
@@ -1104,7 +2604,7 @@ def run(argv: list[str] | None = None) -> int:
                 break
             time.sleep(min(remaining, 0.25))
         backoff = min(args.maximum_backoff_seconds, backoff * 2)
-    return 0
+    return finish(0)
 
 
 if __name__ == "__main__":

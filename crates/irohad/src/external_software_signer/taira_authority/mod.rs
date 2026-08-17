@@ -5,7 +5,10 @@
 //! encrypted Ed25519 key, one administrator-issued run ledger, one consume-once
 //! replay ledger, and one predecessor-bound audit chain.
 
+mod native_evidence;
+mod privacy_protocol_origin;
 mod protocol;
+mod rollout_observation;
 mod sandbox;
 mod service;
 mod store;
@@ -22,6 +25,8 @@ pub use transport::{
 };
 
 /// Run the standalone native authority command-line interface.
+/// # Errors
+/// Returns an error when CLI arguments, identity binding, or authority service startup fails.
 pub fn run_cli() -> Result<(), &'static str> {
     crate::external_software_signer::taira_authority::transport::run_cli()
 }

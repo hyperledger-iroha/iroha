@@ -1085,7 +1085,7 @@ impl SumeragiRelayCapacityGeometry {
 /// Terminal disposition of one exact daemon relay occurrence.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SumeragiRelayTerminalOutcome {
-    /// Ordinary ingress accepted, coalesced, or found the occurrence obsolete.
+    /// Ordinary ingress accepted or coalesced.
     Delivered,
     /// Its authenticated reply authority retired before ingress succeeded.
     Retired,
@@ -1917,6 +1917,8 @@ impl ConsensusIngressLimiter {
             iroha_core::NetworkMessage::SumeragiControlFlow(_)
             | iroha_core::NetworkMessage::LaneDrainVote(_)
             | iroha_core::NetworkMessage::NativeAmx(_) => IngressPolicy::critical(),
+            iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(_)
+            | iroha_core::NetworkMessage::BlockSync(_) => IngressPolicy::bulk(),
             iroha_core::NetworkMessage::CertifiedMergeSidecar(message) => match message.as_ref() {
                 iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Request(_)
                 | iroha_core::merge_sidecar::CertifiedMergeSidecarMessage::Close(_) => {
@@ -1930,7 +1932,6 @@ impl ConsensusIngressLimiter {
                     IngressPolicy::bulk()
                 }
             },
-            iroha_core::NetworkMessage::BlockSync(_) => IngressPolicy::bulk(),
             _ => IngressPolicy::limited(),
         }
     }
@@ -2028,6 +2029,13 @@ impl ConsensusIngressLimiter {
     ) -> Option<ConsensusIngressDropReason> {
         if matches!(msg, iroha_core::NetworkMessage::LaneDrainVote(_))
             && size_bytes > iroha_core::MAX_LANE_DRAIN_VOTE_WIRE_BYTES
+        {
+            return Some(ConsensusIngressDropReason::Bytes);
+        }
+        if matches!(
+            msg,
+            iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(_)
+        ) && size_bytes > iroha_core::MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES
         {
             return Some(ConsensusIngressDropReason::Bytes);
         }
@@ -2477,7 +2485,8 @@ fn sumeragi_relay_class(message: &iroha_core::NetworkMessage) -> Option<Sumeragi
         | MergeCommitteeSignature(_)
         | LaneDrainVote(_)
         | CertifiedMergeSidecar(_)
-        | NativeAmx(_) => Some(SumeragiRelayClass::Lane),
+        | NativeAmx(_)
+        | QueuePlanAdmissionCertificate(_) => Some(SumeragiRelayClass::Lane),
         _ => None,
     }
 }
@@ -2490,7 +2499,7 @@ fn obsolete_sumeragi_relay_terminal_meta(
     SumeragiRelayTerminalOutcome,
 )> {
     NetworkRelayShared::retired_sumeragi_message_meta(message)
-        .map(|(kind, height, view)| (kind, height, view, SumeragiRelayTerminalOutcome::Delivered))
+        .map(|(kind, height, view)| (kind, height, view, SumeragiRelayTerminalOutcome::Failed))
 }
 fn certified_merge_sidecar_ingress_reply_route(
     _message: &iroha_core::merge_sidecar::CertifiedMergeSidecarMessage,
@@ -2708,63 +2717,7 @@ fn prepare_sumeragi_block_relay_item(
         }
     }
 }
-fn prepare_sumeragi_lane_relay_item(
-    context: SumeragiRelayBuildContext,
-    message: iroha_core::NetworkMessage,
-) -> PrepareSumeragiRelayResult {
-    use iroha_core::NetworkMessage::{
-        CertifiedMergeSidecar, LaneDrainVote, LaneRelay, MergeCommitteeSignature, NativeAmx,
-    };
-    let peer_id = context.peer.id().clone();
-    let item = match message {
-        LaneRelay(envelope) => LaneRelayMessage::Envelope(*envelope),
-        MergeCommitteeSignature(signature) => {
-            LaneRelayMessage::MergeSignature(Arc::unwrap_or_clone(signature))
-        }
-        CertifiedMergeSidecar(message) => {
-            let reply_route = certified_merge_sidecar_ingress_reply_route(
-                message.as_ref(),
-                context.reply_route.clone(),
-            );
-            LaneRelayMessage::CertifiedMergeSidecar {
-                sender: peer_id.clone(),
-                reply_route: Some(reply_route),
-                message: Arc::unwrap_or_clone(message),
-            }
-        }
-        NativeAmx(message) => LaneRelayMessage::NativeAmx {
-            sender: peer_id.clone(),
-            reply_route: Some(context.reply_route.clone()),
-            message: Arc::unwrap_or_clone(message),
-        },
-        LaneDrainVote(vote) => {
-            let vote = *vote;
-            if vote.signer != peer_id {
-                iroha_logger::debug!(
-                    peer = %context.peer,
-                    signer = %vote.signer,
-                    "rejecting lane-drain vote whose signed identity differs from its authenticated sender"
-                );
-                return context.terminal(SumeragiRelayTerminalOutcome::Failed);
-            }
-            LaneRelayMessage::DrainVote {
-                sender: peer_id,
-                vote,
-            }
-        }
-        _ => {
-            iroha_logger::error!(
-                peer = %context.peer,
-                "non-Sumeragi message reached the retained Sumeragi dispatcher"
-            );
-            return context.terminal(SumeragiRelayTerminalOutcome::Failed);
-        }
-    };
-    context.prepared(
-        SumeragiRelayClass::Lane,
-        PreparedSumeragiRelayItem::Lane(Box::new(item)),
-    )
-}
+include!("sumeragi_lane_relay_item.rs");
 impl NetworkRelayShared {
     fn authorize_sumeragi_relay_parts(
         &self,
@@ -2947,31 +2900,38 @@ impl NetworkRelayShared {
         }
     }
 }
-fn finish_sumeragi_block_ingress_attempt(
+fn sumeragi_ingress_terminal_outcome<T>(
+    disposition: &SumeragiIngressDisposition<T>,
+    reply_route_active: bool,
+) -> Option<SumeragiRelayTerminalOutcome> {
+    use SumeragiIngressDisposition::*;
+    use SumeragiRelayTerminalOutcome::{Delivered, Failed, Retired};
+    match (disposition, reply_route_active) {
+        (Accepted | Coalesced, _) => Some(Delivered),
+        (Obsolete, _) | (Rejected(_), true) => Some(Failed),
+        (Rejected(_), false) => Some(Retired),
+        (Retry(_) | Closed(_) | FailStop(_), _) => None,
+    }
+}
+fn finish_sumeragi_ingress_attempt<T>(
     source: SumeragiRelaySource,
     reply_route: iroha_p2p::network::NetworkReplyRoute,
     retention_guard: SumeragiRelayRetention,
     completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
-    disposition: SumeragiIngressDisposition<InboundBlockMessage>,
+    disposition: SumeragiIngressDisposition<T>,
+    prepare_item: fn(T) -> PreparedSumeragiRelayItem,
 ) -> SumeragiRelayAttempt {
+    use SumeragiIngressDisposition::*;
+    if let Some(outcome) = sumeragi_ingress_terminal_outcome(&disposition, reply_route.is_active())
+    {
+        return SumeragiRelayAttempt::Terminal {
+            outcome,
+            retention_guard,
+            completion,
+        };
+    }
     match disposition {
-        SumeragiIngressDisposition::Accepted
-        | SumeragiIngressDisposition::Coalesced
-        | SumeragiIngressDisposition::Obsolete => SumeragiRelayAttempt::Terminal {
-            outcome: SumeragiRelayTerminalOutcome::Delivered,
-            retention_guard,
-            completion,
-        },
-        SumeragiIngressDisposition::Rejected(_) => SumeragiRelayAttempt::Terminal {
-            outcome: if reply_route.is_active() {
-                SumeragiRelayTerminalOutcome::Failed
-            } else {
-                SumeragiRelayTerminalOutcome::Retired
-            },
-            retention_guard,
-            completion,
-        },
-        SumeragiIngressDisposition::Retry(inbound) => {
+        Retry(message) => {
             if !reply_route.is_active() {
                 return SumeragiRelayAttempt::Terminal {
                     outcome: SumeragiRelayTerminalOutcome::Retired,
@@ -2981,30 +2941,49 @@ fn finish_sumeragi_block_ingress_attempt(
             }
             SumeragiRelayAttempt::Retry(PreparedSumeragiRelayWork {
                 source,
-                item: PreparedSumeragiRelayItem::Block(Box::new(inbound)),
+                item: prepare_item(message),
                 reply_route,
                 retention_guard,
                 completion,
                 retry_eligible_at: Instant::now() + SUMERAGI_RELAY_RETRY_CADENCE,
             })
         }
-        SumeragiIngressDisposition::Closed(inbound) => SumeragiRelayAttempt::Fatal {
+        Closed(message) => SumeragiRelayAttempt::Fatal {
             source,
             reason: SumeragiRelayFatalReason::IngressClosed,
-            exact_item: Some(PreparedSumeragiRelayItem::Block(Box::new(inbound))),
+            exact_item: Some(prepare_item(message)),
             reply_route,
             retention_guard,
             completion,
         },
-        SumeragiIngressDisposition::FailStop(inbound) => SumeragiRelayAttempt::Fatal {
+        FailStop(message) => SumeragiRelayAttempt::Fatal {
             source,
             reason: SumeragiRelayFatalReason::FailStop,
-            exact_item: Some(PreparedSumeragiRelayItem::Block(Box::new(inbound))),
+            exact_item: Some(prepare_item(message)),
             reply_route,
             retention_guard,
             completion,
         },
+        Accepted | Coalesced | Obsolete | Rejected(_) => {
+            unreachable!("terminal dispositions return before owned ingress handling")
+        }
     }
+}
+fn finish_sumeragi_block_ingress_attempt(
+    source: SumeragiRelaySource,
+    reply_route: iroha_p2p::network::NetworkReplyRoute,
+    retention_guard: SumeragiRelayRetention,
+    completion: Option<oneshot::Sender<SumeragiRelayTerminalOutcome>>,
+    disposition: SumeragiIngressDisposition<InboundBlockMessage>,
+) -> SumeragiRelayAttempt {
+    finish_sumeragi_ingress_attempt(
+        source,
+        reply_route,
+        retention_guard,
+        completion,
+        disposition,
+        |message| PreparedSumeragiRelayItem::Block(Box::new(message)),
+    )
 }
 #[cfg(test)]
 fn attempt_sumeragi_block_relay_work_for_test(
@@ -3046,57 +3025,14 @@ fn attempt_sumeragi_lane_relay_work(
             completion,
         };
     }
-    match shared.sumeragi.try_incoming_lane_relay_owned(message) {
-        SumeragiIngressDisposition::Accepted
-        | SumeragiIngressDisposition::Coalesced
-        | SumeragiIngressDisposition::Obsolete => SumeragiRelayAttempt::Terminal {
-            outcome: SumeragiRelayTerminalOutcome::Delivered,
-            retention_guard,
-            completion,
-        },
-        SumeragiIngressDisposition::Rejected(_) => SumeragiRelayAttempt::Terminal {
-            outcome: if reply_route.is_active() {
-                SumeragiRelayTerminalOutcome::Failed
-            } else {
-                SumeragiRelayTerminalOutcome::Retired
-            },
-            retention_guard,
-            completion,
-        },
-        SumeragiIngressDisposition::Retry(message) => {
-            if !reply_route.is_active() {
-                return SumeragiRelayAttempt::Terminal {
-                    outcome: SumeragiRelayTerminalOutcome::Retired,
-                    retention_guard,
-                    completion,
-                };
-            }
-            SumeragiRelayAttempt::Retry(PreparedSumeragiRelayWork {
-                source,
-                item: PreparedSumeragiRelayItem::Lane(Box::new(message)),
-                reply_route,
-                retention_guard,
-                completion,
-                retry_eligible_at: Instant::now() + SUMERAGI_RELAY_RETRY_CADENCE,
-            })
-        }
-        SumeragiIngressDisposition::Closed(message) => SumeragiRelayAttempt::Fatal {
-            source,
-            reason: SumeragiRelayFatalReason::IngressClosed,
-            exact_item: Some(PreparedSumeragiRelayItem::Lane(Box::new(message))),
-            reply_route,
-            retention_guard,
-            completion,
-        },
-        SumeragiIngressDisposition::FailStop(message) => SumeragiRelayAttempt::Fatal {
-            source,
-            reason: SumeragiRelayFatalReason::FailStop,
-            exact_item: Some(PreparedSumeragiRelayItem::Lane(Box::new(message))),
-            reply_route,
-            retention_guard,
-            completion,
-        },
-    }
+    finish_sumeragi_ingress_attempt(
+        source,
+        reply_route,
+        retention_guard,
+        completion,
+        shared.sumeragi.try_incoming_lane_relay_owned(message),
+        |message| PreparedSumeragiRelayItem::Lane(Box::new(message)),
+    )
 }
 async fn attempt_sumeragi_relay_work(
     shared: &NetworkRelayShared,
@@ -4198,7 +4134,11 @@ impl NetworkRelayShared {
         use iroha_core::NetworkMessage::*;
         if !matches!(
             msg,
-            SumeragiBlock(_) | SumeragiControlFlow(_) | LaneDrainVote(_) | CertifiedMergeSidecar(_)
+            SumeragiBlock(_)
+                | SumeragiControlFlow(_)
+                | LaneDrainVote(_)
+                | CertifiedMergeSidecar(_)
+                | QueuePlanAdmissionCertificate(_)
         ) {
             return true;
         }
@@ -4246,6 +4186,7 @@ impl NetworkRelayShared {
                     ("CertifiedMergeSidecarChunk", None, None)
                 }
             },
+            QueuePlanAdmissionCertificate(_) => ("QueuePlanAdmissionCertificate", None, None),
             _ => ("Other", None, None),
         };
         iroha_logger::debug!(
@@ -4345,7 +4286,8 @@ impl NetworkRelayShared {
             | MergeCommitteeSignature(_)
             | LaneDrainVote(_)
             | CertifiedMergeSidecar(_)
-            | NativeAmx(_) => {
+            | NativeAmx(_)
+            | QueuePlanAdmissionCertificate(_) => {
                 iroha_logger::error!(
                     %peer,
                     via = %authenticated_via,
@@ -4763,10 +4705,11 @@ impl NetworkRelayShared {
 #[cfg(test)]
 mod network_relay_tests {
     use super::{
-        BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, IngressRateClass,
-        LowPriorityIngressDropReason, LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig,
+        BucketConfig, ConsensusIngressDropReason, ConsensusIngressLimiter, InboundBlockMessage,
+        IngressRateClass, LaneRelayMessage, LowPriorityIngressDropReason,
+        LowPriorityIngressLimiter, NetworkRelayShared, PenaltyConfig, SumeragiIngressDisposition,
         SumeragiRelayClass, SumeragiRelayTerminalOutcome, obsolete_sumeragi_relay_terminal_meta,
-        sumeragi_relay_class,
+        sumeragi_ingress_terminal_outcome, sumeragi_relay_class,
     };
     use iroha_core::{
         MAX_KURA_REPLICA_ADVERT_NETWORK_FRAME_BYTES, MAX_LANE_DRAIN_VOTE_WIRE_BYTES,
@@ -5428,16 +5371,41 @@ mod network_relay_tests {
         );
     }
     #[test]
-    fn obsolete_sumeragi_relay_message_completes_as_delivered() {
+    fn obsolete_sumeragi_relay_message_fails_closed() {
         assert_eq!(
             obsolete_sumeragi_relay_terminal_meta(&retired_vrf_commit_msg())
                 .map(|(_, _, _, outcome)| outcome),
-            Some(SumeragiRelayTerminalOutcome::Delivered)
+            Some(SumeragiRelayTerminalOutcome::Failed)
         );
         assert!(obsolete_sumeragi_relay_terminal_meta(&v2_vote_msg()).is_none());
     }
     #[test]
+    fn obsolete_block_ingress_disposition_fails_closed() {
+        let disposition = SumeragiIngressDisposition::<InboundBlockMessage>::Obsolete;
+        assert_eq!(
+            sumeragi_ingress_terminal_outcome(&disposition, true),
+            Some(SumeragiRelayTerminalOutcome::Failed)
+        );
+    }
+    #[test]
+    fn obsolete_lane_ingress_disposition_fails_closed() {
+        let disposition = SumeragiIngressDisposition::<LaneRelayMessage>::Obsolete;
+        assert_eq!(
+            sumeragi_ingress_terminal_outcome(&disposition, true),
+            Some(SumeragiRelayTerminalOutcome::Failed)
+        );
+    }
+    #[test]
     fn sumeragi_v2_ingress_policy_and_metadata_match_payload_kind() {
+        let handoff = iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(Arc::new(vec![]));
+        assert_eq!(
+            ConsensusIngressLimiter::ingress_policy(&handoff).rate_class,
+            Some(IngressRateClass::Bulk)
+        );
+        assert_eq!(
+            sumeragi_relay_class(&handoff),
+            Some(SumeragiRelayClass::Lane)
+        );
         let chunk = v2_payload_chunk_block_message();
         let chunk_policy = ConsensusIngressLimiter::ingress_policy(&sumeragi_msg(chunk.clone()));
         assert_eq!(chunk_policy.rate_class, Some(IngressRateClass::Critical));
@@ -6246,6 +6214,8 @@ mod network_relay_tests {
         }
         let peer = sample_peer();
         assert_bulk(&peer, &v2_certified_body_response_msg());
+        let handoff = iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(Arc::new(vec![]));
+        assert_bulk(&peer, &handoff);
     }
     #[test]
     fn consensus_ingress_bytes_limit_drops_oversize() {
@@ -6272,6 +6242,13 @@ mod network_relay_tests {
             Some(ConsensusIngressDropReason::Bytes)
         );
         assert_eq!(limiter.should_drop(&peer, &msg, 5), None);
+        let handoff = iroha_core::NetworkMessage::QueuePlanAdmissionCertificate(Arc::new(vec![]));
+        let max = iroha_core::MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES;
+        assert_eq!(
+            limiter.should_drop(&peer, &handoff, max + 1),
+            Some(ConsensusIngressDropReason::Bytes)
+        );
+        assert_eq!(limiter.should_drop(&peer, &handoff, max), None);
     }
     #[test]
     fn low_priority_ingress_rate_limit_drops_burst() {

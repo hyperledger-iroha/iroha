@@ -589,7 +589,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "0dc98e8799acf15729f4cb42c79b754232fbda6091558ec87c2bd2765a6ffc48"
+        "e7958352865498206204cb38b06c25d4d4756705796ce96f0b8f72dc94b001fa"
     )
     python_probe_code = "import sys;sys.stdout.write(sys.executable+'\\n')"
     python_launcher = (
@@ -609,7 +609,7 @@ def make_bootstrap_evidence(
         ("manifest_helper", b"# fixture manifest helper\n", 0o400),
         ("identity_verifier", b"# fixture identity verifier\n", 0o400),
         ("receipt_validator", b"# fixture receipt validator\n", 0o400),
-        ("runtime_helper", b"# fixture protected runtime helper\n", 0o400),
+        ("runtime_helper", b"# fixture protected runtime helper\n", 0o400), ("runtime_helper_cli", b"# fixture runtime helper CLI component\n", 0o400),
         ("tool_probe_helper", fixture_tool_probe_helper_source(), 0o400),
         ("approval_contract", APPROVAL_CONTRACT.read_bytes(), 0o400),
         (
@@ -724,7 +724,7 @@ def make_bootstrap_evidence(
         "receipt_validator_support": synthetic_sources[
             "receipt_validator_support"
         ],
-        "runtime_helper": synthetic_sources["runtime_helper"],
+        "runtime_helper": synthetic_sources["runtime_helper"], "runtime_helper_cli": synthetic_sources["runtime_helper_cli"],
         "tool_probe_helper": synthetic_sources["tool_probe_helper"],
         "approval_contract": synthetic_sources["approval_contract"],
         **{
@@ -751,7 +751,7 @@ def make_bootstrap_evidence(
             "sumeragi_v2_localnet_manifest.py",
             0o400,
         ),
-        "runtime_helper": ("copy-release-runtime.py", 0o400),
+        "runtime_helper": ("copy-release-runtime.py", 0o400), "runtime_helper_cli": ("copy_sumeragi_v2_release_cargo_cache_cli.py", 0o400),
         "tool_probe_helper": ("probe-release-tools.py", 0o400),
         "approval_contract": ("release-approval-contract.py", 0o400),
         "approval_offline_toolchain_sdk": (

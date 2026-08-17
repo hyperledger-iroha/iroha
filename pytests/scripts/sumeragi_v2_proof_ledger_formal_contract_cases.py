@@ -9,6 +9,7 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/merge_ledger_latest_execution_index.rs"),
     Path("crates/iroha_core/src/kura/replica_advert_and_body_status.rs"),
     Path("crates/iroha_core/src/kura/retained_finality_replica_authority.rs"),
+    Path("crates/iroha_core/src/kura/queue_plan_admission_batch.rs"),
     Path("crates/iroha_core/src/kura/wsv_checkpoint_read_helpers.rs"),
     Path("crates/iroha_core/src/kura/durable_block_and_atomic_sidecar_io.rs"),
     Path("crates/iroha_core/src/kura/prune_intent_publication.rs"),
@@ -17,10 +18,7 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs"),
     Path("crates/iroha_core/src/kura/autonomous_terminal_capacity.rs"),
     Path("crates/iroha_core/src/kura/autonomous_publication_temp_recovery.rs"),
-    Path(
-        "crates/iroha_core/src/kura/"
-        "historical_autonomous_recovery_temp_reconciliation.rs"
-    ),
+    Path("crates/iroha_core/src/kura/historical_autonomous_recovery_temp_reconciliation.rs"),
     Path("crates/iroha_core/src/kura/hot_path_capacity_preflight.rs"),
     Path("crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs"),
     Path("crates/iroha_core/src/kura/certified_bundle_capacity.rs"),
@@ -75,6 +73,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('kura/merge_ledger_latest_execution_index.rs'),
         Path('kura/replica_advert_and_body_status.rs'),
         Path('kura/retained_finality_replica_authority.rs'),
+        Path('kura/queue_plan_admission_batch.rs'),
         Path('kura/wsv_checkpoint_read_helpers.rs'),
         Path('kura/durable_block_and_atomic_sidecar_io.rs'),
         Path('kura/prune_intent_publication.rs'),
@@ -225,6 +224,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path('crates/irohad/src/main.rs'): (
         Path('main/shared_sorafs_provider_cache_tests.rs'),
         Path('main/runtime_deps.rs'),
+        Path('sumeragi_lane_relay_item.rs'),
         Path('main/online_peers_provider.rs'),
         Path('main_tests/governance_dag_publisher_binding_signer.rs'),
         Path('main/governance_dag_launcher_tests.rs'),
@@ -236,6 +236,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/sumeragi/mod.rs'): (
         Path('fair_v2_ingress_selector.rs'),
+        Path('tests/queue_plan_admission_handoff.rs'),
         Path('tests/mod_authoritative_runtime_gate_01_support.rs'),
         Path('tests/mod_authoritative_runtime_gate_02_carrierless_replay.rs'),
         Path('tests/mod_authoritative_runtime_gate_03_admission_and_fairness.rs'),
@@ -321,6 +322,8 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/sumeragi/v2_worker.rs'): (
         Path('v2_worker/exact_output_rollover_claim.rs'),
+        Path('v2_worker/queue_plan_admission_handoff.rs'),
+        Path('v2_worker/exact_output_pending_state.rs'),
         Path('v2_worker/autonomous_lane_output_reconstruction.rs'),
         Path('v2_worker/kura_replica_advert_refresh.rs'),
         Path('v2_worker/current_lane_output_rollover_claim.rs'),
@@ -330,6 +333,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_worker_lifecycle_capacity_cases.rs'),
         Path('tests/v2_worker_equivocation_and_selected_serve_fixture.rs'),
         Path('v2_worker/applied_height_handoff_tests.rs'),
+        Path('v2_worker/queue_plan_admission_handoff_tests.rs'),
         Path('v2_worker/upstream_reply_route_test.rs'),
         Path('tests/v2_worker_main_02.rs'),
         Path('tests/v2_worker_main_03.rs'),
@@ -395,6 +399,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lane_work.rs'): (
         Path('v2_lane_work/canonical_executed_block_application_repair.rs'),
+        Path('v2_lane_work/queue_plan_admission_handoff.rs'),
         Path('v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs'),
         Path('v2_lane_work/typed_finality_handoff_tests.rs'),
         Path('tests/v2_lane_work_native_signing_guard.rs'),
@@ -405,6 +410,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lane_work/historical_recovery_and_carrier_tests.rs'),
         Path('v2_lane_work_autonomous_ready_durability_tests.rs'),
         Path('v2_lane_work/autonomous_retirement_and_merge_tests.rs'),
+        Path('v2_lane_work/queue_plan_admission_handoff_tests.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs'): (
         Path('v2_lane_work_effect_queue.rs'),
@@ -451,10 +457,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
 
 REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
     Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
-        Path(
-            "crates/iroha_core/src/sumeragi/tests/"
-            "v2_lane_work_lifecycle_and_recovery_cases.rs"
-        ),
+        Path("crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs"),
     ),
     Path("crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"): (
         Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs"),
@@ -473,9 +476,7 @@ REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
     ),
 }
 REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS = tuple(
-    companion
-    for companions in REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS.values()
-    for companion in companions
+    companion for companions in REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS.values() for companion in companions
 )
 REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     parent

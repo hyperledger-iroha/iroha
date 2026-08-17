@@ -56,56 +56,7 @@ pub const OFFLINE_ESCROW_ACCOUNT_DOMAIN: &str = "iroha.offline.escrow.v1";
 pub const OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME: &str = "iroha.torii.v1.offline.top_up.request";
 /// Stable public Norito schema name for the first-release Torii redemption request.
 pub const OFFLINE_REDEEM_REQUEST_SCHEMA_NAME: &str = "iroha.torii.v1.offline.redeem.request";
-/// Domain-separation tag for on-chain Kagemusha device-attestation challenges.
-pub const OFFLINE_DEVICE_ATTESTATION_CHALLENGE_DOMAIN: &str =
-    "iroha:kagemusha:device-attestation-challenge:v1";
-/// Canonical Android hardware-attestation platform label for Kagemusha.
-pub const OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM: &str = "android-keymint";
-/// Canonical Android one-use assertion scheme for Kagemusha.
-pub const OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME: &str =
-    "android-keymint-ecdsa-p256-usage-limit-v1";
-/// Canonical Android assertion-key algorithm for Kagemusha.
-pub const OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM: &str =
-    "ecdsa-p256-sha256";
-/// Canonical Apple App Attest platform label for Kagemusha.
-pub const OFFLINE_DEVICE_ATTESTATION_IOS_APP_ATTEST_PLATFORM: &str = "ios-appattest";
-/// Maximum canonical Norito bytes for one governed device-attestation policy.
-pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1: usize = 64 * 1024;
-/// Maximum trusted roots retained by one governed device-attestation policy.
-pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1: usize = 8;
-/// Maximum trusted roots retained for either supported platform.
-pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_PER_PLATFORM_V1: usize = 4;
-/// Maximum DER bytes accepted for one trusted attestation root.
-pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1: usize = 16 * 1024;
-/// Maximum revoked-certificate SHA-256 digests retained by one policy.
-pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_REVOKED_CERTIFICATES_V1: usize = 256;
-/// Maximum iOS application identities retained by one policy.
-pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_APPS_V1: usize = 16;
-/// Maximum Android application identities retained by one policy.
-pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1: usize = 16;
-/// Maximum iOS validation categories retained for one application.
-pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_VALIDATION_CATEGORIES_V1: usize = 7;
-/// Maximum iOS bundle versions retained for one application.
-pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSIONS_V1: usize = 32;
-/// Maximum ASCII bytes accepted for one iOS bundle version.
-pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSION_BYTES_V1: usize = 128;
-/// Maximum Android signing-certificate digests retained for one application.
-pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_SIGNING_CERTIFICATES_V1: usize = 8;
-/// Maximum ASCII bytes accepted for one Apple Developer Team ID.
-pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TEAM_ID_BYTES_V1: usize = 64;
-/// Maximum ASCII bytes accepted for an iOS bundle ID or Android package name.
-pub const OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1: usize = 255;
-/// Maximum bytes accepted for one platform device identifier.
-pub const OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1: usize = 128;
-/// Maximum bytes accepted for one issuer-scoped platform key identifier.
-pub const OFFLINE_DEVICE_ATTESTATION_KEY_ID_MAX_BYTES_V1: usize = 64;
-/// Legacy App Attest assertion authenticator-data size (RP hash, flags, counter).
-pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1: usize = 37;
-/// Minimum App Attest assertion authenticator-data size.
-pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1: usize =
-    KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1;
-/// Maximum App Attest assertion authenticator-data size, including iOS 27 extensions.
-pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1: usize = 4 * 1024;
+include!("device_attestation_constants.rs");
 /// Maximum asset scale accepted by the exact Kagemusha V2 amount contract.
 pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
 /// Fixed confidential Merkle-tree depth shared by top-up, spend, and redemption.
@@ -1016,7 +967,7 @@ pub struct OfflineDeviceAttestationPolicy {
     /// entry exists in `ios_apps`.
     ///
     /// iOS App Attest is disabled when this is false; there is no implicit app
-    /// identity or legacy-authData fallback.
+    /// identity fallback.
     pub require_ios_app_policy: bool,
     /// Explicitly enables Android registration when a matching entry exists in `android_apps`.
     ///
@@ -1051,8 +1002,6 @@ pub struct OfflineIosAppAttestationPolicy {
     pub allowed_validation_categories: Vec<u32>,
     /// Allowed application bundle versions from extension-bearing App Attest data.
     pub allowed_bundle_versions: Vec<String>,
-    /// Whether legacy App Attest attestation and assertion authData without extensions remains accepted.
-    pub allow_legacy_auth_data_without_extensions: bool,
 }
 /// Allowed Android `KeyMint` app identity.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -2320,13 +2269,7 @@ impl KagemushaRequestAuthorizationV2 {
                 if (KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1
                     ..=KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1)
                     .contains(&assertion.authenticator_data.len())
-                    && assertion.authenticator_data[32] & !0x80 == 0
-                    && ((assertion.authenticator_data[32] & 0x80 == 0
-                        && assertion.authenticator_data.len()
-                            == KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1)
-                        || (assertion.authenticator_data[32] & 0x80 != 0
-                            && assertion.authenticator_data.len()
-                                > KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1)) =>
+                    && assertion.authenticator_data[32] == 0x80 =>
             {
                 assertion.signature.validate()
             }
@@ -4977,7 +4920,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 environment: "production".to_owned(),
                 allowed_validation_categories: vec![1, 10],
                 allowed_bundle_versions: vec!["1.0".to_owned()],
-                allow_legacy_auth_data_without_extensions: false,
             }],
             android_apps: vec![OfflineAndroidAppAttestationPolicy {
                 package_name: "com.example.wire".to_owned(),

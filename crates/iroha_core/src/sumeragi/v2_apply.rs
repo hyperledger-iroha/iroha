@@ -965,6 +965,15 @@ fn canonical_autonomous_carrier_disposition(
 include!("v2_apply/historical_autonomous_recovery.rs");
 include!("v2_apply/reconciliation_authority.rs");
 include!("v2_apply/committed_carrier_cleanup.rs");
+fn reservation_route_is_active(
+    nexus: &iroha_config::parameters::actual::Nexus,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    proposal_height: u64,
+) -> bool {
+    crate::state::consensus_lane_dataspace_at_height(lane_id, nexus, proposal_height)
+        == Some(dataspace_id)
+}
 /// Build one immutable Queue/Kura/State reservation reconciliation plan.
 ///
 /// Every Queue group, release barrier, State membership bit, committed merge
@@ -1202,11 +1211,12 @@ pub(crate) fn plan_lane_reservation_ownership(
             input.group.identity.lane_id,
             input.group.identity.proposal_height,
         ) != Some(input.group.identity.lane_incarnation)
-            || crate::state::nexus_active_lane_dataspace_at_height(
-                input.group.identity.lane_id,
+            || !reservation_route_is_active(
                 &nexus,
+                input.group.identity.lane_id,
+                input.group.identity.dataspace_id,
                 input.group.identity.proposal_height,
-            ) != Some(input.group.identity.dataspace_id)
+            )
         {
             return Err(V2ReservationLifecycleError::StaleReservationContext {
                 lane_id: input.group.identity.lane_id,

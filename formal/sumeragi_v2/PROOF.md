@@ -555,9 +555,16 @@ runner turn within the declared bound after every finite wait, and completes
 admitted fsync, signature, body-transfer, deterministic-validation, proposal-
 construction, and application work within finite declared bounds. Also assume
 that the complete successful-round rank is representable below the maximum
-runtime duration. The immutable view-zero timeout is positive and view `v` receives
-`base * (v + 1)` (saturating only at that representation limit), so the model
-derives rather than assumes a later view whose timeout exceeds the rank.
+runtime duration. The immutable view-zero timeout is positive and view `v`
+receives `min(base * (v + 1), 10 * base)`, so the model requires the complete
+post-GST service rank to fit below that finite protocol ceiling.
+`AsyncProductionTimingInstantiation` records the exact ten-base production
+binding, and `ProductionAdequateViewTimeoutExists` specializes the adequate-view
+theorem under that binding. The finite TLC configurations leave the ceiling
+symbolic and larger because their service budget counts abstract actions, not
+milliseconds; those searches validate the conditional transition argument,
+not the operational claim that a particular deployment meets the ten-base
+service premise.
 
 The claim is conditional and per height: after GST, with a representative
 roster of at least four voting peers, a responsive dual quorum, and
@@ -575,8 +582,9 @@ type state: fail-stop admission precedes clock arming, status projection,
 observer installation, exact ingress/status publication, and readiness release;
 CompleteTip publication consumes its retained predecessor retirement. This is
 paired with a source-sealed consuming finalization chain which closes readiness
-and both ingress gates, joins exact Kura finality to adapter/WAL retirement,
-seals the existing output handoff before refreshing Serve state, and publishes
+and both ingress gates, joins exact Kura finality to adapter closure, retains
+the safety WAL through the existing durable output handoff, retires it only
+after that handoff, then refreshes Serve state and publishes
 all-row LedgerV1 retirement through opaque coordinator-owning tokens before
 clean shutdown. This is not a new mechanized liveness theorem, and the
 serialized runner still needs to mint these states in the atomic cutover.
@@ -876,8 +884,8 @@ complete rotation.
 This is necessarily a conditional temporal target: FLP rules out unconditional
 termination without post-GST bounds. Without bounded delivery and service, a
 representative roster of at least four voting peers, a responsive dual quorum,
-deterministic terminating validation/fsync/application, and a representable
-service bound that some view-indexed timeout can exceed, deterministic
+deterministic terminating validation/fsync/application, and a service bound
+below the finite maximum view timeout, deterministic
 consensus cannot guarantee progress. The paper argument derives
 height progress under those premises when valid transaction, autonomous,
 internal, or state-derived time-trigger work exists; it
@@ -1664,7 +1672,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5`.
+`4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329`.
 The separate source-sealed G-UNIT inventory contains 527 focused tests,
 including 321 `iroha_core` tests. Its 528-line
 canonical TSV has SHA-256
@@ -1784,9 +1792,10 @@ batch, preflights `PrepareIntent -> Sign(Prepare)`, fsyncs that frame, and then
 uses the same two-child LedgerV1 publication. Capacity is retryable only before
 the WAL append; every later ambiguity is restart-only. The unified lifecycle
 Completion-turn driver classifies both recovered Proposal settlement shapes,
-but the live production runner does not yet invoke that driver, so the cold
-Proposal path remains unreachable from the production loop. These are
-source-bound production-refinement contracts; the existing deductive
+and the live lifecycle height driver invokes it with the real borrow-bound
+Completion turn before the ordinary completion tail. The cold Proposal path is
+therefore reachable without a second scheduler or publication authority. These
+are source-bound production-refinement contracts; the existing deductive
 asynchronous proof does not by itself prove their Rust persistence ordering,
 and no theorem or evidence status is promoted. The executor then retries the
 same retained FIFO occurrence and acquires pending-work and request ownership

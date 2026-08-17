@@ -1623,7 +1623,7 @@ self.io.is_some()
                 worker_source,
                 "legacy worker Apply-service construction",
                 "pub(crate) fn start(",
-                "/// Start with the exact application service used for recovered marker replay.",
+                "pub(in crate::sumeragi) fn start_with_apply_service(",
             )
             require_order(
                 worker_path,
@@ -2095,7 +2095,7 @@ self.io.is_some()
                 worker_source,
                 "single-preview recovered next-Vote body service join",
                 "pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(",
-                "/// Publish the live completion owner",
+                "pub(in crate::sumeragi) fn activate_effect_completion_observer(",
             )
             require_order(
                 worker_path,
@@ -4497,7 +4497,7 @@ self.io.is_some()
                 launch_source,
                 "consuming activated Serve retirement fixture",
                 "fn retire_lifecycle_stores_for_test(",
-                "/// Borrow the live owner/runtime/service triple",
+                "pub(in crate::sumeragi) fn with_runner_runtime<R>(",
             )
             require_order(
                 launch_path,
@@ -4518,7 +4518,7 @@ self.io.is_some()
                 launch_source,
                 "activated lifecycle finalization",
                 "fn into_finalized_rollover(",
-                "/// Exercise the exact empty-output post-handoff retirement transaction",
+                "pub(in crate::sumeragi) fn retire_lifecycle_stores_for_test(",
             )
             require_order(
                 launch_path,
@@ -4547,7 +4547,7 @@ self.io.is_some()
                     "recovered_lifecycle_sign_completion.is_some()",
                     "completion_observer_activation.is_some()",
                     "ProductionLifecycleFinalizationErrorV1::NotReady",
-                    "finalized.into_wal_retirement_warning()",
+                    "finalized_adapter: finalized",
                 ),
             )
             output_rollover = region(
@@ -4564,6 +4564,7 @@ self.io.is_some()
                 (
                     "rollover_finalized_height_outputs_for_lifecycle(",
                     "ProductionLifecycleOutputRolloverPermitV1 {",
+                    "finalized_adapter.retire_after_output_handoff()",
                     "refresh_live_serve_retirement_cut(&services, &retired_ingress)",
                     "ProductionLifecyclePostOutputHandoffV1 {",
                 ),

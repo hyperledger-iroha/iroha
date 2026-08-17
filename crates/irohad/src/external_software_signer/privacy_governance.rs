@@ -19,8 +19,6 @@ use iroha_data_model::{
 };
 use norito::json::{Map, Value};
 use std::num::NonZeroU32;
-pub(super) const PRIVACY_GOVERNANCE_PROVISIONING_BLOCKER_V1: &str =
-    "MissingRetainedGenesisSignerFinalizePrivacyGenesisV1";
 pub(super) const PRIVACY_GOVERNANCE_REQUEST_SCHEMA_V1: &str =
     "iroha.taira.privacy_governance_authority_request";
 pub(super) const PRIVACY_GOVERNANCE_AUTHORITY_ENVELOPE_SCHEMA_V1: &str =
@@ -36,7 +34,6 @@ const TRANSACTION_PAYLOAD_CODEC_V1: &str = "iroha.TransactionPayload/norito-adap
 const TRANSACTION_PAYLOAD_PREHASH_V1: &str = "iroha.HashOf<TransactionPayload>/v1";
 const TRANSACTION_DOMAIN_V1: &str = "network-from-reset-genesis-header-hash-v1";
 const TRANSACTION_EXECUTABLE_KIND_V1: &str = "single-direct-instruction-v1";
-const AUTHORIZED_ROOT_PEER_UID_V1: u32 = 0;
 const MAX_ACTIVATION_BYTES_V1: usize = 4 * 1024 * 1024;
 const MAX_REQUEST_BYTES_V1: usize = 8 * 1024 * 1024;
 const MAX_TRANSACTION_PAYLOAD_BYTES_V1: usize = 8 * 1024 * 1024;
@@ -188,8 +185,8 @@ pub(super) enum PrivacyGovernanceSemanticErrorV1 {
 ///
 /// The authenticated kernel peer UID is checked before request parsing.  The caller
 /// must eventually obtain it from the accepted Unix peer credentials, never from the
-/// request body.  This function has no production caller until the separately built
-/// retained genesis signer and same-key finalization transition are source-closed.
+/// request body. The feature-gated Taira authority is the only production caller;
+/// this module itself retains no key material, transport, or signing surface.
 #[expect(
     clippy::too_many_lines,
     reason = "the fail-closed request validator keeps the complete authenticated contract in one auditable sequence"
@@ -197,10 +194,11 @@ pub(super) enum PrivacyGovernanceSemanticErrorV1 {
 pub(super) fn validate_privacy_governance_request_v1(
     request_bytes: &[u8],
     authenticated_kernel_peer_uid: u32,
+    authorized_kernel_peer_uid: u32,
     now_unix_millis: u64,
     expected: &PrivacyGovernanceExpectedContextV1,
 ) -> Result<ValidatedPrivacyGovernanceRequestV1, PrivacyGovernanceSemanticErrorV1> {
-    if authenticated_kernel_peer_uid != AUTHORIZED_ROOT_PEER_UID_V1 {
+    if authenticated_kernel_peer_uid != authorized_kernel_peer_uid {
         return Err(PrivacyGovernanceSemanticErrorV1::KernelPeer);
     }
     validate_expected_context(expected)?;
@@ -454,6 +452,7 @@ pub(super) fn validate_privacy_governance_request_v1(
 pub(super) fn validate_assigned_privacy_governance_request_v1(
     request_bytes: &[u8],
     authenticated_kernel_peer_uid: u32,
+    authorized_kernel_peer_uid: u32,
     now_unix_millis: u64,
 ) -> Result<ValidatedPrivacyGovernanceRequestV1, PrivacyGovernanceSemanticErrorV1> {
     let value = parse_canonical_request(request_bytes)?;
@@ -534,6 +533,7 @@ pub(super) fn validate_assigned_privacy_governance_request_v1(
     validate_privacy_governance_request_v1(
         request_bytes,
         authenticated_kernel_peer_uid,
+        authorized_kernel_peer_uid,
         now_unix_millis,
         &expected,
     )
@@ -1490,9 +1490,11 @@ mod tests {
         bytes: &[u8],
         context: &PrivacyGovernanceExpectedContextV1,
     ) -> Result<ValidatedPrivacyGovernanceRequestV1, PrivacyGovernanceSemanticErrorV1> {
+        const AUTHORIZED_PEER_UID: u32 = 50_000;
         validate_privacy_governance_request_v1(
             bytes,
-            AUTHORIZED_ROOT_PEER_UID_V1,
+            AUTHORIZED_PEER_UID,
+            AUTHORIZED_PEER_UID,
             context.issued_at_unix_millis + 1,
             context,
         )
@@ -1518,12 +1520,41 @@ mod tests {
         assert_eq!(validated.transaction_payload_hash[31] & 1, 1);
     }
     #[test]
-    fn root_peer_is_checked_before_any_request_decode() {
+    fn cross_language_fixture_is_the_exact_native_transaction_request() {
+        const FIXTURE: &[u8] = include_bytes!(
+            "../../../../scripts/tests/fixtures/taira_privacy_governance_request_v1.json"
+        );
+        let context = fixture_context();
+        let generated = valid_request(&context);
+        assert_eq!(FIXTURE, generated);
+
+        let validated = validate(FIXTURE, &context).expect("golden request validates natively");
+        let value = parse_canonical_request(FIXTURE).expect("canonical golden request");
+        let request = exact_object(&value, REQUEST_FIELDS_V1).expect("golden request object");
+        let transaction = nested_object(request, "transaction", TRANSACTION_FIELDS_V1)
+            .expect("golden transaction object");
+        let payload = required_canonical_base64(
+            transaction,
+            "payload_norito_base64",
+            MAX_TRANSACTION_PAYLOAD_BYTES_V1,
+        )
+        .expect("golden TransactionPayload bytes");
+        let decoded = TransactionBuilder::decode_payload(&payload)
+            .expect("golden TransactionPayload decodes natively");
+        assert_eq!(decoded.encode_payload(), payload);
+        assert_eq!(
+            decoded.payload_hash_bytes(),
+            validated.transaction_payload_hash
+        );
+    }
+    #[test]
+    fn assigned_peer_is_checked_before_any_request_decode() {
         let context = fixture_context();
         assert_eq!(
             validate_privacy_governance_request_v1(
                 b"not-json",
                 50_000,
+                50_001,
                 context.issued_at_unix_millis + 1,
                 &context,
             ),
@@ -1532,7 +1563,8 @@ mod tests {
         assert_eq!(
             validate_privacy_governance_request_v1(
                 b"not-json",
-                AUTHORIZED_ROOT_PEER_UID_V1,
+                50_000,
+                50_000,
                 context.issued_at_unix_millis + 1,
                 &context,
             ),
@@ -1705,10 +1737,19 @@ mod tests {
         let foreign_network = NetworkId::from_genesis_hash(
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"foreign-network")),
         );
-        let mut attacks = Vec::new();
         let mut payload = original.clone();
         payload.domain = TransactionDomain::Genesis;
-        attacks.push(payload);
+        let bytes = TransactionBuilder::from_genesis_payload(payload)
+            .expect("hostile genesis payload remains structurally encodable")
+            .encode_payload();
+        let mut value: Value = norito::json::from_slice(&request).expect("request JSON");
+        replace_payload(&mut value, &bytes);
+        let hostile = reseal_request_id(&mut value);
+        assert_eq!(
+            validate(&hostile, &context),
+            Err(PrivacyGovernanceSemanticErrorV1::TransactionPayload)
+        );
+        let mut attacks = Vec::new();
         let mut payload = original.clone();
         payload.domain = TransactionDomain::Network(foreign_network);
         attacks.push(payload);
@@ -1785,7 +1826,8 @@ mod tests {
         assert_eq!(
             validate_privacy_governance_request_v1(
                 &request,
-                AUTHORIZED_ROOT_PEER_UID_V1,
+                50_000,
+                50_000,
                 context.issued_at_unix_millis - 1,
                 &context,
             ),
@@ -1794,7 +1836,8 @@ mod tests {
         assert_eq!(
             validate_privacy_governance_request_v1(
                 &request,
-                AUTHORIZED_ROOT_PEER_UID_V1,
+                50_000,
+                50_000,
                 context.expires_at_unix_millis,
                 &context,
             ),
@@ -1954,44 +1997,14 @@ mod tests {
         );
     }
     #[test]
-    fn production_surface_has_no_role_service_or_signing_caller() {
+    fn production_surface_is_wired_to_the_taira_authority() {
         let parent = include_str!("../external_software_signer.rs");
-        assert!(parent.contains("#[allow(dead_code)]\nmod privacy_governance;"));
-        for source in [
-            include_str!("adapter.rs"),
-            include_str!("envelope.rs"),
-            include_str!("journal.rs"),
-            include_str!("protocol.rs"),
-            include_str!("runtime_adapters.rs"),
-            include_str!("runtime_backends.rs"),
-            include_str!("service.rs"),
-            include_str!("unix.rs"),
-            include_str!("typed_payload.rs"),
-            include_str!("../bin/sorafs_external_software_signer.rs"),
-        ] {
-            assert!(!source.contains("privacy_governance::"));
-            assert!(!source.contains("PrivacyGovernance"));
-        }
-        let this_source = include_str!("privacy_governance.rs");
-        let production_contract = this_source
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production contract prefix");
-        for forbidden in [
-            "SoftwareSignerRoleV1",
-            "SoftwareSignerServiceV1",
-            "PrivateKey",
-            "fn sign",
-            "fn provision",
-            "fn rotate",
-            "std::fs",
-            "UnixStream",
-        ] {
-            assert!(
-                !production_contract.contains(forbidden),
-                "forbidden authority surface: {forbidden}"
-            );
-        }
-        assert!(this_source.contains(PRIVACY_GOVERNANCE_PROVISIONING_BLOCKER_V1));
+        assert!(parent.contains("pub mod taira_authority;"));
+        let authority = include_str!("taira_authority/service.rs");
+        assert!(
+            authority
+                .contains("privacy_governance::validate_assigned_privacy_governance_request_v1")
+        );
+        assert!(authority.contains("ensure_privacy_genesis_finalized"));
     }
 }

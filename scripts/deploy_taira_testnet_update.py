@@ -373,76 +373,6 @@ def parse_pid_file(path: Path, uid: int, gid: int) -> int:
     return int(text)
 
 
-def framework_python_argv0_rewrite_matches(
-    plist_argv: tuple[str, ...],
-    runtime_argv: tuple[str, ...],
-    *,
-    owner_uid: int,
-) -> bool:
-    """Authenticate CPython's same-framework launcher-to-runtime rewrite."""
-
-    if (
-        len(plist_argv) != len(runtime_argv)
-        or not plist_argv
-        or plist_argv[1:] != runtime_argv[1:]
-        or not Path(plist_argv[0]).is_absolute()
-        or not Path(runtime_argv[0]).is_absolute()
-    ):
-        return False
-    launcher = Path(plist_argv[0])
-    try:
-        resolved_launcher_before = launcher.resolve(strict=True)
-        launcher_before = resolved_launcher_before.lstat()
-    except OSError:
-        return False
-    launcher_name = re.fullmatch(
-        r"python3(?:\.([0-9]+))?", resolved_launcher_before.name
-    )
-    if (
-        resolved_launcher_before.parent.name != "bin"
-        or launcher_name is None
-        or not stat.S_ISREG(launcher_before.st_mode)
-        or launcher_before.st_nlink != 1
-        or not launcher_before.st_mode & 0o111
-        or stat.S_IMODE(launcher_before.st_mode) & 0o022
-        or launcher_before.st_uid != owner_uid
-    ):
-        return False
-    version_root = resolved_launcher_before.parent.parent
-    minor = launcher_name.group(1)
-    if (
-        version_root.parent.name != "Versions"
-        or version_root.parent.parent.name
-        not in {"Python.framework", "Python3.framework"}
-        or version_root.parent.parent.parent.name != "Frameworks"
-        or (minor is not None and version_root.name != f"3.{minor}")
-    ):
-        return False
-    expected_runtime = version_root / "Resources/Python.app/Contents/MacOS/Python"
-    try:
-        expected_runtime = expected_runtime.resolve(strict=True)
-        runtime_before = expected_runtime.lstat()
-        resolved_launcher_after = launcher.resolve(strict=True)
-        launcher_after = resolved_launcher_after.lstat()
-        runtime_after = expected_runtime.lstat()
-    except OSError:
-        return False
-    return not (
-        str(expected_runtime) != runtime_argv[0]
-        or resolved_launcher_after != resolved_launcher_before
-        or file_identity(launcher_before) != file_identity(launcher_after)
-        or file_identity(runtime_before) != file_identity(runtime_after)
-        or not stat.S_ISREG(runtime_before.st_mode)
-        or runtime_before.st_nlink != 1
-        or not runtime_before.st_mode & 0o111
-        or stat.S_IMODE(runtime_before.st_mode) & 0o022
-        or runtime_before.st_dev != launcher_before.st_dev
-        or runtime_before.st_uid != launcher_before.st_uid
-        or runtime_before.st_gid != launcher_before.st_gid
-        or runtime_before.st_uid != owner_uid
-    )
-
-
 def require_managed_processes(
     label: str,
     arguments: tuple[str, ...],
@@ -458,14 +388,7 @@ def require_managed_processes(
     if (
         supervisor.ppid != 1
         or supervisor.uid != runtime_uid
-        or (
-            supervisor.argv != arguments
-            and not framework_python_argv0_rewrite_matches(
-                arguments,
-                supervisor.argv,
-                owner_uid=runtime_uid,
-            )
-        )
+        or supervisor.argv != arguments
     ):
         fail(f"{label} live supervisor differs from its plist")
     pid_file = _absolute_option(arguments, "--pid-file", label)

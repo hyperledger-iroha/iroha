@@ -51,7 +51,13 @@ MAX_POLICY_BYTES = 1024 * 1024
 MAX_PLATFORM_OBJECT_BYTES = 128 * 1024
 MAX_CERTIFICATE_BYTES = 64 * 1024
 MAX_RECEIPT_BYTES = 64 * 1024
+ASSERTION_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES = 37
+MIN_ASSERTION_AUTHENTICATOR_DATA_BYTES = (
+    ASSERTION_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES + 1
+)
 MAX_AUTHENTICATOR_DATA_BYTES = 4 * 1024
+MAX_CBOR_ARRAY_ITEMS = 1024
+MAX_CBOR_MAP_ITEMS = 64
 P256_PUBLIC_KEY_BYTES = 65
 P256_SIGNATURE_DER_MAX_BYTES = 80
 
@@ -207,8 +213,12 @@ class _CborDecoder:
             except UnicodeDecodeError as error:
                 raise ValueError("CBOR text is not UTF-8") from error
         if major == 4:
+            if argument > MAX_CBOR_ARRAY_ITEMS:
+                raise ValueError("CBOR array exceeds its item-count bound")
             return tuple(self.value(depth + 1) for _ in range(argument))
         if major == 5:
+            if argument > MAX_CBOR_MAP_ITEMS:
+                raise ValueError("CBOR map exceeds its item-count bound")
             pairs: list[tuple[Any, Any]] = []
             for _ in range(argument):
                 key = self.value(depth + 1)
@@ -298,10 +308,13 @@ def _canonical_ascii(value: Any, label: str, maximum: int, errors: list[str]) ->
 
 
 def _validate_policy(
-    policy: dict[str, Any], policy_bytes: bytes, errors: list[str]
-) -> None:
+    policy: Any, policy_bytes: bytes, errors: list[str]
+) -> bool:
+    """Validate the policy and report whether later typed access is safe."""
+
+    starting_errors = len(errors)
     if _exact_fields(policy, PRODUCTION_POLICY_FIELDS, "production iOS policy", errors) is None:
-        return
+        return False
     if policy.get("schema") != PRODUCTION_POLICY_SCHEMA:
         errors.append(f"production iOS policy schema must be {PRODUCTION_POLICY_SCHEMA}")
     if policy.get("version") != 1 or isinstance(policy.get("version"), bool):
@@ -390,6 +403,7 @@ def _validate_policy(
         errors.append("production iOS trusted root must not also be revoked")
     if len(policy_bytes) > MAX_POLICY_BYTES:
         errors.append("production iOS policy exceeds its byte limit")
+    return len(errors) == starting_errors
 
 
 def _point_on_curve(point: tuple[int, int]) -> bool:
@@ -590,7 +604,11 @@ def _parse_assertion_object(
         auth_data = value["authenticatorData"]
         if not isinstance(signature, bytes) or not isinstance(auth_data, bytes):
             raise ValueError("App Attest assertion fields must be byte strings")
-        if not 37 < len(auth_data) <= MAX_AUTHENTICATOR_DATA_BYTES:
+        if not (
+            MIN_ASSERTION_AUTHENTICATOR_DATA_BYTES
+            <= len(auth_data)
+            <= MAX_AUTHENTICATOR_DATA_BYTES
+        ):
             raise ValueError("App Attest assertion authenticatorData length is outside bounds")
         app_id = f"{policy['app_id_prefix']}.{policy['bundle_id']}".encode("ascii")
         if auth_data[:32] != hashlib.sha256(app_id).digest():
@@ -600,7 +618,10 @@ def _parse_assertion_object(
         if int.from_bytes(auth_data[33:37], "big") == 0:
             raise ValueError("App Attest assertion counter must be positive")
         _validate_extensions(
-            _decode_cbor(auth_data[37:], "App Attest assertion extensions"),
+            _decode_cbor(
+                auth_data[ASSERTION_AUTHENTICATOR_DATA_FIXED_HEADER_BYTES:],
+                "App Attest assertion extensions",
+            ),
             attestation=False,
             policy=policy,
         )
@@ -880,7 +901,8 @@ def validate_production_signed_evidence(
         errors,
     ) is None:
         return errors + [PLATFORM_TRUST_BLOCKER]
-    _validate_policy(policy, policy_snapshot.payload, errors)
+    policy_valid = _validate_policy(policy, policy_snapshot.payload, errors)
+    policy_object = policy if isinstance(policy, dict) else {}
     policy_digest = hashlib.sha256(policy_snapshot.payload).hexdigest()
     if evidence.get("schema") != PRODUCTION_SIGNED_EVIDENCE_SCHEMA:
         errors.append(
@@ -893,7 +915,7 @@ def validate_production_signed_evidence(
         "signed production evidence release_manifest_sha256",
         errors,
     )
-    if evidence.get("production_policy_id") != policy.get("policy_id"):
+    if evidence.get("production_policy_id") != policy_object.get("policy_id"):
         errors.append("signed production evidence production_policy_id must match policy")
     if evidence.get("production_policy_sha256") != policy_digest:
         errors.append("signed production evidence production_policy_sha256 must match exact policy bytes")
@@ -948,15 +970,14 @@ def validate_production_signed_evidence(
         except candidate_module.EvidenceError as error:
             errors.append(str(error))
     if (
-        isinstance(policy, dict)
-        and set(policy) == PRODUCTION_POLICY_FIELDS
+        policy_valid
         and release_manifest_sha256 is not None
         and artifact_digests
         and raw_snapshot is not None
     ):
         _validate_platform_evidence(
             evidence.get("platform_evidence"),
-            policy,
+            policy_object,
             policy_digest,
             release_manifest_sha256,
             artifact_digests,

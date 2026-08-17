@@ -883,6 +883,37 @@ fn bind_queue_plan_synced_test_authorities(
     authorities
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn move_queue_plan_synced_test_binding_to_future(
+    request: &mut ToriiProxyRequestV6,
+    authority_height: u64,
+    predecessor_block_hash: HashOf<BlockHeader>,
+) {
+    let ToriiProxyRequestKindV4::SubmitTransaction {
+        transaction,
+        expected_plan,
+        admission_binding: Some(binding),
+        ..
+    } = &mut request.request
+    else {
+        panic!("QueuePlanSynced fixture must contain a binding");
+    };
+    binding.admission_context.authority_height = authority_height;
+    binding.admission_context.proposal_height = authority_height.checked_add(1).unwrap();
+    binding.admission_context.predecessor_block_hash = Some(predecessor_block_hash);
+    let routing_plan = expected_plan
+        .clone()
+        .try_into_routing_plan()
+        .expect("routing plan");
+    binding.journal_record_digest = queue::queue_plan_journal_record_claim_digest(
+        transaction.clone(),
+        routing_plan,
+        binding.admission_context.clone(),
+        binding.enqueue_timestamp_ms,
+        Some(binding.global_admission_identity()),
+    )
+    .expect("future journal claim");
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn exact_queue_plan_synced_test_receipt(
     request: &ToriiProxyRequestV6,
     signer: &KeyPair,
@@ -1033,6 +1064,12 @@ fn queue_plan_admission_publication_validates_and_persists_idempotently() {
             .expect_err("unsupported publication schema must fail")
             .contains("schema_version")
     );
+}
+macro_rules! torii_qp_case { ($($tokens:tt)*) => {{ $($tokens)* }}; }
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[test]
+fn queue_plan_admission_publication_rejects_future_before_kura_persistence() {
+    torii_qp_case! { let (app, mut request) = incoming_proxy_submit_fixture(0xb1, ToriiProxyTransactionAdmissionV2::QueuePlanSynced); let future_height = u64::try_from(app.state.committed_height()).unwrap() + 1; move_queue_plan_synced_test_binding_to_future(&mut request, future_height, HashOf::from_untyped_unchecked(Hash::new(b"future QueuePlan predecessor"))); let receipt = exact_queue_plan_synced_test_receipt(&request, &app.torii_proxy_bridge_signer, 40_002); let publication = QueuePlanAdmissionPublicationV1 { schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, certificate: queue_plan_synced_test_certificate_snapshot(&request, vec![receipt]).body }; let carrier_height = u64::try_from(app.state.committed_height()).unwrap() + 1; assert_eq!(app.state.classify_pending_queue_plan_admission(&publication.certificate, carrier_height).expect("classifiable future certificate").1, PendingQueuePlanAdmissionDisposition::Future); let hash = Hash::new(&publication.certificate); assert!(super::ingest_queue_plan_admission_publication(&app, &publication).expect_err("future publication must fail before Kura").contains("ahead of canonical authority")); assert_eq!(app.kura.pending_queue_plan_admission_certificate(hash).expect("inspect Kura"), None); }
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]

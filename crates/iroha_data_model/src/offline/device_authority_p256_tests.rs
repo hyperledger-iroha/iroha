@@ -784,9 +784,14 @@ mod device_authority_p256_tests {
         changed.registration_hash = [0x34; 32];
         mutations.push(changed);
         let mut changed = authorization.clone();
+        let mut ios_authenticator_data =
+            vec![0_u8; KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1];
+        ios_authenticator_data[32] = 0x80;
+        ios_authenticator_data
+            [KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_FIXED_HEADER_BYTES_V1] = 0xA0;
         changed.hardware_assertion = KagemushaOnlineHardwareAssertionV1::IosAppAttest(
             KagemushaIosAppAttestHardwareAssertionV1 {
-                authenticator_data: vec![0; 37],
+                authenticator_data: ios_authenticator_data,
                 signature: match &authorization.hardware_assertion {
                     KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(assertion) => {
                         assertion.signature
@@ -808,11 +813,18 @@ mod device_authority_p256_tests {
     #[test]
     fn online_ios_assertion_binds_authenticator_data_and_client_data_hash() {
         let key = signing_key(41);
-        let mut authenticator_data = vec![0_u8; 37];
+        let mut authenticator_data =
+            vec![0_u8; KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1];
         authenticator_data[..32].copy_from_slice(&[0x41; 32]);
+        authenticator_data[32] = 0x80;
         authenticator_data[36] = 1;
+        authenticator_data[KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_FIXED_HEADER_BYTES_V1] =
+            0xA0;
         let authorization = authorization(&key, Some(authenticator_data));
         let public_key = key.verifying_key().to_encoded_point(false);
+        authorization
+            .validate_for_payload(authorization.payload_digest)
+            .expect("extension-bearing App Attest assertion is structurally valid");
         authorization
             .verify_hardware_signature(public_key.as_bytes())
             .expect("exact App Attest assertion verifies");
@@ -835,12 +847,14 @@ mod device_authority_p256_tests {
         else {
             unreachable!()
         };
-        assertion.authenticator_data.truncate(36);
+        assertion
+            .authenticator_data
+            .truncate(KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_FIXED_HEADER_BYTES_V1);
         assert!(
             wrong_length
                 .validate_for_payload(wrong_length.payload_digest)
                 .is_err(),
-            "truncated assertion authData must fail at typed ingress",
+            "extension-free assertion authData must fail at typed ingress",
         );
     }
 }

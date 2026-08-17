@@ -1,4 +1,23 @@
 include!("part_5_pipeline_cache.rs");
+async fn pipeline_status_response(
+    app: SharedAppState,
+    hash: String,
+    scope: Option<&str>,
+    diagnostic: &'static str,
+) -> Response {
+    super::handler_pipeline_transaction_status(
+        State(app),
+        HeaderMap::new(),
+        crate::loopback_connect_info(),
+        None,
+        crate::NoritoStringQuery(PipelineStatusQuery {
+            hash: Some(hash),
+            scope: scope.map(str::to_owned),
+        }),
+    )
+    .await
+    .expect(diagnostic)
+}
 #[test]
 #[ignore = "load profile; run explicitly with --ignored --nocapture"]
 fn pipeline_status_cache_prune_load_profile() {
@@ -123,45 +142,24 @@ async fn pipeline_status_handler_returns_queued() {
     app.queue
         .push(accepted, app.state.view())
         .expect("queue push");
-    let resp = super::handler_pipeline_transaction_status(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-        crate::NoritoStringQuery(PipelineStatusQuery {
-            hash: Some(tx.hash().to_string()),
-            scope: Some("local".to_owned()),
-        }),
-    )
-    .await
-    .expect("ok");
+    let resp =
+        pipeline_status_response(app.clone(), tx.hash().to_string(), Some("local"), "ok").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+    let payload = torii_json_body(resp).await;
     let status_kind = payload
         .get("status")
         .and_then(|status| status.get("kind"))
         .and_then(norito::json::Value::as_str);
     assert_eq!(status_kind, Some("Queued"));
-    let resp_entry = super::handler_pipeline_transaction_status(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-        crate::NoritoStringQuery(PipelineStatusQuery {
-            hash: Some(tx.hash_as_entrypoint().to_string()),
-            scope: Some("local".to_owned()),
-        }),
+    let resp_entry = pipeline_status_response(
+        app.clone(),
+        tx.hash_as_entrypoint().to_string(),
+        Some("local"),
+        "ok",
     )
-    .await
-    .expect("ok");
+    .await;
     assert_eq!(resp_entry.status(), StatusCode::OK);
-    let bytes_entry = axum::body::to_bytes(resp_entry.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let payload_entry: norito::json::Value = norito::json::from_slice(&bytes_entry).expect("json");
+    let payload_entry = torii_json_body(resp_entry).await;
     let status_kind_entry = payload_entry
         .get("status")
         .and_then(|status| status.get("kind"))
@@ -223,9 +221,7 @@ async fn pipeline_status_handler_returns_typed_norito_when_requested() {
             .and_then(|value| value.to_str().ok()),
         Some(crate::utils::NORITO_MIME_TYPE)
     );
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let bytes = torii_body_bytes(resp, "body").await;
     let payload: PipelineTransactionStatusResponse =
         norito::decode_from_bytes(&bytes).expect("typed norito response");
     assert_eq!(payload.status.kind, "Queued");
@@ -250,10 +246,7 @@ async fn pipeline_preflight_handler_returns_json_snapshot() {
     .await
     .expect("ok");
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+    let payload = torii_json_body(resp).await;
     assert_eq!(
         payload.get("schema_version"),
         Some(&norito::json::Value::from(1_u64))
@@ -303,9 +296,7 @@ async fn pipeline_preflight_handler_returns_typed_norito_when_requested() {
             .and_then(|value| value.to_str().ok()),
         Some(crate::utils::NORITO_MIME_TYPE)
     );
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let bytes = torii_body_bytes(resp, "body").await;
     let payload: routing::PipelinePreflightResponse =
         norito::decode_from_bytes(&bytes).expect("typed norito response");
     assert_eq!(payload.schema_version, 1);
@@ -372,22 +363,14 @@ async fn pipeline_status_local_read_keeps_live_pending_queued_cache() {
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xd8,
-        Algorithm::Ed25519,
-        "derive live pending pipeline-status fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xd8, "derive live pending pipeline-status fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
-    let transaction = TransactionBuilder::new(
+    let transaction = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
         authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(
-        Level::INFO,
-        "pipeline-status-live-pending".to_string(),
-    )])
-    .sign(keypair.private_key());
+        "pipeline-status-live-pending",
+        &keypair,
+    );
     let tx_hash = transaction.hash();
     let response = super::handler_post_transaction(
         State(app.clone()),
@@ -494,18 +477,13 @@ async fn pipeline_status_handler_cache_hit_ignores_tx_rate_limiter_pressure() {
     }
     assert!(app.tx_rate_limiter.allow("pipeline-status-test").await);
     assert!(!app.tx_rate_limiter.allow("pipeline-status-test").await);
-    let resp = super::handler_pipeline_transaction_status(
-        State(app),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-        crate::NoritoStringQuery(PipelineStatusQuery {
-            hash: Some(tx_hash.to_string()),
-            scope: Some("local".to_owned()),
-        }),
+    let resp = pipeline_status_response(
+        app,
+        tx_hash.to_string(),
+        Some("local"),
+        "cached pipeline status should stay available under tx-ingress pressure",
     )
-    .await
-    .expect("cached pipeline status should stay available under tx-ingress pressure");
+    .await;
     assert_eq!(resp.status(), StatusCode::OK);
 }
 #[tokio::test]
@@ -668,15 +646,10 @@ async fn account_get_handler_supports_json_and_norito() {
     .expect("json account get");
     assert_eq!(json_resp.status(), StatusCode::OK);
     assert_eq!(
-        json_resp
-            .headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&json_resp, "content-type"),
         Some("application/json")
     );
-    let json_bytes = axum::body::to_bytes(json_resp.into_body(), usize::MAX)
-        .await
-        .expect("json body");
+    let json_bytes = torii_body_bytes(json_resp, "json body").await;
     let json_value: norito::json::Value =
         norito::json::from_slice(&json_bytes).expect("json account payload value");
     let json_payload: AccountReadResponse =
@@ -703,15 +676,10 @@ async fn account_get_handler_supports_json_and_norito() {
     .expect("norito account get");
     assert_eq!(norito_resp.status(), StatusCode::OK);
     assert_eq!(
-        norito_resp
-            .headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&norito_resp, "content-type"),
         Some(crate::utils::NORITO_MIME_TYPE)
     );
-    let norito_bytes = axum::body::to_bytes(norito_resp.into_body(), usize::MAX)
-        .await
-        .expect("norito body");
+    let norito_bytes = torii_body_bytes(norito_resp, "norito body").await;
     let norito_payload: AccountReadResponse =
         norito::decode_from_bytes(&norito_bytes).expect("norito account payload");
     assert_eq!(norito_payload.account_id, account_id);
@@ -755,16 +723,11 @@ async fn account_read_for_routes_skips_route_unavailable_until_success() {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-routed-by")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-routed-by"),
         Some("proxy"),
         "mixed local/proxy fanout should report proxy routing",
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("account read body");
+    let body = torii_body_bytes(response, "account read body").await;
     let payload: AccountReadResponse =
         norito::json::from_slice(&body).expect("account read payload");
     assert_eq!(payload.account_id, account_id);
@@ -802,10 +765,7 @@ async fn trusted_internal_account_handler_rejects_credentials_from_untrusted_sou
     .expect("untrusted request should return a typed rejection");
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-reject-code"),
         Some("trusted_network_required")
     );
     headers.insert(
@@ -922,9 +882,7 @@ async fn trusted_internal_account_handler_emits_exact_json_and_norito_projection
     .await
     .expect("loopback JSON account read");
     assert_eq!(json_response.status(), StatusCode::OK);
-    let json_body = axum::body::to_bytes(json_response.into_body(), usize::MAX)
-        .await
-        .expect("JSON account body");
+    let json_body = torii_body_bytes(json_response, "JSON account body").await;
     let json: Value = norito::json::from_slice(&json_body).expect("valid account JSON");
     let object = json.as_object().expect("account JSON object");
     assert_eq!(
@@ -956,9 +914,7 @@ async fn trusted_internal_account_handler_emits_exact_json_and_norito_projection
             .get(axum::http::header::CONTENT_TYPE),
         Some(&HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE))
     );
-    let norito_body = axum::body::to_bytes(norito_response.into_body(), usize::MAX)
-        .await
-        .expect("Norito account body");
+    let norito_body = torii_body_bytes(norito_response, "Norito account body").await;
     let decoded_norito: super::InternalAccountReadResponse =
         norito::decode_from_bytes(&norito_body).expect("decode typed account Norito");
     assert_eq!(decoded_norito, decoded_json);
@@ -1062,9 +1018,7 @@ async fn trusted_internal_transaction_read_requires_exact_hash_and_account_invol
         ResponseFormat::Json,
     );
     assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("committed transaction JSON body");
+    let body = torii_body_bytes(response, "committed transaction JSON body").await;
     let decoded: iroha_data_model::query::CommittedTransaction =
         norito::json::from_slice(&body).expect("full committed transaction JSON");
     assert_eq!(
@@ -1078,9 +1032,7 @@ async fn trusted_internal_transaction_read_requires_exact_hash_and_account_invol
         ResponseFormat::Norito,
     );
     assert_eq!(norito_response.status(), StatusCode::OK);
-    let norito_body = axum::body::to_bytes(norito_response.into_body(), usize::MAX)
-        .await
-        .expect("committed transaction Norito body");
+    let norito_body = torii_body_bytes(norito_response, "committed transaction Norito body").await;
     let decoded_norito: iroha_data_model::query::CommittedTransaction =
         norito::decode_from_bytes(&norito_body)
             .expect("full committed transaction Norito response");
@@ -1156,9 +1108,7 @@ async fn trusted_internal_asset_read_is_exactly_scoped_bound_and_conflict_safe()
     .await
     .expect("exact JSON asset read");
     assert_eq!(json_response.status(), StatusCode::OK);
-    let json_body = axum::body::to_bytes(json_response.into_body(), usize::MAX)
-        .await
-        .expect("asset JSON body");
+    let json_body = torii_body_bytes(json_response, "asset JSON body").await;
     let json_value: Value = norito::json::from_slice(&json_body).expect("valid asset JSON");
     assert_eq!(
         json_value
@@ -1188,9 +1138,7 @@ async fn trusted_internal_asset_read_is_exactly_scoped_bound_and_conflict_safe()
     .await
     .expect("exact Norito asset read");
     assert_eq!(norito_response.status(), StatusCode::OK);
-    let norito_body = axum::body::to_bytes(norito_response.into_body(), usize::MAX)
-        .await
-        .expect("asset Norito body");
+    let norito_body = torii_body_bytes(norito_response, "asset Norito body").await;
     let decoded_norito: Asset =
         norito::decode_from_bytes(&norito_body).expect("typed asset Norito");
     assert_eq!(decoded_norito, expected);
@@ -1216,15 +1164,10 @@ async fn trusted_internal_asset_read_is_exactly_scoped_bound_and_conflict_safe()
         Some(&HeaderValue::from_static("application/json")),
     );
     assert_eq!(
-        missing_json_response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&missing_json_response, "x-iroha-reject-code"),
         Some("not_found"),
     );
-    let missing_json_body = axum::body::to_bytes(missing_json_response.into_body(), usize::MAX)
-        .await
-        .expect("missing asset JSON body");
+    let missing_json_body = torii_body_bytes(missing_json_response, "missing asset JSON body").await;
     let missing_envelope: ErrorEnvelope =
         norito::json::from_slice(&missing_json_body).expect("typed missing asset JSON");
     assert_eq!(missing_envelope.code, "not_found");
@@ -1265,19 +1208,14 @@ async fn trusted_internal_asset_read_is_exactly_scoped_bound_and_conflict_safe()
     };
     assert_eq!(conflict.status(), StatusCode::CONFLICT);
     assert_eq!(
-        conflict
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&conflict, "x-iroha-reject-code"),
         Some("route_conflict"),
     );
     assert_eq!(
         conflict.headers().get(axum::http::header::CONTENT_TYPE),
         Some(&HeaderValue::from_static("application/json")),
     );
-    let conflict_body = axum::body::to_bytes(conflict.into_body(), usize::MAX)
-        .await
-        .expect("route-conflict JSON body");
+    let conflict_body = torii_body_bytes(conflict, "route-conflict JSON body").await;
     let conflict_envelope: ErrorEnvelope =
         norito::json::from_slice(&conflict_body).expect("typed route-conflict JSON");
     assert_eq!(conflict_envelope.code, "route_conflict");
@@ -1299,10 +1237,7 @@ async fn account_read_for_routes_prefers_not_found_over_route_unavailable_when_m
     .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_ne!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-reject-code"),
         Some("route_unavailable"),
         "a definitive missing-account response should outrank an unrelated unavailable route",
     );
@@ -1324,14 +1259,7 @@ async fn account_read_for_routes_returns_route_unavailable_when_only_unavailable
         ResponseFormat::Json,
     )
     .await;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("route_unavailable")
-    );
+    assert_route_unavailable_response(&response);
 }
 #[test]
 fn trigger_completion_query_falls_back_to_reconstructed_entrypoint_hash() {
@@ -1499,45 +1427,18 @@ async fn pipeline_status_handler_returns_applied_from_state() {
     let tx_hashes: HashSet<_> = [tx_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
-    let resp = super::handler_pipeline_transaction_status(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-        crate::NoritoStringQuery(PipelineStatusQuery {
-            hash: Some(tx_hash.to_string()),
-            scope: None,
-        }),
-    )
-    .await
-    .expect("ok");
+    let resp = pipeline_status_response(app.clone(), tx_hash.to_string(), None, "ok").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+    let payload = torii_json_body(resp).await;
     let status_kind = payload
         .get("status")
         .and_then(|status| status.get("kind"))
         .and_then(norito::json::Value::as_str);
     assert_eq!(status_kind, Some("Applied"));
-    let resp_entry = super::handler_pipeline_transaction_status(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-        crate::NoritoStringQuery(PipelineStatusQuery {
-            hash: Some(tx_entry_hash.to_string()),
-            scope: None,
-        }),
-    )
-    .await
-    .expect("ok");
+    let resp_entry =
+        pipeline_status_response(app.clone(), tx_entry_hash.to_string(), None, "ok").await;
     assert_eq!(resp_entry.status(), StatusCode::OK);
-    let bytes_entry = axum::body::to_bytes(resp_entry.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let payload_entry: norito::json::Value = norito::json::from_slice(&bytes_entry).expect("json");
+    let payload_entry = torii_json_body(resp_entry).await;
     let status_kind_entry = payload_entry
         .get("status")
         .and_then(|status| status.get("kind"))
@@ -1596,23 +1497,10 @@ async fn public_pipeline_status_never_hydrates_trigger_completion_details() {
     let tx_hashes: HashSet<_> = [sample.tx_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
-    let resp = super::handler_pipeline_transaction_status(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-        crate::NoritoStringQuery(PipelineStatusQuery {
-            hash: Some(sample.tx_hash.to_string()),
-            scope: None,
-        }),
-    )
-    .await
-    .expect("ok");
+    let resp =
+        pipeline_status_response(app.clone(), sample.tx_hash.to_string(), None, "ok").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+    let payload = torii_json_body(resp).await;
     assert_eq!(
         payload
             .get("status")
@@ -1713,23 +1601,15 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
         )]))
         .expect("attach batch receipt to transaction-details fixture");
     let signed_hash = store_and_index_transaction_details_block(&app, block, entrypoint_hash);
-    let public = super::handler_pipeline_transaction_status(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-        crate::NoritoStringQuery(PipelineStatusQuery {
-            hash: Some(signed_hash.to_string()),
-            scope: Some("local".to_owned()),
-        }),
+    let public = pipeline_status_response(
+        app.clone(),
+        signed_hash.to_string(),
+        Some("local"),
+        "public status projection",
     )
-    .await
-    .expect("public status projection");
-    let public_body = axum::body::to_bytes(public.into_body(), usize::MAX)
-        .await
-        .expect("public status body");
-    let public_json: norito::json::Value =
-        norito::json::from_slice(&public_body).expect("public status JSON");
+    .await;
+    let public_json =
+        decode_torii_json(public, "public status body", "public status JSON").await;
     assert!(public_json.get("batch_transfer_outcomes").is_none());
     assert!(public_json.get("transaction").is_none());
     let public_text = norito::json::to_json(&public_json).expect("render public status JSON");
@@ -1748,9 +1628,7 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
             panic!("{label} should read involved transaction details: {error}")
         });
         assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("transaction-details response body");
+        let body = torii_body_bytes(response, "transaction-details response body").await;
         let details: iroha_torii_shared::PipelineTransactionDetailsResponse =
             norito::json::from_slice(&body).expect("typed transaction-details JSON");
         assert_eq!(details.transaction.entrypoint_hash(), &entrypoint_hash);
@@ -1889,23 +1767,10 @@ async fn pipeline_status_handler_returns_applied_for_sealed_reveal_entrypoint_ha
     let tx_hashes: HashSet<_> = [reveal_status_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
-    let resp = super::handler_pipeline_transaction_status(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-        crate::NoritoStringQuery(PipelineStatusQuery {
-            hash: Some(reveal_status_hash.to_string()),
-            scope: None,
-        }),
-    )
-    .await
-    .expect("ok");
+    let resp =
+        pipeline_status_response(app.clone(), reveal_status_hash.to_string(), None, "ok").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+    let payload = torii_json_body(resp).await;
     assert_eq!(
         payload
             .get("status")
@@ -1939,23 +1804,9 @@ async fn pipeline_status_handler_prefers_state_over_stale_queued_cache() {
     let tx_hashes: HashSet<_> = [tx_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
-    let resp = super::handler_pipeline_transaction_status(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-        crate::NoritoStringQuery(PipelineStatusQuery {
-            hash: Some(tx_hash.to_string()),
-            scope: None,
-        }),
-    )
-    .await
-    .expect("ok");
+    let resp = pipeline_status_response(app.clone(), tx_hash.to_string(), None, "ok").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+    let payload = torii_json_body(resp).await;
     assert_eq!(
         payload
             .get("status")
@@ -1994,23 +1845,9 @@ async fn pipeline_status_handler_prefers_state_over_stale_rejected_cache() {
     let tx_hashes: HashSet<_> = [tx_hash].into_iter().collect();
     state_block.transactions.insert_block(tx_hashes, height_nz);
     state_block.commit().expect("commit");
-    let resp = super::handler_pipeline_transaction_status(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-        crate::NoritoStringQuery(PipelineStatusQuery {
-            hash: Some(tx_hash.to_string()),
-            scope: None,
-        }),
-    )
-    .await
-    .expect("ok");
+    let resp = pipeline_status_response(app.clone(), tx_hash.to_string(), None, "ok").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+    let payload = torii_json_body(resp).await;
     assert_eq!(
         payload
             .get("status")
@@ -2039,23 +1876,9 @@ async fn public_pipeline_status_does_not_expose_rejection_details() {
             Some(pipeline_rejection_summary(&reason)),
         ),
     );
-    let resp = super::handler_pipeline_transaction_status(
-        State(app.clone()),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        None,
-        crate::NoritoStringQuery(PipelineStatusQuery {
-            hash: Some(tx_hash.to_string()),
-            scope: None,
-        }),
-    )
-    .await
-    .expect("ok");
+    let resp = pipeline_status_response(app.clone(), tx_hash.to_string(), None, "ok").await;
     assert_eq!(resp.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
-    let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
+    let payload = torii_json_body(resp).await;
     assert_eq!(
         payload
             .get("status")
@@ -2081,11 +1904,7 @@ fn sample_commit_qc(
     epoch: u64,
 ) -> (Qc, Vec<u8>) {
     let parent_state_root = iroha_crypto::Hash::prehashed([0x11; 32]);
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0x2f,
-        Algorithm::BlsNormal,
-        "derive Torii commit-QC fixture key",
-    );
+    let keypair = checked_torii_test_bls_keypair(0x2f, "derive Torii commit-QC fixture key");
     let vote = Vote {
         phase: Phase::Commit,
         block_hash,
@@ -2139,11 +1958,7 @@ fn record_commit_cert(height: u64) -> Qc {
     let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
         [0x42; Hash::LENGTH],
     )));
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0x30,
-        Algorithm::BlsNormal,
-        "derive Torii recorded commit-cert fixture key",
-    );
+    let keypair = checked_torii_test_bls_keypair(0x30, "derive Torii recorded commit-cert fixture key");
     let peer_id = PeerId::from(keypair.public_key().clone());
     let block_hash = HashOf::from_untyped_unchecked(Hash::prehashed([height as u8; 32]));
     let parent_state_root = iroha_crypto::Hash::prehashed([0x22; 32]);
@@ -2214,9 +2029,7 @@ async fn ledger_headers_respect_from_and_limit() {
             .map(HeaderValue::as_bytes),
         Some(b"application/json".as_slice())
     );
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body bytes");
+    let bytes = torii_body_bytes(resp, "body bytes").await;
     let headers: Vec<BlockHeader> = norito::json::from_slice(&bytes).expect("json decode");
     assert_eq!(headers.len(), 1);
     assert_eq!(headers[0].height().get(), 2);
@@ -2237,9 +2050,7 @@ async fn ledger_headers_respect_from_and_limit() {
     )
     .await
     .expect("ok");
-    let norito_bytes = axum::body::to_bytes(norito_resp.into_body(), usize::MAX)
-        .await
-        .expect("norito body");
+    let norito_bytes = torii_body_bytes(norito_resp, "norito body").await;
     let archived = norito::from_bytes::<Vec<BlockHeader>>(&norito_bytes).expect("archive");
     let decoded: Vec<BlockHeader> = norito::core::NoritoDeserialize::deserialize(archived);
     assert_eq!(decoded.len(), 2);
@@ -2260,9 +2071,7 @@ async fn commit_qc_window_clamped() {
     )
     .await
     .expect("ok");
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("bytes");
+    let bytes = torii_body_bytes(resp, "bytes").await;
     let certs: Vec<Qc> = norito::json::from_slice(&bytes).expect("decode certs json");
     assert_eq!(certs.len(), 1);
     assert_eq!(certs[0].height, latest.height);
@@ -2275,9 +2084,7 @@ async fn commit_qc_window_clamped() {
     )
     .await
     .expect("ok");
-    let norito_bytes = axum::body::to_bytes(norito_resp.into_body(), usize::MAX)
-        .await
-        .expect("bytes");
+    let norito_bytes = torii_body_bytes(norito_resp, "bytes").await;
     let archived = norito::from_bytes::<Vec<Qc>>(&norito_bytes).expect("arch");
     let decoded: Vec<Qc> = norito::core::NoritoDeserialize::deserialize(archived);
     assert!(decoded.iter().any(|c| c.height == latest.height));
@@ -2297,9 +2104,7 @@ async fn validator_set_history_returns_snapshots() {
     )
     .await
     .expect("ok");
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("json");
+    let bytes = torii_body_bytes(resp, "json").await;
     let sets: Vec<routing::ValidatorSetSnapshot> =
         norito::json::from_slice(&bytes).expect("decode json");
     assert_eq!(sets.len(), 2);
@@ -2314,9 +2119,7 @@ async fn validator_set_history_returns_snapshots() {
     )
     .await
     .expect("ok");
-    let norito_bytes = axum::body::to_bytes(norito_resp.into_body(), usize::MAX)
-        .await
-        .expect("bytes");
+    let norito_bytes = torii_body_bytes(norito_resp, "bytes").await;
     let archived =
         norito::from_bytes::<Vec<routing::ValidatorSetSnapshot>>(&norito_bytes).expect("arch");
     let decoded: Vec<routing::ValidatorSetSnapshot> =
@@ -2336,9 +2139,7 @@ async fn validator_set_by_height_returns_exact_match() {
     )
     .await
     .expect("ok");
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("norito body");
+    let bytes = torii_body_bytes(resp, "norito body").await;
     let archived = norito::from_bytes::<routing::ValidatorSetSnapshot>(&bytes).expect("archive");
     let decoded: routing::ValidatorSetSnapshot =
         norito::core::NoritoDeserialize::deserialize(archived);
@@ -2379,9 +2180,7 @@ async fn ledger_state_root_uses_result_merkle_root_when_no_commit_qc() {
             .map(HeaderValue::as_bytes),
         Some(b"application/json".as_slice())
     );
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("json body");
+    let bytes = torii_body_bytes(resp, "json body").await;
     let payload: StateRootResponse = norito::json::from_slice(&bytes).expect("decode json");
     assert_eq!(payload.height, 1);
     assert_eq!(payload.block_hash, block_hash);
@@ -2395,9 +2194,7 @@ async fn ledger_state_root_uses_result_merkle_root_when_no_commit_qc() {
     let norito_resp = handler_ledger_state_root(State(app), axum::extract::Path(1), accept)
         .await
         .expect("ok");
-    let norito_bytes = axum::body::to_bytes(norito_resp.into_body(), usize::MAX)
-        .await
-        .expect("norito body");
+    let norito_bytes = torii_body_bytes(norito_resp, "norito body").await;
     let archived = norito::from_bytes::<StateRootResponse>(&norito_bytes).expect("archive");
     let decoded: StateRootResponse = norito::core::NoritoDeserialize::deserialize(archived);
     assert_eq!(decoded.state_root, result_root);
@@ -2444,9 +2241,7 @@ async fn ledger_state_proof_returns_commit_qc() {
         handler_ledger_state_proof(State(app.clone()), axum::extract::Path(1), HeaderMap::new())
             .await
             .expect("ok");
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let body = torii_body_bytes(resp, "body").await;
     let proof: StateProofResponse = norito::json::from_slice(&body).expect("json decode");
     assert_eq!(proof.height, 1);
     assert_eq!(proof.block_hash, block_hash);
@@ -2469,9 +2264,7 @@ async fn ledger_state_proof_returns_commit_qc() {
     let norito_resp = handler_ledger_state_proof(State(app), axum::extract::Path(1), accept)
         .await
         .expect("ok");
-    let norito_bytes = axum::body::to_bytes(norito_resp.into_body(), usize::MAX)
-        .await
-        .expect("bytes");
+    let norito_bytes = torii_body_bytes(norito_resp, "bytes").await;
     let archived = norito::from_bytes::<StateProofResponse>(&norito_bytes).expect("arch");
     let decoded: StateProofResponse = norito::core::NoritoDeserialize::deserialize(archived);
     assert_eq!(decoded.commit_qc.post_state_root, expected_root);
@@ -2484,7 +2277,6 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
         http::{Request, StatusCode},
         routing::get,
     };
-    use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
     let app = mk_app_state_for_tests();
     let (mut block, _) = make_signed_block(1, None);
@@ -2531,12 +2323,7 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
         .expect("request");
     let response = router.clone().oneshot(request).await.expect("response");
     assert_eq!(response.status(), StatusCode::OK);
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("body")
-        .to_bytes();
+    let bytes = torii_body_bytes(response, "body").await;
     let proof: StateProofResponse = norito::json::from_slice(&bytes).expect("json decode");
     assert_eq!(proof.height, 1);
     assert_eq!(proof.block_hash, block_hash);
@@ -2556,12 +2343,7 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
         .expect("request");
     let response = router.oneshot(request).await.expect("response");
     assert_eq!(response.status(), StatusCode::OK);
-    let bytes = response
-        .into_body()
-        .collect()
-        .await
-        .expect("body")
-        .to_bytes();
+    let bytes = torii_body_bytes(response, "body").await;
     let archived = norito::from_bytes::<StateProofResponse>(&bytes).expect("archived state proof");
     let proof: StateProofResponse = norito::core::NoritoDeserialize::deserialize(archived);
     assert_eq!(proof.height, 1);
@@ -2593,9 +2375,7 @@ async fn block_proof_handler_emits_norito() {
             .map(HeaderValue::as_bytes),
         Some(crate::utils::NORITO_MIME_TYPE.as_bytes())
     );
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("norito payload");
+    let bytes = torii_body_bytes(resp, "norito payload").await;
     let archived = norito::from_bytes::<BlockProofs>(&bytes).expect("archive decode");
     let proofs: BlockProofs = norito::core::NoritoDeserialize::deserialize(archived);
     assert_eq!(proofs.block_height.get(), 1);
@@ -2663,9 +2443,7 @@ fn executed_block_wire_handler_returns_the_exact_finalized_canonical_wire() {
                 .map(HeaderValue::as_bytes),
             Some(b"nosniff".as_slice())
         );
-        let actual_wire = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("wire body");
+        let actual_wire = torii_body_bytes(response, "wire body").await;
         assert_eq!(actual_wire.as_ref(), expected_wire.as_slice());
     });
 }

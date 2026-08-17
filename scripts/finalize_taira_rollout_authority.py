@@ -47,6 +47,9 @@ from seal_taira_release_controllers import (
     verify as verify_controller_closure,
 )
 from taira_release_authority import (
+    AUTHORITY_ENVELOPE_SUFFIX,
+    DURABLE_RECEIPT_SUFFIX,
+    AuthorizedAuthority,
     TairaReleaseAuthorityError,
     build_authority,
     require_independent_native_evidence_authority_provisioned,
@@ -55,8 +58,12 @@ from taira_release_authority import (
 COMMIT_RE = re.compile(r"[0-9a-f]{40}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 AUTHORITY_PAYLOAD = "taira-exact12-release-authority-v1.json"
+AUTHORITY_ENVELOPE = AUTHORITY_PAYLOAD + AUTHORITY_ENVELOPE_SUFFIX
+DURABLE_RECEIPT = AUTHORITY_PAYLOAD + DURABLE_RECEIPT_SUFFIX
 ARTIFACT_SPECS = (
     f"iroha3:taira-exact12:release-evidence:json:{AUTHORITY_PAYLOAD}",
+    f"iroha3:taira-authority:release-evidence:json:{AUTHORITY_ENVELOPE}",
+    f"iroha3:taira-authority:release-evidence:json:{DURABLE_RECEIPT}",
     "iroha3:taira-authority:release-evidence:binary:release_artifact_contract.py",
     "iroha3:taira-authority:reference-validator:binary:sorafs-validate",
     "iroha3:taira-authority:release-evidence:binary:taira_release_authority.py",
@@ -64,6 +71,8 @@ ARTIFACT_SPECS = (
 )
 ARTIFACT_FILES = (
     AUTHORITY_PAYLOAD,
+    AUTHORITY_ENVELOPE,
+    DURABLE_RECEIPT,
     "release_artifact_contract.py",
     "sorafs-validate",
     "taira_release_authority.py",
@@ -367,7 +376,12 @@ def finalize(args: argparse.Namespace) -> dict[str, object]:
         evidence_root,
     )
 
-    authority = build_authority(_authority_args(args, evidence_root, archive))
+    authorized: AuthorizedAuthority = build_authority(
+        _authority_args(args, evidence_root, archive)
+    )
+    authority = authorized.subject
+    authority_envelope_payload = authorized.authority_envelope
+    durable_receipt_payload = authorized.durable_receipt
     if authority.get("dpn_validator_release_commit") != args.dpn_validator_release_commit:
         raise FinalizationError("authority returned the wrong DPN validator release commit")
     workspace_digest = authority["workspace_source_manifest_sha256"]
@@ -419,6 +433,8 @@ def finalize(args: argparse.Namespace) -> dict[str, object]:
 
     authority_payload = canonical_json_bytes(authority)
     exclusive_write_bytes(artifacts / AUTHORITY_PAYLOAD, authority_payload)
+    exclusive_write_bytes(artifacts / AUTHORITY_ENVELOPE, authority_envelope_payload)
+    exclusive_write_bytes(artifacts / DURABLE_RECEIPT, durable_receipt_payload)
     _write_checksums(artifacts)
 
     manifest = output / "release_manifest.json"
@@ -450,11 +466,19 @@ def finalize(args: argparse.Namespace) -> dict[str, object]:
     replay_manifest = canonical_json_bytes(build_release_manifest(manifest_args))
     if replay_manifest != manifest_payload:
         raise FinalizationError("release manifest replay differs after signing")
-    replay_authority = canonical_json_bytes(
-        build_authority(_authority_args(args, evidence_root, archive))
+    replay: AuthorizedAuthority = build_authority(
+        _authority_args(args, evidence_root, archive)
     )
+    replay_authority = canonical_json_bytes(replay.subject)
     if replay_authority != authority_payload:
         raise FinalizationError("release authority subject changed after signing")
+    if (
+        replay.authority_envelope != authority_envelope_payload
+        or replay.durable_receipt != durable_receipt_payload
+    ):
+        raise FinalizationError(
+            "release authority authenticated sidecars changed after signing"
+        )
     final_inventory = scan_inventory_paths(output)
     expected_inventory = sorted(
         [

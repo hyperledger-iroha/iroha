@@ -851,7 +851,7 @@ mod tests {
             .expect("built-in roots form a valid activation-policy template");
         policy.require_ios_app_policy = true;
         policy.require_android_app_policy = true;
-        policy.ios_apps = vec![ios_assertion_policy(false)];
+        policy.ios_apps = vec![ios_assertion_policy()];
         policy.android_apps = vec![OfflineAndroidAppAttestationPolicy {
             package_name: "com.pk.retailwallet".to_owned(),
             signing_certificate_sha256: vec![vec![0x55; 32]],
@@ -876,12 +876,6 @@ mod tests {
             validate_offline_attestation_policy_for_release_activation(&development_ios, 0)
                 .is_err(),
             "activation must not publish a development App Attest policy",
-        );
-        let mut legacy_ios = policy.clone();
-        legacy_ios.ios_apps[0].allow_legacy_auth_data_without_extensions = true;
-        assert!(
-            validate_offline_attestation_policy_for_release_activation(&legacy_ios, 0).is_err(),
-            "activation must not publish a legacy App Attest fallback",
         );
         let mut control_character_ios = policy.clone();
         control_character_ios.ios_apps[0].bundle_id = "io.soramitsu.\npk".to_owned();
@@ -995,7 +989,7 @@ mod tests {
         revoked.revoked_certificate_sha256.push(vec![0x5A; 32]);
         assert!(validate_offline_attestation_policy_bounds(&revoked).is_err());
 
-        let ios_app = ios_assertion_policy(false);
+        let ios_app = ios_assertion_policy();
         let mut ios_apps = baseline.clone();
         ios_apps.ios_apps =
             vec![ios_app.clone(); OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_APPS_V1];
@@ -1377,6 +1371,221 @@ mod tests {
         );
         state_key
     }
+    fn capacity_registration(
+        account: &AccountId,
+        index: usize,
+        expires_at_ms: u64,
+    ) -> OfflineDeviceAttestationRegistration {
+        let asset = offline_test_asset(account);
+        let assertion_key = online_assertion_signing_key(0x71);
+        let mut registration = android_online_registration(
+            account,
+            asset.definition(),
+            &assertion_key,
+            expires_at_ms,
+        );
+        let discriminator = u64::try_from(index)
+            .expect("capacity fixture index fits u64")
+            .to_be_bytes();
+        registration.device_id = format!("capacity-device-{index:05}");
+        registration.challenge_hash = Hash::new(discriminator);
+        registration.attestation_report = [b"capacity-report:".as_slice(), &discriminator].concat();
+        registration.attestation_report_hash = Hash::new(&registration.attestation_report);
+        registration.evidence = [b"capacity-evidence:".as_slice(), &discriminator].concat();
+        registration.evidence_hash = Hash::new(&registration.evidence);
+        registration.recent_block_hash = Hash::new(
+            [b"capacity-recent-block:".as_slice(), &discriminator]
+                .concat(),
+        );
+        registration
+    }
+    fn install_capacity_registration(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        account: &AccountId,
+        index: usize,
+        expires_at_ms: u64,
+    ) -> (StatePath, [Hash; 4]) {
+        let registration = capacity_registration(account, index, expires_at_ms);
+        let registration_hash = canonical_registration_hash(&registration)
+            .expect("canonical capacity registration hash");
+        let replay_keys =
+            kagemusha_registration_replay_keys(&registration, &registration_hash);
+        let state_key = install_android_online_registration(state_transaction, registration);
+        for replay_key in replay_keys {
+            assert!(
+                state_transaction
+                    .world
+                    .kagemusha_replay_keys
+                    .insert(replay_key, ())
+                    .is_none(),
+                "capacity fixture replay material must be unique",
+            );
+        }
+        (state_key, replay_keys)
+    }
+    #[test]
+    fn online_registration_capacity_bounds_are_exact() {
+        assert_eq!(
+            validate_kagemusha_online_registration_capacity_v1(
+                KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1,
+                1,
+            ),
+            Ok(()),
+            "the exact global registration limit must remain valid",
+        );
+        assert_eq!(
+            validate_kagemusha_online_registration_capacity_v1(
+                KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1 + 1,
+                1,
+            ),
+            Err(KagemushaOnlineRegistrationCapacityErrorV1::Global),
+            "one registration above the global limit must fail",
+        );
+        assert_eq!(
+            validate_kagemusha_online_registration_capacity_v1(
+                KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1,
+                KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1,
+            ),
+            Ok(()),
+            "the exact per-account registration limit must remain valid",
+        );
+        assert_eq!(
+            validate_kagemusha_online_registration_capacity_v1(
+                KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1 + 1,
+                KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1 + 1,
+            ),
+            Err(KagemushaOnlineRegistrationCapacityErrorV1::Account),
+            "one registration above the per-account limit must fail",
+        );
+    }
+    #[test]
+    fn per_account_registration_capacity_rejection_does_not_mutate_state() {
+        let state = offline_test_state();
+        let mut block = state.block(offline_test_header());
+        let mut state_transaction = block.transaction();
+        let expires_at_ms = POLICY_TEST_TIME_MS + 60_000;
+        for index in 0..KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1 - 1 {
+            install_capacity_registration(
+                &mut state_transaction,
+                &ALICE_ID,
+                index,
+                expires_at_ms,
+            );
+        }
+        let candidate = capacity_registration(
+            &ALICE_ID,
+            KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1,
+            expires_at_ms,
+        );
+        let policy_hash = current_offline_device_attestation_policy_from_world(
+            &state_transaction.world,
+            POLICY_TEST_TIME_MS,
+        )
+        .expect("capacity fixture policy is valid")
+        .1;
+        plan_kagemusha_online_registration_admission_v1(
+            &candidate,
+            policy_hash,
+            &state_transaction,
+        )
+        .expect("the candidate reaching the exact per-account limit must remain valid");
+
+        install_capacity_registration(
+            &mut state_transaction,
+            &ALICE_ID,
+            KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1 - 1,
+            expires_at_ms,
+        );
+        let state_before = state_transaction
+            .world
+            .smart_contract_state
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        let replay_before = state_transaction
+            .world
+            .kagemusha_replay_keys
+            .iter()
+            .map(|(key, ())| *key)
+            .collect::<Vec<_>>();
+        let error = plan_kagemusha_online_registration_admission_v1(
+            &candidate,
+            policy_hash,
+            &state_transaction,
+        )
+        .expect_err("one registration above the per-account limit must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("offline_reason::registration_capacity_exceeded"),
+            "unexpected capacity rejection: {error}",
+        );
+        assert_eq!(
+            state_transaction
+                .world
+                .smart_contract_state
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect::<Vec<_>>(),
+            state_before,
+            "capacity rejection must not mutate registration state",
+        );
+        assert_eq!(
+            state_transaction
+                .world
+                .kagemusha_replay_keys
+                .iter()
+                .map(|(key, ())| *key)
+                .collect::<Vec<_>>(),
+            replay_before,
+            "capacity rejection must not mutate replay protection",
+        );
+    }
+    #[test]
+    fn successful_registration_plan_prunes_expired_archive_and_replay_markers() {
+        let state = offline_test_state();
+        let mut block = state.block(offline_test_header());
+        let mut state_transaction = block.transaction();
+        let (expired_state_key, expired_replay_keys) = install_capacity_registration(
+            &mut state_transaction,
+            &ALICE_ID,
+            0,
+            POLICY_TEST_TIME_MS,
+        );
+        let candidate = capacity_registration(&ALICE_ID, 1, POLICY_TEST_TIME_MS + 60_000);
+        let policy_hash = current_offline_device_attestation_policy_from_world(
+            &state_transaction.world,
+            POLICY_TEST_TIME_MS,
+        )
+        .expect("capacity fixture policy is valid")
+        .1;
+        let plan = plan_kagemusha_online_registration_admission_v1(
+            &candidate,
+            policy_hash,
+            &state_transaction,
+        )
+        .expect("expired registration must release capacity");
+        assert_eq!(plan.expired.len(), 1);
+        plan.commit(&mut state_transaction);
+        assert!(
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(&expired_state_key)
+                .is_none(),
+            "expired registration archive must be pruned",
+        );
+        for replay_key in expired_replay_keys {
+            assert!(
+                state_transaction
+                    .world
+                    .kagemusha_replay_keys
+                    .get(&replay_key)
+                    .is_none(),
+                "expired replay marker must be pruned",
+            );
+        }
+    }
     fn committed_android_replay_fixture(
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> (
@@ -1746,7 +1955,12 @@ mod tests {
         let mut cross_platform = authorization.clone();
         cross_platform.hardware_assertion = KagemushaOnlineHardwareAssertionV1::IosAppAttest(
             KagemushaIosAppAttestHardwareAssertionV1 {
-                authenticator_data: vec![0; 37],
+                authenticator_data: ios_assertion_auth_data(
+                    [0; 32],
+                    OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA,
+                    1,
+                    &ios_assertion_extension_bytes("42", 4),
+                ),
                 signature: match &authorization.hardware_assertion {
                     KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(assertion) => {
                         assertion.signature
@@ -2530,23 +2744,23 @@ mod tests {
         sign_count: u32,
         extension_bytes: &[u8],
     ) -> Vec<u8> {
-        let mut auth_data = Vec::with_capacity(37 + extension_bytes.len());
+        let mut auth_data = Vec::with_capacity(
+            KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_FIXED_HEADER_BYTES_V1
+                + extension_bytes.len(),
+        );
         auth_data.extend_from_slice(&rp_id_hash);
         auth_data.push(flags);
         auth_data.extend_from_slice(&sign_count.to_be_bytes());
         auth_data.extend_from_slice(extension_bytes);
         auth_data
     }
-    fn ios_assertion_policy(
-        allow_legacy_auth_data_without_extensions: bool,
-    ) -> OfflineIosAppAttestationPolicy {
+    fn ios_assertion_policy() -> OfflineIosAppAttestationPolicy {
         OfflineIosAppAttestationPolicy {
             team_id: "TEAMID1234".to_owned(),
             bundle_id: "io.soramitsu.pk".to_owned(),
             environment: "production".to_owned(),
             allowed_validation_categories: vec![4],
             allowed_bundle_versions: vec!["42".to_owned()],
-            allow_legacy_auth_data_without_extensions,
         }
     }
     #[test]
@@ -2564,8 +2778,8 @@ mod tests {
         assert_eq!(parsed.rp_id_hash, rp_id_hash);
         assert_eq!(parsed.sign_count, 1);
         validate_ios_app_attest_extensions_against_policy(
-            &ios_assertion_policy(false),
-            parsed.extensions.as_ref(),
+            &ios_assertion_policy(),
+            &parsed.extensions,
         )
         .expect("the exact governed category and bundle version are accepted");
         let reverse_order = ciborium::value::Value::Map(vec![
@@ -2610,8 +2824,8 @@ mod tests {
             .expect("well-formed but unlisted extension values");
         assert!(
             validate_ios_app_attest_extensions_against_policy(
-                &ios_assertion_policy(false),
-                parsed.extensions.as_ref(),
+                &ios_assertion_policy(),
+                &parsed.extensions,
             )
             .is_err(),
             "an unlisted validation category must fail closed",
@@ -2627,8 +2841,8 @@ mod tests {
             .expect("well-formed but unlisted bundle version");
         assert!(
             validate_ios_app_attest_extensions_against_policy(
-                &ios_assertion_policy(false),
-                parsed.extensions.as_ref(),
+                &ios_assertion_policy(),
+                &parsed.extensions,
             )
             .is_err(),
             "an unlisted bundle version must fail closed",
@@ -2726,32 +2940,34 @@ mod tests {
         );
     }
     #[test]
-    fn ios_assertion_legacy_and_counter_rules_are_explicit_and_strict() {
+    fn ios_assertion_extensions_and_counter_rules_are_mandatory_and_strict() {
         let rp_id_hash = [0xC7; 32];
-        let legacy = ios_assertion_auth_data(rp_id_hash, 0, 9, &[]);
-        let parsed = parse_ios_app_attest_assertion_auth_data(&legacy)
-            .expect("legacy 37-byte assertion authData is structurally valid");
-        assert!(parsed.extensions.is_none());
-        validate_ios_app_attest_extensions_against_policy(
-            &ios_assertion_policy(true),
-            parsed.extensions.as_ref(),
-        )
-        .expect("legacy authData is accepted only when explicitly governed");
+        let without_extensions = ios_assertion_auth_data(rp_id_hash, 0, 9, &[]);
         assert!(
-            validate_ios_app_attest_extensions_against_policy(
-                &ios_assertion_policy(false),
-                parsed.extensions.as_ref(),
-            )
-            .is_err(),
-            "implicit legacy fallback must be rejected",
+            parse_ios_app_attest_assertion_auth_data(&without_extensions).is_err(),
+            "extension-free assertion authData must fail closed",
         );
+        let extension_bytes = ios_assertion_extension_bytes("42", 4);
+        let encoded = ios_assertion_auth_data(
+            rp_id_hash,
+            OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA,
+            9,
+            &extension_bytes,
+        );
+        let parsed = parse_ios_app_attest_assertion_auth_data(&encoded)
+            .expect("extension-bearing assertion authData is structurally valid");
+        validate_ios_app_attest_extensions_against_policy(
+            &ios_assertion_policy(),
+            &parsed.extensions,
+        )
+        .expect("the required assertion extensions satisfy the pinned policy");
         validate_ios_app_attest_assertion_binding(&parsed, rp_id_hash, 8)
             .expect("a strictly increasing counter is accepted");
         for (sign_count, last_sign_count) in [(0, 0), (8, 8), (7, 8)] {
             let candidate = IosAppAttestAssertionAuthData {
                 rp_id_hash,
                 sign_count,
-                extensions: None,
+                extensions: parsed.extensions.clone(),
             };
             assert!(
                 validate_ios_app_attest_assertion_binding(&candidate, rp_id_hash, last_sign_count,)
@@ -2769,7 +2985,7 @@ mod tests {
         let mut policy = default_offline_device_attestation_policy()
             .expect("built-in roots form a valid test policy");
         policy.require_ios_app_policy = true;
-        policy.ios_apps = vec![ios_assertion_policy(true)];
+        policy.ios_apps = vec![ios_assertion_policy()];
         validate_offline_attestation_policy(&policy, 0)
             .expect("documented category 4 is policy-valid");
         for category in [0, 7, 8, 9, 11] {
@@ -2784,7 +3000,7 @@ mod tests {
     fn ios_app_admission_requires_explicit_pinned_policy() {
         let mut policy = default_offline_device_attestation_policy()
             .expect("built-in roots form a valid test policy");
-        let app = ios_assertion_policy(true);
+        let app = ios_assertion_policy();
         assert!(
             ensure_ios_app_allowed_by_policy(
                 &policy,

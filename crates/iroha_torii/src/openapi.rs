@@ -927,15 +927,7 @@ mod tests {
         assert_strict_object_schema(
             schemas,
             "TransactionPayload",
-            &[
-                "domain",
-                "authority",
-                "creation_time_ms",
-                "instructions",
-                "time_to_live_ms",
-                "fee_payment",
-                "metadata",
-            ],
+            &openapi_contract_strings("openapi.transaction_payload.required").collect::<Vec<_>>(),
             &["nonce", "attachments"],
         );
         let properties = schemas["TransactionPayload"]["properties"]
@@ -997,60 +989,9 @@ mod tests {
     fn incoming_static_openapi_contracts_remain_bound_to_runtime_routes() {
         let document = canonical_document();
         let schemas = component_schemas(&document);
-        for (name, network_property, retired_property, target) in [
-            (
-                "OfflineTransitionProofBundle",
-                "network_id",
-                "chain_id",
-                "NetworkId",
-            ),
-            (
-                "OfflineSpendableNoteDescriptor",
-                "network_id",
-                "chain_id",
-                "NetworkId",
-            ),
-            ("OfflineTopUpAnchor", "network_id", "chain_id", "NetworkId"),
-            (
-                "OfflineTopUpFinalityHeightContext",
-                "network_id",
-                "chain_id",
-                "Hash",
-            ),
-            (
-                "OfflineSpendStatement",
-                "network_id",
-                "chain_id",
-                "NetworkId",
-            ),
-            (
-                "OfflineRedemptionIntent",
-                "network_id",
-                "chain_id",
-                "NetworkId",
-            ),
-            ("SumeragiV2HeightContext", "network_id", "chain_id", "Hash"),
-            (
-                "BridgeFinalityAttestationBodyV1",
-                "network_id",
-                "chain_id",
-                "Hash",
-            ),
-            ("BridgeCommitment", "network_id", "chain_id", "Hash"),
-            (
-                "NativeAmxAttestationBody",
-                "network_id",
-                "chain_id_hash",
-                "NetworkId",
-            ),
-            (
-                "NativeAmxReceipt",
-                "network_id",
-                "chain_id_hash",
-                "NetworkId",
-            ),
-            ("HedgeIntentV1", "network_id", "chain_id", "NetworkId"),
-        ] {
+        for [name, network_property, retired_property, target] in openapi_contract_fixed_rows::<4>(
+            "openapi.incoming_static_openapi_contracts_remain_bound_to_runtime_routes.rows.1",
+        ) {
             let properties = schemas[name]["properties"]
                 .as_object()
                 .unwrap_or_else(|| panic!("{name} properties"));
@@ -1071,18 +1012,9 @@ mod tests {
                 .expect("OfflineUnshieldPublicInputs properties")
                 .contains_key("chain_tag")
         );
-        for name in [
-            "ConnectSessionCreateRequest",
-            "ConnectSessionCreateResponse",
-            "GovernanceCapabilitiesV1",
-            "GovernancePlainBallotRequestV1",
-            "GovernanceParliamentBallotRequestV1",
-            "GovernanceZkBallotEnvelopeRequestV1",
-            "GovernanceZkBallotProofRequestV1",
-            "PipelineTransactionDetailsResponse",
-            "PinManifestPageV1",
-            "PrivacyExact12CapabilityManifestV1",
-        ] {
+        for name in openapi_contract_strings(
+            "openapi.incoming_static_openapi_contracts_remain_bound_to_runtime_routes.strings.1",
+        ) {
             assert!(schemas.contains_key(name), "missing static schema {name}");
         }
         assert!(!schemas.contains_key("PrivacyCapabilityRowV1"));
@@ -1122,21 +1054,9 @@ mod tests {
             operation_response_schema_ref(connect, "200", "Connect session"),
             "#/components/schemas/ConnectSessionCreateResponse"
         );
-        for (path, request_schema) in [
-            (
-                "/v1/gov/ballots/zk-v1",
-                "GovernanceZkBallotEnvelopeRequestV1",
-            ),
-            (
-                "/v1/gov/ballots/zk-v1/ballot-proof",
-                "GovernanceZkBallotProofRequestV1",
-            ),
-            ("/v1/gov/ballots/plain", "GovernancePlainBallotRequestV1"),
-            (
-                "/v1/gov/parliament/ballots",
-                "GovernanceParliamentBallotRequestV1",
-            ),
-        ] {
+        for [path, request_schema] in openapi_contract_fixed_rows::<2>(
+            "openapi.incoming_static_openapi_contracts_remain_bound_to_runtime_routes.rows.2",
+        ) {
             let operation = openapi_operation(&document, path, "post");
             assert_eq!(
                 operation_request_schema_ref(operation, path),
@@ -1183,48 +1103,12 @@ mod tests {
     #[test]
     fn static_account_operations_publish_exact_auth_and_private_responses() {
         let document = canonical_document();
-        for (path, methods) in [
-            ("/v1/zk/verify-batch", &["post"][..]),
-            ("/v1/zk/ivm/derive", &["post"][..]),
-            ("/v1/zk/ivm/prove", &["post"][..]),
-            ("/v1/zk/ivm/prove/{job_id}", &["get", "delete"][..]),
-            ("/v1/zk/attachments", &["get", "post"][..]),
-            ("/v1/zk/attachments/{id}", &["get", "delete"][..]),
-            ("/v1/zk/attachments/count", &["get"][..]),
-            ("/v1/zk/roots", &["post"][..]),
-            ("/v1/zk/merkle-path", &["post"][..]),
-            ("/v1/zk/vote/tally", &["post"][..]),
-            ("/v1/runtime/abi/active", &["get"][..]),
-            ("/v1/runtime/metrics", &["get"][..]),
-            ("/v1/node/capabilities", &["get"][..]),
-            ("/v1/privacy/capabilities", &["get"][..]),
-            ("/v1/node/query/projection/checkpoint", &["get"][..]),
-            ("/v1/ministry/agenda/proposals/draft", &["post"][..]),
-            ("/v1/ministry/agenda/proposals/{proposal_id}", &["get"][..]),
-            ("/v1/gov/proposals/deploy-contract", &["post"][..]),
-            ("/v1/gov/proposals/sccp-route-governance", &["post"][..]),
-            ("/v1/gov/capabilities", &["get"][..]),
-            ("/v1/gov/citizens/draft", &["post"][..]),
-            ("/v1/validation-fee/policy/current/proof", &["post"][..]),
-            ("/v1/validation-fee/proposals", &["get"][..]),
-            ("/v1/validation-fee/proposals/draft", &["post"][..]),
-            ("/v1/validation-fee/proposals/{proposal_id}", &["get"][..]),
-            (
-                "/v1/validation-fee/proposals/{proposal_id}/plain-ballot/draft",
-                &["post"][..],
-            ),
-            ("/v1/gov/proposals/{id}", &["get"][..]),
-            ("/v1/gov/locks/{rid}", &["get"][..]),
-            ("/v1/gov/referenda/{id}", &["get"][..]),
-            ("/v1/gov/tally/{id}", &["get"][..]),
-            ("/v1/gov/protected-namespaces", &["get"][..]),
-            ("/v1/gov/unlocks/stats", &["get"][..]),
-            ("/v1/gov/contracts/{contract_address}", &["get"][..]),
-            ("/v1/gov/enact", &["post"][..]),
-            ("/v1/gov/council/current", &["get"][..]),
-            ("/v1/gov/citizens", &["get"][..]),
-            ("/v1/gov/citizens/{account_id}", &["get"][..]),
-        ] {
+        for (path, methods) in openapi_contract_rows("openapi.static_account_operations_publish_exact_auth_and_private_responses.method_rows")
+            .iter()
+            .map(|row| {
+                let (path, methods) = row.split_first().expect("account operation contract row");
+                (path.as_str(), methods.iter().map(String::as_str))
+            }) {
             for method in methods {
                 let operation = openapi_operation(&document, path, method);
                 assert!(operation.contains_key("security"), "{method} {path}");
@@ -1236,13 +1120,7 @@ mod tests {
                     .into_iter()
                     .map(|(name, _)| name)
                     .collect::<Vec<_>>();
-                for name in [
-                    "X-Iroha-Account",
-                    "X-Iroha-Signature",
-                    "X-Iroha-Timestamp-Ms",
-                    "X-Iroha-Nonce",
-                    "X-Iroha-Witness",
-                ] {
+                for name in openapi_contract_strings("openapi.static_account_operations_publish_exact_auth_and_private_responses.strings.1") {
                     assert_eq!(
                         header_names
                             .iter()
@@ -1265,11 +1143,9 @@ mod tests {
                 );
             }
         }
-        for (path, method) in [
-            ("/v1/runtime/abi/hash", "get"),
-            ("/v1/gov/finalize", "post"),
-            ("/v1/gov/protected-namespaces", "post"),
-        ] {
+        for [path, method] in openapi_contract_fixed_rows::<2>(
+            "openapi.static_account_operations_publish_exact_auth_and_private_responses.rows.1",
+        ) {
             let operation = openapi_operation(&document, path, method);
             assert!(
                 !operation_header_requirements(operation)
@@ -1288,63 +1164,21 @@ mod tests {
             "/v1/musubi/instructions/provider-bundle-attestation-register";
         let document = canonical_document();
         let schemas = component_schemas(&document);
-        for (name, required, properties) in [
-            (
-                "MusubiProviderBundleAttestationKeyV1",
-                vec!["archive_id", "replication_order", "provider_id"],
-                vec![
-                    ("archive_id", "MusubiDigest32V1"),
-                    ("replication_order", "MusubiDigest32V1"),
-                    ("provider_id", "MusubiProviderIdV1"),
-                ],
-            ),
-            (
-                "MusubiProviderBundleAttestationRecordV1",
-                vec![
-                    "key",
-                    "attestation_digest",
-                    "attestation",
-                    "registered_by",
-                    "registered_at_height",
-                ],
-                vec![
-                    ("key", "MusubiProviderBundleAttestationKeyV1"),
-                    ("attestation_digest", "MusubiDigest32V1"),
-                    (
-                        "attestation",
-                        "MusubiProviderBundleVerificationAttestationV1",
-                    ),
-                    ("registered_by", "MusubiAccountIdV1"),
-                    ("registered_at_height", "MusubiPositiveU64V1"),
-                ],
-            ),
-            (
-                "RegisterMusubiProviderBundleAttestationV1",
-                vec!["attestation", "expected_location_revision"],
-                vec![
-                    (
-                        "attestation",
-                        "MusubiProviderBundleVerificationAttestationV1",
-                    ),
-                    ("expected_location_revision", "MusubiPositiveU64V1"),
-                ],
-            ),
-            (
-                "MusubiExactReleaseSnapshotV1",
-                vec![
-                    "network_id",
-                    "snapshot",
-                    "home_release",
-                    "universal_release",
-                ],
-                vec![
-                    ("network_id", "NetworkId"),
-                    ("snapshot", "MusubiRegistrySnapshotV1"),
-                    ("home_release", "MusubiReleaseRecordV1"),
-                    ("universal_release", "MusubiResolverReleaseRowV1"),
-                ],
-            ),
-        ] {
+        for (name, required, properties) in
+            openapi_contract_rows("openapi.musubi_provider_bundle_attestation.schema_rows")
+                .iter()
+                .map(|row| {
+                    let required_len = row[1].parse::<usize>().expect("required-field count");
+                    let required = row[2..2 + required_len]
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>();
+                    let properties = row[2 + required_len..]
+                        .chunks_exact(2)
+                        .map(|pair| (pair[0].as_str(), pair[1].as_str()));
+                    (row[0].as_str(), required, properties)
+                })
+        {
             let schema = schemas
                 .get(name)
                 .and_then(Value::as_object)
@@ -1570,14 +1404,9 @@ mod tests {
         }
         let serialized =
             norito::json::to_string(&Value::Object(schemas)).expect("serialize SCCP schemas");
-        for forbidden in [
-            "manifest_hash_hex",
-            "client_signature_b64",
-            "public_key_hex",
-            "private_key",
-            "allow_unready",
-            "sora_nexus",
-        ] {
+        for forbidden in openapi_contract_strings(
+            "openapi.sccp_schema_serialization_excludes_retired_and_secret_fields.strings.1",
+        ) {
             assert!(
                 !serialized.contains(forbidden),
                 "retired or secret SCCP field `{forbidden}` reappeared"
@@ -1875,10 +1704,9 @@ mod tests {
     fn exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent() {
         let document = generate_spec();
         let schemas = component_schemas(&document);
-        for (name, pattern) in [
-            ("Quantity", "^(0|[1-9][0-9]*)(\\.[0-9]{0,27}[1-9])?$"),
-            ("XorQuantity", "^(0|[1-9][0-9]*)(\\.[0-9]{0,8}[1-9])?$"),
-        ] {
+        for [name, pattern] in openapi_contract_fixed_rows::<2>(
+            "openapi.exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent.rows.1",
+        ) {
             let schema = schemas
                 .get(name)
                 .and_then(Value::as_object)
@@ -1891,37 +1719,17 @@ mod tests {
             .get("paths")
             .and_then(Value::as_object)
             .expect("OpenAPI paths");
-        for path in [
-            "/v1/sorafs/deal/fund-provider",
-            "/v1/sorafs/deal/fund-client",
-            "/v1/sorafs/deal/open",
-            "/v1/sorafs/deal/cancel",
-            "/v1/sorafs/deal/usage",
-            "/v1/sorafs/deal/settle",
-        ] {
+        for path in openapi_contract_strings(
+            "openapi.exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent.strings.1",
+        ) {
             assert!(
                 !paths.contains_key(path),
                 "retired path leaked into OpenAPI: {path}"
             );
         }
-        for schema in [
-            "FundProviderBondRequest",
-            "FundProviderBondResponse",
-            "FundClientCreditRequest",
-            "FundClientCreditResponse",
-            "SorafsDealFixed32Bytes",
-            "SorafsDealStorageClass",
-            "SorafsDealTerms",
-            "SorafsDealProposal",
-            "OpenDealRequest",
-            "OpenDealResponse",
-            "DealUsageTicket",
-            "RecordDealUsageRequest",
-            "RecordDealUsageResponse",
-            "SettleDealRequest",
-            "CancelDealRequest",
-            "DealSettlementResponse",
-        ] {
+        for schema in openapi_contract_strings(
+            "openapi.exact_quantity_components_remain_canonical_and_legacy_deal_api_is_absent.strings.2",
+        ) {
             assert!(
                 !schemas.contains_key(schema),
                 "retired process-local deal schema leaked into OpenAPI: {schema}"
@@ -1936,29 +1744,18 @@ mod tests {
             .get("paths")
             .and_then(Value::as_object)
             .expect("OpenAPI paths");
-        for path in [
-            "/v1/sorafs/economics/pricing/manifests",
-            "/v1/sorafs/economics/hedging/feeds",
-            "/v1/sorafs/economics/status",
-            "/v1/sorafs/economics/pricing/active",
-            "/v1/sorafs/economics/hedging/reference",
-        ] {
+        for path in
+            openapi_contract_strings("openapi.retired_sorafs_economics_surface_is_absent.strings.1")
+        {
             assert!(
                 !paths.contains_key(path),
                 "retired process-local economics path leaked into OpenAPI: {path}"
             );
         }
         let schemas = component_schemas(&document);
-        for schema in [
-            "SorafsEconomicsPricingAdmissionResponse",
-            "SorafsEconomicsHedgingAdmissionResponse",
-            "SorafsEconomicsPricingHead",
-            "SorafsEconomicsPricingStatus",
-            "SorafsEconomicsHedgingStatus",
-            "SorafsEconomicsStatusResponse",
-            "SorafsEconomicsActivePricingResponse",
-            "SorafsEconomicsHedgingReferenceResponse",
-        ] {
+        for schema in
+            openapi_contract_strings("openapi.retired_sorafs_economics_surface_is_absent.strings.2")
+        {
             assert!(
                 !schemas.contains_key(schema),
                 "retired process-local economics schema leaked into OpenAPI: {schema}"
@@ -2009,16 +1806,9 @@ mod tests {
                 descriptor.path()
             );
         }
-        for unsupported_path in [
-            "/v1/aliases/resolve_index",
-            "/v1/aliases/by_account",
-            "/v1/da/proof_policies",
-            "/v1/da/proof_policy_snapshot",
-            "/v1/da/pin_intents",
-            "/v1/iso20022/status/{msg_id}",
-            "/ws/reputation",
-            "/sorafs/cid/{cid}/",
-        ] {
+        for unsupported_path in openapi_contract_strings(
+            "openapi.converted_catalog_families_have_exact_openapi_operations.strings.1",
+        ) {
             assert!(
                 !paths.contains_key(unsupported_path),
                 "unsupported path leaked into OpenAPI: {unsupported_path}"
@@ -2099,17 +1889,9 @@ mod tests {
             .get("description")
             .and_then(Value::as_str)
             .expect("content operation description");
-        for phrase in [
-            "optional for public bundles",
-            "Cache-Control: private, no-store",
-            "authenticate and authorize before file lookup",
-            "absent or invalid proof returns 401",
-            "missing file returns 404 only after successful authorization",
-            "byte-delivery boundary",
-            "active, unknown, or invalid media types",
-            "X-Content-Type-Options",
-            "without changing byte or range semantics",
-        ] {
+        for phrase in openapi_contract_strings(
+            "openapi.content_route_documents_conditional_cache_and_auth_contract.strings.1",
+        ) {
             assert!(
                 description.contains(phrase),
                 "content operation must document `{phrase}`"
@@ -2170,11 +1952,9 @@ mod tests {
                 .and_then(Value::as_str),
             Some(crate::content::CANONICAL_CONTENT_AUTH_VARY)
         );
-        for (name, expected) in [
-            ("X-Content-Type-Options", "nosniff"),
-            ("Content-Security-Policy", "sandbox; default-src 'none'"),
-            ("Content-Disposition", "attachment"),
-        ] {
+        for [name, expected] in openapi_contract_fixed_rows::<2>(
+            "openapi.content_route_documents_conditional_cache_and_auth_contract.rows.1",
+        ) {
             assert_eq!(
                 success_headers
                     .get(name)
@@ -2268,88 +2048,54 @@ mod tests {
                 "retired alias VOPRF schema {retired_schema} reappeared"
             );
         }
-        assert!(paths.contains_key("/v1/aliases/resolve"));
-        assert!(paths.contains_key("/v1/aliases/resolve-index"));
-        assert!(paths.contains_key("/v1/aliases/by-account"));
-        assert!(paths.contains_key("/v1/aliases/setup/plan"));
-        assert!(paths.contains_key("/v1/aliases/lease/renew/plan"));
-        assert!(paths.contains_key("/v1/aliases/auto-renew/plan"));
-        assert!(paths.contains_key("/v1/retail/recipients/lookup"));
-        assert!(paths.contains_key("/v1/retail/recipients/route"));
-        assert!(paths.contains_key("/v1/fee-sponsor-programs/by-id"));
-        assert!(paths.contains_key("/v1/fees/quote"));
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.1",
+        ) {
+            assert!(paths.contains_key(path));
+        }
         assert!(!paths.contains_key("/v1/fee-sponsor-policies/by-id"));
-        assert!(paths.contains_key("/v1/assets/aliases/resolve"));
-        assert!(paths.contains_key("/v1/contracts/aliases"));
-        assert!(paths.contains_key("/v1/contracts/aliases/resolve"));
-        assert!(paths.contains_key("/v1/time/now"));
-        assert!(paths.contains_key("/v1/time/status"));
-        assert!(paths.contains_key("/v1/ledger/headers"));
-        assert!(paths.contains_key("/v1/ledger/state/{height}"));
-        assert!(paths.contains_key("/v1/ledger/state-proof/{height}"));
-        assert!(paths.contains_key("/v1/ledger/block/{height}"));
-        assert!(paths.contains_key("/v1/ledger/block/{height}/proof/{entry_hash}"));
-        assert!(paths.contains_key("/v1/da/commitments"));
-        assert!(paths.contains_key("/v1/da/commitments/prove"));
-        assert!(paths.contains_key("/v1/da/commitments/verify"));
-        for path in [
-            "/v1/sumeragi/commit-certificates",
-            "/v1/sumeragi/validator-sets",
-            "/v1/sumeragi/validator-sets/{height}",
-            "/v1/telemetry/live",
-        ] {
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.2",
+        ) {
+            assert!(paths.contains_key(path));
+        }
+        for path in
+            openapi_contract_strings("openapi.generated_spec_includes_documented_paths.strings.1")
+        {
             assert_eq!(
                 paths.contains_key(path),
                 catalog_openapi_route_enabled(CatalogHttpMethod::Get, path),
                 "{path} presence must follow the enabled catalog OpenAPI projection"
             );
         }
-        assert!(paths.contains_key("/v1/bridge/finality/{height}"));
-        assert!(paths.contains_key("/v1/bridge/finality/attestation/{height}"));
-        assert!(paths.contains_key("/v1/bridge/finality/bundle/{height}"));
-        assert!(paths.contains_key("/v1/sccp/proofs/message/{message_id}"));
-        assert!(paths.contains_key("/v1/sccp/capabilities"));
-        assert!(paths.contains_key("/v1/sccp/registry"));
-        assert!(paths.contains_key("/v1/sccp/proof-requests/{message_id}"));
-        assert!(paths.contains_key("/v1/sccp/messages/recent"));
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.3",
+        ) {
+            assert!(paths.contains_key(path));
+        }
         assert!(paths.contains_key(
             "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"
         ));
         assert!(paths.contains_key("/v1/bridge/proofs/submit"));
         assert!(paths.contains_key("/v1/bridge/messages"));
-        assert!(!paths.contains_key("/v1/sccp/manifests"));
-        assert!(!paths.contains_key("/v1/sccp/artifacts/message/{message_id}"));
-        assert!(!paths.contains_key("/v1/sccp/jobs/message/{message_id}"));
-        assert!(!paths.contains_key("/v1/sccp/proofs/burn/{message_id}"));
-        for retired in [
-            "/v1/sumeragi/rbc",
-            "/v1/sumeragi/rbc/delivered/{height}/{view}",
-            "/v1/sumeragi/rbc/sessions",
-            "/v1/sumeragi/rbc/sample",
-            "/v1/sumeragi/collectors",
-        ] {
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_absent.4",
+        ) {
+            assert!(!paths.contains_key(path));
+        }
+        for retired in
+            openapi_contract_strings("openapi.generated_spec_includes_documented_paths.strings.2")
+        {
             assert!(
                 !paths.contains_key(retired),
                 "retired path {retired} leaked"
             );
         }
-        assert!(paths.contains_key("/v1/contracts/view/batch"));
-        assert!(paths.contains_key("/v1/contracts/rollups/swaps/fills"));
-        assert!(paths.contains_key("/v1/contracts/rollups/swaps/candles"));
-        assert!(paths.contains_key("/v1/contracts/rollups/uranai/markets/history"));
-        assert!(paths.contains_key("/v1/contracts/rollups/trader/activity"));
-        assert!(paths.contains_key("/v1/contracts/rollups/trader/account"));
-        assert!(paths.contains_key("/health"));
-        assert!(paths.contains_key("/v1/operator/auth/login/verify"));
-        assert!(paths.contains_key("/v1/kaigi/relays"));
-        assert!(paths.contains_key("/v1/kaigi/relays/{relay_id}"));
-        assert!(paths.contains_key("/v1/kaigi/relays/health"));
-        assert!(paths.contains_key("/v1/kaigi/relays/events"));
-        assert!(paths.contains_key("/v1/nexus/public-lanes/{lane_id}/validators"));
-        assert!(paths.contains_key("/v1/nexus/public-lanes/{lane_id}/stake"));
-        assert!(paths.contains_key("/v1/repo/agreements"));
-        assert!(paths.contains_key("/v1/repo/agreements/query"));
-        assert!(paths.contains_key("/v1/pipeline/preflight"));
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.5",
+        ) {
+            assert!(paths.contains_key(path));
+        }
         assert!(paths.contains_key(uri::TRANSACTION));
         assert!(paths.contains_key(uri::TRANSACTION_ENTRYPOINT));
         assert!(paths.contains_key(uri::TRANSACTIONS_BATCH));
@@ -2363,11 +2109,11 @@ mod tests {
         assert!(paths.contains_key(uri::PROFILE));
         #[cfg(not(feature = "profiling"))]
         assert!(!paths.contains_key(uri::PROFILE));
-        assert!(!paths.contains_key("/transaction"));
-        assert!(!paths.contains_key("/transaction/entrypoint"));
-        assert!(!paths.contains_key("/transactions/batch"));
-        assert!(!paths.contains_key("/query"));
-        assert!(!paths.contains_key("/events"));
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_absent.6",
+        ) {
+            assert!(!paths.contains_key(path));
+        }
         let da_ingest_responses = paths
             .get("/v1/da/ingest")
             .and_then(Value::as_object)
@@ -2394,9 +2140,11 @@ mod tests {
             .expect("vpn quote create description");
         assert!(vpn_quotes_post_description.contains("metering_public_key_hex"));
         assert!(vpn_quotes_post_description.contains("OpenVpnLeaseEscrow"));
-        assert!(paths.contains_key("/v1/vpn/sessions"));
-        assert!(paths.contains_key("/v1/vpn/sessions/{session_id}"));
-        assert!(paths.contains_key("/v1/vpn/receipts"));
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.7",
+        ) {
+            assert!(paths.contains_key(path));
+        }
         let vpn_receipts_post_description = paths
             .get("/v1/vpn/receipts")
             .and_then(Value::as_object)
@@ -2420,111 +2168,78 @@ mod tests {
         assert!(verifying_key_get_description.contains("record_norito_base64"));
         assert!(verifying_key_get_description.contains("namespace"));
         assert!(verifying_key_get_description.contains("owner_manifest_id"));
-        assert!(paths.contains_key("/v1/multisig/propose"));
-        assert!(paths.contains_key("/v1/multisig/approve"));
-        assert!(paths.contains_key("/v1/contracts/call/multisig/propose"));
-        assert!(paths.contains_key("/v1/contracts/call/multisig/approve"));
-        assert!(paths.contains_key("/v1/multisig/cancel"));
-        assert!(paths.contains_key("/v1/multisig/spec"));
-        assert!(paths.contains_key("/v1/multisig/proposals/query"));
-        assert!(paths.contains_key("/v1/multisig/proposals/resolve"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/lookup"));
-        assert!(!paths.contains_key("/v1/multisig/approvals/query"));
-        assert!(!paths.contains_key("/v1/multisig/approvals/lookup"));
-        assert!(!paths.contains_key("/v1/multisig/approvals/query-for-authority"));
-        assert!(!paths.contains_key("/v1/multisig/approvals/lookup-for-authority"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/list"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/get"));
-        assert!(!paths.contains_key("/v1/multisig/proposals/search"));
-        assert!(paths.contains_key("/v1/controls/asset-transfer/query"));
-        assert!(paths.contains_key("/v1/ministry/agenda/proposals/draft"));
-        assert!(paths.contains_key("/v1/ministry/agenda/proposals/{proposal_id}"));
-        assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.8",
+        ) {
+            assert!(paths.contains_key(path));
+        }
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_absent.9",
+        ) {
+            assert!(!paths.contains_key(path));
+        }
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.10",
+        ) {
+            assert!(paths.contains_key(path));
+        }
         assert!(paths.contains_key(iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE));
         assert!(paths.contains_key(iroha_torii_shared::uri::GOV_CAPABILITIES));
         assert!(paths.contains_key(iroha_torii_shared::uri::GOV_CITIZEN_DRAFT));
         assert!(paths.contains_key("/v1/gov/citizens"));
         assert!(paths.contains_key("/v1/gov/stream"));
-        assert!(!paths.contains_key("/v1/gov/council/audit"));
-        assert!(!paths.contains_key("/v1/gov/council/persist"));
-        assert!(!paths.contains_key("/v1/gov/council/replace"));
-        assert!(!paths.contains_key("/v1/gov/council/derive-vrf"));
-        assert!(paths.contains_key("/v1/node/query/projection/checkpoint"));
-        assert!(paths.contains_key("/v1/node/query/projection/checkpoint/plan"));
-        assert!(paths.contains_key("/v1/node/query/projection/checkpoint/publish"));
-        assert!(paths.contains_key("/v1/node/query/projection/catalog/{resource}"));
-        assert!(paths.contains_key("/v1/node/query/projection/shards/{resource}/{partition_id}"));
-        assert!(paths.contains_key("/v1/runtime/abi/active"));
-        assert!(paths.contains_key("/v1/accounts"));
-        assert!(paths.contains_key("/v1/transactions/history"));
-        assert!(paths.contains_key("/v1/transactions/query"));
-        assert!(paths.contains_key("/v1/transactions/visible/query"));
-        assert!(paths.contains_key("/v1/contracts/activity"));
-        assert!(paths.contains_key("/v1/contracts/events"));
-        assert!(paths.contains_key("/v1/contracts/events/sse"));
-        assert!(paths.contains_key("/v1/offline/readiness"));
-        assert!(paths.contains_key("/v1/offline/receiver-lineage"));
-        assert!(paths.contains_key("/v1/ram-lfe/program-policies"));
-        assert!(paths.contains_key("/v1/ram-lfe/programs/{program_id}/execute"));
-        assert!(paths.contains_key("/v1/ram-lfe/receipts/verify"));
-        assert!(paths.contains_key("/v1/assets/definitions"));
-        assert!(paths.contains_key("/v1/explorer/accounts"));
-        assert!(paths.contains_key("/v1/sorafs/providers"));
-        assert!(paths.contains_key("/v1/sorafs/reputation/latest"));
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_absent.11",
+        ) {
+            assert!(!paths.contains_key(path));
+        }
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.12",
+        ) {
+            assert!(paths.contains_key(path));
+        }
         let reputation_latest = paths
             .get("/v1/sorafs/reputation/latest")
             .and_then(Value::as_object)
             .expect("reputation latest OpenAPI operation");
         assert!(reputation_latest.contains_key("get"));
         assert!(!reputation_latest.contains_key("post"));
-        assert!(paths.contains_key("/v1/sorafs/reputation/providers/{provider_id}"));
-        assert!(paths.contains_key("/v1/sorafs/reputation/snapshots/{snapshot_id_hex}"));
-        assert!(paths.contains_key("/v1/sorafs/reputation/weights"));
-        assert!(paths.contains_key("/v1/sorafs/reputation/events"));
-        assert!(paths.contains_key("/v1/sorafs/reputation/events/stream"));
-        assert!(paths.contains_key("/v1/sorafs/reputation/events/ws"));
-        assert!(!paths.contains_key("/v1/sorafs/denylist/catalog"));
-        assert!(!paths.contains_key("/v1/sorafs/denylist/packs/{pack_id}"));
-        assert!(!paths.contains_key("/ws/reputation"));
-        for repair_command_path in [
-            "/v1/sorafs/audit/repair/report",
-            "/v1/sorafs/audit/repair/slash",
-            "/v1/sorafs/audit/repair/claim",
-            "/v1/sorafs/audit/repair/heartbeat",
-            "/v1/sorafs/audit/repair/complete",
-            "/v1/sorafs/audit/repair/fail",
-            "/v1/sorafs/audit/repair/appeal",
-        ] {
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.13",
+        ) {
+            assert!(paths.contains_key(path));
+        }
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_absent.14",
+        ) {
+            assert!(!paths.contains_key(path));
+        }
+        for repair_command_path in
+            openapi_contract_strings("openapi.generated_spec_includes_documented_paths.strings.3")
+        {
             assert!(paths.contains_key(repair_command_path));
         }
-        assert!(paths.contains_key("/v1/sorafs/audit/repair/status"));
-        assert!(paths.contains_key("/v1/sorafs/audit/repair/tasks"));
-        assert!(paths.contains_key("/v1/sorafs/audit/repair/tasks/{ticket_id}"));
-        assert!(paths.contains_key("/v1/sorafs/audit/repair/events"));
-        assert!(!paths.contains_key("/v1/sorafs/audit/repair/status/{manifest_hex}"));
-        assert!(!paths.contains_key("/v1/sorafs/audit/repair/events/stream"));
-        assert!(!paths.contains_key("/v1/sorafs/audit/repair/events/ws"));
-        for unsupported_path in [
-            "/v1/sorafs/capacity/por-challenge",
-            "/v1/sorafs/capacity/por",
-            "/v1/sorafs/por/trigger",
-            "/v1/sorafs/storage/por-challenge",
-            "/v1/sorafs/storage/por-proof",
-            "/v1/sorafs/storage/por-verdict",
-        ] {
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.15",
+        ) {
+            assert!(paths.contains_key(path));
+        }
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_absent.16",
+        ) {
+            assert!(!paths.contains_key(path));
+        }
+        for unsupported_path in
+            openapi_contract_strings("openapi.generated_spec_includes_documented_paths.strings.4")
+        {
             assert!(
                 !paths.contains_key(unsupported_path),
                 "unsupported path leaked into OpenAPI: {unsupported_path}"
             );
         }
-        for live_path in [
-            "/v1/sorafs/capacity/por-proof",
-            "/v1/sorafs/capacity/por-verdict",
-            "/v1/sorafs/por/status",
-            "/v1/sorafs/por/export",
-            "/v1/sorafs/por/report/{iso_week}",
-            "/v1/sorafs/por/ingestion/{manifest_digest_hex}",
-        ] {
+        for live_path in
+            openapi_contract_strings("openapi.generated_spec_includes_documented_paths.strings.5")
+        {
             assert!(
                 paths.contains_key(live_path),
                 "live PoR route missing from OpenAPI: {live_path}"
@@ -2554,22 +2269,14 @@ mod tests {
         let stale_pending_runtime_phrase =
             ["still pending runtime escrow", " and ledger integration"].concat();
         assert!(!appeal_pricing_status_description.contains(&stale_pending_runtime_phrase));
-        assert!(paths.contains_key("/v1/sorafs/appeals/pricing/quote"));
-        assert!(paths.contains_key("/v1/sorafs/appeals/finance/settle"));
-        assert!(paths.contains_key("/v1/sorafs/appeals/finance/disburse"));
-        assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits"));
-        assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits/confirm"));
-        assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits/settle"));
-        assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits/submit-settlement"));
-        assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits/reconcile"));
-        assert!(paths.contains_key("/v1/sorafs/appeals/finance/deposits/{escrow_id_hex}"));
-        assert!(paths.contains_key("/v1/sorafs/appeals/finance/settlement-receipts"));
-        assert!(paths.contains_key("/v1/sorafs/appeals/finance/reports"));
-        assert!(paths.contains_key("/v1/sorafs/appeals/finance/weekly-rollups"));
-        for publication_path in [
-            "/v1/sorafs/appeals/finance/reports",
-            "/v1/sorafs/appeals/finance/weekly-rollups",
-        ] {
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.17",
+        ) {
+            assert!(paths.contains_key(path));
+        }
+        for publication_path in
+            openapi_contract_strings("openapi.generated_spec_includes_documented_paths.strings.6")
+        {
             let operation = paths
                 .get(publication_path)
                 .and_then(Value::as_object)
@@ -2602,35 +2309,19 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/transparency/explorer"));
         assert!(paths.contains_key("/v1/sorafs/transparency/explorer/ui"));
         assert!(!paths.contains_key("/v1/sorafs/transparency/source-entries/{source_kind}"));
-        assert!(paths.contains_key("/v1/sorafs/transparency/privacy-aggregates/source-events"));
-        assert!(paths.contains_key("/v1/sorafs/transparency/privacy-aggregates/publish-due"));
-        assert!(paths.contains_key("/v1/sorafs/transparency/tokens"));
-        assert!(paths.contains_key("/v1/sorafs/transparency/tokens/issuances"));
-        assert!(paths.contains_key("/v1/sorafs/transparency/tokens/verify"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/dead-letters/prepare"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/dead-letters/apply"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/ballots"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/{case_id}/{round_id}"));
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.18",
+        ) {
+            assert!(paths.contains_key(path));
+        }
         assert!(
             paths.contains_key("/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan")
         );
-        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/eligibility"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/sortition"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/assignments/accept"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/activate"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/commits"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/challenges"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/challenges/resolve"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/reveals"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/tally"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/ballots/events"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/model-registry"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/model-registry/repro-manifests"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/model-registry/corpora"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/screening-results"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/quarantine"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review"));
-        assert!(paths.contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/release"));
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.19",
+        ) {
+            assert!(paths.contains_key(path));
+        }
         assert!(
             paths.contains_key(
                 "/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/appeal-handoff"
@@ -2642,19 +2333,9 @@ mod tests {
             )
         );
         assert!(paths.contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/object"));
-        for evidence_path in [
-            "/v1/evidence/session/challenge",
-            "/v1/evidence/session",
-            "/v1/evidence/manifest/{session_id_hex}",
-            "/v1/evidence/segment/{session_id_hex}",
-            "/v1/evidence/log/{session_id_hex}",
-            "/v1/evidence/audit",
-            "/v1/evidence/status",
-            "/v1/evidence/legal-hold",
-            "/v1/evidence/legal-hold/{hold_id_hex}/release",
-            "/v1/evidence/retention",
-            "/v1/evidence/erasure",
-        ] {
+        for evidence_path in
+            openapi_contract_strings("openapi.generated_spec_includes_documented_paths.strings.7")
+        {
             assert!(
                 paths.contains_key(evidence_path),
                 "missing production evidence-viewer route {evidence_path}"
@@ -2669,30 +2350,29 @@ mod tests {
             !paths
                 .contains_key("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/viewer-access")
         );
-        for retired_path in [
-            "/v1/sorafs/moderation/viewer-audit-reports",
-            "/v1/sorafs/moderation/viewer-audit-reports/publish-due",
-        ] {
+        for retired_path in
+            openapi_contract_strings("openapi.generated_spec_includes_documented_paths.strings.8")
+        {
             assert!(
                 !paths.contains_key(retired_path),
                 "retired evidence-viewer audit route leaked into OpenAPI: {retired_path}"
             );
         }
-        assert!(paths.contains_key("/v1/soradns/directory/latest"));
-        assert!(paths.contains_key("/v1/content/{bundle}/{path}"));
-        assert!(paths.contains_key("/v1/sns/names/{namespace}/{literal}"));
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.20",
+        ) {
+            assert!(paths.contains_key(path));
+        }
         assert!(!paths.contains_key("/v1/sns/names"));
         assert!(!paths.contains_key("/v1/sns/names/{namespace}/{literal}/renew"));
-        assert!(paths.contains_key("/v1/soranet/privacy/event"));
-        assert!(paths.contains_key("/v1/webhooks"));
-        assert!(paths.contains_key("/v1/notify/devices"));
-        for path in [
-            "/v1/offline/readiness",
-            "/v1/offline/receiver-lineage",
-            "/v1/offline/top-up",
-            "/v1/offline/redeem",
-            "/v1/offline/operations/{operation_id}",
-        ] {
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_includes_documented_paths.path_present.21",
+        ) {
+            assert!(paths.contains_key(path));
+        }
+        for path in
+            openapi_contract_strings("openapi.generated_spec_includes_documented_paths.strings.9")
+        {
             assert!(
                 paths.contains_key(path),
                 "missing final offline route {path}"
@@ -2815,32 +2495,14 @@ mod tests {
             (
                 "OfflineTopUpRequest",
                 iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
-                BTreeSet::from([
-                    "amount",
-                    "artifact_binding",
-                    "asset",
-                    "authorization",
-                    "current_note",
-                    "operation_id",
-                    "shield_evidence",
-                    "version",
-                ]),
+                openapi_contract_strings("openapi.offline_request.properties.1")
+                    .collect::<BTreeSet<_>>(),
             ),
             (
                 "OfflineRedeemRequest",
                 iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
-                BTreeSet::from([
-                    "amount",
-                    "authorization",
-                    "block_height",
-                    "bundle",
-                    "offline_change",
-                    "operation_id",
-                    "recipient",
-                    "redeem_proof",
-                    "redemption",
-                    "version",
-                ]),
+                openapi_contract_strings("openapi.offline_request.properties.2")
+                    .collect::<BTreeSet<_>>(),
             ),
         ] {
             let schema = schemas
@@ -2953,17 +2615,9 @@ mod tests {
             ["statement", "operation", "recursive_proof"],
             "an ABI-21 spendable bundle must carry its statement and exact operation row"
         );
-        for (owner, forbidden) in [
-            ("OfflinePeerSplitTransition", "parent_branch_claim_digest"),
-            (
-                "OfflineRedemptionChangeTransition",
-                "parent_branch_claim_digest",
-            ),
-            ("OfflineSpendStatement", "input_root"),
-            ("OfflineSpendBundle", "branch"),
-            ("OfflineSpendBundle", "current_note"),
-            ("OfflineSpendBundle", "branch_claims"),
-        ] {
+        for [owner, forbidden] in openapi_contract_fixed_rows::<2>(
+            "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.rows.1",
+        ) {
             assert!(
                 !schemas[owner]["properties"]
                     .as_object()
@@ -2971,66 +2625,26 @@ mod tests {
                 "{owner}.{forbidden} is not part of the first-release wire contract"
             );
         }
-        for (owner, property, expected) in [
-            (
-                "OfflinePeerSplitTransition",
-                "parent_max_proof_step_count",
-                (1, 127),
-            ),
-            (
-                "OfflinePeerSplitTransition",
-                "parent_max_peer_hop_count",
-                (0, 7),
-            ),
-            (
-                "OfflineRedemptionChangeTransition",
-                "parent_proof_step_count",
-                (1, 127),
-            ),
-            (
-                "OfflineRedemptionChangeTransition",
-                "parent_peer_hop_count",
-                (0, 8),
-            ),
-            ("OfflineSpendStatement", "proof_step_count", (1, 128)),
-            ("OfflineSpendStatement", "peer_hop_count", (0, 8)),
-            (
-                "OfflineSpendStatement",
-                "next_zero_leaf_index",
-                (
-                    0,
-                    iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2 as u64 - 1,
-                ),
-            ),
-            (
-                "OfflineRedemptionIntent",
-                "parent_proof_step_count",
-                (1, 128),
-            ),
-            ("OfflineRedemptionIntent", "parent_peer_hop_count", (0, 8)),
-            ("OfflineBranchPath", "depth", (0, 64)),
-            ("OfflineReadiness", "required_bridge_abi_version", (22, 22)),
-            ("OfflineReadiness", "max_hops", (8, 8)),
-            (
-                "OfflineAuthenticatedArtifactSet",
-                "max_proof_bytes",
-                (1, 16 * 1024 * 1024),
-            ),
-            ("OfflineAuthenticatedArtifactSet", "asset_scale", (0, 28)),
-        ] {
+        for [owner, property, minimum, maximum] in openapi_contract_fixed_rows::<4>(
+            "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.integer_bounds",
+        ) {
+            let expected = (
+                minimum.parse::<u64>().expect("offline integer minimum"),
+                if maximum == "kagemusha_topup_shield_tree_capacity_v2_minus_one" {
+                    iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2 as u64 - 1
+                } else {
+                    maximum.parse::<u64>().expect("offline integer maximum")
+                },
+            );
             assert_eq!(
                 property_integer_bounds(schemas, owner, property),
                 expected,
                 "{owner}.{property} must expose the exact recursive-spend bound"
             );
         }
-        for (owner, property) in [
-            ("OfflineSpendStatement", "topup_anchor_refs"),
-            ("OfflineSpendStatement", "branch_claims"),
-            ("OfflineRedemptionIntent", "parent_topup_anchor_refs"),
-            ("OfflineRedemptionIntent", "parent_branch_claims"),
-            ("OfflineRedeemChangeBranch", "branch_claims"),
-        ] {
+        for [owner, property] in openapi_contract_fixed_rows::<2>(
+            "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.rows.2",
+        ) {
             assert_eq!(
                 property_array_bounds(schemas, owner, property),
                 (1, 2),
@@ -3078,11 +2692,9 @@ mod tests {
             nullable_property_ref(schemas, "OfflineReadiness", "active_topup_shield_verifier"),
             "#/components/schemas/OfflineActiveTopUpShieldVerifier"
         );
-        for field in [
-            "active_unshield_verifier",
-            "active_recursive_step_eq_verifier",
-            "active_recursive_step_ep_verifier",
-        ] {
+        for field in openapi_contract_strings(
+            "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.strings.1",
+        ) {
             assert_eq!(
                 nullable_property_ref(schemas, "OfflineReadiness", field),
                 "#/components/schemas/OfflineActiveTransferVerifier"
@@ -3131,11 +2743,9 @@ mod tests {
                 "^(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|$))[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$"
             )
         );
-        for digest in [
-            "manifest_sha256",
-            "release_policy_sha256",
-            "release_attestation_sha256",
-        ] {
+        for digest in openapi_contract_strings(
+            "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.strings.2",
+        ) {
             let digest_schema = artifact_properties
                 .get(digest)
                 .and_then(Value::as_object)
@@ -3197,13 +2807,9 @@ mod tests {
             readiness_properties["blockers"].get("minItems").is_none(),
             "ready responses must admit an empty blocker list"
         );
-        for property in [
-            "required_bridge_abi_version",
-            "active_recursive_step_eq_verifier",
-            "active_recursive_step_ep_verifier",
-            "artifact_set",
-            "proof_backend_available",
-        ] {
+        for property in openapi_contract_strings(
+            "openapi.generated_spec_documents_strict_typed_offline_request_schemas_and_states.strings.3",
+        ) {
             assert!(
                 readiness_properties[property]["description"]
                     .as_str()
@@ -3335,44 +2941,17 @@ mod tests {
                     .expect("verifier-registry label must be a string")
             })
             .collect::<BTreeSet<_>>();
-        let expected = BTreeSet::from([
-            "halo2/ipa",
-            "halo2/pasta/kaigi-roster-v1",
-            "halo2/pasta/kaigi-usage-v1",
-            "halo2/pasta/ivm-execution-v1",
-            "halo2/pasta/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
-            "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-            "stark/fri",
-            "stark/fri/sha256-goldilocks",
-            "stark/fri/poseidon2-goldilocks",
-            "stark/fri/sha256_goldilocks.v1",
-        ]);
+        let expected =
+            openapi_contract_strings("openapi.offline_backend.labels").collect::<BTreeSet<_>>();
         assert_eq!(
             labels.len(),
             expected.len(),
             "registry labels must be unique"
         );
         assert_eq!(actual, expected);
-        for retired_or_alias in [
-            "halo2-ipa-pasta",
-            "halo2-bn254",
-            "groth16",
-            "groth16-bls12-377",
-            "aztec-plonkish-private-kernel",
-            "zkat",
-            "silent-threshold-anoncred",
-            "penumbra-masp",
-            "unsupported",
-            "stark",
-            "stark/fri/latest",
-            " halo2/ipa",
-            "halo2/ipa ",
-            "HALO2/IPA",
-            "halo2\u{ff0f}ipa",
-            "halo2/\u{200b}ipa",
-        ] {
+        for retired_or_alias in openapi_contract_strings(
+            "openapi.generated_spec_exposes_only_the_closed_verifier_backend_registry_v1.strings.1",
+        ) {
             assert!(
                 !actual.contains(retired_or_alias),
                 "{retired_or_alias:?} must not be advertised"
@@ -3392,27 +2971,9 @@ mod tests {
             !reachable.contains("OfflineVerifyingKeyRecord"),
             "chain-facing Offline DTOs must not regain the retired embedded verifier record"
         );
-        for required in [
-            "OfflineSpendableNoteDescriptor",
-            "OfflineTopUpShieldEvidence",
-            "OfflineRequestAuthorization",
-            "OfflineSpendBundle",
-            "OfflineSpendProof",
-            "OfflinePastaCycleProofEnvelope",
-            "OfflineRecursiveStateBoundary",
-            "OfflineRecursiveOperationVector",
-            "OfflineProofAttachment",
-            "OfflineRedemptionIntent",
-            "OfflineArtifactBinding",
-            "OfflineRedeemChangeBranch",
-            "OfflineTopUpAnchor",
-            "OfflineTopUpFinalityProof",
-            "OfflineTopUpFinalityCompactQc",
-            "OfflineTopUpAnchorMerkleProof",
-            "OfflineAuthenticatedArtifactSet",
-            "OfflineBase64Bytes",
-            "OfflineLanePrivacyWitness",
-        ] {
+        for required in openapi_contract_strings(
+            "openapi.generated_spec_offline_typed_graph_is_closed_and_publicly_named.strings.1",
+        ) {
             assert!(
                 reachable.contains(required),
                 "Offline typed graph does not reach {required}"
@@ -3536,13 +3097,9 @@ mod tests {
             .get("paths")
             .and_then(Value::as_object)
             .expect("paths section");
-        for (path, method) in [
-            ("/v1/offline/readiness", "get"),
-            ("/v1/offline/receiver-lineage", "post"),
-            ("/v1/offline/top-up", "post"),
-            ("/v1/offline/redeem", "post"),
-            ("/v1/offline/operations/{operation_id}", "get"),
-        ] {
+        for [path, method] in openapi_contract_fixed_rows::<2>(
+            "openapi.generated_spec_matches_offline_negotiation_and_operation_lifecycle.rows.1",
+        ) {
             let responses = paths
                 .get(path)
                 .and_then(Value::as_object)
@@ -3594,12 +3151,9 @@ mod tests {
                 }
             }
         }
-        for path in [
-            "/v1/offline/receiver-lineage",
-            "/v1/offline/top-up",
-            "/v1/offline/redeem",
-            "/v1/offline/operations/{operation_id}",
-        ] {
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_matches_offline_negotiation_and_operation_lifecycle.strings.1",
+        ) {
             let responses = paths
                 .get(path)
                 .and_then(Value::as_object)
@@ -3724,10 +3278,9 @@ mod tests {
                 );
             }
         }
-        for path in [
-            "/v1/offline/readiness",
-            "/v1/offline/operations/{operation_id}",
-        ] {
+        for path in openapi_contract_strings(
+            "openapi.generated_spec_matches_offline_negotiation_and_operation_lifecycle.strings.2",
+        ) {
             let responses = paths
                 .get(path)
                 .and_then(Value::as_object)
@@ -4137,10 +3690,9 @@ mod tests {
             query.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
             Some("read")
         );
-        for path in [
-            "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/resolve",
-        ] {
+        for path in
+            openapi_contract_strings("openapi.generated_operations_declare_tool_effects.strings.1")
+        {
             let operation = paths
                 .get(path)
                 .and_then(Value::as_object)
@@ -4235,17 +3787,9 @@ mod tests {
                 .and_then(Value::as_str),
             Some("read")
         );
-        for legacy_path in [
-            "/v1/musubi/packages",
-            "/v1/musubi/release",
-            "/v1/musubi/releases",
-            "/v1/musubi/versions",
-            "/v1/musubi/aliases/{alias}",
-            "/v1/musubi/instructions/publish-release",
-            "/v1/musubi/instructions/yank-release",
-            "/v1/musubi/instructions/set-alias",
-            "/v1/musubi/instructions/assert-release-exists",
-        ] {
+        for legacy_path in
+            openapi_contract_strings("openapi.generated_operations_declare_tool_effects.strings.2")
+        {
             assert!(
                 !paths.contains_key(legacy_path),
                 "legacy path survived: {legacy_path}"
@@ -4487,108 +4031,8 @@ mod tests {
     }
     fn openapi_schemas_include_system_keys() {
         let schemas = openapi_schemas();
-        for key in [
-            "JsonValue",
-            "JsonList",
-            "SccpCapabilitiesV1",
-            "SccpRegistryLimitsV1",
-            "SccpResourceLimitsV1",
-            "SccpRegistryV1",
-            "SccpMessageBundleV1",
-            "SccpProofRequestV1",
-            "SccpRecentCursorV1",
-            "SccpRecentMessagesV1",
-            "SccpBridgeProofSubmitRequest",
-            "SccpBridgeMessageSubmitRequest",
-            "SccpBridgeSubmitResponseV1",
-            "SccpRouteGovernanceDraftRequestV1",
-            "SccpRouteGovernanceDraftResponseV1",
-            "BridgeFinalityProof",
-            "BridgeFinalityAttestationBodyV1",
-            "BridgeFinalityAttestationV1",
-            "BridgeCommitment",
-            "BridgeFinalityBundle",
-            "SumeragiV2FinalityArtifact",
-            "SumeragiV2FinalizedNextEpochSnapshot",
-            "SumeragiV2HeightContext",
-            "SumeragiV2ValidatorPower",
-            "SumeragiV2DualQuorum",
-            "SumeragiV2BlockSubject",
-            "SumeragiV2MergeCarrierCommitment",
-            "SumeragiV2ExecutionCommitment",
-            "SumeragiV2QuorumCertificate",
-            "SumeragiV2CommitQuorumCertificate",
-            "SumeragiV2BlsProof",
-            "NexusLaneLifecycleIncarnationEntry",
-            "NexusLaneLifecycleStatusV1",
-            "AppPageMetadata",
-            "AccountQueryResponse",
-            "DomainQueryResponse",
-            "AccountAssetQueryResponse",
-            "AssetHolderQueryResponse",
-            "NftQueryResponse",
-            "RwaQueryResponse",
-            "RepoAgreementListResponse",
-            "PeerIdList",
-            "SumeragiStatusResponse",
-            "SumeragiDiagnosticsResponse",
-            "SumeragiV2StatusPhase",
-            "SumeragiV2BodyState",
-            "SumeragiV2QuorumCertificateRef",
-            "SumeragiV2TimeoutCertificateRef",
-            "SumeragiV2HeightContextStatus",
-            "SumeragiV2CommitQcStatus",
-            "SumeragiV2VoteQuorumStatus",
-            "SumeragiV2TimeoutQuorumStatus",
-            "SumeragiV2OutboundIntentKind",
-            "SumeragiV2OutboundIntentStage",
-            "SumeragiV2OutboundIntentStatus",
-            "SumeragiV2LocalWorkStage",
-            "SumeragiV2WorkStatus",
-            "SumeragiV2QueueKind",
-            "SumeragiV2QueueStatus",
-            "SumeragiV2ProgressTransition",
-            "SumeragiV2ProgressTransitionStatus",
-            "SumeragiV2LivenessBlocker",
-            "SumeragiV2IgnoreReason",
-            "SumeragiV2IgnoreCount",
-            "SumeragiV2LivenessStatus",
-            "SumeragiNposDiagnostics",
-            "SumeragiPipelineExecutionDiagnostics",
-            "SumeragiNativeAmxParticipantApplicationState",
-            "SumeragiNativeAmxParticipantApplication",
-            "SumeragiAutonomousLaneExecutionStage",
-            "SumeragiAutonomousLaneExecutionStuckReason",
-            "SumeragiAutonomousLaneExecution",
-            "SumeragiLaneCommitment",
-            "SumeragiDataspaceCommitment",
-            "SumeragiLanePayloadOwnership",
-            "SumeragiCommittedLaneBlock",
-            "SumeragiLaneBlockSessionStatus",
-            "SumeragiLaneGovernance",
-            "SumeragiRuntimeUpgradeHook",
-            "LaneSettlementCommitment",
-            "LaneSettlementReceipt",
-            "LaneLiquidityProfile",
-            "LaneVolatilityClass",
-            "LaneRelayEnvelope",
-            "LaneFastpqProofMaterial",
-            "NexusFeeScheduleInputs",
-            "NexusFeeReceipt",
-            "NativeAmxReceipt",
-            "NativeAmxLegRecord",
-            "NativeAmxParticipantSettlementCommitment",
-            "NativeAmxParticipantSettlementReceipt",
-            "NativeAmxAttestationQc",
-            "NativeAmxAttestationBody",
-            "NativeAmxPhase",
-            "NativeAmxParticipantLaneBlockDescriptor",
-            "NativeAmxParticipantLaneBlockProposal",
-            "PrivateUploadedModelExecuteRequest",
-            "PrivateUploadedModelExecuteResponse",
-            "PrivateUploadedModelReceiptListResponse",
-            "PushRegisterDeviceRequest",
-        ] {
+        for key in openapi_contract_strings("openapi.openapi_schemas_include_system_keys.strings.1")
+        {
             assert!(schemas.contains_key(key), "schema missing {key}");
         }
     }

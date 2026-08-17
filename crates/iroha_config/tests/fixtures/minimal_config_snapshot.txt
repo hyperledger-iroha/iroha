@@ -1952,6 +1952,7 @@ Root {
                     id: LaneId(
                         0,
                     ),
+                    shard_id: None,
                     dataspace_id: DataSpaceId(
                         0,
                     ),
@@ -1974,6 +1975,7 @@ Root {
                     id: LaneId(
                         0,
                     ),
+                    shard_id: None,
                     dataspace_id: DataSpaceId(
                         0,
                     ),

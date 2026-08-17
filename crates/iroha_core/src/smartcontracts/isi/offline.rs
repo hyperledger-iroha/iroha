@@ -20,6 +20,9 @@ use iroha_data_model::{
         },
     },
     offline::{
+        KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1,
+        KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1,
+        KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_FIXED_HEADER_BYTES_V1,
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1,
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1,
         KagemushaActiveReceiverActiveEntryV1, KagemushaActiveReceiverAmbiguousEntryV1,
@@ -907,12 +910,8 @@ pub mod isi {
     const KAGEMUSHA_ATTESTATION_CHALLENGE_REPLAY_DOMAIN: &str = "kagemusha-attestation-challenge";
     const KAGEMUSHA_ATTESTATION_REPORT_REPLAY_DOMAIN: &str = "kagemusha-attestation-report";
     const KAGEMUSHA_ATTESTATION_EVIDENCE_REPLAY_DOMAIN: &str = "kagemusha-attestation-evidence";
-    // This namespace was introduced together with native-only contract-state
-    // protection.  Registrations in the legacy `v1` namespace are deliberately
-    // not eligible for receiver snapshots because older generic IVM programs
-    // could forge that namespace.  Devices must re-register once after the
-    // upgrade so an active-receiver proof can rely on native admission.
-    const KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX: &str = "kagemusha_online_registration_v2_";
+    // Online registrations use one native-authored, read-only first-release namespace.
+    const KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX: &str = "kagemusha_online_registration_";
     const KAGEMUSHA_V4_OPERATION_DOMAIN: &str = "kagemusha-v4-operation";
     const KAGEMUSHA_V4_NONCE_DOMAIN: &str = "kagemusha-v4-authorization-nonce";
     const KAGEMUSHA_V4_PAYLOAD_DOMAIN: &str = "kagemusha-v4-payload";
@@ -1020,7 +1019,7 @@ pub mod isi {
         aaguid: [u8; 16],
         credential_id: Vec<u8>,
         cose_key: Vec<u8>,
-        extensions: Option<IosAppAttestExtensionProperties>,
+        extensions: IosAppAttestExtensionProperties,
     }
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct IosAppAttestExtensionProperties {
@@ -1030,7 +1029,7 @@ pub mod isi {
     struct IosAppAttestAssertionAuthData {
         rp_id_hash: [u8; 32],
         sign_count: u32,
-        extensions: Option<IosAppAttestExtensionProperties>,
+        extensions: IosAppAttestExtensionProperties,
     }
     struct AndroidKeyMintReport {
         certificates: Vec<Vec<u8>>,
@@ -1371,7 +1370,6 @@ pub mod isi {
                 environment: OFFLINE_ATTESTATION_IOS_ENV_PRODUCTION.to_owned(),
                 allowed_validation_categories: ios_validation_categories,
                 allowed_bundle_versions: ios_bundle_versions,
-                allow_legacy_auth_data_without_extensions: false,
             }],
             android_apps: vec![OfflineAndroidAppAttestationPolicy {
                 package_name: android_package_name,
@@ -1444,486 +1442,7 @@ pub mod isi {
             .into()),
         }
     }
-    fn ensure_offline_attestation_policy_limit(
-        actual: usize,
-        maximum: usize,
-        field: &str,
-    ) -> Result<(), Error> {
-        if actual > maximum {
-            return Err(labeled_invariant(
-                "invalid_attestation_policy",
-                format!(
-                    "Offline device attestation policy {field} exceeds the first-release limit of {maximum}"
-                ),
-            )
-            .into());
-        }
-        Ok(())
-    }
-    fn validate_offline_attestation_policy_bounds(
-        policy: &OfflineDeviceAttestationPolicy,
-    ) -> Result<(), Error> {
-        ensure_offline_attestation_policy_limit(
-            policy.trusted_roots.len(),
-            OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1,
-            "trusted-root count",
-        )?;
-        ensure_offline_attestation_policy_limit(
-            policy.revoked_certificate_sha256.len(),
-            OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_REVOKED_CERTIFICATES_V1,
-            "revoked-certificate count",
-        )?;
-        ensure_offline_attestation_policy_limit(
-            policy.ios_apps.len(),
-            OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_APPS_V1,
-            "iOS app count",
-        )?;
-        ensure_offline_attestation_policy_limit(
-            policy.android_apps.len(),
-            OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1,
-            "Android app count",
-        )?;
-        for platform in [
-            OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST,
-            OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT,
-        ] {
-            ensure_offline_attestation_policy_limit(
-                policy
-                    .trusted_roots
-                    .iter()
-                    .filter(|root| root.platform == platform)
-                    .count(),
-                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_PER_PLATFORM_V1,
-                "trusted roots per platform",
-            )?;
-        }
-        for root in &policy.trusted_roots {
-            ensure_offline_attestation_policy_limit(
-                root.platform.len(),
-                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1,
-                "trusted-root platform bytes",
-            )?;
-            ensure_offline_attestation_policy_limit(
-                root.der.len(),
-                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1,
-                "trusted-root DER bytes",
-            )?;
-        }
-        for digest in &policy.revoked_certificate_sha256 {
-            ensure_offline_attestation_policy_limit(
-                digest.len(),
-                32,
-                "revoked-certificate digest bytes",
-            )?;
-        }
-        for app in &policy.ios_apps {
-            ensure_offline_attestation_policy_limit(
-                app.team_id.len(),
-                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TEAM_ID_BYTES_V1,
-                "iOS Team ID bytes",
-            )?;
-            ensure_offline_attestation_policy_limit(
-                app.bundle_id.len(),
-                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1,
-                "iOS bundle ID bytes",
-            )?;
-            ensure_offline_attestation_policy_limit(
-                app.environment.len(),
-                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1,
-                "iOS environment bytes",
-            )?;
-            ensure_offline_attestation_policy_limit(
-                app.allowed_validation_categories.len(),
-                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_VALIDATION_CATEGORIES_V1,
-                "iOS validation-category count",
-            )?;
-            ensure_offline_attestation_policy_limit(
-                app.allowed_bundle_versions.len(),
-                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSIONS_V1,
-                "iOS bundle-version count",
-            )?;
-            for version in &app.allowed_bundle_versions {
-                ensure_offline_attestation_policy_limit(
-                    version.len(),
-                    OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSION_BYTES_V1,
-                    "iOS bundle-version bytes",
-                )?;
-            }
-        }
-        for app in &policy.android_apps {
-            ensure_offline_attestation_policy_limit(
-                app.package_name.len(),
-                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1,
-                "Android package-name bytes",
-            )?;
-            ensure_offline_attestation_policy_limit(
-                app.signing_certificate_sha256.len(),
-                OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_SIGNING_CERTIFICATES_V1,
-                "Android signing-certificate count",
-            )?;
-            for digest in &app.signing_certificate_sha256 {
-                ensure_offline_attestation_policy_limit(
-                    digest.len(),
-                    32,
-                    "Android signing-certificate digest bytes",
-                )?;
-            }
-        }
-        let canonical = norito::encode_canonical(policy).map_err(|error| {
-            labeled_invariant(
-                "invalid_attestation_policy",
-                format!("failed to encode Offline device attestation policy: {error}"),
-            )
-        })?;
-        ensure_offline_attestation_policy_limit(
-            canonical.len(),
-            OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1,
-            "canonical bytes",
-        )
-    }
-    fn normalize_policy_ascii(value: &str, field: &str) -> Result<String, Error> {
-        let trimmed = value.trim();
-        if trimmed.is_empty() || !trimmed.is_ascii() || trimmed.chars().any(char::is_control) {
-            return Err(labeled_invariant(
-                "invalid_attestation_policy",
-                format!(
-                    "Offline device attestation policy {field} must be non-empty printable ASCII"
-                ),
-            )
-            .into());
-        }
-        if trimmed != value {
-            return Err(labeled_invariant(
-                "invalid_attestation_policy",
-                format!(
-                    "Offline device attestation policy {field} must not contain surrounding whitespace"
-                ),
-            )
-            .into());
-        }
-        Ok(value.to_owned())
-    }
-    fn normalize_sha256_digest(digest: &[u8], field: &str) -> Result<[u8; 32], Error> {
-        digest.try_into().map_err(|_| {
-            labeled_invariant(
-                "invalid_attestation_policy",
-                format!(
-                    "Offline device attestation policy {field} must be a 32-byte SHA-256 digest"
-                ),
-            )
-            .into()
-        })
-    }
-    fn trusted_root_is_active(
-        root: &OfflineDeviceAttestationTrustedRoot,
-        block_unix_timestamp_ms: u64,
-    ) -> bool {
-        root.not_before_ms
-            .is_none_or(|not_before_ms| block_unix_timestamp_ms >= not_before_ms)
-            && root
-                .not_after_ms
-                .is_none_or(|not_after_ms| block_unix_timestamp_ms <= not_after_ms)
-    }
-    fn offline_attestation_policy_for_registration_lifetime(
-        policy: &OfflineDeviceAttestationPolicy,
-        platform: &str,
-        admitted_at_ms: u64,
-        expires_at_ms: u64,
-    ) -> Result<OfflineDeviceAttestationPolicy, Error> {
-        let mut lifetime_policy = policy.clone();
-        lifetime_policy.trusted_roots.retain(|root| {
-            root.platform == platform
-                && trusted_root_is_active(root, admitted_at_ms)
-                && trusted_root_is_active(root, expires_at_ms)
-        });
-        if lifetime_policy.trusted_roots.is_empty() {
-            return Err(labeled_invariant(
-                "invalid_attestation_policy",
-                "Offline device attestation policy has no trusted platform root covering the full registration lifetime",
-            )
-            .into());
-        }
-        Ok(lifetime_policy)
-    }
-    fn validate_offline_attestation_policy(
-        policy: &OfflineDeviceAttestationPolicy,
-        block_unix_timestamp_ms: u64,
-    ) -> Result<(), Error> {
-        if policy.version != 1 {
-            return Err(labeled_invariant(
-                "invalid_attestation_policy",
-                "Offline device attestation policy version is unsupported",
-            )
-            .into());
-        }
-        validate_offline_attestation_policy_bounds(policy)?;
-        if policy.trusted_roots.is_empty() {
-            return Err(labeled_invariant(
-                "invalid_attestation_policy",
-                "Offline device attestation policy must include at least one trusted root",
-            )
-            .into());
-        }
-        let evaluation_time = x509_evaluation_time(block_unix_timestamp_ms)?;
-        let mut root_hashes = HashSet::new();
-        for root in &policy.trusted_roots {
-            match root.platform.as_str() {
-                OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST
-                | OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT => {}
-                _ => {
-                    return Err(labeled_invariant(
-                        "invalid_attestation_policy",
-                        "Offline device attestation policy trusted root platform is unsupported",
-                    )
-                    .into());
-                }
-            }
-            if root.der.is_empty()
-                || root
-                    .not_before_ms
-                    .zip(root.not_after_ms)
-                    .is_some_and(|(not_before, not_after)| not_before > not_after)
-            {
-                return Err(labeled_invariant(
-                    "invalid_attestation_policy",
-                    "Offline device attestation policy trusted root lifetime is invalid",
-                )
-                .into());
-            }
-            let digest = sha256_bytes(&root.der);
-            if !root_hashes.insert(digest) {
-                return Err(labeled_invariant(
-                    "invalid_attestation_policy",
-                    "Offline device attestation policy contains a duplicate trusted root",
-                )
-                .into());
-            }
-            let certificate = parse_x509_certificate_der(&root.der)?;
-            validate_x509_certificate_critical_extensions(&certificate)?;
-            if trusted_root_is_active(root, block_unix_timestamp_ms) {
-                validate_x509_certificate_time(&certificate, evaluation_time)?;
-            }
-            if !x509_certificate_is_ca(&certificate)? {
-                return Err(labeled_invariant(
-                    "invalid_attestation_policy",
-                    "Offline device attestation policy trusted root must be a CA certificate",
-                )
-                .into());
-            }
-        }
-        let mut revoked = HashSet::new();
-        for digest in &policy.revoked_certificate_sha256 {
-            let digest = normalize_sha256_digest(digest, "revoked certificate digest")?;
-            if digest == [0u8; 32] || !revoked.insert(digest) {
-                return Err(labeled_invariant(
-                    "invalid_attestation_policy",
-                    "Offline device attestation policy has an invalid revoked certificate digest",
-                )
-                .into());
-            }
-        }
-        let mut ios_apps = HashSet::new();
-        for app in &policy.ios_apps {
-            let team_id = normalize_policy_ascii(&app.team_id, "iOS Team ID")?.to_ascii_uppercase();
-            let bundle_id = normalize_policy_ascii(&app.bundle_id, "iOS bundle ID")?;
-            let environment =
-                normalize_policy_ascii(&app.environment, "iOS environment")?.to_ascii_lowercase();
-            if environment != OFFLINE_ATTESTATION_IOS_ENV_PRODUCTION
-                && environment != OFFLINE_ATTESTATION_IOS_ENV_DEVELOPMENT
-            {
-                return Err(labeled_invariant(
-                    "invalid_attestation_policy",
-                    "Offline device attestation policy iOS environment must be production or development",
-                )
-                .into());
-            }
-            if !ios_apps.insert((team_id, bundle_id, environment)) {
-                return Err(labeled_invariant(
-                    "invalid_attestation_policy",
-                    "Offline device attestation policy contains a duplicate iOS app identity",
-                )
-                .into());
-            }
-            if app.allowed_validation_categories.is_empty()
-                != app.allowed_bundle_versions.is_empty()
-            {
-                return Err(labeled_invariant(
-                    "invalid_attestation_policy",
-                    "Offline device attestation policy iOS extension category and bundle-version allowlists must both be present or both be empty",
-                )
-                .into());
-            }
-            if app.allowed_validation_categories.is_empty()
-                && !app.allow_legacy_auth_data_without_extensions
-            {
-                return Err(labeled_invariant(
-                    "invalid_attestation_policy",
-                    "Offline device attestation policy iOS app must allow legacy authData or configure extension allowlists",
-                )
-                .into());
-            }
-            let mut validation_categories = HashSet::new();
-            for category in &app.allowed_validation_categories {
-                if !matches!(*category, 1..=6 | 10) || !validation_categories.insert(*category) {
-                    return Err(labeled_invariant(
-                        "invalid_attestation_policy",
-                        "Offline device attestation policy iOS app has an invalid or duplicate validation category",
-                    )
-                    .into());
-                }
-            }
-            let mut bundle_versions = HashSet::new();
-            for bundle_version in &app.allowed_bundle_versions {
-                let bundle_version =
-                    normalize_policy_ascii(bundle_version, "iOS allowed bundle version")?;
-                if bundle_version.len()
-                    > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSION_BYTES_V1
-                    || bundle_version.chars().any(char::is_control)
-                    || !bundle_versions.insert(bundle_version)
-                {
-                    return Err(labeled_invariant(
-                        "invalid_attestation_policy",
-                        "Offline device attestation policy iOS app has an invalid or duplicate bundle version",
-                    )
-                    .into());
-                }
-            }
-        }
-        let mut android_apps = HashSet::new();
-        for app in &policy.android_apps {
-            let package_name = normalize_policy_ascii(&app.package_name, "Android package name")?;
-            if app.signing_certificate_sha256.is_empty() {
-                return Err(labeled_invariant(
-                    "invalid_attestation_policy",
-                    "Offline device attestation policy Android app must include signing digests",
-                )
-                .into());
-            }
-            let mut signing_digests = Vec::with_capacity(app.signing_certificate_sha256.len());
-            let mut seen_signers = HashSet::new();
-            for digest in &app.signing_certificate_sha256 {
-                let digest = normalize_sha256_digest(digest, "Android signing certificate digest")?;
-                if digest == [0u8; 32] || !seen_signers.insert(digest) {
-                    return Err(labeled_invariant(
-                        "invalid_attestation_policy",
-                        "Offline device attestation policy Android app has an invalid signing digest",
-                    )
-                    .into());
-                }
-                signing_digests.push(digest);
-            }
-            signing_digests.sort_unstable();
-            if !android_apps.insert((package_name, signing_digests)) {
-                return Err(labeled_invariant(
-                    "invalid_attestation_policy",
-                    "Offline device attestation policy contains a duplicate Android app identity",
-                )
-                .into());
-            }
-        }
-        if policy.require_ios_app_policy && policy.ios_apps.is_empty() {
-            return Err(labeled_invariant(
-                "invalid_attestation_policy",
-                "Offline device attestation policy requires iOS apps but none are configured",
-            )
-            .into());
-        }
-        if policy.require_android_app_policy && policy.android_apps.is_empty() {
-            return Err(labeled_invariant(
-                "invalid_attestation_policy",
-                "Offline device attestation policy requires Android apps but none are configured",
-            )
-            .into());
-        }
-        Ok(())
-    }
-    fn validate_offline_attestation_policy_for_release_activation(
-        policy: &OfflineDeviceAttestationPolicy,
-        block_unix_timestamp_ms: u64,
-    ) -> Result<(), Error> {
-        validate_offline_attestation_policy(policy, block_unix_timestamp_ms)?;
-        if !policy.require_ios_app_policy
-            || !policy.require_android_app_policy
-            || policy.ios_apps.is_empty()
-            || policy.android_apps.is_empty()
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation_policy",
-                "Kagemusha release activation requires fail-closed iOS and Android app policies",
-            )
-            .into());
-        }
-        let platforms = policy
-            .trusted_roots
-            .iter()
-            .map(|root| root.platform.as_str())
-            .collect::<BTreeSet<_>>();
-        if platforms
-            != BTreeSet::from([
-                OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT,
-                OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST,
-            ])
-            || policy.trusted_roots.iter().any(|root| {
-                root.der.len() > OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1
-                    || root
-                        .not_before_ms
-                        .zip(root.not_after_ms)
-                        .is_some_and(|(start, end)| start >= end)
-            })
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation_policy",
-                "Kagemusha release activation requires bounded trust roots for both production platforms",
-            )
-            .into());
-        }
-        for app in &policy.ios_apps {
-            let sorted_categories = app
-                .allowed_validation_categories
-                .iter()
-                .copied()
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            let sorted_versions = app
-                .allowed_bundle_versions
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            if app.environment != OFFLINE_ATTESTATION_IOS_ENV_PRODUCTION
-                || app.allow_legacy_auth_data_without_extensions
-                || app.allowed_validation_categories.is_empty()
-                || app.allowed_bundle_versions.is_empty()
-                || app.allowed_validation_categories != sorted_categories
-                || app.allowed_bundle_versions != sorted_versions
-            {
-                return Err(labeled_invariant(
-                    "invalid_attestation_policy",
-                    "Kagemusha release activation requires canonical production iOS app policy",
-                )
-                .into());
-            }
-        }
-        for app in &policy.android_apps {
-            let sorted_signers = app
-                .signing_certificate_sha256
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect::<Vec<_>>();
-            if app.signing_certificate_sha256 != sorted_signers {
-                return Err(labeled_invariant(
-                    "invalid_attestation_policy",
-                    "Kagemusha release activation requires canonical Android signing policy",
-                )
-                .into());
-            }
-        }
-        Ok(())
-    }
+    include!("offline/attestation_policy_validation.rs");
     fn trusted_root_der_for_platform(
         policy: &OfflineDeviceAttestationPolicy,
         platform: &str,
@@ -2917,6 +2436,204 @@ pub mod isi {
                 .into()
             })
     }
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum KagemushaOnlineRegistrationCapacityErrorV1 {
+        Global,
+        Account,
+    }
+    fn validate_kagemusha_online_registration_capacity_v1(
+        global_after_admission: usize,
+        account_after_admission: usize,
+    ) -> Result<(), KagemushaOnlineRegistrationCapacityErrorV1> {
+        if global_after_admission > KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1 {
+            return Err(KagemushaOnlineRegistrationCapacityErrorV1::Global);
+        }
+        if account_after_admission > KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1 {
+            return Err(KagemushaOnlineRegistrationCapacityErrorV1::Account);
+        }
+        Ok(())
+    }
+    #[derive(Debug)]
+    struct KagemushaExpiredOnlineRegistrationV1 {
+        state_key: StatePath,
+        replay_keys: [Hash; 4],
+    }
+    #[derive(Debug, Default)]
+    struct KagemushaOnlineRegistrationAdmissionPlanV1 {
+        expired: Vec<KagemushaExpiredOnlineRegistrationV1>,
+    }
+    impl KagemushaOnlineRegistrationAdmissionPlanV1 {
+        fn commit(self, state_transaction: &mut StateTransaction<'_, '_>) {
+            for expired in self.expired {
+                state_transaction
+                    .world
+                    .smart_contract_state
+                    .remove(expired.state_key);
+                for replay_key in expired.replay_keys {
+                    state_transaction
+                        .world
+                        .kagemusha_replay_keys
+                        .remove(replay_key);
+                }
+            }
+        }
+    }
+    fn kagemusha_registration_replay_keys(
+        registration: &OfflineDeviceAttestationRegistration,
+        registration_hash: &Hash,
+    ) -> [Hash; 4] {
+        [
+            kagemusha_device_registration_key(registration_hash),
+            kagemusha_attestation_challenge_key(&registration.challenge_hash),
+            kagemusha_attestation_report_key(&registration.attestation_report_hash),
+            kagemusha_attestation_evidence_key(&registration.evidence_hash),
+        ]
+    }
+    fn plan_kagemusha_online_registration_admission_v1(
+        registration: &OfflineDeviceAttestationRegistration,
+        admission_policy_hash: [u8; 32],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<KagemushaOnlineRegistrationAdmissionPlanV1, Error> {
+        let evaluated_at_ms = state_transaction.block_unix_timestamp_ms();
+        let mut retained_count = 0_usize;
+        let mut active_global_count = 0_usize;
+        let mut active_account_count = 0_usize;
+        let mut seen_replay_keys = BTreeSet::new();
+        let mut plan = KagemushaOnlineRegistrationAdmissionPlanV1::default();
+
+        // TODO: Replace this protocol-bounded namespace scan with consensus-maintained global and
+        // per-account counters plus an expiry index. Opportunistic pruning bounds retained work for
+        // newly admitted state, but an index would make admission and block snapshot derivation O(1)
+        // and O(active registrations), respectively.
+        for (existing_key, existing_archive) in state_transaction.world.smart_contract_state.iter()
+        {
+            if !existing_key
+                .to_string()
+                .starts_with(KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX)
+            {
+                continue;
+            }
+            retained_count = retained_count.checked_add(1).ok_or_else(|| {
+                labeled_invariant(
+                    "registration_capacity_exceeded",
+                    "Kagemusha device-registration count overflowed",
+                )
+            })?;
+            if retained_count > KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1 {
+                return Err(labeled_invariant(
+                    "registration_capacity_exceeded",
+                    "retained Kagemusha device registrations exceed the global protocol limit",
+                )
+                .into());
+            }
+            let existing: KagemushaOnlineRegistrationStateV3 =
+                norito::decode_canonical(existing_archive).map_err(|error| {
+                    labeled_invariant(
+                        "invalid_attestation",
+                        format!("failed to decode existing Kagemusha registration state: {error}"),
+                    )
+                })?;
+            if existing.version != 3 {
+                return Err(labeled_invariant(
+                    "invalid_attestation",
+                    "existing Kagemusha registration state is non-canonical",
+                )
+                .into());
+            }
+            let other = &existing.registration;
+            let other_hash = canonical_registration_hash(other)?;
+            let expected_state_key =
+                kagemusha_online_registration_state_key(&exact_hash_bytes(&other_hash))?;
+            if &expected_state_key != existing_key {
+                return Err(labeled_invariant(
+                    "invalid_attestation",
+                    "existing Kagemusha registration state key does not match its canonical registration",
+                )
+                .into());
+            }
+            let replay_keys = kagemusha_registration_replay_keys(other, &other_hash);
+            if replay_keys.iter().any(|key| !seen_replay_keys.insert(*key)) {
+                return Err(labeled_invariant(
+                    "invalid_attestation",
+                    "existing Kagemusha registration states reuse replay-protected material",
+                )
+                .into());
+            }
+            if replay_keys.iter().any(|key| {
+                state_transaction
+                    .world
+                    .kagemusha_replay_keys
+                    .get(key)
+                    .is_none()
+            }) {
+                return Err(labeled_invariant(
+                    "invalid_attestation",
+                    "existing Kagemusha registration state is missing replay protection",
+                )
+                .into());
+            }
+            if other.expires_at_ms <= evaluated_at_ms {
+                plan.expired.push(KagemushaExpiredOnlineRegistrationV1 {
+                    state_key: existing_key.clone(),
+                    replay_keys,
+                });
+                continue;
+            }
+            active_global_count = active_global_count.checked_add(1).ok_or_else(|| {
+                labeled_invariant(
+                    "registration_capacity_exceeded",
+                    "active Kagemusha device-registration count overflowed",
+                )
+            })?;
+            if other.account_id == registration.account_id {
+                active_account_count = active_account_count.checked_add(1).ok_or_else(|| {
+                    labeled_invariant(
+                        "registration_capacity_exceeded",
+                        "per-account Kagemusha device-registration count overflowed",
+                    )
+                })?;
+            }
+            if existing.admission_policy_hash == admission_policy_hash
+                && other.account_id == registration.account_id
+                && other.device_id == registration.device_id
+                && other.asset_definition_id == registration.asset_definition_id
+                && other.public_key == registration.public_key
+            {
+                return Err(labeled_invariant(
+                    "duplicate_attestation",
+                    "an active registration already owns this account, device, asset, and P-256 key under the current policy",
+                )
+                .into());
+            }
+        }
+        let global_after_admission = active_global_count.checked_add(1).ok_or_else(|| {
+            labeled_invariant(
+                "registration_capacity_exceeded",
+                "active Kagemusha device-registration count overflowed",
+            )
+        })?;
+        let account_after_admission = active_account_count.checked_add(1).ok_or_else(|| {
+            labeled_invariant(
+                "registration_capacity_exceeded",
+                "per-account Kagemusha device-registration count overflowed",
+            )
+        })?;
+        validate_kagemusha_online_registration_capacity_v1(
+            global_after_admission,
+            account_after_admission,
+        )
+        .map_err(|error| match error {
+            KagemushaOnlineRegistrationCapacityErrorV1::Global => labeled_invariant(
+                "registration_capacity_exceeded",
+                "Kagemusha device registrations reached the global protocol limit",
+            ),
+            KagemushaOnlineRegistrationCapacityErrorV1::Account => labeled_invariant(
+                "registration_capacity_exceeded",
+                "Kagemusha device registrations reached the per-account protocol limit",
+            ),
+        })?;
+        Ok(plan)
+    }
     fn canonical_offline_device_attestation_policy_hash(
         policy: &OfflineDeviceAttestationPolicy,
     ) -> Result<[u8; 32], Error> {
@@ -2967,10 +2684,10 @@ pub mod isi {
     }
     /// Derive the canonical end-of-block active-receiver snapshot.
     ///
-    /// Only records in the post-upgrade native-protected `v2` namespace are eligible. Legacy
-    /// records require one fresh native registration. A corrupt protected record or policy produces
-    /// a deterministic unavailable snapshot; multiple current registrations for the same
-    /// account/device/ asset tuple produce an explicit ambiguous leaf which cannot be routed.
+    /// Only records in the canonical native-protected namespace are eligible. A corrupt protected
+    /// record or policy produces a deterministic unavailable snapshot; multiple current
+    /// registrations for the same account/device/asset tuple produce an explicit ambiguous leaf
+    /// which cannot be routed.
     pub fn derive_kagemusha_active_receiver_snapshot_v1(
         world: &impl WorldReadOnly,
         evaluated_height: u64,
@@ -3484,7 +3201,7 @@ pub mod isi {
                     parse_ios_app_attest_assertion_auth_data(&assertion.authenticator_data)?;
                 validate_ios_app_attest_extensions_against_policy(
                     app_policy,
-                    authenticator_data.extensions.as_ref(),
+                    &authenticator_data.extensions,
                 )?;
                 let expected_rp_id_hash = sha256_bytes(format!("{team_id}.{bundle_id}").as_bytes());
                 validate_ios_app_attest_assertion_identity(
@@ -4960,11 +4677,12 @@ pub mod isi {
             | OFFLINE_ATTESTATION_APP_ATTEST_FLAG_ATTESTED_CREDENTIAL_DATA
             | OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA;
         if flags & OFFLINE_ATTESTATION_APP_ATTEST_FLAG_ATTESTED_CREDENTIAL_DATA == 0
+            || flags & OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA == 0
             || flags & !allowed_flags != 0
         {
             return Err(labeled_invariant(
                 "invalid_attestation",
-                "iOS App Attest authData flags are invalid or missing attested credential data",
+                "iOS App Attest authData flags are invalid or missing attested credential or extension data",
             )
             .into());
         }
@@ -5016,27 +4734,14 @@ pub mod isi {
         })?;
         let cose_key = credential_and_extensions[..cose_key_end].to_vec();
         let extension_bytes = &credential_and_extensions[cose_key_end..];
-        let extensions = if flags & OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA != 0 {
-            if extension_bytes.is_empty() {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "iOS App Attest authData sets ED without extension data",
-                )
-                .into());
-            }
-            Some(decode_ios_app_attest_attestation_extensions(
-                extension_bytes,
-            )?)
-        } else {
-            if !extension_bytes.is_empty() {
-                return Err(labeled_invariant(
-                    "invalid_attestation",
-                    "iOS App Attest authData has extension bytes without ED",
-                )
-                .into());
-            }
-            None
-        };
+        if extension_bytes.is_empty() {
+            return Err(labeled_invariant(
+                "invalid_attestation",
+                "iOS App Attest authData sets ED without extension data",
+            )
+            .into());
+        }
+        let extensions = decode_ios_app_attest_attestation_extensions(extension_bytes)?;
         Ok(IosAppAttestAuthData {
             rp_id_hash,
             sign_count,
@@ -5063,10 +4768,10 @@ pub mod isi {
             .try_into()
             .expect("App Attest assertion minimum length is checked");
         let flags = auth_data[32];
-        if flags & !OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA != 0 {
+        if flags != OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA {
             return Err(labeled_invariant(
                 "invalid_authorization",
-                "iOS App Attest assertion authData flags may contain only ED",
+                "iOS App Attest assertion authData must contain only the extension-data flag",
             )
             .into());
         }
@@ -5076,26 +4781,8 @@ pub mod isi {
                 .expect("App Attest assertion minimum length is checked"),
         );
         let extension_bytes =
-            &auth_data[KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1..];
-        let extensions = if flags & OFFLINE_ATTESTATION_APP_ATTEST_FLAG_EXTENSION_DATA != 0 {
-            if extension_bytes.is_empty() {
-                return Err(labeled_invariant(
-                    "invalid_authorization",
-                    "iOS App Attest assertion sets ED without extension data",
-                )
-                .into());
-            }
-            Some(decode_ios_app_attest_assertion_extensions(extension_bytes)?)
-        } else {
-            if !extension_bytes.is_empty() {
-                return Err(labeled_invariant(
-                    "invalid_authorization",
-                    "iOS App Attest assertion has extension bytes without ED",
-                )
-                .into());
-            }
-            None
-        };
+            &auth_data[KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_FIXED_HEADER_BYTES_V1..];
+        let extensions = decode_ios_app_attest_assertion_extensions(extension_bytes)?;
         Ok(IosAppAttestAssertionAuthData {
             rp_id_hash,
             sign_count,
@@ -5218,30 +4905,22 @@ pub mod isi {
     }
     fn validate_ios_app_attest_extensions_against_policy(
         app_policy: &OfflineIosAppAttestationPolicy,
-        extensions: Option<&IosAppAttestExtensionProperties>,
+        extensions: &IosAppAttestExtensionProperties,
     ) -> Result<(), Error> {
-        match extensions {
-            None if app_policy.allow_legacy_auth_data_without_extensions => Ok(()),
-            None => Err(labeled_invariant(
-                "invalid_attestation_policy",
-                "legacy iOS App Attest authData without extensions is not allowed for this app",
-            )
-            .into()),
-            Some(extensions)
-                if app_policy
-                    .allowed_validation_categories
-                    .contains(&extensions.validation_category)
-                    && app_policy
-                        .allowed_bundle_versions
-                        .contains(&extensions.bundle_version) =>
-            {
-                Ok(())
-            }
-            Some(_) => Err(labeled_invariant(
+        if app_policy
+            .allowed_validation_categories
+            .contains(&extensions.validation_category)
+            && app_policy
+                .allowed_bundle_versions
+                .contains(&extensions.bundle_version)
+        {
+            Ok(())
+        } else {
+            Err(labeled_invariant(
                 "invalid_attestation_policy",
                 "iOS App Attest validation category or bundle version is not allowed for this app",
             )
-            .into()),
+            .into())
         }
     }
     fn android_attestation_metadata(
@@ -5437,10 +5116,7 @@ pub mod isi {
         let (team_id, bundle_id, environment) = ios_attestation_metadata(registration)?;
         let app_policy =
             ensure_ios_app_allowed_by_policy(policy, &team_id, &bundle_id, &environment)?;
-        validate_ios_app_attest_extensions_against_policy(
-            app_policy,
-            auth_data.extensions.as_ref(),
-        )?;
+        validate_ios_app_attest_extensions_against_policy(app_policy, &auth_data.extensions)?;
         let expected_aaguid = if environment == OFFLINE_ATTESTATION_IOS_ENV_DEVELOPMENT {
             OFFLINE_ATTESTATION_IOS_AAGUID_DEVELOPMENT
         } else {
@@ -6039,143 +5715,7 @@ pub mod isi {
         }
         Ok(())
     }
-    fn validate_offline_attestation_registration_identifiers(
-        registration: &OfflineDeviceAttestationRegistration,
-    ) -> Result<(), Error> {
-        for (field, value) in [
-            ("platform", registration.platform.as_str()),
-            ("key_id", registration.key_id.as_str()),
-            ("device_id", registration.device_id.as_str()),
-            ("assertion_scheme", registration.assertion_scheme.as_str()),
-            (
-                "assertion_key_algorithm",
-                registration.assertion_key_algorithm.as_str(),
-            ),
-        ] {
-            validate_attestation_protocol_string(
-                "offline device attestation",
-                field,
-                value,
-                "invalid_attestation",
-            )
-            .map_err(Error::from)?;
-        }
-        if registration.key_id.len() > OFFLINE_DEVICE_ATTESTATION_KEY_ID_MAX_BYTES_V1 {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                format!(
-                    "offline device attestation key_id exceeds the first-release limit of {} bytes",
-                    OFFLINE_DEVICE_ATTESTATION_KEY_ID_MAX_BYTES_V1
-                ),
-            )
-            .into());
-        }
-        if registration.device_id.len() > OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1
-            || registration.device_id.chars().any(char::is_control)
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                format!(
-                    "offline device attestation device_id must contain at most {} bytes and no control characters",
-                    OFFLINE_DEVICE_ATTESTATION_DEVICE_ID_MAX_BYTES_V1
-                ),
-            )
-            .into());
-        }
-        Ok(())
-    }
-    fn validate_offline_device_attestation_registration(
-        registration: &OfflineDeviceAttestationRegistration,
-        authority: &AccountId,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(Hash, [u8; 32]), Error> {
-        ensure_can_submit_kagemusha_for_account(
-            &registration.account_id,
-            authority,
-            state_transaction,
-        )?;
-        if registration.version != 1 {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation registration version is unsupported",
-            )
-            .into());
-        }
-        validate_offline_attestation_registration_identifiers(registration)?;
-        if registration.assertion_public_key.is_empty() {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation assertion public key must be non-empty",
-            )
-            .into());
-        }
-        if is_zero_hash(&registration.challenge_hash)
-            || is_zero_hash(&registration.attestation_report_hash)
-            || is_zero_hash(&registration.evidence_hash)
-            || is_zero_hash(&registration.recent_block_hash)
-        {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation hashes must be non-zero",
-            )
-            .into());
-        }
-        validate_offline_attestation_platform_profile(registration)?;
-        validate_offline_attestation_optional_metadata(registration)?;
-        validate_offline_attestation_evidence_bytes(registration)?;
-        let expected_challenge_hash = registration.canonical_challenge_hash().map_err(|err| {
-            labeled_invariant(
-                "invalid_attestation",
-                format!("failed to encode Offline attestation challenge preimage: {err}"),
-            )
-        })?;
-        if registration.challenge_hash != expected_challenge_hash {
-            return Err(labeled_invariant(
-                "invalid_attestation",
-                "offline device attestation challenge hash does not match the canonical preimage",
-            )
-            .into());
-        }
-        if registration.expires_at_ms <= state_transaction.block_unix_timestamp_ms() {
-            return Err(labeled_invariant(
-                "expired_attestation",
-                "offline device attestation registration is expired",
-            )
-            .into());
-        }
-        let policy = effective_offline_device_attestation_policy(state_transaction)?;
-        let admitted_at_ms = state_transaction.block_unix_timestamp_ms();
-        validate_offline_attestation_policy(&policy, admitted_at_ms)?;
-        let lifetime_policy = offline_attestation_policy_for_registration_lifetime(
-            &policy,
-            &registration.platform,
-            admitted_at_ms,
-            registration.expires_at_ms,
-        )?;
-        validate_offline_attestation_policy(&lifetime_policy, admitted_at_ms)?;
-        validate_offline_attestation_recent_block(registration, state_transaction)?;
-        validate_offline_attestation_report(registration, &lifetime_policy, admitted_at_ms)?;
-        // Admission must cover the registration's entire lifetime. Certificate
-        // validity and governed root activation are continuous time ranges, so
-        // validating both endpoints prevents a registration from surviving
-        // beyond either bound without repeating X.509 verification on every use.
-        validate_offline_attestation_policy(&lifetime_policy, registration.expires_at_ms)?;
-        validate_offline_attestation_report(
-            registration,
-            &lifetime_policy,
-            registration.expires_at_ms,
-        )?;
-        let bytes = norito::encode_canonical(registration).map_err(|err| {
-            labeled_invariant(
-                "invalid_attestation",
-                format!("failed to encode Kagemusha device registration: {err}"),
-            )
-        })?;
-        Ok((
-            Hash::new(bytes),
-            canonical_offline_device_attestation_policy_hash(&policy)?,
-        ))
-    }
+    include!("offline/device_attestation_registration_validation.rs");
     impl Execute for RegisterOfflineDeviceAttestation {
         fn execute(
             self,
@@ -6237,46 +5777,11 @@ pub mod isi {
                 )
                 .into());
             }
-            for (existing_key, existing_archive) in
-                state_transaction.world.smart_contract_state.iter()
-            {
-                if !existing_key
-                    .to_string()
-                    .starts_with(KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX)
-                {
-                    continue;
-                }
-                let existing: KagemushaOnlineRegistrationStateV3 =
-                    norito::decode_canonical(existing_archive).map_err(|error| {
-                        labeled_invariant(
-                            "invalid_attestation",
-                            format!(
-                                "failed to decode existing Kagemusha registration state: {error}"
-                            ),
-                        )
-                    })?;
-                if existing.version != 3 {
-                    return Err(labeled_invariant(
-                        "invalid_attestation",
-                        "existing Kagemusha registration state is non-canonical",
-                    )
-                    .into());
-                }
-                let other = &existing.registration;
-                if existing.admission_policy_hash == admission_policy_hash
-                    && other.account_id == registration.account_id
-                    && other.device_id == registration.device_id
-                    && other.asset_definition_id == registration.asset_definition_id
-                    && other.public_key == registration.public_key
-                    && other.expires_at_ms > state_transaction.block_unix_timestamp_ms()
-                {
-                    return Err(labeled_invariant(
-                        "duplicate_attestation",
-                        "an active registration already owns this account, device, asset, and P-256 key under the current policy",
-                    )
-                    .into());
-                }
-            }
+            let registration_admission_plan = plan_kagemusha_online_registration_admission_v1(
+                &registration,
+                admission_policy_hash,
+                state_transaction,
+            )?;
             let lifecycle = match registration.platform.as_str() {
                 OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT => {
                     KagemushaOnlineHardwareAssertionLifecycleV1::AndroidKeyMintUnused
@@ -6310,6 +5815,7 @@ pub mod isi {
                         format!("failed to persist exact Kagemusha registration: {err}"),
                     )
                 })?;
+            registration_admission_plan.commit(state_transaction);
             state_transaction
                 .world
                 .kagemusha_replay_keys

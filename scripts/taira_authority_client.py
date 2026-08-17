@@ -92,7 +92,7 @@ def _registered_role(role: str) -> AuthorityRole:
         administrator_id=f"taira-authority-{role}-administrator-v1",
         binding_path=FIXED_CONFIG_ROOT / role / "binding-v1.norito",
         request_socket=FIXED_RUNTIME_ROOT / role / "request-v1.sock",
-        state_directory=FIXED_STATE_ROOT / role,
+        state_directory=FIXED_STATE_ROOT / role / "state-v1",
     )
 
 
@@ -327,8 +327,15 @@ def _invoke_native_client(
     return decode_canonical_json(completed.stdout, "native Taira authority response")
 
 
-def preflight(role: str) -> Mapping[str, object]:
-    """Authenticate the fixed verifier, installed binding, and live service."""
+def preflight(
+    role: str, *, require_signing: bool = True
+) -> Mapping[str, object]:
+    """Authenticate the fixed verifier, installed binding, and live service.
+
+    Historical verification authenticates a revoked service so already-issued
+    receipts remain verifiable.  Operations that can sign or consume state use
+    the default and require a ready, non-revoked service.
+    """
 
     registered = _role(role)
     value = _invoke_native_client("status", role, None)
@@ -338,6 +345,8 @@ def preflight(role: str) -> Mapping[str, object]:
         "status",
         "service_id",
         "administrator_id",
+        "service_uid",
+        "client_uid",
         "binding_sha256",
         "key_revision",
         "policy_revision",
@@ -347,13 +356,14 @@ def preflight(role: str) -> Mapping[str, object]:
     }
     if set(value) != expected:
         _fail(f"authenticated Taira authority {role} returned a noncanonical status")
+    ready = value["status"] == "ready" and value["revoked"] is False
+    revoked = value["status"] == "revoked" and value["revoked"] is True
     if (
         value["schema"] != CLIENT_STATUS_SCHEMA
         or value["role"] != role
         or value["service_id"] != registered.service_id
         or value["administrator_id"] != registered.administrator_id
-        or value["status"] != "ready"
-        or value["revoked"] is not False
+        or not (ready if require_signing else ready or revoked)
     ):
         _fail(f"authenticated Taira authority {role} is not ready")
     _sha256(value["binding_sha256"], "authority binding digest")
@@ -362,6 +372,24 @@ def preflight(role: str) -> Mapping[str, object]:
         item = value[field]
         if isinstance(item, bool) or not isinstance(item, int) or item <= 0:
             _fail(f"authority status {field} must be positive")
+    service_uid = value["service_uid"]
+    client_uid = value["client_uid"]
+    if (
+        isinstance(service_uid, bool)
+        or not isinstance(service_uid, int)
+        or service_uid < 0
+        or service_uid >= 2**32 - 1
+        or (role == "qualification") != (service_uid == 0)
+    ):
+        _fail("authority status service_uid is invalid")
+    if (
+        isinstance(client_uid, bool)
+        or not isinstance(client_uid, int)
+        or client_uid <= 0
+        or client_uid >= 2**32 - 1
+        or client_uid == service_uid
+    ):
+        _fail("authority status client_uid is invalid")
     return value
 
 
@@ -394,7 +422,9 @@ def _hash_descriptor(descriptor: int, maximum: int | None) -> str:
     return digest.hexdigest()
 
 
-def _open_artifacts(artifacts: Sequence[Artifact]) -> list[_OpenedArtifact]:
+def _open_artifacts(
+    artifacts: Sequence[Artifact], *, service_uid: int
+) -> list[_OpenedArtifact]:
     if len(artifacts) > 256:
         _fail("authority artifact manifest exceeds 256 descriptors")
     opened: list[_OpenedArtifact] = []
@@ -412,7 +442,8 @@ def _open_artifacts(artifacts: Sequence[Artifact]) -> list[_OpenedArtifact]:
                 not stat.S_ISREG(before.st_mode)
                 or stat.S_ISLNK(before.st_mode)
                 or before.st_nlink != 1
-                or before.st_mode & 0o002
+                or before.st_uid not in (0, service_uid)
+                or before.st_mode & 0o222
                 or before.st_size <= 0
                 or (artifact.maximum is not None and before.st_size > artifact.maximum)
             ):
@@ -563,6 +594,8 @@ def authorize(
     """
 
     _role(role)
+    status = preflight(role)
+    service_uid = int(status["service_uid"])
     if role == "deploy-issuance":
         if disposition not in DEPLOY_DISPOSITIONS:
             _fail("deploy issuance requires a canonical lease disposition")
@@ -572,7 +605,7 @@ def authorize(
     assigned = derive_run_id(role, subject) if run_id is None else _sha256(run_id, "run ID")
     opened: list[_OpenedArtifact] = []
     try:
-        opened = _open_artifacts(artifacts)
+        opened = _open_artifacts(artifacts, service_uid=service_uid)
         manifest = [artifact.manifest for artifact in opened]
         operation_id = _operation_id(role, assigned, subject, manifest)
         request = {
@@ -620,13 +653,15 @@ def verify_receipt(
     """Historically verify sidecars without consuming or re-signing state."""
 
     _role(role)
+    status = preflight(role, require_signing=False)
+    service_uid = int(status["service_uid"])
     canonical_json_bytes(subject)
     canonical_json_bytes(authority_envelope)
     canonical_json_bytes(durable_receipt)
     assigned = derive_run_id(role, subject) if run_id is None else _sha256(run_id, "run ID")
     opened: list[_OpenedArtifact] = []
     try:
-        opened = _open_artifacts(artifacts)
+        opened = _open_artifacts(artifacts, service_uid=service_uid)
         manifest = [artifact.manifest for artifact in opened]
         expected_operation = _operation_id(role, assigned, subject, manifest)
         if operation_id is not None and _sha256(operation_id, "operation ID") != expected_operation:
@@ -676,6 +711,7 @@ def finalize_deployment(
     """
 
     role = "deploy-issuance"
+    preflight(role)
     canonical_json_bytes(subject)
     if (
         lease.role != role

@@ -1,4 +1,3 @@
-const LEGACY_HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX: &str = ".kura-sidecar-";
 const HISTORICAL_AUTONOMOUS_RECOVERY_PUBLICATION_MAX_ARTIFACTS: usize =
     HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS * 2;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -51,16 +50,9 @@ impl Kura {
             return Some(HistoricalAutonomousRecoveryPublicationKind::Stable);
         }
         let name = name.to_str()?;
-        [
-            HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX,
-            LEGACY_HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX,
-        ]
-        .into_iter()
-        .any(|prefix| {
-            name.strip_prefix(prefix)
-                .is_some_and(|suffix| !suffix.is_empty())
-        })
-        .then_some(HistoricalAutonomousRecoveryPublicationKind::Temporary)
+        name.strip_prefix(HISTORICAL_AUTONOMOUS_RECOVERY_ATOMIC_TEMP_PREFIX)
+            .is_some_and(|suffix| !suffix.is_empty())
+            .then_some(HistoricalAutonomousRecoveryPublicationKind::Temporary)
     }
     fn historical_autonomous_recovery_publication_link_count(
         metadata: &std::fs::Metadata,

@@ -62,13 +62,13 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
     ),
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "314270ab70b6e71905c697e94c38ff928385419ee270d9d7e8c423022d152426"
+        "1745d4e9b2409ff999eeb655f9573dda4e823bde405d50c2339e2a981ad7fbad"
     ),
     "write_sumeragi_v2_release_receipt_gate_evidence.py": (
         "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "337c9237f5a7e29a81b4960a514b8875e097bc8baa44d7d35b4a438f6b1fdbb9"
+        "4f351ac1711c88465e76f804c714a8d43ee0fc8d0133739b717f6e31dcf79ae6"
     ),
 }
 
@@ -194,7 +194,7 @@ _SCALING_REQUIRED_TOOLING = (
 )
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "0dc98e8799acf15729f4cb42c79b754232fbda6091558ec87c2bd2765a6ffc48"
+    "e7958352865498206204cb38b06c25d4d4756705796ce96f0b8f72dc94b001fa"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -211,6 +211,10 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
         _SIGNATURE_DATA_MODE,
     ),
     "runtime_helper": ("copy-release-runtime.py", _SIGNATURE_DATA_MODE),
+    "runtime_helper_cli": (
+        "copy_sumeragi_v2_release_cargo_cache_cli.py",
+        _SIGNATURE_DATA_MODE,
+    ),
     "tool_probe_helper": ("probe-release-tools.py", _SIGNATURE_DATA_MODE),
     "approval_contract": ("release-approval-contract.py", _SIGNATURE_DATA_MODE),
     "approval_offline_toolchain_sdk": (
@@ -239,7 +243,7 @@ _BOOTSTRAP_TRUSTED_ARCHIVES = {
 }
 _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
     "write_sumeragi_v2_release_receipt_corridor_log.py": (
-        "314270ab70b6e71905c697e94c38ff928385419ee270d9d7e8c423022d152426"
+        "1745d4e9b2409ff999eeb655f9573dda4e823bde405d50c2339e2a981ad7fbad"
     ),
     "write_sumeragi_v2_release_receipt_formal_artifacts.py": (
         "61e6f44e6d288f9a8c0e034b2b69b1c67ae04998846ca922e014efc3c85dba64"
@@ -248,12 +252,12 @@ _RECEIPT_VALIDATOR_COMPONENT_SHA256 = {
         "e891691dc7a18a6244398538315dba16e73a09a8a39a4d7cd6921e64ede728c5"
     ),
     "write_sumeragi_v2_release_receipt_publication.py": (
-        "337c9237f5a7e29a81b4960a514b8875e097bc8baa44d7d35b4a438f6b1fdbb9"
+        "4f351ac1711c88465e76f804c714a8d43ee0fc8d0133739b717f6e31dcf79ae6"
     ),
 }
 _BOOTSTRAP_COMPONENT_SHA256 = {
     "bootstrap_sumeragi_v2_release_receipt_replay.py": (
-        "e336273e2a4322d125344b6bd5162fdd1a9dcfce874aa49497a03c30141bfd8b"
+        "59bdbde20094d65a855f08dd5aad22e827c985c19f58edf3090a72164cd7cc0e"
     ),
 }
 _APPROVAL_CLASS_IDS = (
@@ -3134,6 +3138,7 @@ def _framework_runtime_projection(
             or ".." in PurePosixPath(relative).parts
             or not isinstance(mode, str)
             or re.fullmatch(r"[0-7]{4}", mode) is None
+            or (kind != "symlink" and int(mode, 8) & 0o022)
         ):
             raise ReceiptError(f"{name} member path or mode is unsafe")
         if kind == "file":
@@ -3174,13 +3179,14 @@ def _validate_framework_python_runtime(
             "record_count",
             "file_bytes",
             "records",
+            "relocation",
         },
         "framework Python runtime",
     )
     if (
         runtime["format"] != "iroha-sumeragi-v2-framework-python-runtime"
         or type(runtime["schema_version"]) is not int
-        or runtime["schema_version"] != 1
+        or runtime["schema_version"] != 2
         or runtime["archive_root"] != "python-runtime"
         or runtime["root_mode"] != "0500"
         or runtime["executable"] != "bin/python3"
@@ -3232,6 +3238,7 @@ def _validate_framework_python_runtime(
         "input_record_count",
         "input_file_bytes",
         "input_records",
+        "relocation",
     }
     runtime_root = directory / "python-runtime"
     if (
@@ -3239,7 +3246,7 @@ def _validate_framework_python_runtime(
         or private_inventory["format"]
         != "iroha-sumeragi-v2-private-framework-python-runtime"
         or type(private_inventory["schema_version"]) is not int
-        or private_inventory["schema_version"] != 1
+        or private_inventory["schema_version"] != 2
         or private_inventory["runtime_root"] != str(runtime_root)
         or private_inventory["source_disclosure"] != "withheld"
         or not isinstance(private_inventory["input_records"], list)
@@ -3261,6 +3268,12 @@ def _validate_framework_python_runtime(
         raise ReceiptError(
             "framework Python marker does not bind the private member inventory"
         )
+    _validate_framework_python_relocation_evidence(
+        runtime["relocation"], private_inventory["relocation"],
+        private_inventory["input_records"], expected,
+        private_inventory["input_record_count"],
+        private_inventory["input_file_bytes"],
+    )
     expected_count = runtime["record_count"]
     expected_bytes = runtime["file_bytes"]
     if (

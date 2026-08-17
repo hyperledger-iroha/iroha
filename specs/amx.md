@@ -174,7 +174,8 @@ The canonical data-model types live in
 | `AxtProofEnvelope.da_commitment` | Optional DA commitment bound into the envelope. |
 | `AxtProofEnvelope.proof` | Non-empty backend proof bytes. |
 | `AxtProofEnvelope.fastpq_binding` | Required FastPQ V1 source, claim, witness, policy, effect, verifier, and target-dataspace binding. |
-| `committed_amount` / `amount_commitment` | Optional clear or hidden amount binding checked against the spend intent. |
+| `committed_amount` | Optional non-zero scalar that must exactly match the canonical 16-byte little-endian `u128` in `axt_fastpq_committed_amount_v1` metadata inserted before the FastPQ batch seal and proof are generated. Missing or mismatched proof-bound metadata is rejected. |
+| `amount_commitment` | Optional deterministic hidden-amount copy checked against the spend intent; recomputing it cannot replace or alter the proof-bound `committed_amount`. |
 
 Issuers construct an unsigned `AssetHandleDraft`; signing consumes that draft
 and returns an admission-ready `AssetHandle` with a mandatory signature. The

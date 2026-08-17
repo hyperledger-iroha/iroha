@@ -381,16 +381,8 @@ pub(crate) fn configure_private_ingress_routes_for_test(
     app: &mut SharedAppState,
 ) -> (LaneId, DataSpaceId) {
     let nexus_lane = LaneId::new(0);
-    let local_validator_keypair = checked_torii_test_keypair_from_seed_byte(
-        0xb6,
-        Algorithm::Ed25519,
-        "derive private-ingress local validator fixture key",
-    );
-    let local_peer_keypair = checked_torii_test_keypair_from_seed_byte(
-        0xb7,
-        Algorithm::BlsNormal,
-        "derive private-ingress local peer fixture key",
-    );
+    let local_validator_keypair = checked_torii_test_ed25519_keypair(0xb6, "derive private-ingress local validator fixture key");
+    let local_peer_keypair = checked_torii_test_bls_keypair(0xb7, "derive private-ingress local peer fixture key");
     let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
     let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
     let governance_dataspace = DataSpaceId::new(1);
@@ -481,26 +473,10 @@ pub(crate) fn configure_private_ingress_with_offline_foreign_route_for_test(
     app: &mut SharedAppState,
 ) -> (RoutingDecision, RoutingDecision) {
     let nexus_lane = LaneId::new(0);
-    let local_validator_keypair = checked_torii_test_keypair_from_seed_byte(
-        0xb8,
-        Algorithm::Ed25519,
-        "derive offline-foreign local validator fixture key",
-    );
-    let local_peer_keypair = checked_torii_test_keypair_from_seed_byte(
-        0xb9,
-        Algorithm::BlsNormal,
-        "derive offline-foreign local peer fixture key",
-    );
-    let foreign_validator_keypair = checked_torii_test_keypair_from_seed_byte(
-        0xba,
-        Algorithm::Ed25519,
-        "derive offline-foreign validator fixture key",
-    );
-    let foreign_peer_keypair = checked_torii_test_keypair_from_seed_byte(
-        0xbb,
-        Algorithm::BlsNormal,
-        "derive offline-foreign peer fixture key",
-    );
+    let local_validator_keypair = checked_torii_test_ed25519_keypair(0xb8, "derive offline-foreign local validator fixture key");
+    let local_peer_keypair = checked_torii_test_bls_keypair(0xb9, "derive offline-foreign local peer fixture key");
+    let foreign_validator_keypair = checked_torii_test_ed25519_keypair(0xba, "derive offline-foreign validator fixture key");
+    let foreign_peer_keypair = checked_torii_test_bls_keypair(0xbb, "derive offline-foreign peer fixture key");
     let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
     let local_peer_id = PeerId::from(local_peer_keypair.public_key().clone());
     let foreign_validator = AccountId::new(foreign_validator_keypair.public_key().clone());
@@ -1339,11 +1315,7 @@ pub(crate) fn foreign_network_signed_app_fixture(
     key_seed: u8,
     network_marker: u8,
 ) -> (SharedAppState, HeaderMap) {
-    let key_pair = checked_torii_test_keypair_from_seed_byte(
-        key_seed,
-        Algorithm::Ed25519,
-        "derive foreign-network Torii auth fixture key",
-    );
+    let key_pair = checked_torii_test_ed25519_keypair(key_seed, "derive foreign-network Torii auth fixture key");
     let account = AccountId::new(key_pair.public_key().clone());
     let app = mk_app_state_for_tests_with_world(world_with_account(&account));
     let foreign_network =
@@ -1428,6 +1400,16 @@ fn checked_torii_test_keypair_from_seed_byte(
 pub(crate) fn checked_torii_test_ed25519_keypair(seed: u8, context: &'static str) -> KeyPair {
     checked_torii_test_keypair_from_seed_byte(seed, Algorithm::Ed25519, context)
 }
+fn checked_torii_test_bls_keypair(seed: u8, context: &'static str) -> KeyPair {
+    checked_torii_test_keypair_from_seed_byte(seed, Algorithm::BlsNormal, context)
+}
+fn checked_torii_test_peer_id(seed: u8, context: &'static str) -> PeerId {
+    PeerId::from(
+        checked_torii_test_ed25519_keypair(seed, context)
+            .public_key()
+            .clone(),
+    )
+}
 pub(crate) fn checked_torii_test_account_id(seed: u8, context: &'static str) -> AccountId {
     AccountId::new(
         checked_torii_test_ed25519_keypair(seed, context)
@@ -1466,11 +1448,7 @@ fn checked_torii_test_block_signature(
 }
 #[test]
 fn checked_torii_test_block_signature_verifies_and_rejects_wrong_key() {
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xb1,
-        Algorithm::BlsNormal,
-        "derive Torii block signature fixture key",
-    );
+    let keypair = checked_torii_test_bls_keypair(0xb1, "derive Torii block signature fixture key");
     let header = BlockHeader::new(
         NonZeroU64::new(9).expect("nonzero height"),
         None,
@@ -1485,11 +1463,7 @@ fn checked_torii_test_block_signature_verifies_and_rejects_wrong_key() {
         .signature()
         .verify_hash(keypair.public_key(), header.hash())
         .expect("checked Torii block fixture signature verifies");
-    let wrong_key = checked_torii_test_keypair_from_seed_byte(
-        0xb2,
-        Algorithm::BlsNormal,
-        "derive wrong Torii block signature fixture key",
-    );
+    let wrong_key = checked_torii_test_bls_keypair(0xb2, "derive wrong Torii block signature fixture key");
     signature
         .signature()
         .verify_hash(wrong_key.public_key(), header.hash())
@@ -1534,11 +1508,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
     {
         let mut topo_block = state_inner.commit_topology.block();
         topo_block.clear();
-        let peer_keypair = checked_torii_test_keypair_from_seed_byte(
-            0xb3,
-            Algorithm::Ed25519,
-            "derive Torii topology fixture peer key",
-        );
+        let peer_keypair = checked_torii_test_ed25519_keypair(0xb3, "derive Torii topology fixture peer key");
         let peer_id = iroha_data_model::peer::PeerId::from(peer_keypair.public_key().clone());
         topo_block.push(peer_id);
         topo_block.commit();
@@ -1891,11 +1861,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_chain_id(
         da_replay_store,
         da_receipt_log,
         da_receipt_signer,
-        torii_proxy_bridge_signer: checked_torii_test_keypair_from_seed_byte(
-            0xb5,
-            Algorithm::Ed25519,
-            "derive Torii proxy bridge fixture signer",
-        ),
+        torii_proxy_bridge_signer: checked_torii_test_ed25519_keypair(0xb5, "derive Torii proxy bridge fixture signer"),
         #[cfg(feature = "app_api")]
         public_dataspace_upstreams: Arc::new(BTreeMap::new()),
         #[cfg(feature = "app_api")]
@@ -2066,9 +2032,7 @@ async fn runtime_handlers_ok_without_token_and_rate_limit() {
     .await
     .expect("ok");
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let bytes = torii_body_bytes(resp, "body").await;
     let active: crate::runtime::RuntimeAbiActiveResponse =
         norito::json::from_slice(&bytes).expect("decode json");
     assert_eq!(active.abi_version, 1);
@@ -2078,9 +2042,7 @@ async fn runtime_handlers_ok_without_token_and_rate_limit() {
             .await
             .expect("ok");
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let bytes = torii_body_bytes(resp, "body").await;
     let hash: crate::runtime::RuntimeAbiHashResponse =
         norito::json::from_slice(&bytes).expect("decode json");
     assert_eq!(hash.policy, "V1");
@@ -2102,17 +2064,11 @@ async fn explorer_transaction_detail_not_found_returns_json_response() {
     .expect("explorer detail handler should map errors to HTTP responses");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(
-        response
-            .headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "content-type"),
         Some("application/json")
     );
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body");
-    let _payload: norito::json::Value =
-        norito::json::from_slice(&bytes).expect("json error payload");
+    let _payload =
+        decode_torii_json(response, "response body", "json error payload").await;
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2130,17 +2086,11 @@ async fn explorer_instruction_detail_not_found_returns_json_response() {
     .expect("explorer instruction detail handler should map errors to HTTP responses");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(
-        response
-            .headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "content-type"),
         Some("application/json")
     );
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body");
-    let _payload: norito::json::Value =
-        norito::json::from_slice(&bytes).expect("json error payload");
+    let _payload =
+        decode_torii_json(response, "response body", "json error payload").await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -2160,10 +2110,7 @@ async fn debug_witness_returns_json_body() {
         .get(axum::http::header::CONTENT_TYPE)
         .expect("content type header");
     assert_eq!(content_type, "application/json");
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
-        .expect("response body");
-    let _parsed: norito::json::Value = norito::json::from_slice(&bytes).expect("valid json");
+    let _parsed = decode_torii_json(resp, "response body", "valid json").await;
 }
 #[tokio::test]
 async fn torii_tx_rate_uses_config_and_queue_default() {
@@ -2270,8 +2217,102 @@ fn versioned_entrypoint_for_test(
 ) -> JsonOrNoritoVersioned<TransactionEntrypoint> {
     JsonOrNoritoVersioned(entrypoint)
 }
+async fn post_signed_transaction_for_test(
+    app: SharedAppState,
+    headers: HeaderMap,
+    transaction: &SignedTransaction,
+) -> Result<Response, Error> {
+    let response = super::handler_post_transaction(
+        State(app),
+        headers,
+        None,
+        versioned_signed_for_test(transaction),
+    )
+    .await?;
+    Ok(response.into_response())
+}
+async fn post_external_transaction_entrypoint_for_test(
+    app: SharedAppState,
+    headers: HeaderMap,
+    transaction: SignedTransaction,
+) -> Result<Response, Error> {
+    let response = super::handler_post_transaction_entrypoint(
+        State(app),
+        headers,
+        None,
+        versioned_entrypoint_for_test(TransactionEntrypoint::External(transaction)),
+    )
+    .await?;
+    Ok(response.into_response())
+}
+fn signed_log_transaction_for_test(
+    network_id: NetworkId,
+    authority: AccountId,
+    message: impl Into<String>,
+    key_pair: &KeyPair,
+) -> SignedTransaction {
+    TransactionBuilder::new(
+        network_id,
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, message.into())])
+    .sign(key_pair.private_key())
+}
 fn versioned_query_for_test(query: SignedQuery) -> JsonOrNoritoVersioned<SignedQuery> {
     JsonOrNoritoVersioned(query)
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn signed_query_proxy_request_for_test(
+    request_id: Hash,
+    route: RoutingDecision,
+) -> ToriiProxyRequestV6 {
+    ToriiProxyRequestV6 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V6,
+        request_id,
+        deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
+        hop_count: 1,
+        max_hops: 3,
+        visited_peer_ids: Vec::new(),
+        request: ToriiProxyRequestKindV4::SignedQueryRouteScan {
+            query_bytes: Vec::new(),
+            expected_route: ToriiRouteHintV1::from(route),
+            response_format: ToriiProxyResponseFormatV1::Norito,
+        },
+    }
+}
+fn torii_response_header<'a>(response: &'a Response, name: &'static str) -> Option<&'a str> {
+    response
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+}
+fn assert_route_unavailable_response(response: &Response) {
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        torii_response_header(response, "x-iroha-reject-code"),
+        Some("route_unavailable")
+    );
+}
+async fn torii_body_bytes(
+    response: Response,
+    diagnostic: &'static str,
+) -> axum::body::Bytes {
+    axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect(diagnostic)
+}
+async fn decode_torii_json(
+    response: Response,
+    body_diagnostic: &'static str,
+    json_diagnostic: &'static str,
+) -> norito::json::Value {
+    let bytes = torii_body_bytes(response, body_diagnostic).await;
+    norito::json::from_slice(&bytes).expect(json_diagnostic)
+}
+async fn torii_json_body(response: Response) -> norito::json::Value {
+    let bytes = torii_body_bytes(response, "Torii JSON response body").await;
+    norito::json::from_slice(&bytes).expect("valid Torii JSON response")
 }
 struct CountingRouteRouter {
     route_calls: Arc<AtomicUsize>,
@@ -2344,71 +2385,30 @@ async fn handler_post_transaction_uses_tx_rate_limiter() {
         app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
         app_mut.fee_policy = FeePolicy::Disabled;
     }
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xc1,
-        Algorithm::Ed25519,
-        "derive post-transaction rate-limit fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xc1, "derive post-transaction rate-limit fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = TransactionBuilder::new(
-        network_id,
-        authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "rate-limit-1".to_string())])
-    .sign(keypair.private_key());
-    let tx2 = TransactionBuilder::new(
-        network_id,
-        authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "rate-limit-2".to_string())])
-    .sign(keypair.private_key());
+    let tx1 = signed_log_transaction_for_test(network_id, authority.clone(), "rate-limit-1", &keypair);
+    let tx2 = signed_log_transaction_for_test(network_id, authority, "rate-limit-2", &keypair);
     let headers = HeaderMap::new();
     let submitted_hash = tx1.hash().to_string();
-    let ok = super::handler_post_transaction(
-        State(app.clone()),
-        headers.clone(),
-        None,
-        versioned_signed_for_test(&tx1),
-    )
-    .await
-    .expect("accepted");
-    let ok_response = ok.into_response();
+    let ok_response = post_signed_transaction_for_test(app.clone(), headers.clone(), &tx1)
+        .await
+        .expect("accepted");
     assert_eq!(ok_response.status(), StatusCode::ACCEPTED);
-    let hash_header = ok_response
-        .headers()
-        .get("x-iroha-transaction-hash")
-        .and_then(|value| value.to_str().ok())
+    let hash_header = torii_response_header(&ok_response, "x-iroha-transaction-hash")
         .expect("transaction hash header must be present");
     assert_eq!(hash_header, submitted_hash);
-    let lane_header = ok_response
-        .headers()
-        .get("x-iroha-route-lane-id")
-        .and_then(|value| value.to_str().ok())
+    let lane_header = torii_response_header(&ok_response, "x-iroha-route-lane-id")
         .expect("route lane header must be present");
-    let dataspace_header = ok_response
-        .headers()
-        .get("x-iroha-route-dataspace-id")
-        .and_then(|value| value.to_str().ok())
+    let dataspace_header = torii_response_header(&ok_response, "x-iroha-route-dataspace-id")
         .expect("route dataspace header must be present");
-    let routed_by = ok_response
-        .headers()
-        .get("x-iroha-routed-by")
-        .and_then(|value| value.to_str().ok())
+    let routed_by = torii_response_header(&ok_response, "x-iroha-routed-by")
         .expect("routed-by header must be present");
     assert!(!lane_header.trim().is_empty());
     assert!(!dataspace_header.trim().is_empty());
     assert_eq!(routed_by, "local");
-    let err = match super::handler_post_transaction(
-        State(app),
-        headers,
-        None,
-        versioned_signed_for_test(&tx2),
-    )
-    .await
-    {
+    let err = match post_signed_transaction_for_test(app, headers, &tx2).await {
         Ok(_) => panic!("expected rate limit"),
         Err(err) => err,
     };
@@ -2423,57 +2423,25 @@ async fn handler_post_transaction_reports_full_queue_before_rate_limit() {
         app_mut.fee_policy = FeePolicy::Disabled;
     }
     install_single_slot_transaction_queue(&mut app);
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xce,
-        Algorithm::Ed25519,
-        "derive queue-before-rate-limit fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xce, "derive queue-before-rate-limit fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = TransactionBuilder::new(
-        network_id,
-        authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "queue-before-rate-1".to_string())])
-    .sign(keypair.private_key());
-    let tx2 = TransactionBuilder::new(
-        network_id,
-        authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "queue-before-rate-2".to_string())])
-    .sign(keypair.private_key());
+    let tx1 = signed_log_transaction_for_test(network_id, authority.clone(), "queue-before-rate-1", &keypair);
+    let tx2 = signed_log_transaction_for_test(network_id, authority, "queue-before-rate-2", &keypair);
     let mut headers = HeaderMap::new();
     headers.insert("x-api-token", HeaderValue::from_static("queue-before-rate"));
-    let first = super::handler_post_transaction(
-        State(app.clone()),
-        headers.clone(),
-        None,
-        versioned_signed_for_test(&tx1),
-    )
-    .await
-    .expect("first transaction should fill the queue")
-    .into_response();
+    let first = post_signed_transaction_for_test(app.clone(), headers.clone(), &tx1)
+        .await
+        .expect("first transaction should fill the queue");
     assert_eq!(first.status(), StatusCode::ACCEPTED);
-    let err = match super::handler_post_transaction(
-        State(app.clone()),
-        headers,
-        None,
-        versioned_signed_for_test(&tx2),
-    )
-    .await
-    {
+    let err = match post_signed_transaction_for_test(app.clone(), headers, &tx2).await {
         Ok(_) => panic!("expected queue full before token rate limit"),
         Err(err) => err,
     };
     let response = err.into_response();
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-reject-code"),
         Some("PRTRY:QUEUE_FULL")
     );
 }
@@ -2488,51 +2456,28 @@ async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() 
         app_mut.require_api_token = true;
         app_mut.api_tokens_set = Arc::new(HashSet::from(["shared-token".to_owned()]));
     }
-    let first_keypair = checked_torii_test_keypair_from_seed_byte(
-        0xc2,
-        Algorithm::Ed25519,
-        "derive first post-transaction API-token fixture key",
-    );
-    let second_keypair = checked_torii_test_keypair_from_seed_byte(
-        0xc3,
-        Algorithm::Ed25519,
-        "derive second post-transaction API-token fixture key",
-    );
+    let first_keypair = checked_torii_test_ed25519_keypair(0xc2, "derive first post-transaction API-token fixture key");
+    let second_keypair = checked_torii_test_ed25519_keypair(0xc3, "derive second post-transaction API-token fixture key");
     let network_id = *app.state.network_id_ref();
-    let tx1 = TransactionBuilder::new(
+    let tx1 = signed_log_transaction_for_test(
         network_id,
         AccountId::new(first_keypair.public_key().clone()),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "token-rate-limit-1".to_string())])
-    .sign(first_keypair.private_key());
-    let tx2 = TransactionBuilder::new(
+        "token-rate-limit-1",
+        &first_keypair,
+    );
+    let tx2 = signed_log_transaction_for_test(
         network_id,
         AccountId::new(second_keypair.public_key().clone()),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "token-rate-limit-2".to_string())])
-    .sign(second_keypair.private_key());
+        "token-rate-limit-2",
+        &second_keypair,
+    );
     let mut headers = HeaderMap::new();
     headers.insert("x-api-token", HeaderValue::from_static("shared-token"));
-    let first = super::handler_post_transaction(
-        State(app.clone()),
-        headers.clone(),
-        None,
-        versioned_signed_for_test(&tx1),
-    )
-    .await
-    .expect("first token-keyed transaction accepted")
-    .into_response();
+    let first = post_signed_transaction_for_test(app.clone(), headers.clone(), &tx1)
+        .await
+        .expect("first token-keyed transaction accepted");
     assert_eq!(first.status(), StatusCode::ACCEPTED);
-    let err = match super::handler_post_transaction(
-        State(app),
-        headers,
-        None,
-        versioned_signed_for_test(&tx2),
-    )
-    .await
-    {
+    let err = match post_signed_transaction_for_test(app, headers, &tx2).await {
         Ok(_) => panic!("expected shared token rate limit"),
         Err(err) => err,
     };
@@ -2542,28 +2487,17 @@ async fn handler_post_transaction_uses_authenticated_api_token_rate_limit_key() 
 async fn handler_post_transaction_reuses_resolved_route_for_enqueue() {
     let mut app = mk_app_state_for_tests();
     let route_calls = install_counting_route_queue(&mut app);
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xc4,
-        Algorithm::Ed25519,
-        "derive post-transaction route-cache fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xc4, "derive post-transaction route-cache fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
-    let transaction = TransactionBuilder::new(
+    let transaction = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
         authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "route-cache-submit".to_string())])
-    .sign(keypair.private_key());
-    let response = super::handler_post_transaction(
-        State(app.clone()),
-        HeaderMap::new(),
-        None,
-        versioned_signed_for_test(&transaction),
-    )
-    .await
-    .expect("accepted")
-    .into_response();
+        "route-cache-submit",
+        &keypair,
+    );
+    let response = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &transaction)
+        .await
+        .expect("accepted");
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 1);
     assert_eq!(
@@ -2578,39 +2512,22 @@ async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xc5,
-        Algorithm::Ed25519,
-        "derive entrypoint external fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xc5, "derive entrypoint external fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
-    let transaction = TransactionBuilder::new(
+    let transaction = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
         authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "entrypoint-submit".to_string())])
-    .sign(keypair.private_key());
-    let entrypoint = TransactionEntrypoint::External(transaction);
-    let response = super::handler_post_transaction_entrypoint(
-        State(app.clone()),
-        HeaderMap::new(),
-        None,
-        versioned_entrypoint_for_test(entrypoint),
-    )
-    .await
-    .expect("accepted")
-    .into_response();
+        "entrypoint-submit",
+        &keypair,
+    );
+    let response =
+        post_external_transaction_entrypoint_for_test(app.clone(), HeaderMap::new(), transaction)
+            .await
+            .expect("accepted");
     assert_eq!(response.status(), StatusCode::ACCEPTED);
-    let entrypoint_hash = response
-        .headers()
-        .get("x-iroha-entrypoint-hash")
-        .and_then(|value| value.to_str().ok())
+    let entrypoint_hash = torii_response_header(&response, "x-iroha-entrypoint-hash")
         .expect("entrypoint hash header must be present");
-    let tx_hash = response
-        .headers()
-        .get("x-iroha-transaction-hash")
-        .and_then(|value| value.to_str().ok())
+    let tx_hash = torii_response_header(&response, "x-iroha-transaction-hash")
         .expect("transaction hash header must be present");
     assert_eq!(tx_hash, entrypoint_hash);
     assert_eq!(app.queue.active_len(), 1);
@@ -2619,32 +2536,18 @@ async fn handler_post_transaction_entrypoint_accepts_external_entrypoint() {
 async fn handler_post_transaction_entrypoint_reuses_resolved_route_for_enqueue() {
     let mut app = mk_app_state_for_tests();
     let route_calls = install_counting_route_queue(&mut app);
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xc6,
-        Algorithm::Ed25519,
-        "derive entrypoint route-cache fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xc6, "derive entrypoint route-cache fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
-    let transaction = TransactionBuilder::new(
+    let transaction = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
         authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(
-        Level::INFO,
-        "entrypoint-route-cache-submit".to_string(),
-    )])
-    .sign(keypair.private_key());
-    let entrypoint = TransactionEntrypoint::External(transaction);
-    let response = super::handler_post_transaction_entrypoint(
-        State(app.clone()),
-        HeaderMap::new(),
-        None,
-        versioned_entrypoint_for_test(entrypoint),
-    )
-    .await
-    .expect("accepted")
-    .into_response();
+        "entrypoint-route-cache-submit",
+        &keypair,
+    );
+    let response =
+        post_external_transaction_entrypoint_for_test(app.clone(), HeaderMap::new(), transaction)
+            .await
+            .expect("accepted");
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 1);
     assert_eq!(

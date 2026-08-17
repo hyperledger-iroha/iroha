@@ -27,6 +27,11 @@ PATH-selected cryptographic tool:
 - the assertion's ECDSA-P256-SHA256 signature after the same low-S
   normalization used by the native bridge.
 
+The parser bounds arrays to 1,024 items and maps to 64 entries before decoding
+their children. Malformed policy collections stop typed platform validation
+and return diagnostics plus the production blocker instead of reaching an
+exception path.
+
 That is a safe verification substrate, not production qualification. The
 validator deliberately returns a blocker until it also directly verifies the
 Apple X.509 chain to the policy roots, certificate validity and revocations,
@@ -52,5 +57,6 @@ validation. It also requires the production envelope's
 
 Mutation coverage lives in
 `scripts/tests/check_kagemusha_candidate_ios_evidence_test.py` and includes
-policy ID/hash substitution, control bytes, omitted code-sign binding, raw-tree
-loss, assertion-signature tampering, RP-ID substitution, and counter rollback.
+policy ID/hash substitution, malformed policy collection types, CBOR container
+count overflow, control bytes, omitted code-sign binding, raw-tree loss,
+assertion-signature tampering, RP-ID substitution, and counter rollback.

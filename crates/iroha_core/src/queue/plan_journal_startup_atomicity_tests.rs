@@ -12,7 +12,7 @@ fn queue_plan_journal_replays_matching_plan_after_restart() {
     nexus.enabled = false;
     state
         .set_nexus(nexus)
-        .expect("apply disabled Nexus state for legacy route test");
+        .expect("apply disabled Nexus state for canonical single-lane route test");
     install_single_validator_topology_for_queue_test(&state, 0xA7);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
@@ -95,7 +95,7 @@ fn queue_plan_startup_receipt_failure_precedes_atomic_publication() {
     nexus.enabled = false;
     state
         .set_nexus(nexus)
-        .expect("apply disabled Nexus state for legacy route test");
+        .expect("apply disabled Nexus state for canonical single-lane route test");
     install_single_validator_topology_for_queue_test(&state, 0xD7);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
@@ -182,7 +182,7 @@ fn queue_plan_startup_receipt_failure_after_terminal_cleanup_retries_as_empty_st
     nexus.enabled = false;
     state
         .set_nexus(nexus)
-        .expect("apply disabled Nexus state for legacy route test");
+        .expect("apply disabled Nexus state for canonical single-lane route test");
     install_single_validator_topology_for_queue_test(&state, 0xD8);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
@@ -277,7 +277,7 @@ fn queue_plan_startup_receipt_failure_after_mixed_terminal_cleanup_replays_live_
     nexus.enabled = false;
     state
         .set_nexus(nexus)
-        .expect("apply disabled Nexus state for legacy route test");
+        .expect("apply disabled Nexus state for canonical single-lane route test");
     install_single_validator_topology_for_queue_test(&state, 0xD9);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {

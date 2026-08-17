@@ -1634,13 +1634,12 @@ PRODUCTION_TRACE_EXTRACTION_BINDINGS = (
         "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
         "impl": "Kura",
         "symbol": "durable_autonomous_lane_merge_source_under_prune_guard",
-        "model_actions": ("PersistExecutionInput", "PersistReadyQc", "LaneCommit"),
+        "model_actions": ("PersistReadyQc", "LaneCommit"),
         "action_tags": (
-            "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_READY_QC",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_LANE_COMMIT",
         ),
-        "checked_transition_count": 3,
+        "checked_transition_count": 2,
         "additional_tokens": (
             "AutonomousLaneMergeBundleV1",
             "validate_autonomous_lane_merge_bundle",
@@ -3901,7 +3900,7 @@ def _production_trace_extraction_source_snapshot(
                     f"binding {required!r}"
                 )
 
-    verus_kernel_relative = "crates/iroha_sumeragi_core/src/verus_proofs.rs"
+    verus_kernel_relative = verus_relative
     verus_witness_kernel = _production_trace_unique_function(
         root_dir=root_dir,
         relative=verus_kernel_relative,

@@ -287,9 +287,9 @@ SOURCES = (
 )
 
 _INCLUDE_RE = re.compile(
-    rb'include_str!\(\s*"(?P<path>[^"\r\n]*fixtures/koto_v1/[^"\r\n]+)"\s*\)'
-    rb'(?P<sentinel>\s*\.strip_suffix\(\s*\'\\n\'\s*\)\s*'
-    rb'\.expect\(\s*"fixture sentinel newline"\s*\))?'
+    rb'include_str!\([ \t\r\n]*"(?P<path>[^"\r\n]*fixtures/koto_v1/[^"\r\n]+)"[ \t\r\n]*\)'
+    rb'(?P<sentinel>[ \t\r\n]*\.strip_suffix\([ \t\r\n]*\'\\n\'[ \t\r\n]*\)'
+    rb'[ \t\r\n]*\.expect\([ \t\r\n]*"fixture sentinel newline"[ \t\r\n]*\))?'
 )
 
 

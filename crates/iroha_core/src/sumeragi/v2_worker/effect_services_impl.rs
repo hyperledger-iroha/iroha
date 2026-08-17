@@ -739,3 +739,205 @@ impl V2EffectServices for ProductionV2Services {
         iroha_logger::error!(reason, "Sumeragi v2 effect services failed closed");
     }
 }
+
+/// Recover the exact global round carried by one view-scoped v2 output.
+///
+/// Height-only recovery requests and epoch-wide VRF traffic deliberately
+/// return `None`: a certified view does not supersede those owners.
+fn global_v2_output_round(message: &NetworkMessage) -> Option<wire::ConsensusRound> {
+    let NetworkMessage::SumeragiBlock(envelope) = message else {
+        return None;
+    };
+    let BlockMessage::V2(message) = envelope.as_message() else {
+        return None;
+    };
+    match &message.payload {
+        wire::ConsensusMessageV2Payload::Proposal(proposal) => Some(proposal.round),
+        wire::ConsensusMessageV2Payload::Vote(vote) => Some(vote.round),
+        wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) => Some(certificate.round),
+        wire::ConsensusMessageV2Payload::TimeoutVote(vote) => Some(vote.round),
+        wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate) => Some(certificate.round),
+        wire::ConsensusMessageV2Payload::PayloadManifest(manifest) => Some(manifest.round),
+        wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) => Some(request.round),
+        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) => {
+            Some(response.manifest.round)
+        }
+        wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) => {
+            Some(response.certificate.round)
+        }
+        wire::ConsensusMessageV2Payload::PayloadChunk(_)
+        | wire::ConsensusMessageV2Payload::CommitCertificateRequest(_)
+        | wire::ConsensusMessageV2Payload::VrfCommit(_)
+        | wire::ConsensusMessageV2Payload::VrfReveal(_) => None,
+    }
+}
+impl PendingExactFanout {
+    fn is_global_pacemaker_fanout(&self) -> bool {
+        !self.messages.is_empty()
+            && self.messages.iter().all(|message| {
+                let NetworkMessage::SumeragiBlock(envelope) = message else {
+                    return false;
+                };
+                let BlockMessage::V2(message) = envelope.as_message() else {
+                    return false;
+                };
+                matches!(
+                    &message.payload,
+                    wire::ConsensusMessageV2Payload::TimeoutVote(_)
+                        | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+                )
+            })
+    }
+    /// Whether a retained topology send already owns this exact retry.
+    ///
+    /// Reducer and lane-work retransmission retain their source authority until
+    /// the protocol progresses. Periodic retries therefore reuse an identical
+    /// worker owner instead of allocating an unbounded fanout for a silent
+    /// peer. Once the incumbent drains, a later retry creates a fresh owner.
+    fn can_coalesce_exact_topology_retry(&self, candidate: &Self) -> bool {
+        self.rollover_claim == candidate.rollover_claim
+            && self.message_hashes == candidate.message_hashes
+            && self.semantic_peers() == candidate.semantic_peers()
+            && self.reply_routes.is_none()
+            && candidate.reply_routes.is_none()
+            && self.ingress_ownership.is_none()
+            && candidate.ingress_ownership.is_none()
+            && self
+                .targets
+                .iter()
+                .chain(&candidate.targets)
+                .all(|target| matches!(&target.route, ExactTargetRoute::Topology))
+    }
+}
+impl PendingExactOutput {
+    fn retain_native_amx_round(
+        &mut self,
+        retained_round: wire::ConsensusRound,
+        terminal: bool,
+        expected_requests: &BTreeMap<NativeAmxAttestationBodyV2, BTreeSet<PeerId>>,
+    ) -> Result<usize, String> {
+        self.remove_fanouts_matching(
+            |fanout| {
+                let ExactOutputRolloverClaim::NativeAmx { round, .. } = &fanout.rollover_claim
+                else {
+                    return false;
+                };
+                if terminal || *round != retained_round {
+                    return true;
+                }
+                let [NetworkMessage::NativeAmx(message)] = fanout.messages.as_slice() else {
+                    return false;
+                };
+                let body = match message.as_ref() {
+                    NativeAmxMessage::PrepareRequest(request) => Some(request.body),
+                    NativeAmxMessage::CommitRequest(request) => Some(request.request.body),
+                    NativeAmxMessage::PrepareVote(_) | NativeAmxMessage::CommitVote(_) => None,
+                };
+                body.is_some_and(|body| {
+                    let peers = fanout.semantic_peers();
+                    match peers.as_slice() {
+                        [peer] => !expected_requests
+                            .get(&body)
+                            .is_some_and(|expected| expected.contains(peer)),
+                        _ => true,
+                    }
+                })
+            },
+            |fanout| {
+                fanout
+                    .rollover_claim
+                    .validate_fanout(&fanout.messages, &fanout.semantic_peers())
+            },
+            "Native AMX round retirement",
+        )
+    }
+    /// Retire global control, payload, and merge-share fanouts made obsolete
+    /// by a certified higher view.
+    ///
+    /// A dead topology target can retain old-view output indefinitely. Without
+    /// this cut, repeated view changes consume the finite shared ownership
+    /// pool until a current Proposal or timeout fanout can no longer reach any
+    /// responsive peer. Every removed message is bound to this exact height
+    /// context and a strictly lower view; height-only and epoch-wide traffic is
+    /// retained.
+    fn retain_certified_global_view_output(
+        &mut self,
+        retained_round: wire::ConsensusRound,
+    ) -> Result<usize, String> {
+        self.remove_fanouts_matching(
+            |fanout| {
+                let scope_matches = |scope: &ExactOutputCreationScope| {
+                    scope.context_id == retained_round.context_id
+                        && scope.height == retained_round.height
+                };
+                match &fanout.rollover_claim {
+                    ExactOutputRolloverClaim::GlobalV2(scope) => {
+                        scope_matches(scope)
+                            && !fanout.messages.is_empty()
+                            && fanout.messages.iter().all(|message| {
+                                global_v2_output_round(message).is_some_and(|round| {
+                                    round.context_id == retained_round.context_id
+                                        && round.height == retained_round.height
+                                        && round.view < retained_round.view
+                                })
+                            })
+                    }
+                    ExactOutputRolloverClaim::PayloadChunks { scope, manifest } => {
+                        scope_matches(scope)
+                            && manifest.round.context_id == retained_round.context_id
+                            && manifest.round.height == retained_round.height
+                            && manifest.round.view < retained_round.view
+                    }
+                    ExactOutputRolloverClaim::MergeShare { scope, .. } => {
+                        scope_matches(scope)
+                            && matches!(
+                                fanout.messages.as_slice(),
+                                [NetworkMessage::MergeCommitteeSignature(signature)]
+                                    if signature.view < retained_round.view
+                            )
+                    }
+                    _ => false,
+                }
+            },
+            |fanout| {
+                fanout
+                    .rollover_claim
+                    .validate_fanout(&fanout.messages, &fanout.semantic_peers())
+            },
+            "global v2 certified-view retirement",
+        )
+    }
+}
+impl ProductionV2Services {
+    /// Retain only Native-AMX output owned by the active certified round.
+    ///
+    /// A terminal Decision retires every height-local Native-AMX occurrence.
+    /// Matching by the complete round also removes stale predecessor-height
+    /// output carried through the exact-output rollover corridor.
+    pub(crate) fn retain_native_amx_round(
+        &self,
+        retained_round: wire::ConsensusRound,
+        terminal: bool,
+        expected_requests: &BTreeMap<NativeAmxAttestationBodyV2, BTreeSet<PeerId>>,
+    ) -> Result<usize, String> {
+        let mut pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            debug_assert!(!pending.is_pending());
+            return Ok(0);
+        }
+        pending.retain_native_amx_round(retained_round, terminal, expected_requests)
+    }
+    /// Retire view-scoped global control, payload, and merge output below the
+    /// active certified round.
+    pub(crate) fn retain_certified_global_view_output(
+        &self,
+        retained_round: wire::ConsensusRound,
+    ) -> Result<usize, String> {
+        let mut pending = self.lock_pending_exact_output()?;
+        if self.exact_output_handoff_owner.is_sealed() {
+            debug_assert!(!pending.is_pending());
+            return Ok(0);
+        }
+        pending.retain_certified_global_view_output(retained_round)
+    }
+}

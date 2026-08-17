@@ -1,2138 +1,842 @@
-#[test]
-fn evidence_audit_openapi_requires_and_returns_exact_cursors() {
-    let document = generate_spec();
-    let operation = openapi_operation(&document, "/v1/evidence/audit", "get");
-    let description = operation
-        .get("description")
-        .and_then(Value::as_str)
-        .expect("evidence audit description");
-    for required_phrase in [
-        "only accepted genesis query wire",
-        "expected_checkpoint_digest_hex then limit",
-        "after_sequence and after_receipt_digest_hex must be supplied together",
-        "sequence-only or digest-only continuation is rejected",
-        "checkpoint change returns 409",
-        "signed checkpoint_anchor",
-        "digest-bound page_limit",
-        "predecessor and next_cursor",
-        "projection_digest_hex",
-        "never emits a sequence-only continuation",
-    ] {
-        assert!(
-            description.contains(required_phrase),
-            "evidence audit description omitted `{required_phrase}`"
+const OPENAPI_CONTRACT_ASSET_VERSION: u64 = 1;
+const OPENAPI_CONTRACT_ASSET_LEN: usize = 14_006;
+const OPENAPI_CONTRACT_ASSET_SHA256: &str =
+    "0ae9398cc79d6316b4813adf97f24efbdf64a1f70e7e26834ca3cb7be0323be7";
+const OPENAPI_CONTRACT_SECTION_ORDER: &[&str] = &[
+    "evidence.audit.description",
+    "evidence.audit.success",
+    "evidence.schemas",
+    "pin.register.description",
+    "pin.list.description",
+    "pin.manifest.description",
+    "pin.manifest.retired",
+    "replication.description",
+    "proof.por.required",
+    "proof.pdp.failures",
+    "proof.potr.failures",
+    "sumeragi.da.required",
+    "bridge.proof.required",
+    "bridge.attestation.required",
+    "finality.artifact.required",
+    "height.context.required",
+    "height.context.optional",
+    "validator.power.required",
+    "dual.quorum.required",
+    "block.subject.required",
+    "block.subject.optional",
+    "merge.carrier.required",
+    "execution.required",
+    "execution.optional",
+    "qc.required",
+    "snapshot.bootstrap.required",
+    "next.epoch.required",
+    "bridge.commitment.required",
+    "bridge.bundle.required",
+    "block.header.required",
+    "block.header.optional",
+    "bridge.components",
+    "bridge.retired",
+    "fixture.header.required",
+    "fixture.artifact.fields",
+    "fixture.execution.fields",
+    "fixture.retired",
+    "lifecycle.required",
+    "status.present",
+    "status.absent",
+    "native.receipt.required",
+    "native.leg.required",
+    "native.body.required",
+    "hf.headers",
+    "private.receipt.metadata",
+    "app.page.required",
+    "app.page.properties",
+    "repo.agreement.fields",
+    "repo.query.fields",
+    "contract.alias.request.required",
+    "contract.alias.binding.required",
+    "contract.alias.binding.optional",
+    "contract.alias.response.required",
+    "governed.found.fields",
+    "governed.missing.fields",
+];
+const OPENAPI_CONTRACT_ASSET: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/src/openapi/tests/openapi_contracts_v1.json"
+));
+
+struct SchemaShape {
+    name: &'static str,
+    required: &'static str,
+    optional: Option<&'static str>,
+}
+
+struct PropertyRefContract {
+    owner: &'static str,
+    property: &'static str,
+    expected: &'static str,
+}
+
+struct OperationResponseContract {
+    path: &'static str,
+    method: &'static str,
+    status: &'static str,
+    schema_ref: &'static str,
+}
+
+fn contract_asset() -> &'static Map {
+    use sha2::{Digest as _, Sha256};
+    static ASSET: LazyLock<Map> = LazyLock::new(|| {
+        assert_eq!(OPENAPI_CONTRACT_ASSET.len(), OPENAPI_CONTRACT_ASSET_LEN);
+        assert_eq!(
+            hex::encode(Sha256::digest(OPENAPI_CONTRACT_ASSET)),
+            OPENAPI_CONTRACT_ASSET_SHA256,
+            "OpenAPI contract asset digest drift"
         );
-    }
-    let parameters = operation
+        let value: Value = norito::json::from_slice(OPENAPI_CONTRACT_ASSET)
+            .expect("OpenAPI contract V1 asset must be valid Norito JSON");
+        let root = value.as_object().expect("OpenAPI contract asset root object");
+        assert_eq!(
+            root.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["sections", "version"]),
+            "OpenAPI contract asset root keys"
+        );
+        assert_eq!(
+            root.get("version").and_then(Value::as_u64),
+            Some(OPENAPI_CONTRACT_ASSET_VERSION),
+            "unsupported OpenAPI contract asset version"
+        );
+        let sections = root
+            .get("sections")
+            .and_then(Value::as_array)
+            .expect("OpenAPI contract asset sections");
+        assert_eq!(sections.len(), OPENAPI_CONTRACT_SECTION_ORDER.len());
+        let mut indexed = Map::new();
+        for (section, expected_id) in sections.iter().zip(OPENAPI_CONTRACT_SECTION_ORDER) {
+            let section = section.as_object().expect("contract section object");
+            assert_eq!(
+                section.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+                BTreeSet::from(["id", "values"]),
+                "contract section keys"
+            );
+            let id = section.get("id").and_then(Value::as_str).expect("section id");
+            assert_eq!(id, *expected_id, "OpenAPI contract section order drift");
+            let values = section
+                .get("values")
+                .and_then(Value::as_array)
+                .expect("contract section string inventory");
+            assert!(!values.is_empty(), "contract section `{id}` must not be empty");
+            assert!(
+                values.iter().all(|value| value.as_str().is_some_and(|item| !item.is_empty())),
+                "contract section `{id}` must contain only non-empty strings"
+            );
+            assert_eq!(
+                values.iter().filter_map(Value::as_str).collect::<BTreeSet<_>>().len(),
+                values.len(),
+                "contract section `{id}` must not contain duplicates"
+            );
+            assert!(indexed.insert(id.to_owned(), Value::Array(values.clone())).is_none());
+        }
+        indexed
+    });
+    LazyLock::force(&ASSET)
+}
+
+fn contract_strings(id: &str) -> Vec<&'static str> {
+    contract_asset()
+        .get(id)
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("missing contract inventory `{id}`"))
+        .iter()
+        .map(|value| value.as_str().expect("validated contract string"))
+        .collect()
+}
+
+fn contract_schema<'a>(schemas: &'a Map, name: &str) -> &'a Map {
+    schemas
+        .get(name)
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| panic!("{name} schema"))
+}
+
+fn contract_property<'a>(schemas: &'a Map, owner: &str, property: &str) -> &'a Map {
+    contract_schema(schemas, owner)
+        .get("properties")
+        .and_then(Value::as_object)
+        .and_then(|properties| properties.get(property))
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| panic!("{owner}.{property} schema"))
+}
+
+fn operation_parameters<'a>(operation: &'a Map, context: &str) -> &'a Vec<Value> {
+    operation
         .get("parameters")
         .and_then(Value::as_array)
-        .expect("evidence audit parameters");
-    assert_eq!(parameters.len(), 9);
-    let parameter = |name: &str| {
-        parameters
-            .iter()
-            .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some(name))
-            .unwrap_or_else(|| panic!("evidence audit `{name}` parameter"))
-    };
-    let expected_checkpoint = parameter("expected_checkpoint_digest_hex");
-    assert_eq!(
-        expected_checkpoint.get("required").and_then(Value::as_bool),
-        Some(true)
-    );
-    let expected_checkpoint_schema = expected_checkpoint
-        .get("schema")
-        .and_then(Value::as_object)
-        .expect("expected checkpoint digest schema");
-    assert_eq!(
-        expected_checkpoint_schema
-            .get("pattern")
-            .and_then(Value::as_str),
-        Some("^(?!0{64}$)[0-9a-f]{64}$")
-    );
-    let after_sequence = parameter("after_sequence");
-    assert_eq!(
-        after_sequence
-            .get("schema")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("minimum"))
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    assert!(
-        after_sequence
-            .get("description")
-            .and_then(Value::as_str)
-            .is_some_and(|description| {
-                description.contains("together with after_receipt_digest_hex")
-            })
-    );
-    let after_digest = parameter("after_receipt_digest_hex");
-    let after_digest_schema = after_digest
-        .get("schema")
-        .and_then(Value::as_object)
-        .expect("exact receipt digest schema");
-    assert_eq!(
-        after_digest_schema.get("minLength").and_then(Value::as_u64),
-        Some(64)
-    );
-    assert_eq!(
-        after_digest_schema.get("maxLength").and_then(Value::as_u64),
-        Some(64)
-    );
-    assert_eq!(
-        after_digest_schema.get("pattern").and_then(Value::as_str),
-        Some("^(?!0{64}$)[0-9a-f]{64}$")
-    );
-    assert!(
-        after_digest
-            .get("description")
-            .and_then(Value::as_str)
-            .is_some_and(|description| description.contains("together with after_sequence"))
-    );
-    let limit = parameter("limit");
-    assert_eq!(limit.get("required").and_then(Value::as_bool), Some(true));
-    let limit_schema = limit
-        .get("schema")
-        .and_then(Value::as_object)
-        .expect("audit limit schema");
-    assert_eq!(limit_schema.get("minimum").and_then(Value::as_u64), Some(1));
-    assert_eq!(
-        limit_schema.get("maximum").and_then(Value::as_u64),
-        Some(256)
-    );
-    let auth_headers = parameters
+        .unwrap_or_else(|| panic!("{context} parameters"))
+}
+
+fn operation_parameter<'a>(operation: &'a Map, name: &str, context: &str) -> &'a Value {
+    operation_parameters(operation, context)
         .iter()
-        .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("header"))
-        .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        auth_headers,
-        BTreeSet::from([
-            "X-Iroha-Account",
-            "X-Iroha-Signature",
-            "X-Iroha-Timestamp-Ms",
-            "X-Iroha-Nonce",
-            "X-Iroha-Witness",
-        ])
-    );
-    let success_description = operation
+        .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some(name))
+        .unwrap_or_else(|| panic!("{context} parameter `{name}`"))
+}
+
+fn parameter_schema<'a>(parameter: &'a Value, context: &str) -> &'a Map {
+    parameter
+        .get("schema")
+        .and_then(Value::as_object)
+        .unwrap_or_else(|| panic!("{context} parameter schema"))
+}
+
+fn operation_responses<'a>(operation: &'a Map, context: &str) -> &'a Map {
+    operation
         .get("responses")
         .and_then(Value::as_object)
-        .and_then(|responses| responses.get("200"))
-        .and_then(Value::as_object)
-        .and_then(|response| response.get("description"))
-        .and_then(Value::as_str)
-        .expect("evidence audit success description");
-    for required_phrase in [
-        "checkpoint_anchor",
-        "digest-bound page_limit",
-        "predecessor and next_cursor",
-        "receipt_digest_hex",
-        "projection_norito_b64",
-        "projection_digest_hex",
-        "No sequence-only continuation",
-    ] {
-        assert!(
-            success_description.contains(required_phrase),
-            "evidence audit success response omitted `{required_phrase}`"
-        );
-    }
-    assert_eq!(
-        operation_response_schema_ref(operation, "200", "/v1/evidence/audit"),
-        "#/components/schemas/SorafsEvidenceAuditProjectionV1"
-    );
-    let responses = operation
-        .get("responses")
-        .and_then(Value::as_object)
-        .expect("evidence audit responses");
-    for status in ["400", "401", "403", "409", "503"] {
-        assert!(
-            responses.contains_key(status),
-            "evidence audit omitted documented {status} response"
-        );
-        assert_eq!(
-            operation_response_schema_ref(operation, status, "/v1/evidence/audit"),
-            "#/components/schemas/SorafsEvidenceApiErrorV1"
-        );
-    }
-    let status_operation = openapi_operation(&document, "/v1/evidence/status", "get");
-    assert_eq!(
-        operation_response_schema_ref(status_operation, "200", "/v1/evidence/status"),
-        "#/components/schemas/SorafsEvidenceAuditStatusV1"
-    );
-    assert_eq!(
-        status_operation
-            .get("parameters")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(5)
-    );
-    let schemas = component_schemas(&document);
-    for schema in [
-        "SorafsEvidenceReceiptCursorV1",
-        "SorafsEvidenceSignedCheckpointAnchorV1",
-        "SorafsEvidenceSignedReceiptV1",
-        "SorafsEvidenceAuditProjectionV1",
-        "SorafsEvidenceAuditStatusV1",
-        "SorafsEvidenceApiErrorV1",
-    ] {
-        assert!(schemas.contains_key(schema), "missing `{schema}` schema");
-    }
+        .unwrap_or_else(|| panic!("{context} responses"))
 }
-#[test]
-fn evidence_openapi_matches_authenticated_protocol_contract() {
-    use iroha_torii_shared::route_catalog::AuthenticationPolicy;
-    fn method_name(method: CatalogHttpMethod) -> &'static str {
-        match method {
-            CatalogHttpMethod::Get => "get",
-            CatalogHttpMethod::Post => "post",
-            CatalogHttpMethod::Put => "put",
-            CatalogHttpMethod::Patch => "patch",
-            CatalogHttpMethod::Delete => "delete",
-            CatalogHttpMethod::Any => {
-                panic!("ANY protocol gateways cannot enter the evidence OpenAPI contract")
-            }
-        }
-    }
-    fn assert_opaque_token_schema(schema: &Map, context: &str) {
-        assert_eq!(
-            schema.get("type").and_then(Value::as_str),
-            Some("string"),
-            "{context} type"
-        );
-        assert_eq!(
-            schema.get("minLength").and_then(Value::as_u64),
-            Some(1),
-            "{context} minimum length"
-        );
-        assert_eq!(
-            schema.get("maxLength").and_then(Value::as_u64),
-            Some(EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1 as u64),
-            "{context} maximum length"
-        );
-        assert_eq!(
-            schema.get("pattern").and_then(Value::as_str),
-            Some("^[!-~]+$"),
-            "{context} printable-ASCII pattern"
-        );
-    }
-    fn assert_nonzero_digest_schema(schema: &Map, context: &str) {
-        assert_eq!(
-            schema.get("type").and_then(Value::as_str),
-            Some("string"),
-            "{context} type"
-        );
-        assert_eq!(
-            schema.get("minLength").and_then(Value::as_u64),
-            Some(64),
-            "{context} minimum length"
-        );
-        assert_eq!(
-            schema.get("maxLength").and_then(Value::as_u64),
-            Some(64),
-            "{context} maximum length"
-        );
-        assert_eq!(
-            schema.get("pattern").and_then(Value::as_str),
-            Some("^(?!0{64}$)[0-9a-f]{64}$"),
-            "{context} canonical non-zero digest pattern"
-        );
-    }
-    let document = generate_spec();
-    let evidence_routes = RouteCatalog::new(CATALOGED_ROUTES)
-        .project(
-            CatalogProjection::OpenApi,
-            crate::router::builder::compiled_route_features(),
-        )
-        .into_iter()
-        .filter(|route| route.path().starts_with("/v1/evidence/"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        evidence_routes.len(),
-        12,
-        "the evidence protocol must expose exactly twelve authenticated operations"
-    );
-    let expected_auth_headers = BTreeSet::from([
-        ("X-Iroha-Account".to_owned(), false),
-        ("X-Iroha-Signature".to_owned(), false),
-        ("X-Iroha-Timestamp-Ms".to_owned(), false),
-        ("X-Iroha-Nonce".to_owned(), false),
-        ("X-Iroha-Witness".to_owned(), false),
-    ]);
-    for route in evidence_routes {
-        assert_eq!(
-            route.authentication(),
-            AuthenticationPolicy::CanonicalAccountSignature,
-            "{} {} catalog authentication policy",
-            method_name(route.method()),
-            route.path()
-        );
-        let method = method_name(route.method());
-        let operation = openapi_operation(&document, route.path(), method);
-        let auth_headers = operation_header_requirements(operation)
-            .into_iter()
-            .filter(|(name, _)| name.starts_with("X-Iroha-"))
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            auth_headers,
-            expected_auth_headers,
-            "{method} {} canonical authentication headers",
-            route.path()
-        );
-        let expected_secret_headers: BTreeSet<&str> = match (route.path(), method) {
-            ("/v1/evidence/session", "post") => BTreeSet::from(["X-SoraFS-Evidence-Challenge"]),
-            ("/v1/evidence/manifest/{session_id_hex}", "get")
-            | ("/v1/evidence/segment/{session_id_hex}", "get")
-            | ("/v1/evidence/log/{session_id_hex}", "post") => {
-                BTreeSet::from(["X-SoraFS-Evidence-Grant"])
-            }
-            _ => BTreeSet::new(),
-        };
-        let parameters = operation
-            .get("parameters")
-            .and_then(Value::as_array)
-            .unwrap_or_else(|| panic!("{method} {} parameters", route.path()));
-        let actual_secret_headers = parameters
-            .iter()
-            .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("header"))
-            .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
-            .filter(|name| name.starts_with("X-SoraFS-Evidence-"))
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            actual_secret_headers,
-            expected_secret_headers,
-            "{method} {} evidence request headers",
-            route.path()
-        );
-        for name in expected_secret_headers {
-            let parameter = parameters
-                .iter()
-                .find(|parameter| {
-                    parameter.get("name").and_then(Value::as_str) == Some(name)
-                        && parameter.get("in").and_then(Value::as_str) == Some("header")
-                })
-                .unwrap_or_else(|| panic!("{method} {} {name} request header", route.path()));
-            assert_eq!(
-                parameter.get("required").and_then(Value::as_bool),
-                Some(true),
-                "{method} {} {name} request requirement",
-                route.path()
-            );
-            assert_opaque_token_schema(
-                parameter
-                    .get("schema")
-                    .and_then(Value::as_object)
-                    .unwrap_or_else(|| panic!("{method} {} {name} request schema", route.path())),
-                &format!("{method} {} {name} request", route.path()),
-            );
-        }
-        let (success_status, expected_response_headers): (&str, BTreeSet<&str>) =
-            match (route.path(), method) {
-                ("/v1/evidence/session/challenge", "post") => {
-                    ("201", BTreeSet::from(["X-SoraFS-Evidence-Challenge"]))
-                }
-                ("/v1/evidence/session", "post") => {
-                    ("201", BTreeSet::from(["X-SoraFS-Evidence-Grant"]))
-                }
-                ("/v1/evidence/manifest/{session_id_hex}", "get") => {
-                    ("200", BTreeSet::from(["X-SoraFS-Evidence-Grant"]))
-                }
-                ("/v1/evidence/segment/{session_id_hex}", "get") => (
-                    "206",
-                    BTreeSet::from([
-                        "X-SoraFS-Evidence-Grant",
-                        "X-SoraFS-Evidence-Receipt-Digest",
-                        "X-SoraFS-Evidence-Watermark-Digest",
-                    ]),
-                ),
-                ("/v1/evidence/log/{session_id_hex}", "post") => {
-                    ("202", BTreeSet::from(["X-SoraFS-Evidence-Grant"]))
-                }
-                ("/v1/evidence/legal-hold", "post") => ("201", BTreeSet::new()),
-                _ => ("200", BTreeSet::new()),
-            };
-        let success_response = operation
-            .get("responses")
-            .and_then(Value::as_object)
-            .and_then(|responses| responses.get(success_status))
-            .and_then(Value::as_object)
-            .unwrap_or_else(|| {
-                panic!(
-                    "{method} {} {success_status} success response",
-                    route.path()
-                )
-            });
-        let response_headers = success_response.get("headers").and_then(Value::as_object);
-        let actual_response_headers = response_headers
-            .into_iter()
-            .flat_map(|headers| headers.keys())
-            .map(String::as_str)
-            .filter(|name| name.starts_with("X-SoraFS-Evidence-"))
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            actual_response_headers,
-            expected_response_headers,
-            "{method} {} evidence success response headers",
-            route.path()
-        );
-        for name in expected_response_headers {
-            let header = response_headers
-                .and_then(|headers| headers.get(name))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "{method} {} {success_status} {name} response header",
-                        route.path()
-                    )
-                });
-            assert_eq!(
-                header.get("required").and_then(Value::as_bool),
-                Some(true),
-                "{method} {} {name} response requirement",
-                route.path()
-            );
-            let schema = header
-                .get("schema")
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("{method} {} {name} response schema", route.path()));
-            match name {
-                "X-SoraFS-Evidence-Challenge" | "X-SoraFS-Evidence-Grant" => {
-                    assert_opaque_token_schema(
-                        schema,
-                        &format!("{method} {} {name} response", route.path()),
-                    );
-                }
-                "X-SoraFS-Evidence-Receipt-Digest" => {
-                    assert_eq!(
-                        schema.get("$ref").and_then(Value::as_str),
-                        Some("#/components/schemas/SorafsEvidenceNonzeroHex32V1")
-                    );
-                }
-                "X-SoraFS-Evidence-Watermark-Digest" => {
-                    assert_eq!(
-                        schema.get("$ref").and_then(Value::as_str),
-                        Some("#/components/schemas/SorafsEvidenceNonzeroHex32V1")
-                    );
-                }
-                _ => panic!("unexpected evidence response header {name}"),
-            }
-        }
-    }
-    let manifest = openapi_operation(&document, "/v1/evidence/manifest/{session_id_hex}", "get");
-    let manifest_queries = manifest
-        .get("parameters")
-        .and_then(Value::as_array)
-        .expect("evidence manifest parameters")
-        .iter()
-        .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("query"))
-        .collect::<Vec<_>>();
-    assert_eq!(manifest_queries.len(), 1);
-    let idempotency_key = manifest_queries[0];
-    assert_eq!(
-        idempotency_key.get("name").and_then(Value::as_str),
-        Some("idempotency_key_hex")
-    );
-    assert_eq!(
-        idempotency_key.get("required").and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_nonzero_digest_schema(
-        idempotency_key
-            .get("schema")
-            .and_then(Value::as_object)
-            .expect("evidence manifest idempotency key schema"),
-        "evidence manifest idempotency key",
-    );
-    let segment = openapi_operation(&document, "/v1/evidence/segment/{session_id_hex}", "get");
-    let segment_queries = segment
-        .get("parameters")
-        .and_then(Value::as_array)
-        .expect("evidence segment parameters")
-        .iter()
-        .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("query"))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        segment_queries
-            .iter()
-            .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["start", "end", "idempotency_key_hex"])
-    );
-    let segment_query = |name: &str| {
-        segment_queries
-            .iter()
-            .copied()
-            .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some(name))
-            .unwrap_or_else(|| panic!("evidence segment {name} query"))
-    };
-    for name in ["start", "end", "idempotency_key_hex"] {
-        assert_eq!(
-            segment_query(name).get("required").and_then(Value::as_bool),
-            Some(true),
-            "evidence segment {name} requirement"
-        );
-    }
-    let start_schema = segment_query("start")
-        .get("schema")
+
+fn response_content<'a>(operation: &'a Map, status: &str, context: &str) -> &'a Map {
+    operation_responses(operation, context)
+        .get(status)
         .and_then(Value::as_object)
-        .expect("evidence segment start schema");
-    assert_eq!(
-        start_schema.get("type").and_then(Value::as_str),
-        Some("integer")
-    );
-    assert_eq!(
-        start_schema.get("format").and_then(Value::as_str),
-        Some("uint64")
-    );
-    assert_eq!(start_schema.get("minimum").and_then(Value::as_u64), Some(0));
-    let end = segment_query("end");
-    let end_schema = end
-        .get("schema")
+        .and_then(|response| response.get("content"))
         .and_then(Value::as_object)
-        .expect("evidence segment end schema");
-    assert_eq!(
-        end_schema.get("type").and_then(Value::as_str),
-        Some("integer")
-    );
-    assert_eq!(
-        end_schema.get("format").and_then(Value::as_str),
-        Some("uint64")
-    );
-    assert_eq!(end_schema.get("minimum").and_then(Value::as_u64), Some(1));
-    assert!(
-        end.get("description")
-            .and_then(Value::as_str)
-            .is_some_and(|description| description.contains("greater than start"))
-    );
-    assert_nonzero_digest_schema(
-        segment_query("idempotency_key_hex")
-            .get("schema")
-            .and_then(Value::as_object)
-            .expect("evidence segment idempotency key schema"),
-        "evidence segment idempotency key",
-    );
+        .unwrap_or_else(|| panic!("{context} HTTP {status} content"))
 }
-#[test]
-fn sorafs_pin_register_openapi_is_caller_signed_transaction_transport() {
-    let document = generate_spec();
-    let operation = openapi_operation(&document, "/v1/sorafs/pin/register", "post");
-    assert_eq!(
-        operation_request_schema_ref(operation, "/v1/sorafs/pin/register"),
-        "#/components/schemas/VersionedSignedTransactionJson"
-    );
-    assert_eq!(
-        operation_response_schema_ref(operation, "202", "/v1/sorafs/pin/register"),
-        "#/components/schemas/SorafsPinRegisterResponseV1"
-    );
-    let request_content = operation
+
+fn request_content<'a>(operation: &'a Map, context: &str) -> &'a Map {
+    operation
         .get("requestBody")
         .and_then(Value::as_object)
         .and_then(|body| body.get("content"))
         .and_then(Value::as_object)
-        .expect("pin-register request content");
-    assert_eq!(
-        request_content
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["application/json", "application/x-norito"])
-    );
-    assert_eq!(
-        request_content
-            .get("application/x-norito")
-            .and_then(Value::as_object)
-            .and_then(|media| media.get("schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("x-iroha-norito-schema"))
-            .and_then(Value::as_str),
-        Some("SignedTransaction")
-    );
-    let success_content = operation
-        .get("responses")
+        .unwrap_or_else(|| panic!("{context} request content"))
+}
+
+fn value_strings<'a>(value: &'a Value, context: &str) -> Vec<&'a str> {
+    value
+        .as_array()
+        .unwrap_or_else(|| panic!("{context} string array"))
+        .iter()
+        .map(|entry| entry.as_str().unwrap_or_else(|| panic!("{context} string entry")))
+        .collect()
+}
+
+fn variant_property<'a>(variants: &'a [Value], index: usize, field: &str) -> &'a Map {
+    variants[index]
+        .get("properties")
         .and_then(Value::as_object)
-        .and_then(|responses| responses.get("202"))
+        .and_then(|properties| properties.get(field))
         .and_then(Value::as_object)
-        .and_then(|response| response.get("content"))
-        .and_then(Value::as_object)
-        .expect("pin-register success content");
+        .unwrap_or_else(|| panic!("variant {index} property {field}"))
+}
+
+fn assert_description_inventory(description: &str, inventory: &str, context: &str) {
+    for phrase in contract_strings(inventory) {
+        assert!(description.contains(phrase), "{context} omitted `{phrase}`");
+    }
+}
+
+fn assert_schema_shapes(schemas: &Map, contracts: &[SchemaShape]) {
+    for contract in contracts {
+        let required = contract_strings(contract.required);
+        let optional = contract.optional.map(contract_strings).unwrap_or_default();
+        assert_strict_object_schema(schemas, contract.name, &required, &optional);
+    }
+}
+
+fn assert_property_refs(schemas: &Map, contracts: &[PropertyRefContract]) {
+    for contract in contracts {
+        assert_eq!(
+            property_ref(schemas, contract.owner, contract.property),
+            contract.expected,
+            "{}.{} reference drift",
+            contract.owner,
+            contract.property
+        );
+    }
+}
+
+fn assert_operation_response_contracts(document: &Value, contracts: &[OperationResponseContract]) {
+    for contract in contracts {
+        let operation = openapi_operation(document, contract.path, contract.method);
+        assert_eq!(
+            operation_response_schema_ref(operation, contract.status, contract.path),
+            contract.schema_ref,
+            "{} {} HTTP {} schema",
+            contract.method,
+            contract.path,
+            contract.status
+        );
+    }
+}
+
+fn assert_required_inventory(schema: &Map, inventory: &str, context: &str) {
+    let required = schema
+        .get("required")
+        .and_then(Value::as_array)
+        .unwrap_or_else(|| panic!("{context} required fields"));
+    for field in contract_strings(inventory) {
+        assert!(required.iter().any(|value| value.as_str() == Some(field)), "{context} must require {field}");
+    }
+}
+
+fn canonical_account_headers(required: bool) -> BTreeSet<(String, bool)> {
+    canonical_account_header_requirements(required).into_iter().collect()
+}
+
+fn canonical_account_header_names() -> BTreeSet<&'static str> {
+    [
+        "X-Iroha-Account",
+        "X-Iroha-Signature",
+        "X-Iroha-Timestamp-Ms",
+        "X-Iroha-Nonce",
+        "X-Iroha-Witness",
+    ]
+    .into_iter()
+    .collect()
+}
+
+fn canonical_account_header_requirements(required: bool) -> Vec<(String, bool)> {
+    [
+        "X-Iroha-Account",
+        "X-Iroha-Signature",
+        "X-Iroha-Timestamp-Ms",
+        "X-Iroha-Nonce",
+        "X-Iroha-Witness",
+    ]
+    .into_iter()
+    .map(|name| (name.to_owned(), required))
+    .collect()
+}
+
+fn assert_opaque_evidence_token(schema: &Map, context: &str) {
+    assert_eq!(schema.get("type").and_then(Value::as_str), Some("string"), "{context} type");
+    assert_eq!(schema.get("minLength").and_then(Value::as_u64), Some(1), "{context} minimum length");
     assert_eq!(
-        success_content
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        ["application/json"]
+        schema.get("maxLength").and_then(Value::as_u64),
+        Some(EVIDENCE_VIEWER_MAX_OPAQUE_TOKEN_BYTES_V1 as u64),
+        "{context} maximum length"
     );
-    let description = operation
-        .get("description")
-        .and_then(Value::as_str)
-        .expect("pin-register operation description");
-    assert!(
-        description.contains("caller-signed")
-            && description.contains("exactly one native `RegisterPinManifest`")
-            && description.contains("queues the original transaction unchanged")
-            && description.contains("Submitted never means committed or finalized")
-            && description.contains("not a finality, fee, custody, or pin-status receipt")
-            && description.contains("never accepts or handles a private key"),
-        "pin-register operation must document the signature-bound transport contract"
+    assert_eq!(schema.get("pattern").and_then(Value::as_str), Some("^[!-~]+$"), "{context} printable-ASCII pattern");
+}
+
+fn assert_nonzero_digest(schema: &Map, context: &str) {
+    assert_eq!(schema.get("type").and_then(Value::as_str), Some("string"), "{context} type");
+    assert_eq!(schema.get("minLength").and_then(Value::as_u64), Some(64), "{context} minimum length");
+    assert_eq!(schema.get("maxLength").and_then(Value::as_u64), Some(64), "{context} maximum length");
+    assert_eq!(schema.get("pattern").and_then(Value::as_str), Some("^(?!0{64}$)[0-9a-f]{64}$"), "{context} canonical non-zero digest pattern");
+}
+
+fn catalog_method_name(method: CatalogHttpMethod) -> &'static str {
+    match method {
+        CatalogHttpMethod::Get => "get",
+        CatalogHttpMethod::Post => "post",
+        CatalogHttpMethod::Put => "put",
+        CatalogHttpMethod::Patch => "patch",
+        CatalogHttpMethod::Delete => "delete",
+        CatalogHttpMethod::Any => panic!("ANY gateway cannot enter this OpenAPI contract"),
+    }
+}
+
+#[test]
+fn evidence_audit_openapi_requires_and_returns_exact_cursors() {
+    let document = generate_spec();
+    let operation = openapi_operation(&document, "/v1/evidence/audit", "get");
+    assert_description_inventory(
+        operation.get("description").and_then(Value::as_str).expect("evidence audit description"),
+        "evidence.audit.description",
+        "evidence audit description",
     );
+    let parameters = operation_parameters(operation, "evidence audit");
+    assert_eq!(parameters.len(), 9);
+    let checkpoint = operation_parameter(operation, "expected_checkpoint_digest_hex", "evidence audit");
+    assert_eq!(checkpoint.get("required").and_then(Value::as_bool), Some(true));
+    assert_eq!(parameter_schema(checkpoint, "expected checkpoint").get("pattern").and_then(Value::as_str), Some("^(?!0{64}$)[0-9a-f]{64}$"));
+    let after_sequence = operation_parameter(operation, "after_sequence", "evidence audit");
+    assert_eq!(parameter_schema(after_sequence, "after sequence").get("minimum").and_then(Value::as_u64), Some(1));
+    assert!(after_sequence.get("description").and_then(Value::as_str).is_some_and(|text| text.contains("together with after_receipt_digest_hex")));
+    let after_digest = operation_parameter(operation, "after_receipt_digest_hex", "evidence audit");
+    let digest_schema = parameter_schema(after_digest, "after receipt digest");
+    assert_eq!(digest_schema.get("minLength").and_then(Value::as_u64), Some(64));
+    assert_eq!(digest_schema.get("maxLength").and_then(Value::as_u64), Some(64));
+    assert_eq!(digest_schema.get("pattern").and_then(Value::as_str), Some("^(?!0{64}$)[0-9a-f]{64}$"));
+    assert!(after_digest.get("description").and_then(Value::as_str).is_some_and(|text| text.contains("together with after_sequence")));
+    let limit = operation_parameter(operation, "limit", "evidence audit");
+    assert_eq!(limit.get("required").and_then(Value::as_bool), Some(true));
+    assert_eq!(parameter_schema(limit, "audit limit").get("minimum").and_then(Value::as_u64), Some(1));
+    assert_eq!(parameter_schema(limit, "audit limit").get("maximum").and_then(Value::as_u64), Some(256));
+    let auth_headers = parameters.iter()
+        .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("header"))
+        .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(auth_headers, canonical_account_header_names());
+    let success = operation_responses(operation, "evidence audit").get("200")
+        .and_then(Value::as_object).and_then(|response| response.get("description"))
+        .and_then(Value::as_str).expect("evidence audit success description");
+    assert_description_inventory(success, "evidence.audit.success", "evidence audit success response");
+    assert_operation_response_contracts(&document, &[
+        OperationResponseContract { path: "/v1/evidence/audit", method: "get", status: "200", schema_ref: "#/components/schemas/SorafsEvidenceAuditProjectionV1" },
+        OperationResponseContract { path: "/v1/evidence/status", method: "get", status: "200", schema_ref: "#/components/schemas/SorafsEvidenceAuditStatusV1" },
+    ]);
+    let responses = operation_responses(operation, "evidence audit");
+    for status in ["400", "401", "403", "409", "503"] {
+        assert!(responses.contains_key(status), "evidence audit omitted documented {status} response");
+        assert_eq!(operation_response_schema_ref(operation, status, "/v1/evidence/audit"), "#/components/schemas/SorafsEvidenceApiErrorV1");
+    }
+    assert_eq!(operation_parameters(openapi_operation(&document, "/v1/evidence/status", "get"), "evidence status").len(), 5);
     let schemas = component_schemas(&document);
-    assert!(
-        !schemas.contains_key("SorafsPinRegisterRequestV1"),
-        "the secret-bearing pin-register request DTO must not remain in OpenAPI"
-    );
-    assert_strict_object_schema(
-        schemas,
-        "SorafsPinRegisterResponseV1",
-        &["status", "tx_hash_hex", "manifest_digest_hex"],
-        &[],
-    );
+    for schema in contract_strings("evidence.schemas") {
+        assert!(schemas.contains_key(schema), "missing `{schema}` schema");
+    }
+}
+
+#[test]
+fn evidence_openapi_matches_authenticated_protocol_contract() {
+    use iroha_torii_shared::route_catalog::AuthenticationPolicy;
+    let document = generate_spec();
+    let routes = RouteCatalog::new(CATALOGED_ROUTES)
+        .project(CatalogProjection::OpenApi, crate::router::builder::compiled_route_features())
+        .into_iter().filter(|route| route.path().starts_with("/v1/evidence/")).collect::<Vec<_>>();
+    assert_eq!(routes.len(), 12, "the evidence protocol must expose exactly twelve authenticated operations");
+    for route in routes {
+        let method = catalog_method_name(route.method());
+        assert_eq!(route.authentication(), AuthenticationPolicy::CanonicalAccountSignature, "{method} {} catalog authentication policy", route.path());
+        let operation = openapi_operation(&document, route.path(), method);
+        let auth = operation_header_requirements(operation).into_iter()
+            .filter(|(name, _)| name.starts_with("X-Iroha-")).collect::<BTreeSet<_>>();
+        assert_eq!(auth, canonical_account_headers(false), "{method} {} canonical authentication headers", route.path());
+        let secret: BTreeSet<&str> = match (route.path(), method) {
+            ("/v1/evidence/session", "post") => BTreeSet::from(["X-SoraFS-Evidence-Challenge"]),
+            ("/v1/evidence/manifest/{session_id_hex}", "get")
+            | ("/v1/evidence/segment/{session_id_hex}", "get")
+            | ("/v1/evidence/log/{session_id_hex}", "post") => BTreeSet::from(["X-SoraFS-Evidence-Grant"]),
+            _ => BTreeSet::new(),
+        };
+        let parameters = operation_parameters(operation, route.path());
+        let actual_secret = parameters.iter()
+            .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("header"))
+            .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
+            .filter(|name| name.starts_with("X-SoraFS-Evidence-")).collect::<BTreeSet<_>>();
+        assert_eq!(actual_secret, secret, "{method} {} evidence request headers", route.path());
+        for name in secret {
+            let parameter = operation_parameter(operation, name, route.path());
+            assert_eq!(parameter.get("required").and_then(Value::as_bool), Some(true), "{method} {} {name} request requirement", route.path());
+            assert_opaque_evidence_token(parameter_schema(parameter, name), &format!("{method} {} {name} request", route.path()));
+        }
+        let (status, expected_headers): (&str, BTreeSet<&str>) = match (route.path(), method) {
+            ("/v1/evidence/session/challenge", "post") => ("201", BTreeSet::from(["X-SoraFS-Evidence-Challenge"])),
+            ("/v1/evidence/session", "post") => ("201", BTreeSet::from(["X-SoraFS-Evidence-Grant"])),
+            ("/v1/evidence/manifest/{session_id_hex}", "get") => ("200", BTreeSet::from(["X-SoraFS-Evidence-Grant"])),
+            ("/v1/evidence/segment/{session_id_hex}", "get") => ("206", BTreeSet::from([
+                "X-SoraFS-Evidence-Grant", "X-SoraFS-Evidence-Receipt-Digest", "X-SoraFS-Evidence-Watermark-Digest",
+            ])),
+            ("/v1/evidence/log/{session_id_hex}", "post") => ("202", BTreeSet::from(["X-SoraFS-Evidence-Grant"])),
+            ("/v1/evidence/legal-hold", "post") => ("201", BTreeSet::new()),
+            _ => ("200", BTreeSet::new()),
+        };
+        let response = operation_responses(operation, route.path()).get(status).and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("{method} {} {status} success response", route.path()));
+        let headers = response.get("headers").and_then(Value::as_object);
+        let actual = headers.into_iter().flat_map(|headers| headers.keys()).map(String::as_str)
+            .filter(|name| name.starts_with("X-SoraFS-Evidence-")).collect::<BTreeSet<_>>();
+        assert_eq!(actual, expected_headers, "{method} {} evidence success response headers", route.path());
+        for name in expected_headers {
+            let header = headers.and_then(|headers| headers.get(name)).and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{method} {} {status} {name} response header", route.path()));
+            assert_eq!(header.get("required").and_then(Value::as_bool), Some(true));
+            let schema = header.get("schema").and_then(Value::as_object).expect("evidence response header schema");
+            if matches!(name, "X-SoraFS-Evidence-Challenge" | "X-SoraFS-Evidence-Grant") {
+                assert_opaque_evidence_token(schema, name);
+            } else {
+                assert_eq!(schema.get("$ref").and_then(Value::as_str), Some("#/components/schemas/SorafsEvidenceNonzeroHex32V1"));
+            }
+        }
+    }
+    let manifest = openapi_operation(&document, "/v1/evidence/manifest/{session_id_hex}", "get");
+    let queries = operation_parameters(manifest, "evidence manifest").iter()
+        .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("query")).collect::<Vec<_>>();
+    assert_eq!(queries.len(), 1);
+    assert_eq!(queries[0].get("name").and_then(Value::as_str), Some("idempotency_key_hex"));
+    assert_eq!(queries[0].get("required").and_then(Value::as_bool), Some(true));
+    assert_nonzero_digest(parameter_schema(queries[0], "manifest idempotency key"), "evidence manifest idempotency key");
+    let segment = openapi_operation(&document, "/v1/evidence/segment/{session_id_hex}", "get");
+    let queries = operation_parameters(segment, "evidence segment").iter()
+        .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("query")).collect::<Vec<_>>();
+    assert_eq!(queries.iter().filter_map(|parameter| parameter.get("name").and_then(Value::as_str)).collect::<BTreeSet<_>>(), BTreeSet::from(["start", "end", "idempotency_key_hex"]));
+    for name in ["start", "end", "idempotency_key_hex"] {
+        assert_eq!(operation_parameter(segment, name, "evidence segment").get("required").and_then(Value::as_bool), Some(true));
+    }
+    for (name, minimum) in [("start", 0), ("end", 1)] {
+        let schema = parameter_schema(operation_parameter(segment, name, "evidence segment"), name);
+        assert_eq!(schema.get("type").and_then(Value::as_str), Some("integer"));
+        assert_eq!(schema.get("format").and_then(Value::as_str), Some("uint64"));
+        assert_eq!(schema.get("minimum").and_then(Value::as_u64), Some(minimum));
+    }
+    assert!(operation_parameter(segment, "end", "evidence segment").get("description").and_then(Value::as_str).is_some_and(|text| text.contains("greater than start")));
+    assert_nonzero_digest(parameter_schema(operation_parameter(segment, "idempotency_key_hex", "evidence segment"), "segment idempotency key"), "evidence segment idempotency key");
+}
+
+#[test]
+fn sorafs_pin_register_openapi_is_caller_signed_transaction_transport() {
+    let document = generate_spec();
+    let operation = openapi_operation(&document, "/v1/sorafs/pin/register", "post");
+    assert_eq!(operation_request_schema_ref(operation, "/v1/sorafs/pin/register"), "#/components/schemas/VersionedSignedTransactionJson");
+    assert_eq!(operation_response_schema_ref(operation, "202", "/v1/sorafs/pin/register"), "#/components/schemas/SorafsPinRegisterResponseV1");
+    let request = request_content(operation, "pin-register");
+    assert_eq!(request.keys().map(String::as_str).collect::<BTreeSet<_>>(), BTreeSet::from(["application/json", "application/x-norito"]));
+    assert_eq!(request.get("application/x-norito").and_then(|media| media.get("schema")).and_then(|schema| schema.get("x-iroha-norito-schema")).and_then(Value::as_str), Some("SignedTransaction"));
+    assert_eq!(response_content(operation, "202", "pin-register").keys().map(String::as_str).collect::<Vec<_>>(), ["application/json"]);
+    assert_description_inventory(operation.get("description").and_then(Value::as_str).expect("pin-register description"), "pin.register.description", "pin-register operation");
+    let schemas = component_schemas(&document);
+    assert!(!schemas.contains_key("SorafsPinRegisterRequestV1"), "the secret-bearing pin-register request DTO must not remain in OpenAPI");
+    assert_strict_object_schema(schemas, "SorafsPinRegisterResponseV1", &["status", "tx_hash_hex", "manifest_digest_hex"], &[]);
     assert!(!schemas.contains_key("SorafsPinAliasV1"));
     assert!(!schemas.contains_key("SorafsPinSuccessorDigestV1"));
 }
+
 #[test]
 fn sorafs_storage_token_openapi_requires_operator_and_diagnostic_headers() {
     use iroha_torii_shared::route_catalog::AuthenticationPolicy;
-    assert_eq!(
-        iroha_torii_shared::route_catalog::sorafs::STORAGE_TOKEN.authentication(),
-        AuthenticationPolicy::OperatorSignature
-    );
+    assert_eq!(iroha_torii_shared::route_catalog::sorafs::STORAGE_TOKEN.authentication(), AuthenticationPolicy::OperatorSignature);
     let document = generate_spec();
     let operation = openapi_operation(&document, "/v1/sorafs/storage/token", "post");
-    assert_eq!(
-        operation_header_requirements(operation)
-            .into_iter()
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([
-            ("X-Iroha-Operator-Nonce".to_owned(), true),
-            ("X-Iroha-Operator-Public-Key".to_owned(), true),
-            ("X-Iroha-Operator-Signature".to_owned(), true),
-            ("X-Iroha-Operator-Timestamp-Ms".to_owned(), true),
-            ("X-SoraFS-Client".to_owned(), true),
-            ("X-SoraFS-Nonce".to_owned(), true),
-        ])
-    );
-    assert!(
-        operation
-            .get("description")
-            .and_then(Value::as_str)
-            .is_some_and(|description| {
-                description.contains("listener-wide API-token enforcement is disabled")
-                    && description.contains("client label is diagnostic")
-            })
-    );
+    assert_eq!(operation_header_requirements(operation).into_iter().collect::<BTreeSet<_>>(), BTreeSet::from([
+        ("X-Iroha-Operator-Nonce".to_owned(), true), ("X-Iroha-Operator-Public-Key".to_owned(), true),
+        ("X-Iroha-Operator-Signature".to_owned(), true), ("X-Iroha-Operator-Timestamp-Ms".to_owned(), true),
+        ("X-SoraFS-Client".to_owned(), true), ("X-SoraFS-Nonce".to_owned(), true),
+    ]));
+    let description = operation.get("description").and_then(Value::as_str).expect("storage-token description");
+    assert!(description.contains("listener-wide API-token enforcement is disabled") && description.contains("client label is diagnostic"));
 }
+
 #[test]
 fn sorafs_storage_and_inventory_openapi_matches_authenticated_catalog() {
     let document = generate_spec();
-    let paths = document
-        .get("paths")
-        .and_then(Value::as_object)
-        .expect("OpenAPI paths");
+    let paths = document.get("paths").and_then(Value::as_object).expect("OpenAPI paths");
     assert!(!paths.contains_key("/v1/sorafs/storage/state"));
     assert!(!paths.contains_key("/v1/sorafs/storage/fetch"));
-    let canonical_headers = BTreeSet::from([
-        "X-Iroha-Account",
-        "X-Iroha-Nonce",
-        "X-Iroha-Signature",
-        "X-Iroha-Timestamp-Ms",
-        "X-Iroha-Witness",
-    ]);
+    let canonical = canonical_account_headers(false).into_iter().map(|(name, _)| name).collect::<BTreeSet<_>>();
     for path in ["/v1/sorafs/aliases", "/v1/sorafs/replication"] {
-        let operation = openapi_operation(&document, path, "get");
-        let headers = operation_header_requirements(operation)
-            .into_iter()
-            .map(|(name, _required)| name)
-            .collect::<BTreeSet<_>>();
-        for expected in &canonical_headers {
-            assert!(
-                headers.contains(*expected),
-                "{path} must document canonical auth header {expected}"
-            );
+        let headers = operation_header_requirements(openapi_operation(&document, path, "get")).into_iter().map(|(name, _)| name).collect::<BTreeSet<_>>();
+        for expected in &canonical {
+            assert!(headers.contains(expected), "{path} must document canonical auth header {expected}");
         }
     }
-    for (path, expected_headers) in [
-        (
-            "/v1/sorafs/storage/car/{manifest_id}",
-            &[
-                "Range",
-                "Sora-Dag-Scope",
-                "X-SoraFS-Chunker",
-                "X-SoraFS-Nonce",
-                "X-SoraFS-Stream-Token",
-            ][..],
-        ),
-        (
-            "/v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}",
-            &["X-SoraFS-Nonce", "X-SoraFS-Stream-Token"][..],
-        ),
+    for (path, expected) in [
+        ("/v1/sorafs/storage/car/{manifest_id}", &["Range", "Sora-Dag-Scope", "X-SoraFS-Chunker", "X-SoraFS-Nonce", "X-SoraFS-Stream-Token"][..]),
+        ("/v1/sorafs/storage/chunk/{manifest_id}/{chunk_digest}", &["X-SoraFS-Nonce", "X-SoraFS-Stream-Token"][..]),
     ] {
-        let operation = openapi_operation(&document, path, "get");
-        let headers = operation_header_requirements(operation)
-            .into_iter()
-            .collect::<BTreeSet<_>>();
-        for expected in expected_headers {
-            assert!(
-                headers.contains(&(expected.to_string(), true)),
-                "{path} must require {expected}"
-            );
+        let headers = operation_header_requirements(openapi_operation(&document, path, "get")).into_iter().collect::<BTreeSet<_>>();
+        for name in expected {
+            assert!(headers.contains(&(name.to_string(), true)), "{path} must require {name}");
         }
     }
 }
+
 #[test]
 fn sorafs_pin_list_openapi_is_finalized_bounded_keyset_readback() {
     const PATH: &str = "/v1/sorafs/pin";
     let document = generate_spec();
     let operation = openapi_operation(&document, PATH, "get");
-    assert_eq!(
-        operation_response_schema_ref(operation, "200", PATH),
-        "#/components/schemas/PinManifestPageV1"
-    );
-    assert_eq!(
-        operation
-            .get("responses")
-            .and_then(Value::as_object)
-            .and_then(|responses| responses.get("200"))
-            .and_then(Value::as_object)
-            .and_then(|response| response.get("content"))
-            .and_then(Value::as_object)
-            .map(|content| content.keys().cloned().collect::<BTreeSet<_>>()),
-        Some(BTreeSet::from([
-            "application/json".to_owned(),
-            "application/x-norito".to_owned(),
-        ])),
-        "pin-list OpenAPI response must advertise both supported representations"
-    );
-    let description = operation
-        .get("description")
-        .and_then(Value::as_str)
-        .expect("pin-list operation description");
-    assert!(
-        description.contains("exclusive keyset cursor")
-            && description.contains("O(1) consensus-maintained")
-            && description.contains("Offset pagination")
-            && description.contains("bounded detail route"),
-        "pin-list operation must document the finalized bounded hard cut"
-    );
-    let parameters = operation
-        .get("parameters")
-        .and_then(Value::as_array)
-        .expect("pin-list parameters");
-    assert_eq!(
-        parameters
-            .iter()
-            .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([
-            "after_digest_hex",
-            "expected_finalized_block_hash_hex",
-            "expected_finalized_height",
-            "limit",
-            "max_bytes",
-            "status",
-        ])
-    );
-    assert!(
-        parameters
-            .iter()
-            .all(|parameter| parameter.get("name").and_then(Value::as_str) != Some("offset"))
-    );
+    assert_eq!(operation_response_schema_ref(operation, "200", PATH), "#/components/schemas/PinManifestPageV1");
+    assert_eq!(response_content(operation, "200", PATH).keys().map(String::as_str).collect::<BTreeSet<_>>(), BTreeSet::from(["application/json", "application/x-norito"]));
+    assert_description_inventory(operation.get("description").and_then(Value::as_str).expect("pin-list description"), "pin.list.description", "pin-list operation");
+    let names = operation_parameters(operation, PATH).iter().filter_map(|parameter| parameter.get("name").and_then(Value::as_str)).collect::<BTreeSet<_>>();
+    assert_eq!(names, BTreeSet::from(["after_digest_hex", "expected_finalized_block_hash_hex", "expected_finalized_height", "limit", "max_bytes", "status"]));
+    assert!(!names.contains("offset"));
     let schemas = component_schemas(&document);
-    assert_strict_object_schema(
-        schemas,
-        "PinManifestPageV1",
-        &["finalized_cursor", "charged_usage", "manifests", "has_more"],
-        &["next_after_digest"],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "PinManifestSummaryV1",
-        &[
-            "digest",
-            "submitted_by",
-            "submitted_epoch",
-            "content_length",
-            "retention_epoch",
-            "status",
-        ],
-        &["successor_of"],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "PinResourceUsage",
-        &["manifest_count", "content_bytes"],
-        &[],
-    );
-    assert_eq!(
-        property_ref(schemas, "PinManifestPageV1", "finalized_cursor"),
-        "#/components/schemas/PinManifestFinalizedCursorV1"
-    );
-    assert_eq!(
-        property_ref(schemas, "PinManifestPageV1", "charged_usage"),
-        "#/components/schemas/PinResourceUsage"
-    );
+    assert_strict_object_schema(schemas, "PinManifestPageV1", &["finalized_cursor", "charged_usage", "manifests", "has_more"], &["next_after_digest"]);
+    assert_strict_object_schema(schemas, "PinManifestSummaryV1", &["digest", "submitted_by", "submitted_epoch", "content_length", "retention_epoch", "status"], &["successor_of"]);
+    assert_strict_object_schema(schemas, "PinResourceUsage", &["manifest_count", "content_bytes"], &[]);
+    assert_property_refs(schemas, &[
+        PropertyRefContract { owner: "PinManifestPageV1", property: "finalized_cursor", expected: "#/components/schemas/PinManifestFinalizedCursorV1" },
+        PropertyRefContract { owner: "PinManifestPageV1", property: "charged_usage", expected: "#/components/schemas/PinResourceUsage" },
+    ]);
 }
+
 #[test]
 fn sorafs_pin_manifest_openapi_is_finalized_native_readback() {
     const PATH: &str = "/v1/sorafs/pin/{digest_hex}";
-    const RETIRED_TOP_LEVEL_FIELDS: [&str; 10] = [
-        "limit",
-        "attestation",
-        "aliases",
-        "alias_count",
-        "aliases_returned",
-        "aliases_truncated",
-        "replication_orders",
-        "replication_order_count",
-        "replication_orders_returned",
-        "replication_orders_truncated",
-    ];
     let document = generate_spec();
     let operation = openapi_operation(&document, PATH, "get");
-    assert_eq!(
-        operation_response_schema_ref(operation, "200", PATH),
-        "#/components/schemas/PinManifestFinalizedRecordV1"
-    );
-    let description = operation
-        .get("description")
-        .and_then(Value::as_str)
-        .expect("pin-manifest operation description");
-    assert!(
-        description.contains("exact native Norito JSON `PinManifestFinalizedRecordV1`")
-            && description.contains("must be supplied together")
-            && description.contains("stale anchor returns 409")
-            && description.contains("retired projection `limit`"),
-        "pin-manifest operation must document finalized native readback and paired-anchor semantics"
-    );
-    let parameters = operation
-        .get("parameters")
-        .and_then(Value::as_array)
-        .expect("pin-manifest parameters");
+    assert_eq!(operation_response_schema_ref(operation, "200", PATH), "#/components/schemas/PinManifestFinalizedRecordV1");
+    assert_description_inventory(operation.get("description").and_then(Value::as_str).expect("pin-manifest description"), "pin.manifest.description", "pin-manifest operation");
+    let parameters = operation_parameters(operation, PATH);
     assert_eq!(parameters.len(), 3);
-    assert_eq!(
-        parameters
-            .iter()
-            .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from([
-            "digest_hex",
-            "expected_finalized_height",
-            "expected_finalized_block_hash_hex",
-        ])
-    );
-    assert!(
-        parameters
-            .iter()
-            .all(|parameter| parameter.get("name").and_then(Value::as_str) != Some("limit")),
-        "the retired projection limit must not remain in the operation"
-    );
-    let height = parameters
-        .iter()
-        .find(|parameter| {
-            parameter.get("name").and_then(Value::as_str) == Some("expected_finalized_height")
-        })
-        .and_then(Value::as_object)
-        .expect("expected finalized height parameter");
+    let names = parameters.iter().filter_map(|parameter| parameter.get("name").and_then(Value::as_str)).collect::<BTreeSet<_>>();
+    assert_eq!(names, BTreeSet::from(["digest_hex", "expected_finalized_height", "expected_finalized_block_hash_hex"]));
+    assert!(!names.contains("limit"), "the retired projection limit must not remain in the operation");
+    let height = operation_parameter(operation, "expected_finalized_height", PATH);
     assert_eq!(height.get("in").and_then(Value::as_str), Some("query"));
     assert_eq!(height.get("required").and_then(Value::as_bool), Some(false));
-    assert_eq!(
-        height
-            .get("schema")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("minimum"))
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    let block_hash = parameters
-        .iter()
-        .find(|parameter| {
-            parameter.get("name").and_then(Value::as_str)
-                == Some("expected_finalized_block_hash_hex")
-        })
-        .and_then(Value::as_object)
-        .expect("expected finalized block hash parameter");
+    assert_eq!(parameter_schema(height, "expected finalized height").get("minimum").and_then(Value::as_u64), Some(1));
+    let block_hash = operation_parameter(operation, "expected_finalized_block_hash_hex", PATH);
     assert_eq!(block_hash.get("in").and_then(Value::as_str), Some("query"));
-    assert_eq!(
-        block_hash.get("required").and_then(Value::as_bool),
-        Some(false)
-    );
-    let block_hash_schema = block_hash
-        .get("schema")
-        .and_then(Value::as_object)
-        .expect("expected finalized block hash schema");
-    assert_eq!(
-        block_hash_schema.get("minLength").and_then(Value::as_u64),
-        Some(64)
-    );
-    assert_eq!(
-        block_hash_schema.get("maxLength").and_then(Value::as_u64),
-        Some(64)
-    );
-    assert_eq!(
-        block_hash_schema.get("pattern").and_then(Value::as_str),
-        Some("^(?!0{64}$)[0-9a-f]{64}$")
-    );
+    assert_eq!(block_hash.get("required").and_then(Value::as_bool), Some(false));
+    assert_nonzero_digest(parameter_schema(block_hash, "expected finalized block hash"), "expected finalized block hash");
     let schemas = component_schemas(&document);
-    assert_strict_object_schema(
-        schemas,
-        "PinManifestFinalizedRecordV1",
-        &["finalized_cursor", "manifest"],
-        &[],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "PinManifestFinalizedCursorV1",
-        &["height", "block_hash"],
-        &[],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "PinManifestRecord",
-        &[
-            "digest",
-            "root_cid",
-            "chunker",
-            "chunk_digest_sha3_256",
-            "por_root",
-            "content_length",
-            "policy",
-            "submitted_by",
-            "submitted_epoch",
-            "alias",
-            "metadata",
-            "status",
-            "council_envelope_digest",
-        ],
-        &["successor_of", "retirement_reason", "pin_fee_payment"],
-    );
-    assert_eq!(
-        property_ref(schemas, "PinManifestFinalizedRecordV1", "finalized_cursor"),
-        "#/components/schemas/PinManifestFinalizedCursorV1"
-    );
-    assert_eq!(
-        property_ref(schemas, "PinManifestFinalizedRecordV1", "manifest"),
-        "#/components/schemas/PinManifestRecord"
-    );
-    assert_eq!(
-        property_ref(schemas, "PinManifestRecord", "por_root"),
-        "#/components/schemas/PinManifestBytes32V1"
-    );
-    assert_eq!(
-        property_ref(schemas, "PinManifestRecord", "status"),
-        "#/components/schemas/PinStatus"
-    );
-    assert_eq!(
-        nullable_property_ref(schemas, "PinManifestRecord", "alias"),
-        "#/components/schemas/ManifestAliasBinding"
-    );
-    assert_eq!(
-        nullable_property_ref(schemas, "PinManifestRecord", "council_envelope_digest"),
-        "#/components/schemas/PinManifestBytes32V1"
-    );
-    let content_length = component_properties(schemas, "PinManifestRecord")
-        .get("content_length")
-        .and_then(Value::as_object)
-        .expect("native manifest content length schema");
-    assert_eq!(
-        content_length.get("type").and_then(Value::as_str),
-        Some("integer")
-    );
-    assert_eq!(
-        content_length.get("format").and_then(Value::as_str),
-        Some("uint64")
-    );
+    assert_strict_object_schema(schemas, "PinManifestFinalizedRecordV1", &["finalized_cursor", "manifest"], &[]);
+    assert_strict_object_schema(schemas, "PinManifestFinalizedCursorV1", &["height", "block_hash"], &[]);
+    assert_strict_object_schema(schemas, "PinManifestRecord", &[
+        "digest", "root_cid", "chunker", "chunk_digest_sha3_256", "por_root", "content_length", "policy",
+        "submitted_by", "submitted_epoch", "alias", "metadata", "status", "council_envelope_digest",
+    ], &["successor_of", "retirement_reason", "pin_fee_payment"]);
+    assert_property_refs(schemas, &[
+        PropertyRefContract { owner: "PinManifestFinalizedRecordV1", property: "finalized_cursor", expected: "#/components/schemas/PinManifestFinalizedCursorV1" },
+        PropertyRefContract { owner: "PinManifestFinalizedRecordV1", property: "manifest", expected: "#/components/schemas/PinManifestRecord" },
+        PropertyRefContract { owner: "PinManifestRecord", property: "por_root", expected: "#/components/schemas/PinManifestBytes32V1" },
+        PropertyRefContract { owner: "PinManifestRecord", property: "status", expected: "#/components/schemas/PinStatus" },
+    ]);
+    assert_eq!(nullable_property_ref(schemas, "PinManifestRecord", "alias"), "#/components/schemas/ManifestAliasBinding");
+    assert_eq!(nullable_property_ref(schemas, "PinManifestRecord", "council_envelope_digest"), "#/components/schemas/PinManifestBytes32V1");
+    let content_length = contract_property(schemas, "PinManifestRecord", "content_length");
+    assert_eq!(content_length.get("type").and_then(Value::as_str), Some("integer"));
+    assert_eq!(content_length.get("format").and_then(Value::as_str), Some("uint64"));
     let response_properties = component_properties(schemas, "PinManifestFinalizedRecordV1");
-    for retired in RETIRED_TOP_LEVEL_FIELDS {
-        assert!(
-            !response_properties.contains_key(retired),
-            "retired pin-manifest projection field `{retired}` must remain absent"
-        );
+    for retired in contract_strings("pin.manifest.retired") {
+        assert!(!response_properties.contains_key(retired), "retired pin-manifest projection field `{retired}` must remain absent");
     }
-    let bytes32 = schemas
-        .get("PinManifestBytes32V1")
-        .and_then(Value::as_object)
-        .expect("pin-manifest bytes32 schema");
+    let bytes32 = contract_schema(schemas, "PinManifestBytes32V1");
     assert_eq!(bytes32.get("minItems").and_then(Value::as_u64), Some(32));
     assert_eq!(bytes32.get("maxItems").and_then(Value::as_u64), Some(32));
-    let statuses = schemas
-        .get("PinStatus")
-        .and_then(Value::as_object)
-        .and_then(|schema| schema.get("oneOf"))
-        .and_then(Value::as_array)
-        .expect("native pin status variants");
-    assert_eq!(
-        statuses
-            .iter()
-            .filter_map(|variant| {
-                variant
-                    .get("properties")
-                    .and_then(Value::as_object)
-                    .and_then(|properties| properties.get("status"))
-                    .and_then(Value::as_object)
-                    .and_then(|status| status.get("const"))
-                    .and_then(Value::as_str)
-            })
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["Pending", "Approved", "Retired"])
-    );
+    let statuses = contract_schema(schemas, "PinStatus").get("oneOf").and_then(Value::as_array).expect("native pin status variants");
+    let values = statuses.iter().filter_map(|variant| variant.get("properties").and_then(|properties| properties.get("status")).and_then(|status| status.get("const")).and_then(Value::as_str)).collect::<BTreeSet<_>>();
+    assert_eq!(values, BTreeSet::from(["Pending", "Approved", "Retired"]));
 }
+
 #[test]
 fn sorafs_replication_openapi_is_a_strict_chain_authoritative_v1_projection() {
     const PATH: &str = "/v1/sorafs/replication";
     let document = generate_spec();
     let operation = openapi_operation(&document, PATH, "get");
-    assert_eq!(
-        operation_response_schema_ref(operation, "200", PATH),
-        "#/components/schemas/SorafsReplicationListResponseV1"
-    );
-    let description = operation
-        .get("description")
-        .and_then(Value::as_str)
-        .expect("replication operation description");
-    assert!(
-        description.contains("fresh committed registry projection")
-            && description.contains("assignment revision")
-            && description.contains("provider-owner signer-policy")
-            && description.contains("finalized block anchor")
-            && description.contains("unknown, duplicate, empty, aliased, or out-of-range"),
-        "replication operation must document the V1 hard-cut projection and selectors"
-    );
-    let parameters = operation
-        .get("parameters")
-        .and_then(Value::as_array)
-        .expect("replication query parameters");
-    assert_eq!(
-        parameters
-            .iter()
-            .filter_map(|parameter| parameter.get("name").and_then(Value::as_str))
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["limit", "offset", "status", "manifest_digest"])
-    );
-    let status_parameter = parameters
-        .iter()
-        .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some("status"))
-        .and_then(Value::as_object)
-        .and_then(|parameter| parameter.get("schema"))
-        .and_then(Value::as_object)
-        .expect("replication status parameter schema");
-    assert_eq!(
-        status_parameter
-            .get("enum")
-            .and_then(Value::as_array)
-            .expect("replication status values")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["pending", "completed", "expired"])
-    );
-    let digest_parameter = parameters
-        .iter()
-        .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some("manifest_digest"))
-        .and_then(Value::as_object)
-        .and_then(|parameter| parameter.get("schema"))
-        .and_then(Value::as_object)
-        .expect("replication digest parameter schema");
-    assert_eq!(
-        digest_parameter.get("pattern").and_then(Value::as_str),
-        Some("^(?!0{64}$)[0-9a-f]{64}$")
-    );
+    assert_eq!(operation_response_schema_ref(operation, "200", PATH), "#/components/schemas/SorafsReplicationListResponseV1");
+    assert_description_inventory(operation.get("description").and_then(Value::as_str).expect("replication description"), "replication.description", "replication operation");
+    let names = operation_parameters(operation, PATH).iter().filter_map(|parameter| parameter.get("name").and_then(Value::as_str)).collect::<BTreeSet<_>>();
+    assert_eq!(names, BTreeSet::from(["limit", "offset", "status", "manifest_digest"]));
+    let status = parameter_schema(operation_parameter(operation, "status", PATH), "replication status");
+    assert_eq!(value_strings(status.get("enum").expect("replication status enum"), "replication statuses").into_iter().collect::<BTreeSet<_>>(), BTreeSet::from(["pending", "completed", "expired"]));
+    assert_eq!(parameter_schema(operation_parameter(operation, "manifest_digest", PATH), "replication digest").get("pattern").and_then(Value::as_str), Some("^(?!0{64}$)[0-9a-f]{64}$"));
     let schemas = component_schemas(&document);
-    assert_strict_object_schema(
-        schemas,
-        "SorafsRegistryAttestationV1",
-        &["block_height", "block_hash_hex", "chain_id"],
-        &[],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "SorafsReplicationAssignmentV1",
-        &["provider_id_hex", "slice_gib", "lane"],
-        &[],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "SorafsReplicationSlaV1",
-        &[
-            "ingest_deadline_secs",
-            "min_availability_percent_milli",
-            "min_por_success_percent_milli",
-        ],
-        &[],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "SorafsReplicationMetadataEntryV1",
-        &["key", "value"],
-        &[],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "SorafsReplicationCanonicalOrderV1",
-        &[
-            "version",
-            "order_id_hex",
-            "manifest_cid_b64",
-            "manifest_digest_hex",
-            "chunking_profile",
-            "target_replicas",
-            "assignments",
-            "issued_at",
-            "deadline_at",
-            "sla",
-            "metadata",
-        ],
-        &[],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "SorafsProviderIngestCompletionAuthorityV1",
-        &["provider_owner", "signer_policy"],
-        &[],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "SorafsProviderIngestFinalizedAnchorV1",
-        &["height", "block_hash_hex"],
-        &[],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "SorafsReplicationCompletionV1",
-        &[
-            "provider_hex",
-            "completed_by",
-            "completion_epoch",
-            "assignment_revision",
-            "completion_authority",
-            "finalized_anchor",
-        ],
-        &[],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "SorafsReplicationOrderProjectionV1",
-        &[
-            "order_id_hex",
-            "manifest_digest_hex",
-            "issued_by",
-            "issued_epoch",
-            "deadline_epoch",
-            "status",
-            "canonical_order_b64",
-            "assignment_revision",
-            "order",
-            "provider_completions",
-            "providers",
-        ],
-        &[],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "SorafsReplicationListResponseV1",
-        &[
-            "attestation",
-            "total_count",
-            "returned_count",
-            "offset",
-            "limit",
-            "replication_orders",
-        ],
-        &[],
-    );
-    assert_eq!(
-        property_ref(
-            schemas,
-            "SorafsReplicationCompletionV1",
-            "completion_authority"
-        ),
-        "#/components/schemas/SorafsProviderIngestCompletionAuthorityV1"
-    );
-    assert_eq!(
-        property_ref(schemas, "SorafsReplicationCompletionV1", "finalized_anchor"),
-        "#/components/schemas/SorafsProviderIngestFinalizedAnchorV1"
-    );
-    assert_eq!(
-        property_ref(
-            schemas,
-            "SorafsProviderIngestCompletionAuthorityV1",
-            "signer_policy"
-        ),
-        "#/components/schemas/SorafsProviderIngestSignerPolicyV1"
-    );
-    assert_eq!(
-        property_ref(schemas, "SorafsReplicationOrderProjectionV1", "order"),
-        "#/components/schemas/SorafsReplicationCanonicalOrderV1"
-    );
-    assert_eq!(
-        property_ref(schemas, "SorafsReplicationOrderProjectionV1", "status"),
-        "#/components/schemas/SorafsReplicationOrderStatusV1"
-    );
-    let status_variants = schemas
-        .get("SorafsReplicationOrderStatusV1")
-        .and_then(Value::as_object)
-        .and_then(|schema| schema.get("oneOf"))
-        .and_then(Value::as_array)
-        .expect("replication lifecycle variants");
-    assert_eq!(status_variants.len(), 3);
-    for variant in status_variants {
-        assert_eq!(
-            variant.get("additionalProperties").and_then(Value::as_bool),
-            Some(false)
-        );
+    for (name, required) in [
+        ("SorafsRegistryAttestationV1", &["block_height", "block_hash_hex", "chain_id"][..]),
+        ("SorafsReplicationAssignmentV1", &["provider_id_hex", "slice_gib", "lane"]),
+        ("SorafsReplicationSlaV1", &["ingest_deadline_secs", "min_availability_percent_milli", "min_por_success_percent_milli"]),
+        ("SorafsReplicationMetadataEntryV1", &["key", "value"]),
+        ("SorafsReplicationCanonicalOrderV1", &["version", "order_id_hex", "manifest_cid_b64", "manifest_digest_hex", "chunking_profile", "target_replicas", "assignments", "issued_at", "deadline_at", "sla", "metadata"]),
+        ("SorafsProviderIngestCompletionAuthorityV1", &["provider_owner", "signer_policy"]),
+        ("SorafsProviderIngestFinalizedAnchorV1", &["height", "block_hash_hex"]),
+        ("SorafsReplicationCompletionV1", &["provider_hex", "completed_by", "completion_epoch", "assignment_revision", "completion_authority", "finalized_anchor"]),
+        ("SorafsReplicationOrderProjectionV1", &["order_id_hex", "manifest_digest_hex", "issued_by", "issued_epoch", "deadline_epoch", "status", "canonical_order_b64", "assignment_revision", "order", "provider_completions", "providers"]),
+        ("SorafsReplicationListResponseV1", &["attestation", "total_count", "returned_count", "offset", "limit", "replication_orders"]),
+    ] {
+        assert_strict_object_schema(schemas, name, required, &[]);
     }
-    assert_eq!(
-        status_variants
-            .iter()
-            .filter_map(|variant| {
-                variant
-                    .get("properties")
-                    .and_then(Value::as_object)
-                    .and_then(|properties| properties.get("state"))
-                    .and_then(Value::as_object)
-                    .and_then(|state| state.get("const"))
-                    .and_then(Value::as_str)
-            })
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["pending", "completed", "expired"])
-    );
-    assert_eq!(
-        status_variants[0]
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("pending status properties")
-            .keys()
-            .map(String::as_str)
-            .collect::<BTreeSet<_>>(),
-        BTreeSet::from(["state"]),
-        "pending must not carry a compatibility epoch"
-    );
-    let policy_variants = schemas
-        .get("SorafsProviderIngestSignerPolicyV1")
-        .and_then(Value::as_object)
-        .and_then(|schema| schema.get("oneOf"))
-        .and_then(Value::as_array)
-        .expect("signer-policy chain variants");
-    assert_eq!(policy_variants.len(), 2);
-    assert_eq!(
-        policy_variants[0]
-            .get("properties")
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("revision"))
-            .and_then(Value::as_object)
-            .and_then(|revision| revision.get("const"))
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        policy_variants[0]
-            .get("properties")
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("predecessor_digest_hex"))
-            .and_then(Value::as_object)
-            .and_then(|predecessor| predecessor.get("type"))
-            .and_then(Value::as_str),
-        Some("null")
-    );
-    assert_eq!(
-        policy_variants[1]
-            .get("properties")
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("revision"))
-            .and_then(Value::as_object)
-            .and_then(|revision| revision.get("minimum"))
-            .and_then(Value::as_u64),
-        Some(2)
-    );
-    assert_eq!(
-        policy_variants[1]
-            .get("properties")
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("predecessor_digest_hex"))
-            .and_then(Value::as_object)
-            .and_then(|predecessor| predecessor.get("$ref"))
-            .and_then(Value::as_str),
-        Some("#/components/schemas/SorafsReplicationNonzeroHex32V1")
-    );
-    let projection_properties = component_properties(schemas, "SorafsReplicationOrderProjectionV1");
-    assert_eq!(
-        projection_properties
-            .get("provider_completions")
-            .and_then(Value::as_object)
-            .and_then(|array| array.get("items"))
-            .and_then(Value::as_object)
-            .and_then(|items| items.get("$ref"))
-            .and_then(Value::as_str),
-        Some("#/components/schemas/SorafsReplicationCompletionV1")
-    );
-    assert_eq!(
-        component_properties(schemas, "SorafsReplicationListResponseV1")
-            .get("replication_orders")
-            .and_then(Value::as_object)
-            .and_then(|array| array.get("items"))
-            .and_then(Value::as_object)
-            .and_then(|items| items.get("$ref"))
-            .and_then(Value::as_str),
-        Some("#/components/schemas/SorafsReplicationOrderProjectionV1")
-    );
-    let canonical_order = projection_properties
-        .get("canonical_order_b64")
-        .and_then(Value::as_object)
-        .expect("canonical order payload schema");
-    assert_eq!(
-        canonical_order.get("maxLength").and_then(Value::as_u64),
-        Some(349_528)
-    );
+    assert_property_refs(schemas, &[
+        PropertyRefContract { owner: "SorafsReplicationCompletionV1", property: "completion_authority", expected: "#/components/schemas/SorafsProviderIngestCompletionAuthorityV1" },
+        PropertyRefContract { owner: "SorafsReplicationCompletionV1", property: "finalized_anchor", expected: "#/components/schemas/SorafsProviderIngestFinalizedAnchorV1" },
+        PropertyRefContract { owner: "SorafsProviderIngestCompletionAuthorityV1", property: "signer_policy", expected: "#/components/schemas/SorafsProviderIngestSignerPolicyV1" },
+        PropertyRefContract { owner: "SorafsReplicationOrderProjectionV1", property: "order", expected: "#/components/schemas/SorafsReplicationCanonicalOrderV1" },
+        PropertyRefContract { owner: "SorafsReplicationOrderProjectionV1", property: "status", expected: "#/components/schemas/SorafsReplicationOrderStatusV1" },
+    ]);
+    let status_variants = contract_schema(schemas, "SorafsReplicationOrderStatusV1").get("oneOf").and_then(Value::as_array).expect("replication lifecycle variants");
+    assert_eq!(status_variants.len(), 3);
+    assert!(status_variants.iter().all(|variant| variant.get("additionalProperties").and_then(Value::as_bool) == Some(false)));
+    let states = status_variants.iter().filter_map(|variant| variant.get("properties").and_then(|properties| properties.get("state")).and_then(|state| state.get("const")).and_then(Value::as_str)).collect::<BTreeSet<_>>();
+    assert_eq!(states, BTreeSet::from(["pending", "completed", "expired"]));
+    assert_eq!(status_variants[0].get("properties").and_then(Value::as_object).expect("pending status properties").keys().map(String::as_str).collect::<BTreeSet<_>>(), BTreeSet::from(["state"]));
+    let policies = contract_schema(schemas, "SorafsProviderIngestSignerPolicyV1").get("oneOf").and_then(Value::as_array).expect("signer-policy variants");
+    assert_eq!(policies.len(), 2);
+    assert_eq!(variant_property(policies, 0, "revision").get("const").and_then(Value::as_u64), Some(1));
+    assert_eq!(variant_property(policies, 0, "predecessor_digest_hex").get("type").and_then(Value::as_str), Some("null"));
+    assert_eq!(variant_property(policies, 1, "revision").get("minimum").and_then(Value::as_u64), Some(2));
+    assert_eq!(variant_property(policies, 1, "predecessor_digest_hex").get("$ref").and_then(Value::as_str), Some("#/components/schemas/SorafsReplicationNonzeroHex32V1"));
+    assert_eq!(contract_property(schemas, "SorafsReplicationOrderProjectionV1", "provider_completions").get("items").and_then(|items| items.get("$ref")).and_then(Value::as_str), Some("#/components/schemas/SorafsReplicationCompletionV1"));
+    assert_eq!(contract_property(schemas, "SorafsReplicationListResponseV1", "replication_orders").get("items").and_then(|items| items.get("$ref")).and_then(Value::as_str), Some("#/components/schemas/SorafsReplicationOrderProjectionV1"));
+    assert_eq!(contract_property(schemas, "SorafsReplicationOrderProjectionV1", "canonical_order_b64").get("maxLength").and_then(Value::as_u64), Some(349_528));
 }
+
 #[test]
 fn moderation_dead_letter_openapi_is_typed_bounded_and_dual_control() {
     let document = generate_spec();
     let schemas = component_schemas(&document);
-    assert_strict_object_schema(
-        schemas,
-        "SorafsModerationDeadLetterPrepareRequestV1",
-        &["identity_hex", "kind", "action", "authorized_at_unix_ms"],
-        &[],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "SorafsModerationDeadLetterPrepareResponseV1",
-        &[
-            "schema",
-            "status",
-            "resolution_norito_b64",
-            "signing_message_hex",
-        ],
-        &[],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "SorafsModerationDeadLetterApplyRequestV1",
-        &["resolution_norito_b64", "signature_hex"],
-        &[],
-    );
-    assert_strict_object_schema(
-        schemas,
-        "SorafsModerationDeadLetterApplyResponseV1",
-        &["schema", "status", "identity_hex", "kind", "action"],
-        &[],
-    );
-    let resolution_schema = schemas
-        .get("SorafsModerationDeadLetterResolutionNoritoBase64V1")
-        .and_then(Value::as_object)
-        .expect("moderation resolution base64 schema");
-    assert_eq!(
-        resolution_schema.get("maxLength").and_then(Value::as_u64),
-        Some(
-            u64::try_from(SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_BASE64_BYTES_V1)
-                .expect("moderation resolution base64 bound fits uint64")
-        )
-    );
-    assert_eq!(
-        schemas
-            .get("SorafsModerationDeadLetterKindV1")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("enum"))
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(3)
-    );
-    assert_eq!(
-        schemas
-            .get("SorafsModerationDeadLetterResolutionActionV1")
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("enum"))
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(2)
-    );
-    let expected_auth_headers = BTreeSet::from([
-        "X-Iroha-Account".to_owned(),
-        "X-Iroha-Signature".to_owned(),
-        "X-Iroha-Timestamp-Ms".to_owned(),
-        "X-Iroha-Nonce".to_owned(),
-        "X-Iroha-Witness".to_owned(),
-    ]);
-    for (path, route, request_schema, response_schema, request_max_bytes) in [
-            (
-                "/v1/sorafs/moderation/dead-letters/prepare",
-                iroha_torii_shared::route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_PREPARE_POST,
-                "#/components/schemas/SorafsModerationDeadLetterPrepareRequestV1",
-                "#/components/schemas/SorafsModerationDeadLetterPrepareResponseV1",
-                SORAFS_MODERATION_DEAD_LETTER_PREPARE_REQUEST_MAX_BYTES_V1,
-            ),
-            (
-                "/v1/sorafs/moderation/dead-letters/apply",
-                iroha_torii_shared::route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_APPLY_POST,
-                "#/components/schemas/SorafsModerationDeadLetterApplyRequestV1",
-                "#/components/schemas/SorafsModerationDeadLetterApplyResponseV1",
-                SORAFS_MODERATION_DEAD_LETTER_APPLY_REQUEST_MAX_BYTES_V1,
-            ),
-        ] {
-            assert!(catalog_openapi_route_enabled(CatalogHttpMethod::Post, path));
-            let operation = openapi_operation(&document, path, "post");
-            assert_eq!(
-                operation.get("operationId").and_then(Value::as_str),
-                Some(route.stable_route_id())
-            );
-            assert_eq!(operation_request_schema_ref(operation, path), request_schema);
-            assert_eq!(
-                operation_response_schema_ref(operation, "200", path),
-                response_schema
-            );
-            assert_eq!(
-                operation
-                    .get("x-iroha-max-request-bytes")
-                    .and_then(Value::as_u64),
-                Some(
-                    u64::try_from(request_max_bytes)
-                        .expect("moderation request bound fits uint64")
-                )
-            );
-            assert_eq!(
-                operation_header_requirements(operation)
-                    .into_iter()
-                    .map(|(name, required)| {
-                        assert!(!required, "{path} canonical auth uses alternative proof sets");
-                        name
-                    })
-                    .collect::<BTreeSet<_>>(),
-                expected_auth_headers
-            );
-            assert_eq!(
-                operation.get("security").and_then(Value::as_array).map(Vec::len),
-                Some(2)
-            );
-            let description = operation
-                .get("description")
-                .and_then(Value::as_str)
-                .expect("moderation recovery description");
-            assert!(description.contains("independent"));
-            let responses = operation
-                .get("responses")
-                .and_then(Value::as_object)
-                .expect("moderation recovery responses");
-            for status in ["200", "400", "401", "403", "404", "409", "429", "503"] {
-                assert!(responses.contains_key(status), "{path} missing HTTP {status}");
-            }
+    for (name, required) in [
+        ("SorafsModerationDeadLetterPrepareRequestV1", &["identity_hex", "kind", "action", "authorized_at_unix_ms"][..]),
+        ("SorafsModerationDeadLetterPrepareResponseV1", &["schema", "status", "resolution_norito_b64", "signing_message_hex"]),
+        ("SorafsModerationDeadLetterApplyRequestV1", &["resolution_norito_b64", "signature_hex"]),
+        ("SorafsModerationDeadLetterApplyResponseV1", &["schema", "status", "identity_hex", "kind", "action"]),
+    ] {
+        assert_strict_object_schema(schemas, name, required, &[]);
+    }
+    assert_eq!(contract_schema(schemas, "SorafsModerationDeadLetterResolutionNoritoBase64V1").get("maxLength").and_then(Value::as_u64), Some(u64::try_from(SORAFS_MODERATION_DEAD_LETTER_RESOLUTION_MAX_BASE64_BYTES_V1).expect("moderation resolution bound")));
+    assert_eq!(contract_schema(schemas, "SorafsModerationDeadLetterKindV1").get("enum").and_then(Value::as_array).map(Vec::len), Some(3));
+    assert_eq!(contract_schema(schemas, "SorafsModerationDeadLetterResolutionActionV1").get("enum").and_then(Value::as_array).map(Vec::len), Some(2));
+    for (path, route, request_schema, response_schema, max_bytes) in [
+        ("/v1/sorafs/moderation/dead-letters/prepare", iroha_torii_shared::route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_PREPARE_POST, "#/components/schemas/SorafsModerationDeadLetterPrepareRequestV1", "#/components/schemas/SorafsModerationDeadLetterPrepareResponseV1", SORAFS_MODERATION_DEAD_LETTER_PREPARE_REQUEST_MAX_BYTES_V1),
+        ("/v1/sorafs/moderation/dead-letters/apply", iroha_torii_shared::route_catalog::contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_APPLY_POST, "#/components/schemas/SorafsModerationDeadLetterApplyRequestV1", "#/components/schemas/SorafsModerationDeadLetterApplyResponseV1", SORAFS_MODERATION_DEAD_LETTER_APPLY_REQUEST_MAX_BYTES_V1),
+    ] {
+        assert!(catalog_openapi_route_enabled(CatalogHttpMethod::Post, path));
+        let operation = openapi_operation(&document, path, "post");
+        assert_eq!(operation.get("operationId").and_then(Value::as_str), Some(route.stable_route_id()));
+        assert_eq!(operation_request_schema_ref(operation, path), request_schema);
+        assert_eq!(operation_response_schema_ref(operation, "200", path), response_schema);
+        assert_eq!(operation.get("x-iroha-max-request-bytes").and_then(Value::as_u64), Some(u64::try_from(max_bytes).expect("moderation request bound")));
+        let headers = operation_header_requirements(operation).into_iter().map(|(name, required)| {
+            assert!(!required, "{path} canonical auth uses alternative proof sets"); name
+        }).collect::<BTreeSet<_>>();
+        assert_eq!(headers, canonical_account_headers(false).into_iter().map(|(name, _)| name).collect::<BTreeSet<_>>());
+        assert_eq!(operation.get("security").and_then(Value::as_array).map(Vec::len), Some(2));
+        assert!(operation.get("description").and_then(Value::as_str).expect("moderation description").contains("independent"));
+        let responses = operation_responses(operation, path);
+        for status in ["200", "400", "401", "403", "404", "409", "429", "503"] {
+            assert!(responses.contains_key(status), "{path} missing HTTP {status}");
         }
+    }
 }
+
 #[test]
 fn hedging_billing_openapi_is_authenticated_bounded_and_private() {
     let document = generate_spec();
-    let expected_auth_headers = BTreeSet::from([
-        "X-Iroha-Account",
-        "X-Iroha-Signature",
-        "X-Iroha-Timestamp-Ms",
-        "X-Iroha-Nonce",
-        "X-Iroha-Witness",
-    ]);
     for (path, method, catalog_method) in [
         ("/v1/sorafs/billing/status", "get", CatalogHttpMethod::Get),
-        (
-            "/v1/sorafs/billing/statements",
-            "get",
-            CatalogHttpMethod::Get,
-        ),
-        (
-            "/v1/sorafs/billing/statements/{statement_id}",
-            "get",
-            CatalogHttpMethod::Get,
-        ),
-        (
-            "/v1/sorafs/billing/statements/{statement_id}/acknowledgements",
-            "post",
-            CatalogHttpMethod::Post,
-        ),
-        (
-            "/v1/sorafs/billing/reconciliation",
-            "get",
-            CatalogHttpMethod::Get,
-        ),
+        ("/v1/sorafs/billing/statements", "get", CatalogHttpMethod::Get),
+        ("/v1/sorafs/billing/statements/{statement_id}", "get", CatalogHttpMethod::Get),
+        ("/v1/sorafs/billing/statements/{statement_id}/acknowledgements", "post", CatalogHttpMethod::Post),
+        ("/v1/sorafs/billing/reconciliation", "get", CatalogHttpMethod::Get),
         ("/v1/sorafs/hedging/exposure", "get", CatalogHttpMethod::Get),
         ("/v1/sorafs/hedging/intents", "get", CatalogHttpMethod::Get),
     ] {
-        assert!(
-            catalog_openapi_route_enabled(catalog_method, path),
-            "{method} {path} must be projected by the canonical route catalog"
-        );
+        assert!(catalog_openapi_route_enabled(catalog_method, path), "{method} {path} catalog projection");
         let operation = openapi_operation(&document, path, method);
-        let auth_headers = operation_header_requirements(operation)
-            .into_iter()
-            .map(|(name, required)| {
-                assert!(
-                    !required,
-                    "{method} {path} canonical auth headers are alternative proof sets"
-                );
-                name
-            })
-            .collect::<BTreeSet<_>>();
-        assert_eq!(
-            auth_headers,
-            expected_auth_headers
-                .iter()
-                .map(ToString::to_string)
-                .collect::<BTreeSet<_>>(),
-            "{method} {path} canonical auth inventory"
-        );
-        let responses = operation
-            .get("responses")
-            .and_then(Value::as_object)
-            .expect("hedging/billing responses");
-        for (status, response) in responses {
-            let headers = response
-                .get("headers")
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("{method} {path} HTTP {status} private headers"));
-            assert_eq!(
-                headers
-                    .get("Cache-Control")
-                    .and_then(Value::as_object)
-                    .and_then(|header| header.get("schema"))
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("const"))
-                    .and_then(Value::as_str),
-                Some("private, no-store")
-            );
-            assert_eq!(
-                headers
-                    .get("Vary")
-                    .and_then(Value::as_object)
-                    .and_then(|header| header.get("schema"))
-                    .and_then(Value::as_object)
-                    .and_then(|schema| schema.get("const"))
-                    .and_then(Value::as_str),
-                Some(
-                    "X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"
-                )
-            );
+        let headers = operation_header_requirements(operation).into_iter().map(|(name, required)| {
+            assert!(!required, "{method} {path} canonical auth headers are alternative proof sets"); name
+        }).collect::<BTreeSet<_>>();
+        assert_eq!(headers, canonical_account_headers(false).into_iter().map(|(name, _)| name).collect::<BTreeSet<_>>(), "{method} {path} canonical auth inventory");
+        for (status, response) in operation_responses(operation, path) {
+            let headers = response.get("headers").and_then(Value::as_object).unwrap_or_else(|| panic!("{method} {path} HTTP {status} private headers"));
+            let constant = |name| headers.get(name).and_then(|header| header.get("schema")).and_then(|schema| schema.get("const")).and_then(Value::as_str);
+            assert_eq!(constant("Cache-Control"), Some("private, no-store"));
+            assert_eq!(constant("Vary"), Some("X-Iroha-Account, X-Iroha-Signature, X-Iroha-Timestamp-Ms, X-Iroha-Nonce, X-Iroha-Witness"));
         }
     }
-    for path in [
-        "/v1/sorafs/billing/statements",
-        "/v1/sorafs/hedging/exposure",
-        "/v1/sorafs/hedging/intents",
-    ] {
-        let parameters = openapi_operation(&document, path, "get")
-            .get("parameters")
-            .and_then(Value::as_array)
-            .expect("bounded page parameters");
-        let limit = parameters
-            .iter()
-            .find(|parameter| parameter.get("name").and_then(Value::as_str) == Some("limit"))
-            .expect("required page limit");
+    for path in ["/v1/sorafs/billing/statements", "/v1/sorafs/hedging/exposure", "/v1/sorafs/hedging/intents"] {
+        let operation = openapi_operation(&document, path, "get");
+        let limit = operation_parameter(operation, "limit", path);
         assert_eq!(limit.get("required").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            limit
-                .get("schema")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("maximum"))
-                .and_then(Value::as_u64),
-            Some(100)
-        );
-        let checkpoint = parameters
-            .iter()
-            .find(|parameter| {
-                parameter.get("name").and_then(Value::as_str)
-                    == Some("expected_checkpoint_fingerprint")
-            })
-            .expect("required checkpoint fingerprint");
-        assert_eq!(
-            checkpoint.get("required").and_then(Value::as_bool),
-            Some(true)
-        );
+        assert_eq!(parameter_schema(limit, "page limit").get("maximum").and_then(Value::as_u64), Some(100));
+        assert_eq!(operation_parameter(operation, "expected_checkpoint_fingerprint", path).get("required").and_then(Value::as_bool), Some(true));
     }
-    let statement_content = openapi_operation(
-        &document,
-        "/v1/sorafs/billing/statements/{statement_id}",
-        "get",
-    )
-    .get("responses")
-    .and_then(Value::as_object)
-    .and_then(|responses| responses.get("200"))
-    .and_then(Value::as_object)
-    .and_then(|response| response.get("content"))
-    .and_then(Value::as_object)
-    .expect("exact statement response content");
-    assert_eq!(
-        statement_content
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        ["application/x-norito"]
-    );
-    assert_eq!(
-        statement_content
-            .get("application/x-norito")
-            .and_then(Value::as_object)
-            .and_then(|media| media.get("schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("x-iroha-norito-schema"))
-            .and_then(Value::as_str),
-        Some("BillingPublishedStatementV1")
-    );
-    let acknowledgement_content = openapi_operation(
-        &document,
-        "/v1/sorafs/billing/statements/{statement_id}/acknowledgements",
-        "post",
-    )
-    .get("requestBody")
-    .and_then(Value::as_object)
-    .and_then(|body| body.get("content"))
-    .and_then(Value::as_object)
-    .expect("acknowledgement request content");
-    assert_eq!(
-        acknowledgement_content
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        ["application/x-norito"]
-    );
-    let acknowledgement_schema = acknowledgement_content
-        .get("application/x-norito")
-        .and_then(Value::as_object)
-        .and_then(|media| media.get("schema"))
-        .and_then(Value::as_object)
-        .expect("acknowledgement Norito schema");
-    assert_eq!(
-        acknowledgement_schema
-            .get("x-iroha-norito-schema")
-            .and_then(Value::as_str),
-        Some(BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1)
-    );
-    assert_eq!(
-        acknowledgement_schema
-            .get("x-iroha-norito-schema-hash")
-            .and_then(Value::as_str),
-        Some(BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1)
-    );
-    assert_eq!(
-        acknowledgement_schema
-            .get("maxLength")
-            .and_then(Value::as_u64),
-        Some(69_632)
-    );
+    let statement = response_content(openapi_operation(&document, "/v1/sorafs/billing/statements/{statement_id}", "get"), "200", "statement");
+    assert_eq!(statement.keys().map(String::as_str).collect::<Vec<_>>(), ["application/x-norito"]);
+    assert_eq!(statement.get("application/x-norito").and_then(|media| media.get("schema")).and_then(|schema| schema.get("x-iroha-norito-schema")).and_then(Value::as_str), Some("BillingPublishedStatementV1"));
+    let acknowledgement = request_content(openapi_operation(&document, "/v1/sorafs/billing/statements/{statement_id}/acknowledgements", "post"), "acknowledgement");
+    assert_eq!(acknowledgement.keys().map(String::as_str).collect::<Vec<_>>(), ["application/x-norito"]);
+    let schema = acknowledgement.get("application/x-norito").and_then(|media| media.get("schema")).and_then(Value::as_object).expect("acknowledgement Norito schema");
+    assert_eq!(schema.get("x-iroha-norito-schema").and_then(Value::as_str), Some(BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1));
+    assert_eq!(schema.get("x-iroha-norito-schema-hash").and_then(Value::as_str), Some(BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1));
+    assert_eq!(schema.get("maxLength").and_then(Value::as_u64), Some(69_632));
     let schemas = component_schemas(&document);
-    let hedge_intent = schemas
-        .get("HedgeIntentV1")
-        .and_then(Value::as_object)
-        .expect("hedge-intent schema");
-    let required = hedge_intent
-        .get("required")
-        .and_then(Value::as_array)
-        .expect("hedge-intent required fields");
-    assert!(
-        required
-            .iter()
-            .any(|field| field.as_str() == Some("network_id"))
-    );
-    assert!(
-        !required
-            .iter()
-            .any(|field| field.as_str() == Some("chain_id"))
-    );
-    assert_eq!(
-        hedge_intent
-            .get("properties")
-            .and_then(Value::as_object)
-            .and_then(|properties| properties.get("network_id"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("$ref"))
-            .and_then(Value::as_str),
-        Some("#/components/schemas/NetworkId")
-    );
-    for (schema_name, tag, variants) in [
-        (
-            "HedgingBillingRetentionScopeV1",
-            "scope",
-            &["active_epoch_only"][..],
-        ),
-        (
-            "BillingStatementOwnerStatusV1",
-            "status",
-            &["published", "acknowledged"][..],
-        ),
-        ("HedgeIntentDirectionV1", "direction", &["sell_xor"][..]),
-        (
-            "HedgeIntentDispositionV1",
-            "disposition",
-            &["executable", "governed_overflow"][..],
-        ),
+    let hedge = contract_schema(schemas, "HedgeIntentV1");
+    let required = hedge.get("required").and_then(Value::as_array).expect("hedge required");
+    assert!(required.iter().any(|field| field.as_str() == Some("network_id")));
+    assert!(!required.iter().any(|field| field.as_str() == Some("chain_id")));
+    assert_eq!(contract_property(schemas, "HedgeIntentV1", "network_id").get("$ref").and_then(Value::as_str), Some("#/components/schemas/NetworkId"));
+    for (name, tag, expected) in [
+        ("HedgingBillingRetentionScopeV1", "scope", &["active_epoch_only"][..]),
+        ("BillingStatementOwnerStatusV1", "status", &["published", "acknowledged"]),
+        ("HedgeIntentDirectionV1", "direction", &["sell_xor"]),
+        ("HedgeIntentDispositionV1", "disposition", &["executable", "governed_overflow"]),
     ] {
-        let actual = schemas
-            .get(schema_name)
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("oneOf"))
-            .and_then(Value::as_array)
-            .expect("tagged hedging/billing enum")
-            .iter()
-            .filter_map(|variant| {
-                variant
-                    .get("properties")
-                    .and_then(Value::as_object)
-                    .and_then(|properties| properties.get(tag))
-                    .and_then(Value::as_object)
-                    .and_then(|tag_schema| tag_schema.get("const"))
-                    .and_then(Value::as_str)
-            })
-            .collect::<BTreeSet<_>>();
-        assert_eq!(actual, variants.iter().copied().collect::<BTreeSet<_>>());
+        let actual = contract_schema(schemas, name).get("oneOf").and_then(Value::as_array).expect("tagged enum").iter()
+            .filter_map(|variant| variant.get("properties").and_then(|properties| properties.get(tag)).and_then(|tag| tag.get("const")).and_then(Value::as_str)).collect::<BTreeSet<_>>();
+        assert_eq!(actual, expected.iter().copied().collect::<BTreeSet<_>>());
     }
 }
+
 #[test]
 fn proof_stream_openapi_matches_the_closed_canonical_envelope() {
     let document = generate_spec();
     let operation = openapi_operation(&document, "/v1/sorafs/proof/stream", "post");
-    assert_eq!(
-        operation_request_schema_ref(operation, "/v1/sorafs/proof/stream"),
-        "#/components/schemas/SorafsProofStreamHttpRequestV1"
-    );
-    let success_content = operation
-        .get("responses")
-        .and_then(Value::as_object)
-        .and_then(|responses| responses.get("200"))
-        .and_then(Value::as_object)
-        .and_then(|response| response.get("content"))
-        .and_then(Value::as_object)
-        .expect("proof-stream success content");
-    assert_eq!(
-        success_content
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        ["application/x-ndjson"]
-    );
-    assert_eq!(
-        success_content
-            .get("application/x-ndjson")
-            .and_then(Value::as_object)
-            .and_then(|media| media.get("x-iroha-ndjson-item-schema"))
-            .and_then(Value::as_object)
-            .and_then(|schema| schema.get("$ref"))
-            .and_then(Value::as_str),
-        Some("#/components/schemas/SorafsProofStreamItemV1")
-    );
+    assert_eq!(operation_request_schema_ref(operation, "/v1/sorafs/proof/stream"), "#/components/schemas/SorafsProofStreamHttpRequestV1");
+    let success = response_content(operation, "200", "proof-stream");
+    assert_eq!(success.keys().map(String::as_str).collect::<Vec<_>>(), ["application/x-ndjson"]);
+    assert_eq!(success.get("application/x-ndjson").and_then(|media| media.get("x-iroha-ndjson-item-schema")).and_then(|schema| schema.get("$ref")).and_then(Value::as_str), Some("#/components/schemas/SorafsProofStreamItemV1"));
     let schemas = component_schemas(&document);
-    assert!(
-        document
-            .get("paths")
-            .and_then(Value::as_object)
-            .and_then(|paths| paths.get("/v1/sorafs/storage/por-sample"))
-            .is_none(),
-        "the unauthenticated local PoR sampling route must remain retired"
-    );
-    assert!(
-        !schemas.contains_key("SorafsStoragePorSampleRequestV1"),
-        "the retired route's request schema must not remain in generated OpenAPI"
-    );
-    let aggregate = schemas
-        .get("SorafsProofStreamHttpRequestV1")
-        .and_then(Value::as_object)
-        .expect("canonical proof-stream request schema");
-    let variants = aggregate
-        .get("oneOf")
-        .and_then(Value::as_array)
-        .expect("proof-stream request variants")
-        .iter()
-        .map(|variant| {
-            variant
-                .get("$ref")
-                .and_then(Value::as_str)
-                .expect("proof-stream request variant reference")
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        variants,
-        [
-            "#/components/schemas/SorafsProofStreamPorRequestV1",
-            "#/components/schemas/SorafsProofStreamPdpRequestV1",
-            "#/components/schemas/SorafsProofStreamPotrRequestV1",
-        ]
-    );
-    for (name, kind, required_field, allowed_kind_fields, forbidden_kind_fields) in [
-        (
-            "SorafsProofStreamPorRequestV1",
-            "por",
-            "sample_count",
-            &["sample_count", "sample_seed"][..],
-            &["challenge_id_hex", "deadline_ms", "orchestrator_job_id_hex"][..],
-        ),
-        (
-            "SorafsProofStreamPdpRequestV1",
-            "pdp",
-            "challenge_id_hex",
-            &["challenge_id_hex"][..],
-            &[
-                "sample_count",
-                "sample_seed",
-                "deadline_ms",
-                "orchestrator_job_id_hex",
-            ][..],
-        ),
-        (
-            "SorafsProofStreamPotrRequestV1",
-            "potr",
-            "deadline_ms",
-            &["deadline_ms", "orchestrator_job_id_hex"][..],
-            &["challenge_id_hex", "sample_count", "sample_seed"][..],
-        ),
+    assert!(document.get("paths").and_then(Value::as_object).and_then(|paths| paths.get("/v1/sorafs/storage/por-sample")).is_none(), "retired local PoR route");
+    assert!(!schemas.contains_key("SorafsStoragePorSampleRequestV1"), "retired PoR request schema");
+    let variants = contract_schema(schemas, "SorafsProofStreamHttpRequestV1").get("oneOf").and_then(Value::as_array).expect("proof request variants").iter()
+        .map(|variant| variant.get("$ref").and_then(Value::as_str).expect("proof request ref")).collect::<Vec<_>>();
+    assert_eq!(variants, ["#/components/schemas/SorafsProofStreamPorRequestV1", "#/components/schemas/SorafsProofStreamPdpRequestV1", "#/components/schemas/SorafsProofStreamPotrRequestV1"]);
+    for (name, kind, required_field, allowed, forbidden) in [
+        ("SorafsProofStreamPorRequestV1", "por", "sample_count", &["sample_count", "sample_seed"][..], &["challenge_id_hex", "deadline_ms", "orchestrator_job_id_hex"][..]),
+        ("SorafsProofStreamPdpRequestV1", "pdp", "challenge_id_hex", &["challenge_id_hex"][..], &["sample_count", "sample_seed", "deadline_ms", "orchestrator_job_id_hex"][..]),
+        ("SorafsProofStreamPotrRequestV1", "potr", "deadline_ms", &["deadline_ms", "orchestrator_job_id_hex"][..], &["challenge_id_hex", "sample_count", "sample_seed"][..]),
     ] {
-        let schema = schemas
-            .get(name)
-            .and_then(Value::as_object)
-            .unwrap_or_else(|| panic!("{name} schema"));
-        assert_eq!(
-            schema.get("additionalProperties").and_then(Value::as_bool),
-            Some(false),
-            "{name} must reject unknown and alias fields"
-        );
-        let required = schema
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("proof request required fields");
-        assert!(
-            required
-                .iter()
-                .any(|field| field.as_str() == Some(required_field)),
-            "{name} must require {required_field}"
-        );
+        let schema = contract_schema(schemas, name);
+        assert_eq!(schema.get("additionalProperties").and_then(Value::as_bool), Some(false));
+        let required = schema.get("required").and_then(Value::as_array).expect("proof request required");
+        assert!(required.iter().any(|field| field.as_str() == Some(required_field)), "{name} must require {required_field}");
         if kind == "potr" {
-            assert!(
-                required
-                    .iter()
-                    .any(|field| field.as_str() == Some("orchestrator_job_id_hex")),
-                "PoTR must require the request-scope job id"
-            );
+            assert!(required.iter().any(|field| field.as_str() == Some("orchestrator_job_id_hex")));
         }
-        let properties = schema
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("proof request properties");
-        for field in [
-            "expected_finalized_height",
-            "expected_finalized_block_hash_hex",
-        ] {
-            assert!(
-                properties.contains_key(field),
-                "{name} must publish the finalized cursor field {field}"
-            );
+        let properties = schema.get("properties").and_then(Value::as_object).expect("proof request properties");
+        for field in ["expected_finalized_height", "expected_finalized_block_hash_hex"] {
+            assert!(properties.contains_key(field), "{name} finalized cursor field {field}");
         }
         if kind == "por" {
-            for field in [
-                "expected_finalized_height",
-                "expected_finalized_block_hash_hex",
-            ] {
-                assert!(
-                    required
-                        .iter()
-                        .any(|required| required.as_str() == Some(field)),
-                    "PoR must require finalized cursor field {field}"
-                );
+            for field in ["expected_finalized_height", "expected_finalized_block_hash_hex"] {
+                assert!(required.iter().any(|required| required.as_str() == Some(field)), "PoR must require {field}");
             }
         } else {
-            let dependencies = schema
-                .get("dependentRequired")
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("{name} finalized cursor dependencies"));
-            assert_eq!(
-                dependencies
-                    .get("expected_finalized_height")
-                    .and_then(Value::as_array)
-                    .and_then(|fields| fields.first())
-                    .and_then(Value::as_str),
-                Some("expected_finalized_block_hash_hex")
-            );
-            assert_eq!(
-                dependencies
-                    .get("expected_finalized_block_hash_hex")
-                    .and_then(Value::as_array)
-                    .and_then(|fields| fields.first())
-                    .and_then(Value::as_str),
-                Some("expected_finalized_height")
-            );
+            let dependencies = schema.get("dependentRequired").and_then(Value::as_object).expect("cursor dependencies");
+            assert_eq!(dependencies.get("expected_finalized_height").and_then(Value::as_array).and_then(|fields| fields.first()).and_then(Value::as_str), Some("expected_finalized_block_hash_hex"));
+            assert_eq!(dependencies.get("expected_finalized_block_hash_hex").and_then(Value::as_array).and_then(|fields| fields.first()).and_then(Value::as_str), Some("expected_finalized_height"));
         }
-        assert_eq!(
-            properties
-                .get("proof_kind")
-                .and_then(Value::as_object)
-                .and_then(|kind_schema| kind_schema.get("const"))
-                .and_then(Value::as_str),
-            Some(kind)
-        );
-        for field in allowed_kind_fields {
-            assert!(
-                properties.contains_key(*field),
-                "{name} must publish {field}"
-            );
-        }
-        for field in forbidden_kind_fields {
-            assert!(
-                !properties.contains_key(*field),
-                "{name} must not publish incompatible field {field}"
-            );
-        }
-        assert_eq!(
-            properties
-                .get("nonce_b64")
-                .and_then(Value::as_object)
-                .and_then(|nonce| nonce.get("pattern"))
-                .and_then(Value::as_str),
-            Some("^(?!A{22}==$)[A-Za-z0-9+/]{21}[AQgw]==$")
-        );
-        assert_eq!(
-            properties
-                .get("expected_finalized_height")
-                .and_then(Value::as_object)
-                .and_then(|height| height.get("minimum"))
-                .and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            properties
-                .get("expected_finalized_block_hash_hex")
-                .and_then(Value::as_object)
-                .and_then(|hash| hash.get("pattern"))
-                .and_then(Value::as_str),
-            Some("^(?!0{64}$)[0-9a-f]{64}$")
-        );
+        assert_eq!(properties.get("proof_kind").and_then(|kind| kind.get("const")).and_then(Value::as_str), Some(kind));
+        for field in allowed { assert!(properties.contains_key(*field), "{name} must publish {field}"); }
+        for field in forbidden { assert!(!properties.contains_key(*field), "{name} incompatible field {field}"); }
+        assert_eq!(properties.get("nonce_b64").and_then(|nonce| nonce.get("pattern")).and_then(Value::as_str), Some("^(?!A{22}==$)[A-Za-z0-9+/]{21}[AQgw]==$"));
+        assert_eq!(properties.get("expected_finalized_height").and_then(|height| height.get("minimum")).and_then(Value::as_u64), Some(1));
+        assert_eq!(properties.get("expected_finalized_block_hash_hex").and_then(|hash| hash.get("pattern")).and_then(Value::as_str), Some("^(?!0{64}$)[0-9a-f]{64}$"));
     }
-    let por_properties = schemas
-        .get("SorafsProofStreamPorRequestV1")
-        .and_then(|schema| schema.get("properties"))
-        .and_then(Value::as_object)
-        .expect("PoR request properties");
-    assert_eq!(
-        por_properties
-            .get("sample_count")
-            .and_then(Value::as_object)
-            .and_then(|count| count.get("maximum"))
-            .and_then(Value::as_u64),
-        Some(500)
-    );
-    let por_proof = schemas
-        .get("SorafsPorProofV1")
-        .and_then(Value::as_object)
-        .expect("closed PoR proof schema");
-    assert_eq!(
-        por_proof
-            .get("additionalProperties")
-            .and_then(Value::as_bool),
-        Some(false)
-    );
-    assert_eq!(
-        por_proof
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("PoR proof required fields")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>(),
-        [
-            "payload_len",
-            "chunk_count",
-            "chunk_index",
-            "chunk_offset",
-            "chunk_length",
-            "chunk_digest_hex",
-            "chunk_root_hex",
-            "segment_index",
-            "segment_offset",
-            "segment_length",
-            "segment_digest_hex",
-            "leaf_index",
-            "leaf_offset",
-            "leaf_length",
-            "leaf_bytes_hex",
-            "leaf_digest_hex",
-            "segment_leaves_hex",
-            "chunk_segments_hex",
-            "chunk_merkle_path_hex",
-        ]
-    );
-    let proof_properties = por_proof
-        .get("properties")
-        .and_then(Value::as_object)
-        .expect("PoR proof properties");
-    for digest_field in [
-        "chunk_digest_hex",
-        "chunk_root_hex",
-        "segment_digest_hex",
-        "leaf_digest_hex",
-    ] {
-        assert_eq!(
-            proof_properties
-                .get(digest_field)
-                .and_then(Value::as_object)
-                .and_then(|field| field.get("pattern"))
-                .and_then(Value::as_str),
-            Some("^[0-9a-f]{64}$"),
-            "{digest_field} must require canonical lowercase digest hex"
-        );
+    assert_eq!(contract_property(schemas, "SorafsProofStreamPorRequestV1", "sample_count").get("maximum").and_then(Value::as_u64), Some(500));
+    let proof = contract_schema(schemas, "SorafsPorProofV1");
+    assert_eq!(proof.get("additionalProperties").and_then(Value::as_bool), Some(false));
+    assert_eq!(value_strings(proof.get("required").expect("PoR required"), "PoR required"), contract_strings("proof.por.required"));
+    let properties = proof.get("properties").and_then(Value::as_object).expect("PoR proof properties");
+    for field in ["chunk_digest_hex", "chunk_root_hex", "segment_digest_hex", "leaf_digest_hex"] {
+        assert_eq!(properties.get(field).and_then(|schema| schema.get("pattern")).and_then(Value::as_str), Some("^[0-9a-f]{64}$"), "{field} digest pattern");
     }
-    let leaf_bytes = proof_properties
-        .get("leaf_bytes_hex")
-        .and_then(Value::as_object)
-        .expect("PoR leaf bytes schema");
-    assert_eq!(
-        leaf_bytes.get("pattern").and_then(Value::as_str),
-        Some("^(?:[0-9a-f]{2})+$")
-    );
-    assert_eq!(
-        leaf_bytes.get("maxLength").and_then(Value::as_u64),
-        Some(8_192)
-    );
-    for (field, maximum) in [
-        ("chunk_count", 4_194_304),
-        ("chunk_index", 4_194_303),
-        ("chunk_length", 4_194_304),
-        ("segment_index", 63),
-        ("segment_length", 65_536),
-        ("leaf_index", 15),
-        ("leaf_length", 4_096),
-    ] {
-        assert_eq!(
-            proof_properties
-                .get(field)
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("maximum"))
-                .and_then(Value::as_u64),
-            Some(maximum),
-            "{field} must publish the self-verifying runtime bound"
-        );
+    let leaf = properties.get("leaf_bytes_hex").and_then(Value::as_object).expect("leaf bytes schema");
+    assert_eq!(leaf.get("pattern").and_then(Value::as_str), Some("^(?:[0-9a-f]{2})+$"));
+    assert_eq!(leaf.get("maxLength").and_then(Value::as_u64), Some(8_192));
+    for (field, maximum) in [("chunk_count", 4_194_304), ("chunk_index", 4_194_303), ("chunk_length", 4_194_304), ("segment_index", 63), ("segment_length", 65_536), ("leaf_index", 15), ("leaf_length", 4_096)] {
+        assert_eq!(properties.get(field).and_then(|schema| schema.get("maximum")).and_then(Value::as_u64), Some(maximum), "{field} runtime bound");
     }
     for (field, maximum) in [("segment_leaves_hex", 16), ("chunk_segments_hex", 64)] {
-        let array = proof_properties
-            .get(field)
-            .and_then(Value::as_object)
-            .unwrap_or_else(|| panic!("{field} schema"));
-        assert_eq!(
-            array.get("minItems").and_then(Value::as_u64),
-            Some(1),
-            "{field} must not accept an empty Merkle level"
-        );
-        assert_eq!(
-            array.get("maxItems").and_then(Value::as_u64),
-            Some(maximum),
-            "{field} must publish the runtime allocation bound"
-        );
-        assert_eq!(
-            array
-                .get("items")
-                .and_then(Value::as_object)
-                .and_then(|items| items.get("pattern"))
-                .and_then(Value::as_str),
-            Some("^[0-9a-f]{64}$"),
-            "{field} entries must use canonical lowercase digest hex"
-        );
+        let array = properties.get(field).and_then(Value::as_object).unwrap_or_else(|| panic!("{field} schema"));
+        assert_eq!(array.get("minItems").and_then(Value::as_u64), Some(1));
+        assert_eq!(array.get("maxItems").and_then(Value::as_u64), Some(maximum));
+        assert_eq!(array.get("items").and_then(|items| items.get("pattern")).and_then(Value::as_str), Some("^[0-9a-f]{64}$"));
     }
-    let chunk_path = proof_properties
-        .get("chunk_merkle_path_hex")
-        .and_then(Value::as_object)
-        .expect("chunk Merkle path schema");
+    let chunk_path = properties.get("chunk_merkle_path_hex").and_then(Value::as_object).expect("chunk path");
     assert_eq!(chunk_path.get("minItems").and_then(Value::as_u64), Some(0));
     assert_eq!(chunk_path.get("maxItems").and_then(Value::as_u64), Some(22));
-    let item = schemas
-        .get("SorafsProofStreamItemV1")
-        .and_then(Value::as_object)
-        .expect("proof-stream item schema");
-    let item_properties = item
-        .get("properties")
-        .and_then(Value::as_object)
-        .expect("proof-stream item properties");
-    assert_eq!(
-        item_properties
-            .get("proof")
-            .and_then(Value::as_object)
-            .and_then(|proof| proof.get("$ref"))
-            .and_then(Value::as_str),
-        Some("#/components/schemas/SorafsPorProofV1")
-    );
+    let item = contract_schema(schemas, "SorafsProofStreamItemV1");
+    let item_properties = item.get("properties").and_then(Value::as_object).expect("proof item properties");
+    assert_eq!(item_properties.get("proof").and_then(|proof| proof.get("$ref")).and_then(Value::as_str), Some("#/components/schemas/SorafsPorProofV1"));
     for field in ["deadline_ms", "recorded_at_ms"] {
-        assert_eq!(
-            item_properties
-                .get(field)
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("minimum"))
-                .and_then(Value::as_u64),
-            Some(1),
-            "{field} must reject the zero value forbidden by signed PoTR receipts"
-        );
+        assert_eq!(item_properties.get(field).and_then(|schema| schema.get("minimum")).and_then(Value::as_u64), Some(1));
     }
-    let receipt = item_properties
-        .get("receipt_b64")
-        .and_then(Value::as_object)
-        .expect("PoTR receipt schema");
-    assert_eq!(
-        receipt.get("pattern").and_then(Value::as_str),
-        Some("^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$")
-    );
-    assert_eq!(
-        receipt
-            .get("x-iroha-runtime-validation")
-            .and_then(Value::as_object)
-            .and_then(|validation| validation.get("requireByteIdenticalCanonicalReencode"))
-            .and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        receipt
-            .get("x-iroha-runtime-validation")
-            .and_then(Value::as_object)
-            .and_then(|validation| validation.get("requireValidatedReceipt"))
-            .and_then(Value::as_bool),
-        Some(true)
-    );
-    let kind_variants = item
-        .get("allOf")
-        .and_then(Value::as_array)
-        .and_then(|all_of| all_of.get(1))
-        .and_then(|kind_constraint| kind_constraint.get("oneOf"))
-        .and_then(Value::as_array)
-        .expect("proof-kind response variants");
-    for (kind, expected_reasons) in [
-        (
-            "pdp",
-            &[
-                "deadline_expired",
-                "submission_late",
-                "future_timestamp",
-                "invalid_proof",
-                "admission_revoked",
-                "admission_inactive",
-                "storage_unavailable",
-            ][..],
-        ),
-        (
-            "potr",
-            &[
-                "missed_deadline",
-                "provider_error",
-                "gateway_error",
-                "client_cancelled",
-            ][..],
-        ),
-    ] {
-        let variant = kind_variants
-            .iter()
-            .find(|variant| {
-                variant
-                    .get("properties")
-                    .and_then(|properties| properties.get("proof_kind"))
-                    .and_then(|proof_kind| proof_kind.get("const"))
-                    .and_then(Value::as_str)
-                    == Some(kind)
-            })
-            .unwrap_or_else(|| panic!("{kind} response variant"));
-        assert_eq!(
-            variant
-                .get("properties")
-                .and_then(|properties| properties.get("failure_reason"))
-                .and_then(|reason| reason.get("enum"))
-                .and_then(Value::as_array)
-                .expect("kind-specific failure reasons")
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>(),
-            expected_reasons,
-            "{kind} must expose only its canonical terminal failure statuses"
-        );
+    let receipt = item_properties.get("receipt_b64").and_then(Value::as_object).expect("PoTR receipt schema");
+    assert_eq!(receipt.get("pattern").and_then(Value::as_str), Some("^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"));
+    let validation = receipt.get("x-iroha-runtime-validation").and_then(Value::as_object).expect("receipt validation");
+    assert_eq!(validation.get("requireByteIdenticalCanonicalReencode").and_then(Value::as_bool), Some(true));
+    assert_eq!(validation.get("requireValidatedReceipt").and_then(Value::as_bool), Some(true));
+    let kind_variants = item.get("allOf").and_then(Value::as_array).and_then(|all| all.get(1)).and_then(|constraint| constraint.get("oneOf")).and_then(Value::as_array).expect("proof-kind variants");
+    for (kind, inventory) in [("pdp", "proof.pdp.failures"), ("potr", "proof.potr.failures")] {
+        let variant = kind_variants.iter().find(|variant| variant.get("properties").and_then(|properties| properties.get("proof_kind")).and_then(|kind| kind.get("const")).and_then(Value::as_str) == Some(kind)).unwrap_or_else(|| panic!("{kind} variant"));
+        let reasons = variant.get("properties").and_then(|properties| properties.get("failure_reason")).and_then(|reason| reason.get("enum")).expect("failure reasons");
+        assert_eq!(value_strings(reasons, "failure reasons"), contract_strings(inventory), "{kind} terminal failures");
     }
 }

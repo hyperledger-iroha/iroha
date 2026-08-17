@@ -8,10 +8,10 @@ def test_release_inventory_constants_match_current_source_seal(
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 860
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5"
+        "4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "afd73a96a4e243923a5a01a97f95dc82da971fdf13486dd73d38479456512537"
+        "97d125f9196963710fd6eb72e98e0b86f6503489f1b1ee492b4cfc628e320d82"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -22,7 +22,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 527
     assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 528
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d"
+        "4dd855f85b071369ec2457dfa75caacc8f597ce17390b406de8f190dd52c6c18"
     )
     assert (
         "_production_liveness_release_inventory_guard_errors"
@@ -1656,7 +1656,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         ),
         (
             "network_relay_tests::",
-            "obsolete_sumeragi_relay_message_completes_as_delivered",
+            "obsolete_sumeragi_relay_message_fails_closed",
             irohad_main_source,
         ),
         (
@@ -3671,7 +3671,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "d34132eb817e08216180c7db186826f1"',
+            '    "4082945a72bd97c31bc147f9cd7bbcb7"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),

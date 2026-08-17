@@ -12922,7 +12922,11 @@ mod tests {
             .expect_err(expected);
         assert!(matches!(err, MsgError::ValidationFailed));
     }
-    fn assert_require_verified_signed_payload_accepted(payload: String, expected: &str) {
+    fn assert_require_verified_signed_payload_accepted(
+        payload: String,
+        expected: &str,
+        expected_business_message_id: Option<&str>,
+    ) {
         let mut config = sample_config();
         config
             .profiles
@@ -12938,6 +12942,12 @@ mod tests {
             .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
             .expect(expected);
         assert!(metadata.embedded_signature_detected());
+        if let Some(expected_business_message_id) = expected_business_message_id {
+            assert_eq!(
+                metadata.business_message_id(),
+                Some(expected_business_message_id)
+            );
+        }
     }
     fn assert_require_verified_signed_payload_rejected(payload: String, expected: &str) {
         let mut config = sample_config();
@@ -13837,62 +13847,27 @@ mod tests {
     }
     #[test]
     fn require_verified_profile_accepts_valid_p256_xmldsig_xades() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("valid XMLDSig/XAdES payload should pass require-verified profile");
-        assert!(metadata.embedded_signature_detected());
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml(),
+            "valid XMLDSig/XAdES payload should pass require-verified profile",
+            None,
+        );
     }
     #[test]
     fn require_verified_profile_accepts_xades_signed_properties_reference() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_signed_properties_reference();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("XAdES SignedProperties Reference digest should verify");
-        assert!(metadata.embedded_signature_detected());
-        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_signed_properties_reference(),
+            "XAdES SignedProperties Reference digest should verify",
+            Some("sig-001"),
+        );
     }
     #[test]
     fn require_verified_profile_accepts_prefixed_xades_signed_properties_reference() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_prefixed_xades_signed_properties();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("prefixed XAdES SignedProperties should bind to the supported namespace");
-        assert!(metadata.embedded_signature_detected());
-        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_prefixed_xades_signed_properties(),
+            "prefixed XAdES SignedProperties should bind to the supported namespace",
+            Some("sig-001"),
+        );
     }
     #[test]
     fn require_verified_profile_rejects_prefixed_xades_with_wrong_namespace() {
@@ -15291,123 +15266,51 @@ mod tests {
     }
     #[test]
     fn require_verified_profile_accepts_comments_in_no_comments_c14n() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_comments();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("no-comments C14N should omit XML comments before digest and signature checks");
-        assert!(metadata.embedded_signature_detected());
-        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_comments(),
+            "no-comments C14N should omit XML comments before digest and signature checks",
+            Some("sig-001"),
+        );
     }
     #[test]
     fn require_verified_profile_accepts_character_references_in_payload_digest() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_character_reference_message_id();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("canonicalized character references should satisfy the XMLDSig digest");
-        assert!(metadata.embedded_signature_detected());
-        assert_eq!(metadata.business_message_id(), Some("sig&001"));
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_character_reference_message_id(),
+            "canonicalized character references should satisfy the XMLDSig digest",
+            Some("sig&001"),
+        );
     }
     #[test]
     fn require_verified_profile_accepts_xml_namespace_attribute_in_payload_digest() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_xml_namespace_attribute();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("implicit xml namespace attributes should satisfy the XMLDSig digest");
-        assert!(metadata.embedded_signature_detected());
-        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_xml_namespace_attribute(),
+            "implicit xml namespace attributes should satisfy the XMLDSig digest",
+            Some("sig-001"),
+        );
     }
     #[test]
     fn require_verified_profile_accepts_prefixed_attribute_in_payload_digest() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_prefixed_attribute();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("prefixed payload attributes should satisfy the XMLDSig digest");
-        assert!(metadata.embedded_signature_detected());
-        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_prefixed_attribute(),
+            "prefixed payload attributes should satisfy the XMLDSig digest",
+            Some("sig-001"),
+        );
     }
     #[test]
     fn require_verified_profile_accepts_xml_namespace_attribute_in_signed_info() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_signed_info_xml_namespace_attribute();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("implicit xml namespace attributes should canonicalize inside SignedInfo");
-        assert!(metadata.embedded_signature_detected());
-        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_signed_info_xml_namespace_attribute(),
+            "implicit xml namespace attributes should canonicalize inside SignedInfo",
+            Some("sig-001"),
+        );
     }
     #[test]
     fn require_verified_profile_accepts_same_document_id_reference() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_same_document_reference();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("same-document #id XMLDSig references should verify");
-        assert!(metadata.embedded_signature_detected());
-        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_same_document_reference(),
+            "same-document #id XMLDSig references should verify",
+            Some("sig-001"),
+        );
     }
     #[test]
     fn require_verified_profile_accepts_same_document_reference_with_inherited_namespace() {
@@ -15438,70 +15341,34 @@ mod tests {
     }
     #[test]
     fn require_verified_profile_accepts_reference_c14n_transform() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_reference_c14n_transform();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("payload Reference C14N transform should drive digest canonicalization");
-        assert!(metadata.embedded_signature_detected());
-        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_reference_c14n_transform(),
+            "payload Reference C14N transform should drive digest canonicalization",
+            Some("sig-001"),
+        );
     }
     #[test]
     fn require_verified_profile_accepts_inherited_prefixed_attribute_in_signed_info() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_signed_info_inherited_prefixed_attribute();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect(
-                "exclusive C14N should inherit namespaces visibly used by SignedInfo attributes",
-            );
-        assert!(metadata.embedded_signature_detected());
-        assert_eq!(metadata.business_message_id(), Some("sig-001"));
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_signed_info_inherited_prefixed_attribute(),
+            "exclusive C14N should inherit namespaces visibly used by SignedInfo attributes",
+            Some("sig-001"),
+        );
     }
     #[test]
     fn require_verified_profile_accepts_prefixed_signed_info_with_inherited_namespace() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_prefixed_signature_namespace();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("prefixed XMLDSig SignedInfo should inherit the Signature namespace");
-        assert!(metadata.embedded_signature_detected());
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_prefixed_signature_namespace(),
+            "prefixed XMLDSig SignedInfo should inherit the Signature namespace",
+            None,
+        );
     }
     #[test]
     fn require_verified_profile_accepts_sgntr_wrapped_signature_carrier() {
         assert_require_verified_signed_payload_accepted(
             signed_pacs008_xml_with_sgntr_signature_carrier(),
             "Sgntr wrappers with one direct XMLDSig Signature must verify",
+            None,
         );
     }
     #[test]
@@ -15533,98 +15400,41 @@ mod tests {
     }
     #[test]
     fn require_verified_profile_accepts_inclusive_c14n_with_unused_inherited_namespace() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_inclusive_unused_signature_namespace();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("inclusive XML canonicalization should carry inherited root namespaces");
-        assert!(metadata.embedded_signature_detected());
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_inclusive_unused_signature_namespace(),
+            "inclusive XML canonicalization should carry inherited root namespaces",
+            None,
+        );
     }
     #[test]
     fn require_verified_profile_rejects_exclusive_bytes_declared_as_inclusive_c14n() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_exclusive_bytes_declared_as_inclusive();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("declared inclusive C14N must not verify exclusive canonical bytes");
-        assert!(matches!(err, MsgError::ValidationFailed));
+        assert_require_verified_signed_payload_rejected(
+            signed_pacs008_xml_with_exclusive_bytes_declared_as_inclusive(),
+            "declared inclusive C14N must not verify exclusive canonical bytes",
+        );
     }
     #[test]
     fn require_verified_profile_accepts_fixed_width_ecdsa_signature_value() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_fixed_width_signature_value();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("XMLDSig ECDSA SignatureValue should accept fixed-width r||s bytes");
-        assert!(metadata.embedded_signature_detected());
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_fixed_width_signature_value(),
+            "XMLDSig ECDSA SignatureValue should accept fixed-width r||s bytes",
+            None,
+        );
     }
     #[test]
     fn require_verified_profile_accepts_self_closing_signed_info_methods() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_self_closing_signed_info();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let metadata = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect("supported canonicalizer must expand self-closing SignedInfo methods");
-        assert!(metadata.embedded_signature_detected());
+        assert_require_verified_signed_payload_accepted(
+            signed_pacs008_xml_with_self_closing_signed_info(),
+            "supported canonicalizer must expand self-closing SignedInfo methods",
+            None,
+        );
     }
     #[test]
     fn require_verified_profile_rejects_raw_self_closing_signed_info_signature() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_raw_self_closing_signed_info_signature();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("signature must be checked against canonical SignedInfo bytes");
-        assert!(matches!(err, MsgError::ValidationFailed));
+        assert_require_verified_signed_payload_rejected(
+            signed_pacs008_xml_with_raw_self_closing_signed_info_signature(),
+            "signature must be checked against canonical SignedInfo bytes",
+        );
     }
     #[test]
     fn require_verified_profile_rejects_extra_sgntr_signature_carrier() {
@@ -15843,13 +15653,6 @@ mod tests {
     }
     #[test]
     fn require_verified_profile_rejects_public_key_xades_signing_certificate_v2() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
         let signing_key = test_p256_signing_key();
         let signed_properties_xml = test_xades_signed_properties_xml_for_certificate(
             TEST_X509_CHAIN_LEAF_CERTIFICATE_DER_B64,
@@ -15863,14 +15666,10 @@ mod tests {
             &signed_properties_reference_xml,
             &xades_object_xml,
         );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("SigningCertificateV2 cannot authorize raw public-key KeyInfo");
-        assert!(matches!(err, MsgError::ValidationFailed));
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "SigningCertificateV2 cannot authorize raw public-key KeyInfo",
+        );
     }
     #[test]
     fn require_verified_profile_accepts_directly_pinned_x509_critical_signer_key_usage() {
@@ -16910,23 +16709,12 @@ mod tests {
     }
     #[test]
     fn require_verified_profile_rejects_unsupported_signature_method() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
         let payload =
             signed_pacs008_xml().replace(XMLDSIG_ECDSA_SHA256, "urn:unsupported:rsa-sha1");
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("unsupported signature methods must fail closed");
-        assert!(matches!(err, MsgError::ValidationFailed));
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "unsupported signature methods must fail closed",
+        );
     }
     #[test]
     fn require_verified_profile_rejects_digest_method_parameters() {
@@ -17036,81 +16824,36 @@ mod tests {
     }
     #[test]
     fn require_verified_profile_rejects_extra_reference_transform() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let payload = signed_pacs008_xml_with_extra_reference_transform();
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("Reference transforms outside the supported set must fail closed");
-        assert!(matches!(err, MsgError::ValidationFailed));
+        assert_require_verified_signed_payload_rejected(
+            signed_pacs008_xml_with_extra_reference_transform(),
+            "Reference transforms outside the supported set must fail closed",
+        );
     }
     #[test]
     fn require_verified_profile_rejects_payload_digest_tampering() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
         let payload = signed_pacs008_xml().replace(">10.00<", ">10.01<");
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("reference digest mismatch must fail closed");
-        assert!(matches!(err, MsgError::ValidationFailed));
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "reference digest mismatch must fail closed",
+        );
     }
     #[test]
     fn require_verified_profile_rejects_signed_properties_digest_tampering() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
         let payload = signed_pacs008_xml_with_signed_properties_reference()
             .replace(XML_SIGNATURE_TEST_SIGNING_TIME, "2025-01-01T12:00:01Z");
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("SignedProperties digest tampering must fail closed");
-        assert!(matches!(err, MsgError::ValidationFailed));
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "SignedProperties digest tampering must fail closed",
+        );
     }
     #[test]
     fn require_verified_profile_rejects_signed_properties_target_drift() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
         let payload = signed_pacs008_xml_with_signed_properties_reference()
             .replace(r##"Target="#sig-001""##, r##"Target="#other-sig""##);
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("QualifyingProperties Target must bind to the enclosing Signature Id");
-        assert!(matches!(err, MsgError::ValidationFailed));
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "QualifyingProperties Target must bind to the enclosing Signature Id",
+        );
     }
     #[test]
     fn require_verified_profile_rejects_wrapped_qualifying_properties() {
@@ -17166,22 +16909,11 @@ mod tests {
     }
     #[test]
     fn require_verified_profile_rejects_signature_value_tampering() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
         let payload = signed_pacs008_xml().replacen("<SignatureValue>", "<SignatureValue>A", 1);
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("invalid signature bytes must fail closed");
-        assert!(matches!(err, MsgError::ValidationFailed));
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "invalid signature bytes must fail closed",
+        );
     }
     #[test]
     fn require_verified_profile_rejects_high_s_signature_value() {
@@ -17211,26 +16943,15 @@ mod tests {
     }
     #[test]
     fn require_verified_profile_rejects_duplicate_signature_value() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
         let payload = signed_pacs008_xml().replacen(
             "</SignatureValue>",
             "</SignatureValue><SignatureValue>AA==</SignatureValue>",
             1,
         );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("duplicate SignatureValue elements must fail closed");
-        assert!(matches!(err, MsgError::ValidationFailed));
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "duplicate SignatureValue elements must fail closed",
+        );
     }
     #[test]
     fn require_verified_profile_rejects_signature_value_unsupported_attribute() {
@@ -17246,49 +16967,27 @@ mod tests {
     }
     #[test]
     fn require_verified_profile_rejects_duplicate_digest_value() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
         let payload = signed_pacs008_xml().replacen(
             "</DigestValue>",
             "</DigestValue><DigestValue>AA==</DigestValue>",
             1,
         );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("duplicate DigestValue elements must fail closed");
-        assert!(matches!(err, MsgError::ValidationFailed));
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "duplicate DigestValue elements must fail closed",
+        );
     }
     #[test]
     fn require_verified_profile_rejects_duplicate_public_key() {
-        let mut config = sample_config();
-        config
-            .profiles
-            .push(signed_message_profile("require-verified"));
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
         let payload = signed_pacs008_xml().replacen(
             "</PublicKey>",
             "</PublicKey><PublicKey>AA==</PublicKey>",
             1,
         );
-        let parsed = parse_message("pacs.008", payload.as_bytes()).expect("parse signed XML");
-        let profile = runtime
-            .resolve_profile(Some("signed-pacs008-test"))
-            .expect("signed profile");
-        let err = runtime
-            .validate_profile_submission(profile, "pacs.008", &parsed, payload.as_bytes())
-            .expect_err("duplicate PublicKey elements must fail closed");
-        assert!(matches!(err, MsgError::ValidationFailed));
+        assert_require_verified_signed_payload_rejected(
+            payload,
+            "duplicate PublicKey elements must fail closed",
+        );
     }
     #[test]
     fn require_verified_profile_rejects_public_key_nested_markup() {

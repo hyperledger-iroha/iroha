@@ -152,6 +152,17 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::{NoritoSerialize, decode_from_bytes};
+
+macro_rules! impl_run_with_client_methods {
+    ($args:ty, $($method:path),+ $(,)?) => {
+        impl Run for $args {
+            fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+                self.run_with(context, $($method),+)
+            }
+        }
+    };
+}
+
 #[allow(dead_code)]
 const ML_KEM_768_PUBLIC_LEN: usize = 1184;
 #[derive(clap::ValueEnum, Clone, Copy, Debug, Default)]
@@ -534,11 +545,7 @@ impl Run for BillingCommand {
 /// Fetch supervised billing projector status.
 #[derive(clap::Args, Debug, Default)]
 pub struct BillingStatusArgs {}
-impl Run for BillingStatusArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_billing_status)
-    }
-}
+impl_run_with_client_methods!(BillingStatusArgs, Client::get_sorafs_billing_status);
 impl BillingStatusArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -562,11 +569,7 @@ pub struct BillingStatementsArgs {
     #[arg(long, value_name = "COUNT")]
     limit: u16,
 }
-impl Run for BillingStatementsArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_billing_statements)
-    }
-}
+impl_run_with_client_methods!(BillingStatementsArgs, Client::get_sorafs_billing_statements);
 impl BillingStatementsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -605,11 +608,7 @@ pub struct BillingStatementArgs {
     #[arg(long, value_name = "PATH")]
     output: PathBuf,
 }
-impl Run for BillingStatementArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_billing_statement)
-    }
-}
+impl_run_with_client_methods!(BillingStatementArgs, Client::get_sorafs_billing_statement);
 impl BillingStatementArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -718,14 +717,10 @@ pub struct BillingAcknowledgeArgs {
     #[arg(long = "authentication-proof", value_name = "PATH")]
     authentication_proof: PathBuf,
 }
-impl Run for BillingAcknowledgeArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_billing_statement_acknowledgement,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    BillingAcknowledgeArgs,
+    Client::post_sorafs_billing_statement_acknowledgement,
+);
 impl BillingAcknowledgeArgs {
     fn run_with<C, F>(&self, context: &mut C, acknowledge: F) -> Result<()>
     where
@@ -991,11 +986,10 @@ fn read_billing_acknowledgement_proof_exact(
 /// Fetch payload-free billing reconciliation status.
 #[derive(clap::Args, Debug, Default)]
 pub struct BillingReconciliationArgs {}
-impl Run for BillingReconciliationArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_billing_reconciliation)
-    }
-}
+impl_run_with_client_methods!(
+    BillingReconciliationArgs,
+    Client::get_sorafs_billing_reconciliation,
+);
 impl BillingReconciliationArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -1117,11 +1111,10 @@ pub struct AppealsPricingQuoteArgs {
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-impl Run for AppealsPricingQuoteArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_appeal_pricing_quote_json)
-    }
-}
+impl_run_with_client_methods!(
+    AppealsPricingQuoteArgs,
+    Client::post_sorafs_appeal_pricing_quote_json,
+);
 impl AppealsPricingQuoteArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1189,11 +1182,10 @@ pub struct AppealsFinanceDepositCreateArgs {
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-impl Run for AppealsFinanceDepositCreateArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_appeal_finance_deposit_json)
-    }
-}
+impl_run_with_client_methods!(
+    AppealsFinanceDepositCreateArgs,
+    Client::post_sorafs_appeal_finance_deposit_json,
+);
 impl AppealsFinanceDepositCreateArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1215,14 +1207,10 @@ pub struct AppealsFinanceDepositConfirmArgs {
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-impl Run for AppealsFinanceDepositConfirmArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_appeal_finance_deposit_confirm_json,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    AppealsFinanceDepositConfirmArgs,
+    Client::post_sorafs_appeal_finance_deposit_confirm_json,
+);
 impl AppealsFinanceDepositConfirmArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1244,11 +1232,10 @@ pub struct AppealsFinanceDepositGetArgs {
     #[arg(long = "escrow-id", value_name = "HEX")]
     escrow_id: String,
 }
-impl Run for AppealsFinanceDepositGetArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_appeal_finance_deposit)
-    }
-}
+impl_run_with_client_methods!(
+    AppealsFinanceDepositGetArgs,
+    Client::get_sorafs_appeal_finance_deposit,
+);
 impl AppealsFinanceDepositGetArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -1267,14 +1254,10 @@ pub struct AppealsFinanceDepositSettleArgs {
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-impl Run for AppealsFinanceDepositSettleArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_appeal_finance_deposit_settle_json,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    AppealsFinanceDepositSettleArgs,
+    Client::post_sorafs_appeal_finance_deposit_settle_json,
+);
 impl AppealsFinanceDepositSettleArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1296,14 +1279,10 @@ pub struct AppealsFinanceDepositReconcileArgs {
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-impl Run for AppealsFinanceDepositReconcileArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_appeal_finance_deposit_reconcile_json,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    AppealsFinanceDepositReconcileArgs,
+    Client::post_sorafs_appeal_finance_deposit_reconcile_json,
+);
 impl AppealsFinanceDepositReconcileArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1325,14 +1304,10 @@ pub struct AppealsFinanceDepositSubmitSettlementArgs {
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-impl Run for AppealsFinanceDepositSubmitSettlementArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_appeal_finance_deposit_submit_settlement_json,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    AppealsFinanceDepositSubmitSettlementArgs,
+    Client::post_sorafs_appeal_finance_deposit_submit_settlement_json,
+);
 impl AppealsFinanceDepositSubmitSettlementArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1354,11 +1329,7 @@ pub struct AppealsFinanceReportsArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for AppealsFinanceReportsArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_appeal_finance_reports)
-    }
-}
+impl_run_with_client_methods!(AppealsFinanceReportsArgs, Client::get_sorafs_appeal_finance_reports);
 impl AppealsFinanceReportsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -1377,11 +1348,10 @@ pub struct AppealsFinanceWeeklyRollupsArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for AppealsFinanceWeeklyRollupsArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_appeal_finance_weekly_rollups)
-    }
-}
+impl_run_with_client_methods!(
+    AppealsFinanceWeeklyRollupsArgs,
+    Client::get_sorafs_appeal_finance_weekly_rollups,
+);
 impl AppealsFinanceWeeklyRollupsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -1400,14 +1370,10 @@ pub struct AppealsFinanceSettlementReceiptsArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for AppealsFinanceSettlementReceiptsArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::get_sorafs_appeal_finance_settlement_receipts,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    AppealsFinanceSettlementReceiptsArgs,
+    Client::get_sorafs_appeal_finance_settlement_receipts,
+);
 impl AppealsFinanceSettlementReceiptsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -1511,11 +1477,10 @@ pub struct TransparencyCyclesListArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for TransparencyCyclesListArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_transparency_cycles)
-    }
-}
+impl_run_with_client_methods!(
+    TransparencyCyclesListArgs,
+    Client::get_sorafs_transparency_cycles,
+);
 impl TransparencyCyclesListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -1537,11 +1502,10 @@ pub struct TransparencyCyclesGetArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for TransparencyCyclesGetArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_transparency_cycle)
-    }
-}
+impl_run_with_client_methods!(
+    TransparencyCyclesGetArgs,
+    Client::get_sorafs_transparency_cycle,
+);
 impl TransparencyCyclesGetArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -1564,11 +1528,10 @@ pub struct TransparencyCyclesEntryArgs {
     #[arg(long = "entry-id", value_name = "HEX")]
     entry_id: String,
 }
-impl Run for TransparencyCyclesEntryArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_transparency_cycle_entry)
-    }
-}
+impl_run_with_client_methods!(
+    TransparencyCyclesEntryArgs,
+    Client::get_sorafs_transparency_cycle_entry,
+);
 impl TransparencyCyclesEntryArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -1588,11 +1551,10 @@ pub struct TransparencyExplorerArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for TransparencyExplorerArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_transparency_explorer)
-    }
-}
+impl_run_with_client_methods!(
+    TransparencyExplorerArgs,
+    Client::get_sorafs_transparency_explorer,
+);
 impl TransparencyExplorerArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -1728,11 +1690,10 @@ pub struct TransparencyTokensArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for TransparencyTokensArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_transparency_token_issuances)
-    }
-}
+impl_run_with_client_methods!(
+    TransparencyTokensArgs,
+    Client::get_sorafs_transparency_token_issuances,
+);
 impl TransparencyTokensArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -1766,14 +1727,10 @@ pub struct TransparencyTokenIssuanceSubmitArgs {
     #[arg(long = "payload", value_name = "PATH")]
     payload: PathBuf,
 }
-impl Run for TransparencyTokenIssuanceSubmitArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_transparency_token_issuance_json,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    TransparencyTokenIssuanceSubmitArgs,
+    Client::post_sorafs_transparency_token_issuance_json,
+);
 impl TransparencyTokenIssuanceSubmitArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1795,14 +1752,10 @@ pub struct TransparencyTokenIssuanceCanaryArgs {
     #[arg(long = "out", value_name = "PATH")]
     out: Option<PathBuf>,
 }
-impl Run for TransparencyTokenIssuanceCanaryArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_transparency_token_issuance_json,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    TransparencyTokenIssuanceCanaryArgs,
+    Client::post_sorafs_transparency_token_issuance_json,
+);
 impl TransparencyTokenIssuanceCanaryArgs {
     fn run_with<C, F>(&self, context: &mut C, mut submit: F) -> Result<()>
     where
@@ -1897,14 +1850,10 @@ pub struct TransparencyPrivacyAggregateSourceEventArgs {
     #[arg(long = "payload", value_name = "PATH")]
     payload: PathBuf,
 }
-impl Run for TransparencyPrivacyAggregateSourceEventArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_transparency_privacy_aggregate_source_event_json,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    TransparencyPrivacyAggregateSourceEventArgs,
+    Client::post_sorafs_transparency_privacy_aggregate_source_event_json,
+);
 impl TransparencyPrivacyAggregateSourceEventArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1924,14 +1873,10 @@ pub struct TransparencyPrivacyAggregatePublishDueArgs {
     #[arg(long = "payload", value_name = "PATH")]
     payload: PathBuf,
 }
-impl Run for TransparencyPrivacyAggregatePublishDueArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_transparency_privacy_aggregate_publish_due_json,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    TransparencyPrivacyAggregatePublishDueArgs,
+    Client::post_sorafs_transparency_privacy_aggregate_publish_due_json,
+);
 impl TransparencyPrivacyAggregatePublishDueArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1957,15 +1902,11 @@ pub struct TransparencyPrivacyAggregateCanaryArgs {
     #[arg(long = "out", value_name = "PATH")]
     out: Option<PathBuf>,
 }
-impl Run for TransparencyPrivacyAggregateCanaryArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_transparency_privacy_aggregate_source_event_json,
-            Client::post_sorafs_transparency_privacy_aggregate_publish_due_json,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    TransparencyPrivacyAggregateCanaryArgs,
+    Client::post_sorafs_transparency_privacy_aggregate_source_event_json,
+    Client::post_sorafs_transparency_privacy_aggregate_publish_due_json,
+);
 impl TransparencyPrivacyAggregateCanaryArgs {
     fn run_with<C, FSource, FPublish>(
         &self,
@@ -2136,11 +2077,10 @@ pub struct ModerationBallotsListArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for ModerationBallotsListArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_moderation_ballots)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationBallotsListArgs,
+    Client::get_sorafs_moderation_ballots,
+);
 impl ModerationBallotsListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -2165,11 +2105,10 @@ pub struct ModerationBallotsGetArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for ModerationBallotsGetArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_moderation_ballot)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationBallotsGetArgs,
+    Client::get_sorafs_moderation_ballot,
+);
 impl ModerationBallotsGetArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -2193,11 +2132,10 @@ pub struct ModerationBallotsNoShowPlanArgs {
     #[arg(long = "round-id", value_name = "TEXT")]
     round_id: String,
 }
-impl Run for ModerationBallotsNoShowPlanArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_moderation_ballot_no_show_plan)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationBallotsNoShowPlanArgs,
+    Client::get_sorafs_moderation_ballot_no_show_plan,
+);
 impl ModerationBallotsNoShowPlanArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -2220,11 +2158,10 @@ pub struct ModerationBallotsEventsArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for ModerationBallotsEventsArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_moderation_ballot_events)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationBallotsEventsArgs,
+    Client::get_sorafs_moderation_ballot_events,
+);
 impl ModerationBallotsEventsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -2249,11 +2186,10 @@ pub struct ModerationBallotsCommitArgs {
     #[arg(long = "format", default_value = "json")]
     format: String,
 }
-impl Run for ModerationBallotsCommitArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_moderation_ballot_commit)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationBallotsCommitArgs,
+    Client::post_sorafs_moderation_ballot_commit,
+);
 impl ModerationBallotsCommitArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2276,11 +2212,10 @@ pub struct ModerationBallotsRevealArgs {
     #[arg(long = "format", default_value = "json")]
     format: String,
 }
-impl Run for ModerationBallotsRevealArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_moderation_ballot_reveal)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationBallotsRevealArgs,
+    Client::post_sorafs_moderation_ballot_reveal,
+);
 impl ModerationBallotsRevealArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2303,11 +2238,10 @@ pub struct ModerationBallotsTallyArgs {
     #[arg(long = "round-id", value_name = "TEXT")]
     round_id: String,
 }
-impl Run for ModerationBallotsTallyArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_moderation_ballot_tally)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationBallotsTallyArgs,
+    Client::post_sorafs_moderation_ballot_tally,
+);
 impl ModerationBallotsTallyArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2343,16 +2277,12 @@ pub struct ModerationBallotsExecuteArgs {
     #[arg(long = "submit-tally")]
     submit_tally: bool,
 }
-impl Run for ModerationBallotsExecuteArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_moderation_ballot_commit,
-            Client::post_sorafs_moderation_ballot_reveal,
-            Client::post_sorafs_moderation_ballot_tally,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    ModerationBallotsExecuteArgs,
+    Client::post_sorafs_moderation_ballot_commit,
+    Client::post_sorafs_moderation_ballot_reveal,
+    Client::post_sorafs_moderation_ballot_tally,
+);
 impl ModerationBallotsExecuteArgs {
     fn run_with<C, FCommit, FReveal, FTally>(
         &self,
@@ -2566,11 +2496,10 @@ pub struct ModerationRegistryListArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for ModerationRegistryListArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_moderation_model_registry)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationRegistryListArgs,
+    Client::get_sorafs_moderation_model_registry,
+);
 impl ModerationRegistryListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -2592,14 +2521,10 @@ pub struct ModerationRegistrySubmitReproArgs {
     #[arg(long = "format", default_value = "json")]
     format: String,
 }
-impl Run for ModerationRegistrySubmitReproArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_moderation_model_registry_repro_manifest,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    ModerationRegistrySubmitReproArgs,
+    Client::post_sorafs_moderation_model_registry_repro_manifest,
+);
 impl ModerationRegistrySubmitReproArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2622,14 +2547,10 @@ pub struct ModerationRegistrySubmitCorpusArgs {
     #[arg(long = "format", default_value = "json")]
     format: String,
 }
-impl Run for ModerationRegistrySubmitCorpusArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_moderation_model_registry_corpus,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    ModerationRegistrySubmitCorpusArgs,
+    Client::post_sorafs_moderation_model_registry_corpus,
+);
 impl ModerationRegistrySubmitCorpusArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2664,11 +2585,10 @@ pub struct ModerationScreeningListArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for ModerationScreeningListArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_moderation_screening_results)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationScreeningListArgs,
+    Client::get_sorafs_moderation_screening_results,
+);
 impl ModerationScreeningListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -2687,11 +2607,10 @@ pub struct ModerationScreeningSubmitArgs {
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-impl Run for ModerationScreeningSubmitArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_moderation_screening_result)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationScreeningSubmitArgs,
+    Client::post_sorafs_moderation_screening_result,
+);
 impl ModerationScreeningSubmitArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2772,11 +2691,10 @@ pub struct ModerationQuarantineListArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for ModerationQuarantineListArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_moderation_quarantine)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationQuarantineListArgs,
+    Client::get_sorafs_moderation_quarantine,
+);
 impl ModerationQuarantineListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -2822,11 +2740,10 @@ pub struct ModerationQuarantineObjectStoreArgs {
     #[arg(long = "notes", value_name = "TEXT")]
     notes: Option<String>,
 }
-impl Run for ModerationQuarantineObjectStoreArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_moderation_quarantine_object)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationQuarantineObjectStoreArgs,
+    Client::post_sorafs_moderation_quarantine_object,
+);
 impl ModerationQuarantineObjectStoreArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2870,11 +2787,10 @@ pub struct ModerationQuarantineObjectReadArgs {
     #[arg(long = "quarantine-id", value_name = "HEX")]
     quarantine_id: String,
 }
-impl Run for ModerationQuarantineObjectReadArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_moderation_quarantine_object)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationQuarantineObjectReadArgs,
+    Client::get_sorafs_moderation_quarantine_object,
+);
 impl ModerationQuarantineObjectReadArgs {
     fn run_with<C, F>(&self, context: &mut C, read: F) -> Result<()>
     where
@@ -3153,11 +3069,10 @@ pub struct ModerationQuarantineReviewArgs {
     #[arg(long = "notes", value_name = "TEXT")]
     notes: Option<String>,
 }
-impl Run for ModerationQuarantineReviewArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_moderation_quarantine_review)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationQuarantineReviewArgs,
+    Client::post_sorafs_moderation_quarantine_review,
+);
 impl ModerationQuarantineReviewArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -3198,11 +3113,10 @@ pub struct ModerationQuarantineReleaseArgs {
     #[arg(long = "notes", value_name = "TEXT")]
     notes: Option<String>,
 }
-impl Run for ModerationQuarantineReleaseArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_moderation_quarantine_release)
-    }
-}
+impl_run_with_client_methods!(
+    ModerationQuarantineReleaseArgs,
+    Client::post_sorafs_moderation_quarantine_release,
+);
 impl ModerationQuarantineReleaseArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -3240,14 +3154,10 @@ pub struct ModerationQuarantineAppealHandoffArgs {
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-impl Run for ModerationQuarantineAppealHandoffArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::post_sorafs_moderation_quarantine_appeal_handoff_json,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    ModerationQuarantineAppealHandoffArgs,
+    Client::post_sorafs_moderation_quarantine_appeal_handoff_json,
+);
 impl ModerationQuarantineAppealHandoffArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -3271,14 +3181,10 @@ pub struct ModerationQuarantineOperatorPanelArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for ModerationQuarantineOperatorPanelArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::get_sorafs_moderation_quarantine_operator_panel,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    ModerationQuarantineOperatorPanelArgs,
+    Client::get_sorafs_moderation_quarantine_operator_panel,
+);
 impl ModerationQuarantineOperatorPanelArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -3301,14 +3207,10 @@ pub struct ModerationQuarantineBridgePlanArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-impl Run for ModerationQuarantineBridgePlanArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::get_sorafs_moderation_quarantine_operator_panel,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    ModerationQuarantineBridgePlanArgs,
+    Client::get_sorafs_moderation_quarantine_operator_panel,
+);
 const MODERATION_OPERATOR_SERVICE_DEFAULT_LISTEN: &str = "127.0.0.1:9201";
 const MODERATION_OPERATOR_SERVICE_DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
 const MODERATION_OPERATOR_CSRF_HEADER: &str = "X-SoraFS-Operator-CSRF";
@@ -3503,15 +3405,11 @@ pub struct RepairListArgs {
     #[arg(long = "after-task-id", value_name = "HEX")]
     after_task_id: Option<String>,
 }
-impl Run for RepairListArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(
-            context,
-            Client::get_sorafs_repair_tasks,
-            Client::get_sorafs_repair_task,
-        )
-    }
-}
+impl_run_with_client_methods!(
+    RepairListArgs,
+    Client::get_sorafs_repair_tasks,
+    Client::get_sorafs_repair_task,
+);
 impl RepairListArgs {
     fn run_with<C, F, G>(&self, context: &mut C, list: F, get: G) -> Result<()>
     where
@@ -3583,11 +3481,7 @@ pub struct RepairClaimArgs {
     #[arg(long = "idempotency-key", value_name = "KEY")]
     idempotency_key: Option<String>,
 }
-impl Run for RepairClaimArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_repair_claim)
-    }
-}
+impl_run_with_client_methods!(RepairClaimArgs, Client::post_sorafs_repair_claim);
 impl RepairClaimArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -3633,11 +3527,7 @@ pub struct RepairRenewArgs {
     #[arg(long = "idempotency-key", value_name = "KEY")]
     idempotency_key: Option<String>,
 }
-impl Run for RepairRenewArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_repair_heartbeat)
-    }
-}
+impl_run_with_client_methods!(RepairRenewArgs, Client::post_sorafs_repair_heartbeat);
 impl RepairRenewArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -3685,11 +3575,7 @@ pub struct RepairCompleteArgs {
     #[arg(long = "idempotency-key", value_name = "KEY")]
     idempotency_key: Option<String>,
 }
-impl Run for RepairCompleteArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_repair_complete)
-    }
-}
+impl_run_with_client_methods!(RepairCompleteArgs, Client::post_sorafs_repair_complete);
 impl RepairCompleteArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -3735,11 +3621,7 @@ pub struct RepairFailArgs {
     #[arg(long = "idempotency-key", value_name = "KEY")]
     idempotency_key: Option<String>,
 }
-impl Run for RepairFailArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_repair_fail)
-    }
-}
+impl_run_with_client_methods!(RepairFailArgs, Client::post_sorafs_repair_fail);
 impl RepairFailArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -3800,11 +3682,7 @@ pub struct RepairEscalateArgs {
     #[arg(long = "idempotency-key", value_name = "KEY")]
     idempotency_key: Option<String>,
 }
-impl Run for RepairEscalateArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::post_sorafs_repair_slash)
-    }
-}
+impl_run_with_client_methods!(RepairEscalateArgs, Client::post_sorafs_repair_slash);
 impl RepairEscalateArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -13546,11 +13424,7 @@ pub struct AliasListArgs {
     #[arg(long, value_name = "HEX")]
     pub manifest_digest: Option<String>,
 }
-impl Run for AliasListArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        self.run_with(context, Client::get_sorafs_aliases)
-    }
-}
+impl_run_with_client_methods!(AliasListArgs, Client::get_sorafs_aliases);
 impl AliasListArgs {
     fn run_with<C, F>(&self, context: &mut C, fetch: F) -> Result<()>
     where

@@ -9,57 +9,29 @@ async fn handler_post_transaction_entrypoint_uses_authenticated_api_token_rate_l
         app_mut.require_api_token = true;
         app_mut.api_tokens_set = Arc::new(HashSet::from(["entrypoint-token".to_owned()]));
     }
-    let first_keypair = checked_torii_test_keypair_from_seed_byte(
-        0xc7,
-        Algorithm::Ed25519,
-        "derive first entrypoint API-token fixture key",
-    );
-    let second_keypair = checked_torii_test_keypair_from_seed_byte(
-        0xc8,
-        Algorithm::Ed25519,
-        "derive second entrypoint API-token fixture key",
-    );
+    let first_keypair = checked_torii_test_ed25519_keypair(0xc7, "derive first entrypoint API-token fixture key");
+    let second_keypair = checked_torii_test_ed25519_keypair(0xc8, "derive second entrypoint API-token fixture key");
     let network_id = *app.state.network_id_ref();
-    let tx1 = TransactionBuilder::new(
+    let tx1 = signed_log_transaction_for_test(
         network_id,
         AccountId::new(first_keypair.public_key().clone()),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(
-        Level::INFO,
-        "entrypoint-token-rate-limit-1".to_string(),
-    )])
-    .sign(first_keypair.private_key());
-    let tx2 = TransactionBuilder::new(
+        "entrypoint-token-rate-limit-1",
+        &first_keypair,
+    );
+    let tx2 = signed_log_transaction_for_test(
         network_id,
         AccountId::new(second_keypair.public_key().clone()),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(
-        Level::INFO,
-        "entrypoint-token-rate-limit-2".to_string(),
-    )])
-    .sign(second_keypair.private_key());
+        "entrypoint-token-rate-limit-2",
+        &second_keypair,
+    );
     let mut headers = HeaderMap::new();
     headers.insert("x-api-token", HeaderValue::from_static("entrypoint-token"));
-    let first = super::handler_post_transaction_entrypoint(
-        State(app.clone()),
-        headers.clone(),
-        None,
-        versioned_entrypoint_for_test(TransactionEntrypoint::External(tx1)),
-    )
-    .await
-    .expect("first token-keyed entrypoint accepted")
-    .into_response();
+    let first =
+        post_external_transaction_entrypoint_for_test(app.clone(), headers.clone(), tx1)
+            .await
+            .expect("first token-keyed entrypoint accepted");
     assert_eq!(first.status(), StatusCode::ACCEPTED);
-    let err = match super::handler_post_transaction_entrypoint(
-        State(app),
-        headers,
-        None,
-        versioned_entrypoint_for_test(TransactionEntrypoint::External(tx2)),
-    )
-    .await
-    {
+    let err = match post_external_transaction_entrypoint_for_test(app, headers, tx2).await {
         Ok(_) => panic!("expected shared token rate limit"),
         Err(err) => err,
     };
@@ -74,66 +46,34 @@ async fn handler_post_transaction_entrypoint_reports_full_queue_before_rate_limi
         app_mut.fee_policy = FeePolicy::Disabled;
     }
     install_single_slot_transaction_queue(&mut app);
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xcf,
-        Algorithm::Ed25519,
-        "derive entrypoint queue-before-rate-limit fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xcf, "derive entrypoint queue-before-rate-limit fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = TransactionBuilder::new(
+    let tx1 = signed_log_transaction_for_test(
         network_id,
         authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(
-        Level::INFO,
-        "entrypoint-queue-before-rate-1".to_string(),
-    )])
-    .sign(keypair.private_key());
-    let tx2 = TransactionBuilder::new(
-        network_id,
-        authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(
-        Level::INFO,
-        "entrypoint-queue-before-rate-2".to_string(),
-    )])
-    .sign(keypair.private_key());
+        "entrypoint-queue-before-rate-1",
+        &keypair,
+    );
+    let tx2 = signed_log_transaction_for_test(network_id, authority, "entrypoint-queue-before-rate-2", &keypair);
     let mut headers = HeaderMap::new();
     headers.insert(
         "x-api-token",
         HeaderValue::from_static("entrypoint-queue-before-rate"),
     );
-    let first = super::handler_post_transaction_entrypoint(
-        State(app.clone()),
-        headers.clone(),
-        None,
-        versioned_entrypoint_for_test(TransactionEntrypoint::External(tx1)),
-    )
-    .await
-    .expect("first entrypoint should fill the queue")
-    .into_response();
+    let first =
+        post_external_transaction_entrypoint_for_test(app.clone(), headers.clone(), tx1)
+            .await
+            .expect("first entrypoint should fill the queue");
     assert_eq!(first.status(), StatusCode::ACCEPTED);
-    let err = match super::handler_post_transaction_entrypoint(
-        State(app.clone()),
-        headers,
-        None,
-        versioned_entrypoint_for_test(TransactionEntrypoint::External(tx2)),
-    )
-    .await
-    {
+    let err = match post_external_transaction_entrypoint_for_test(app.clone(), headers, tx2).await {
         Ok(_) => panic!("expected queue full before token rate limit"),
         Err(err) => err,
     };
     let response = err.into_response();
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-reject-code"),
         Some("PRTRY:QUEUE_FULL")
     );
 }
@@ -143,52 +83,33 @@ async fn handler_post_transaction_honors_prefer_return_minimal() {
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xc9,
-        Algorithm::Ed25519,
-        "derive minimal post-transaction response fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xc9, "derive minimal post-transaction response fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
-    let transaction = TransactionBuilder::new(
+    let transaction = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
         authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "minimal-submit-response".to_string())])
-    .sign(keypair.private_key());
+        "minimal-submit-response",
+        &keypair,
+    );
     let submitted_hash = transaction.hash().to_string();
     let mut headers = HeaderMap::new();
     headers.insert(
         HeaderName::from_static("prefer"),
         HeaderValue::from_static("respond-async, return=minimal"),
     );
-    let response = super::handler_post_transaction(
-        State(app),
-        headers,
-        None,
-        versioned_signed_for_test(&transaction),
-    )
-    .await
-    .expect("accepted")
-    .into_response();
+    let response = post_signed_transaction_for_test(app, headers, &transaction)
+        .await
+        .expect("accepted");
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert_eq!(
-        response
-            .headers()
-            .get("preference-applied")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "preference-applied"),
         Some(PREFER_RETURN_MINIMAL)
     );
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-transaction-hash")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-transaction-hash"),
         Some(submitted_hash.as_str())
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let body = torii_body_bytes(response, "body").await;
     assert!(
         body.is_empty(),
         "minimal response should not sign a receipt body"
@@ -329,22 +250,14 @@ async fn transaction_batch_queue_capacity_rejects_before_transaction_decode() {
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
     install_single_slot_transaction_queue(&mut app);
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xaf,
-        Algorithm::Ed25519,
-        "derive batch queue-capacity fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xaf, "derive batch queue-capacity fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
-    let transaction = TransactionBuilder::new(
+    let transaction = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
         authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(
-        Level::INFO,
-        "batch-queue-before-decode".to_owned(),
-    )])
-    .sign(keypair.private_key());
+        "batch-queue-before-decode",
+        &keypair,
+    );
     let accepted = super::handler_post_transactions_batch(
         State(app.clone()),
         HeaderMap::new(),
@@ -381,27 +294,11 @@ async fn handler_post_transactions_batch_accepts_multiple_payloads() {
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xca,
-        Algorithm::Ed25519,
-        "derive post-transaction batch submit fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xca, "derive post-transaction batch submit fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = TransactionBuilder::new(
-        network_id,
-        authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "batch-submit-1".to_string())])
-    .sign(keypair.private_key());
-    let tx2 = TransactionBuilder::new(
-        network_id,
-        authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "batch-submit-2".to_string())])
-    .sign(keypair.private_key());
+    let tx1 = signed_log_transaction_for_test(network_id, authority.clone(), "batch-submit-1", &keypair);
+    let tx2 = signed_log_transaction_for_test(network_id, authority, "batch-submit-2", &keypair);
     let payloads = vec![
         iroha_version::codec::EncodeVersioned::encode_versioned(&tx1),
         iroha_version::codec::EncodeVersioned::encode_versioned(&tx2),
@@ -415,10 +312,7 @@ async fn handler_post_transactions_batch_accepts_multiple_payloads() {
     .expect("accepted");
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-transactions-accepted")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-transactions-accepted"),
         Some("2")
     );
     assert_eq!(app.queue.active_len(), 2);
@@ -433,25 +327,17 @@ async fn handler_post_transactions_batch_rate_limits_api_token_as_single_key_bat
         app_mut.require_api_token = true;
         app_mut.api_tokens_set = Arc::new(HashSet::from(["batch-token".to_owned()]));
     }
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xcb,
-        Algorithm::Ed25519,
-        "derive post-transaction batch token fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xcb, "derive post-transaction batch token fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
     let payloads = (0..3)
         .map(|index| {
-            let tx = TransactionBuilder::new(
+            let tx = signed_log_transaction_for_test(
                 network_id,
                 authority.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(
-                Level::INFO,
                 format!("batch-token-rate-limit-{index}"),
-            )])
-            .sign(keypair.private_key());
+                &keypair,
+            );
             iroha_version::codec::EncodeVersioned::encode_versioned(&tx)
         })
         .collect();
@@ -490,22 +376,17 @@ async fn handler_post_transactions_batch_uses_authenticated_token_for_distinct_a
     let network_id = *app.state.network_id_ref();
     let payloads = (0..3)
         .map(|index| {
-            let keypair = checked_torii_test_keypair_from_seed_byte(
+            let keypair = checked_torii_test_ed25519_keypair(
                 0xcc_u8.wrapping_add(index as u8),
-                Algorithm::Ed25519,
                 "derive distinct-authority batch token fixture key",
             );
             let authority = AccountId::new(keypair.public_key().clone());
-            let tx = TransactionBuilder::new(
+            let tx = signed_log_transaction_for_test(
                 network_id,
                 authority,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(
-                Level::INFO,
                 format!("batch-token-distinct-authority-{index}"),
-            )])
-            .sign(keypair.private_key());
+                &keypair,
+            );
             iroha_version::codec::EncodeVersioned::encode_versioned(&tx)
         })
         .collect();
@@ -537,30 +418,16 @@ async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_withou
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xd0,
-        Algorithm::Ed25519,
-        "derive invalid precheck batch fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xd0, "derive invalid precheck batch fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = TransactionBuilder::new(
+    let tx1 = signed_log_transaction_for_test(
         network_id,
         authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(
-        Level::INFO,
-        "batch-valid-before-invalid".to_string(),
-    )])
-    .sign(keypair.private_key());
-    let tx2 = TransactionBuilder::new(
-        network_id,
-        authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "batch-invalid-signature".to_string())])
-    .sign(keypair.private_key());
+        "batch-valid-before-invalid",
+        &keypair,
+    );
+    let tx2 = signed_log_transaction_for_test(network_id, authority, "batch-invalid-signature", &keypair);
     let tx2 = transaction_with_invalid_signature_for_test(tx2);
     let payloads = vec![
         iroha_version::codec::EncodeVersioned::encode_versioned(&tx1),
@@ -578,10 +445,7 @@ async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_withou
     };
     let response = err.into_response();
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-reject-code"),
         Some(SignatureRejectionCode::InvalidSignature.as_str())
     );
     assert_eq!(app.queue.active_len(), 0);
@@ -589,17 +453,9 @@ async fn handler_post_transactions_batch_rejects_invalid_ed25519_precheck_withou
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history() {
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xd1,
-        Algorithm::Ed25519,
-        "derive unfunded fee fixture authority key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xd1, "derive unfunded fee fixture authority key");
     let authority = AccountId::new(keypair.public_key().clone());
-    let fee_sink_keypair = checked_torii_test_keypair_from_seed_byte(
-        0xd2,
-        Algorithm::Ed25519,
-        "derive unfunded fee fixture sink key",
-    );
+    let fee_sink_keypair = checked_torii_test_ed25519_keypair(0xd2, "derive unfunded fee fixture sink key");
     let fee_sink = AccountId::new(fee_sink_keypair.public_key().clone());
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let fee_asset_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -623,32 +479,22 @@ async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history()
     );
     let mut app = mk_app_state_for_tests_with_world(world);
     configure_nexus_fee_admission_for_test(&mut app, &fee_asset_id, &fee_sink);
-    let tx = TransactionBuilder::new(
+    let tx = signed_log_transaction_for_test(
         *app.state.network_id_ref(),
         authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "fee-insolvent".to_owned())])
-    .sign(keypair.private_key());
+        "fee-insolvent",
+        &keypair,
+    );
     let tx_hash = tx.hash();
     let tx_hash_hex = tx_hash.to_string();
-    let response = match super::handler_post_transaction(
-        State(app.clone()),
-        HeaderMap::new(),
-        None,
-        versioned_signed_for_test(&tx),
-    )
-    .await
+    let response = match post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &tx).await
     {
         Ok(_) => panic!("expected Nexus fee admission rejection"),
         Err(err) => err.into_response(),
     };
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-reject-code"),
         Some("PRTRY:NEXUS_FEE_ADMISSION_REJECTED")
     );
     assert_eq!(app.queue.active_len(), 0);
@@ -680,10 +526,7 @@ async fn handler_policy_reports_tx_rate_limit_as_always_enforced() {
             .expect("policy response")
             .into_response();
     assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("policy body");
-    let json: norito::json::Value = norito::json::from_slice(&body).expect("valid policy json");
+    let json = decode_torii_json(response, "policy body", "valid policy json").await;
     assert_eq!(
         json.get("rate_limit_enforced"),
         Some(&norito::json::Value::Bool(true))
@@ -706,10 +549,7 @@ async fn handler_policy_reports_required_token_even_when_configuration_is_unavai
             .expect("allowlisted policy response")
             .into_response();
     assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("policy body");
-    let json: norito::json::Value = norito::json::from_slice(&body).expect("valid policy JSON");
+    let json = decode_torii_json(response, "policy body", "valid policy JSON").await;
     assert_eq!(
         json.get("require_api_token"),
         Some(&norito::json::Value::Bool(true))
@@ -725,47 +565,19 @@ async fn handler_post_transaction_high_load_threshold_does_not_reject_before_enq
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = 1;
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xd3,
-        Algorithm::Ed25519,
-        "derive high-load threshold fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xd3, "derive high-load threshold fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = TransactionBuilder::new(
-        network_id,
-        authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "early-shed-1".to_string())])
-    .sign(keypair.private_key());
-    let tx2 = TransactionBuilder::new(
-        network_id,
-        authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "early-shed-2".to_string())])
-    .sign(keypair.private_key());
-    let first = super::handler_post_transaction(
-        State(app.clone()),
-        HeaderMap::new(),
-        None,
-        versioned_signed_for_test(&tx1),
-    )
-    .await
-    .expect("first transaction should be accepted")
-    .into_response();
+    let tx1 = signed_log_transaction_for_test(network_id, authority.clone(), "early-shed-1", &keypair);
+    let tx2 = signed_log_transaction_for_test(network_id, authority, "early-shed-2", &keypair);
+    let first = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &tx1)
+        .await
+        .expect("first transaction should be accepted");
     assert_eq!(first.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 1);
-    let second = super::handler_post_transaction(
-        State(app.clone()),
-        HeaderMap::new(),
-        None,
-        versioned_signed_for_test(&tx2),
-    )
-    .await
-    .expect("second transaction should not be rejected")
-    .into_response();
+    let second = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &tx2)
+        .await
+        .expect("second transaction should not be rejected");
     assert_eq!(second.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 2);
 }
@@ -775,36 +587,14 @@ async fn handler_post_transaction_allows_enqueue_when_queue_age_saturates() {
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xd4,
-        Algorithm::Ed25519,
-        "derive queue-age saturation fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xd4, "derive queue-age saturation fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = TransactionBuilder::new(
-        network_id,
-        authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "age-shed-1".to_string())])
-    .sign(keypair.private_key());
-    let tx2 = TransactionBuilder::new(
-        network_id,
-        authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "age-shed-2".to_string())])
-    .sign(keypair.private_key());
-    let first = super::handler_post_transaction(
-        State(app.clone()),
-        HeaderMap::new(),
-        None,
-        versioned_signed_for_test(&tx1),
-    )
-    .await
-    .expect("first transaction should be accepted")
-    .into_response();
+    let tx1 = signed_log_transaction_for_test(network_id, authority.clone(), "age-shed-1", &keypair);
+    let tx2 = signed_log_transaction_for_test(network_id, authority, "age-shed-2", &keypair);
+    let first = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &tx1)
+        .await
+        .expect("first transaction should be accepted");
     assert_eq!(first.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 1);
     let snapshot = app
@@ -823,15 +613,9 @@ async fn handler_post_transaction_allows_enqueue_when_queue_age_saturates() {
         !app.queue.current_backpressure().is_saturated(),
         "age-only queue pressure must not reject ingress before capacity"
     );
-    let second = super::handler_post_transaction(
-        State(app.clone()),
-        HeaderMap::new(),
-        None,
-        versioned_signed_for_test(&tx2),
-    )
-    .await
-    .expect("second transaction should not be age-shed")
-    .into_response();
+    let second = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &tx2)
+        .await
+        .expect("second transaction should not be age-shed");
     assert_eq!(second.status(), StatusCode::ACCEPTED);
     assert_eq!(app.queue.active_len(), 2);
 }
@@ -839,55 +623,23 @@ async fn handler_post_transaction_allows_enqueue_when_queue_age_saturates() {
 async fn handler_post_transaction_returns_queue_full_only_for_real_capacity_overflow() {
     let mut app = mk_app_state_for_tests();
     install_single_slot_transaction_queue(&mut app);
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xd5,
-        Algorithm::Ed25519,
-        "derive queue capacity fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xd5, "derive queue capacity fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = TransactionBuilder::new(
-        network_id,
-        authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "queue-full-1".to_string())])
-    .sign(keypair.private_key());
-    let tx2 = TransactionBuilder::new(
-        network_id,
-        authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "queue-full-2".to_string())])
-    .sign(keypair.private_key());
-    let first = super::handler_post_transaction(
-        State(app.clone()),
-        HeaderMap::new(),
-        None,
-        versioned_signed_for_test(&tx1),
-    )
-    .await
-    .expect("first transaction should be accepted")
-    .into_response();
+    let tx1 = signed_log_transaction_for_test(network_id, authority.clone(), "queue-full-1", &keypair);
+    let tx2 = signed_log_transaction_for_test(network_id, authority, "queue-full-2", &keypair);
+    let first = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &tx1)
+        .await
+        .expect("first transaction should be accepted");
     assert_eq!(first.status(), StatusCode::ACCEPTED);
-    let err = match super::handler_post_transaction(
-        State(app.clone()),
-        HeaderMap::new(),
-        None,
-        versioned_signed_for_test(&tx2),
-    )
-    .await
-    {
+    let err = match post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &tx2).await {
         Ok(_) => panic!("expected real queue overflow"),
         Err(err) => err,
     };
     let response = err.into_response();
     assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-reject-code"),
         Some("PRTRY:QUEUE_FULL")
     );
 }
@@ -897,39 +649,17 @@ async fn handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_o
     Arc::get_mut(&mut app)
         .expect("unique app state")
         .high_load_tx_threshold = usize::MAX;
-    let keypair = checked_torii_test_keypair_from_seed_byte(
-        0xd6,
-        Algorithm::Ed25519,
-        "derive in-flight queue age fixture key",
-    );
+    let keypair = checked_torii_test_ed25519_keypair(0xd6, "derive in-flight queue age fixture key");
     let authority = AccountId::new(keypair.public_key().clone());
     let network_id = *app.state.network_id_ref();
-    let tx1 = TransactionBuilder::new(
-        network_id,
-        authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "age-inflight-1".to_string())])
-    .sign(keypair.private_key());
-    let tx2 = TransactionBuilder::new(
-        network_id,
-        authority,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(Level::INFO, "age-inflight-2".to_string())])
-    .sign(keypair.private_key());
+    let tx1 = signed_log_transaction_for_test(network_id, authority.clone(), "age-inflight-1", &keypair);
+    let tx2 = signed_log_transaction_for_test(network_id, authority, "age-inflight-2", &keypair);
     let _ = app
         .queue
         .refresh_pressure_budget_from_block_time(Duration::ZERO);
-    let first = super::handler_post_transaction(
-        State(app.clone()),
-        HeaderMap::new(),
-        None,
-        versioned_signed_for_test(&tx1),
-    )
-    .await
-    .expect("first transaction should be accepted")
-    .into_response();
+    let first = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &tx1)
+        .await
+        .expect("first transaction should be accepted");
     assert_eq!(first.status(), StatusCode::ACCEPTED);
     let mut guards = Vec::new();
     app.queue.get_transactions_for_block(
@@ -940,15 +670,9 @@ async fn handler_post_transaction_does_not_early_shed_when_only_inflight_tx_is_o
     assert_eq!(guards.len(), 1, "queue should expose one in-flight guard");
     assert_eq!(app.queue.queued_len(), 0, "no queued transactions remain");
     std::thread::sleep(Duration::from_millis(2_100));
-    let second = super::handler_post_transaction(
-        State(app.clone()),
-        HeaderMap::new(),
-        None,
-        versioned_signed_for_test(&tx2),
-    )
-    .await
-    .expect("second transaction should not be age-shed")
-    .into_response();
+    let second = post_signed_transaction_for_test(app.clone(), HeaderMap::new(), &tx2)
+        .await
+        .expect("second transaction should not be age-shed");
     assert_eq!(second.status(), StatusCode::ACCEPTED);
     assert_eq!(
         app.queue.queued_len(),
@@ -1689,10 +1413,7 @@ async fn signed_query_authorization_denies_foreign_restricted_account_without_ex
         .expect_err("foreign restricted account reads require an exact grant");
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-reject-code"),
         Some("permission_denied")
     );
     grant_account_permission_for_test(
@@ -1811,102 +1532,210 @@ async fn torii_target_scope_routes_resolve_alias_and_domain_dataspaces() {
     assert_eq!(domain_routes[0].dataspace_id, restricted_dataspace);
 }
 #[cfg(feature = "app_api")]
-#[tokio::test]
-async fn torii_account_read_routes_use_target_account_scope_for_signed_and_internal_reads() {
-    let authority = checked_torii_test_account_id(
-        0xea,
-        "derive target-account read routing authority fixture key",
-    );
+#[derive(Clone, Copy)]
+enum AccountRouteMatrixCase {
+    AccountSigned,
+    AccountUnsigned,
+    AccountAssets,
+    PermissionsSigned,
+    PermissionsUnsigned,
+    TargetUnknown,
+    NexusTargetUnknown,
+}
+#[cfg(feature = "app_api")]
+fn run_account_route_matrix_case(case: AccountRouteMatrixCase) {
+    let (authority_seed, authority_context) = match case {
+        AccountRouteMatrixCase::AccountSigned => (
+            0xea,
+            "derive target-account read routing authority fixture key",
+        ),
+        AccountRouteMatrixCase::AccountUnsigned => (
+            0xeb,
+            "derive public account read routing authority fixture key",
+        ),
+        AccountRouteMatrixCase::AccountAssets => {
+            (0xec, "derive account asset fanout authority fixture key")
+        }
+        AccountRouteMatrixCase::PermissionsSigned => (
+            0xee,
+            "derive signed account permissions fanout authority fixture key",
+        ),
+        AccountRouteMatrixCase::PermissionsUnsigned => (
+            0xef,
+            "derive public account permissions fanout authority fixture key",
+        ),
+        AccountRouteMatrixCase::TargetUnknown => (
+            0xf0,
+            "derive unknown target-account routes authority fixture key",
+        ),
+        AccountRouteMatrixCase::NexusTargetUnknown => (
+            0xf1,
+            "derive Nexus target-account fanout authority fixture key",
+        ),
+    };
+    let authority = checked_torii_test_account_id(authority_seed, authority_context);
     let governance_dataspace = DataSpaceId::new(1);
     let restricted_dataspace = DataSpaceId::new(10);
-    let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::target-account-routes"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        restricted_dataspace,
-    ));
+    let mut app = match case {
+        AccountRouteMatrixCase::AccountSigned => mk_app_state_for_tests_with_world(
+            world_with_account_bound_to_dataspace(
+                &authority,
+                UniversalAccountId::from_hash(Hash::new(b"torii::target-account-routes")),
+                restricted_dataspace,
+            ),
+        ),
+        AccountRouteMatrixCase::AccountUnsigned => mk_app_state_for_tests_with_world(
+            world_with_account_bound_to_dataspace(
+                &authority,
+                UniversalAccountId::from_hash(Hash::new(b"torii::public-account-routes")),
+                restricted_dataspace,
+            ),
+        ),
+        AccountRouteMatrixCase::AccountAssets => {
+            mk_app_state_for_tests_with_world(world_with_account(&authority))
+        }
+        AccountRouteMatrixCase::PermissionsSigned => mk_app_state_for_tests_with_world(
+            world_with_account_bound_to_dataspace(
+                &authority,
+                UniversalAccountId::from_hash(Hash::new(b"torii::permissions-account-routes")),
+                restricted_dataspace,
+            ),
+        ),
+        AccountRouteMatrixCase::PermissionsUnsigned => mk_app_state_for_tests_with_world(
+            world_with_account_bound_to_dataspace(
+                &authority,
+                UniversalAccountId::from_hash(Hash::new(
+                    b"torii::permissions-public-account-routes",
+                )),
+                restricted_dataspace,
+            ),
+        ),
+        AccountRouteMatrixCase::TargetUnknown | AccountRouteMatrixCase::NexusTargetUnknown => {
+            mk_app_state_for_tests()
+        }
+    };
     let (_restricted_lane, configured_restricted_dataspace) =
         configure_private_ingress_routes_for_test(&mut app);
     assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-    let routes = super::torii_account_read_routes(app.as_ref(), &authority, None, true)
-        .expect("target-account routes should resolve");
+    let routes = match case {
+        AccountRouteMatrixCase::AccountSigned => {
+            super::torii_account_read_routes(app.as_ref(), &authority, None, true)
+                .expect("target-account routes should resolve")
+        }
+        AccountRouteMatrixCase::AccountUnsigned => {
+            super::torii_account_read_routes(app.as_ref(), &authority, None, false)
+                .expect("public visibility routes should resolve")
+        }
+        AccountRouteMatrixCase::AccountAssets => {
+            super::torii_account_assets_read_routes(app.as_ref())
+        }
+        AccountRouteMatrixCase::PermissionsSigned => super::torii_account_permissions_read_routes(
+            app.as_ref(),
+            &authority,
+            Some(&authority),
+            true,
+        )
+        .expect("target-account permissions routes should resolve"),
+        AccountRouteMatrixCase::PermissionsUnsigned => {
+            super::torii_account_permissions_read_routes(app.as_ref(), &authority, None, false)
+                .expect("public visibility routes should resolve")
+        }
+        AccountRouteMatrixCase::TargetUnknown => {
+            super::torii_target_account_routes(app.as_ref(), &authority)
+                .expect("unknown target-account scope should fall back to all configured routes")
+        }
+        AccountRouteMatrixCase::NexusTargetUnknown => super::torii_fanout_scope_routes(
+            app.as_ref(),
+            &ToriiFanoutRouteScopeV1::TargetAccount {
+                account_id: authority.to_string(),
+            },
+        )
+        .expect("Nexus fanout target-account routes should resolve"),
+    };
     let dataspaces = routes
         .into_iter()
         .map(|route| route.dataspace_id)
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        dataspaces,
-        std::collections::BTreeSet::from([
+    let expected = match case {
+        AccountRouteMatrixCase::AccountUnsigned
+        | AccountRouteMatrixCase::PermissionsUnsigned => std::collections::BTreeSet::from([
+            DataSpaceId::UNIVERSAL,
+            governance_dataspace,
+        ]),
+        _ => std::collections::BTreeSet::from([
             DataSpaceId::UNIVERSAL,
             governance_dataspace,
             restricted_dataspace,
         ]),
-        "signed/internal account reads should fan out across the target account scope plus public dataspaces",
-    );
-    assert!(
-        dataspaces.contains(&governance_dataspace),
-        "public dataspaces must remain visible in target-account routing",
-    );
+    };
+    let diagnostic = match case {
+        AccountRouteMatrixCase::AccountSigned => {
+            "signed/internal account reads should fan out across the target account scope plus public dataspaces"
+        }
+        AccountRouteMatrixCase::AccountUnsigned => {
+            "unsigned public reads should stay on caller/public visibility routes"
+        }
+        AccountRouteMatrixCase::AccountAssets => {
+            "account asset reads must fan out like asset-holder reads so dataspace-scoped balances are visible"
+        }
+        AccountRouteMatrixCase::PermissionsSigned => {
+            "signed/internal permissions reads must fan out across all configured dataspaces to include dataspace-scoped grants"
+        }
+        AccountRouteMatrixCase::PermissionsUnsigned => {
+            "unsigned permissions reads should stay on caller/public visibility routes"
+        }
+        AccountRouteMatrixCase::TargetUnknown => {
+            "target-account queries with unknown local scope should fan out across all configured dataspace routes"
+        }
+        AccountRouteMatrixCase::NexusTargetUnknown => {
+            "Nexus must recompute unknown target-account fanout from its own dataspace catalog"
+        }
+    };
+    assert_eq!(dataspaces, expected, "{diagnostic}");
+    match case {
+        AccountRouteMatrixCase::AccountSigned => assert!(
+            dataspaces.contains(&governance_dataspace),
+            "public dataspaces must remain visible in target-account routing",
+        ),
+        AccountRouteMatrixCase::AccountUnsigned => assert!(
+            !dataspaces.contains(&restricted_dataspace),
+            "unsigned public reads must not automatically gain private dataspace visibility",
+        ),
+        AccountRouteMatrixCase::PermissionsSigned => assert_eq!(
+            super::torii_account_permissions_route_scope(&authority, Some(&authority), true),
+            ToriiFanoutRouteScopeV1::AllDataspaces
+        ),
+        AccountRouteMatrixCase::PermissionsUnsigned => {
+            assert!(
+                !dataspaces.contains(&restricted_dataspace),
+                "unsigned permissions reads must not automatically gain private dataspace visibility",
+            );
+            assert_eq!(
+                super::torii_account_permissions_route_scope(&authority, None, false),
+                ToriiFanoutRouteScopeV1::VisibleAccount {
+                    caller_account_id: None
+                }
+            );
+        }
+        AccountRouteMatrixCase::AccountAssets
+        | AccountRouteMatrixCase::TargetUnknown
+        | AccountRouteMatrixCase::NexusTargetUnknown => {}
+    }
+}
+#[cfg(feature = "app_api")]
+#[tokio::test]
+async fn torii_account_read_routes_use_target_account_scope_for_signed_and_internal_reads() {
+    run_account_route_matrix_case(AccountRouteMatrixCase::AccountSigned);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_account_read_routes_keep_unsigned_public_reads_on_visible_routes() {
-    let authority = checked_torii_test_account_id(
-        0xeb,
-        "derive public account read routing authority fixture key",
-    );
-    let governance_dataspace = DataSpaceId::new(1);
-    let restricted_dataspace = DataSpaceId::new(10);
-    let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::public-account-routes"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        restricted_dataspace,
-    ));
-    let (_restricted_lane, configured_restricted_dataspace) =
-        configure_private_ingress_routes_for_test(&mut app);
-    assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-    let routes = super::torii_account_read_routes(app.as_ref(), &authority, None, false)
-        .expect("public visibility routes should resolve");
-    let dataspaces = routes
-        .into_iter()
-        .map(|route| route.dataspace_id)
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        dataspaces,
-        std::collections::BTreeSet::from([DataSpaceId::UNIVERSAL, governance_dataspace]),
-        "unsigned public reads should stay on caller/public visibility routes",
-    );
-    assert!(
-        !dataspaces.contains(&restricted_dataspace),
-        "unsigned public reads must not automatically gain private dataspace visibility",
-    );
+    run_account_route_matrix_case(AccountRouteMatrixCase::AccountUnsigned);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_account_assets_read_routes_fan_out_across_all_dataspaces() {
-    let authority =
-        checked_torii_test_account_id(0xec, "derive account asset fanout authority fixture key");
-    let governance_dataspace = DataSpaceId::new(1);
-    let restricted_dataspace = DataSpaceId::new(10);
-    let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-    let (_restricted_lane, configured_restricted_dataspace) =
-        configure_private_ingress_routes_for_test(&mut app);
-    assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-    let routes = super::torii_account_assets_read_routes(app.as_ref());
-    let dataspaces = routes
-        .into_iter()
-        .map(|route| route.dataspace_id)
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        dataspaces,
-        std::collections::BTreeSet::from([
-            DataSpaceId::UNIVERSAL,
-            governance_dataspace,
-            restricted_dataspace,
-        ]),
-        "account asset reads must fan out like asset-holder reads so dataspace-scoped balances are visible",
-    );
+    run_account_route_matrix_case(AccountRouteMatrixCase::AccountAssets);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -1957,45 +1786,7 @@ async fn handler_account_assets_fanout_reports_merged_route_headers() {
 #[tokio::test]
 async fn torii_account_permissions_read_routes_fan_out_across_all_dataspaces_for_signed_and_internal_reads()
  {
-    let authority = checked_torii_test_account_id(
-        0xee,
-        "derive signed account permissions fanout authority fixture key",
-    );
-    let governance_dataspace = DataSpaceId::new(1);
-    let restricted_dataspace = DataSpaceId::new(10);
-    let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::permissions-account-routes"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        restricted_dataspace,
-    ));
-    let (_restricted_lane, configured_restricted_dataspace) =
-        configure_private_ingress_routes_for_test(&mut app);
-    assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-    let routes = super::torii_account_permissions_read_routes(
-        app.as_ref(),
-        &authority,
-        Some(&authority),
-        true,
-    )
-    .expect("target-account permissions routes should resolve");
-    let dataspaces = routes
-        .into_iter()
-        .map(|route| route.dataspace_id)
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        dataspaces,
-        std::collections::BTreeSet::from([
-            DataSpaceId::UNIVERSAL,
-            governance_dataspace,
-            restricted_dataspace,
-        ]),
-        "signed/internal permissions reads must fan out across all configured dataspaces to include dataspace-scoped grants",
-    );
-    assert_eq!(
-        super::torii_account_permissions_route_scope(&authority, Some(&authority), true),
-        ToriiFanoutRouteScopeV1::AllDataspaces
-    );
+    run_account_route_matrix_case(AccountRouteMatrixCase::PermissionsSigned);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
@@ -2013,107 +1804,17 @@ async fn fanout_routed_by_uses_attempted_routes_even_when_only_local_payloads_su
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_account_permissions_read_routes_keep_unsigned_public_reads_visible() {
-    let authority = checked_torii_test_account_id(
-        0xef,
-        "derive public account permissions fanout authority fixture key",
-    );
-    let governance_dataspace = DataSpaceId::new(1);
-    let restricted_dataspace = DataSpaceId::new(10);
-    let uaid =
-        UniversalAccountId::from_hash(Hash::new(b"torii::permissions-public-account-routes"));
-    let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
-        &authority,
-        uaid,
-        restricted_dataspace,
-    ));
-    let (_restricted_lane, configured_restricted_dataspace) =
-        configure_private_ingress_routes_for_test(&mut app);
-    assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-    let routes =
-        super::torii_account_permissions_read_routes(app.as_ref(), &authority, None, false)
-            .expect("public visibility routes should resolve");
-    let dataspaces = routes
-        .into_iter()
-        .map(|route| route.dataspace_id)
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        dataspaces,
-        std::collections::BTreeSet::from([DataSpaceId::UNIVERSAL, governance_dataspace]),
-        "unsigned permissions reads should stay on caller/public visibility routes",
-    );
-    assert!(
-        !dataspaces.contains(&restricted_dataspace),
-        "unsigned permissions reads must not automatically gain private dataspace visibility",
-    );
-    assert_eq!(
-        super::torii_account_permissions_route_scope(&authority, None, false),
-        ToriiFanoutRouteScopeV1::VisibleAccount {
-            caller_account_id: None
-        }
-    );
+    run_account_route_matrix_case(AccountRouteMatrixCase::PermissionsUnsigned);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn torii_target_account_routes_fan_out_when_local_scope_is_unknown() {
-    let authority = checked_torii_test_account_id(
-        0xf0,
-        "derive unknown target-account routes authority fixture key",
-    );
-    let governance_dataspace = DataSpaceId::new(1);
-    let restricted_dataspace = DataSpaceId::new(10);
-    let mut app = mk_app_state_for_tests();
-    let (_restricted_lane, configured_restricted_dataspace) =
-        configure_private_ingress_routes_for_test(&mut app);
-    assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-    let routes = super::torii_target_account_routes(app.as_ref(), &authority)
-        .expect("unknown target-account scope should fall back to all configured routes");
-    let dataspaces = routes
-        .into_iter()
-        .map(|route| route.dataspace_id)
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        dataspaces,
-        std::collections::BTreeSet::from([
-            DataSpaceId::UNIVERSAL,
-            governance_dataspace,
-            restricted_dataspace,
-        ]),
-        "target-account queries with unknown local scope should fan out across all configured dataspace routes",
-    );
+    run_account_route_matrix_case(AccountRouteMatrixCase::TargetUnknown);
 }
 #[cfg(feature = "app_api")]
 #[tokio::test]
 async fn nexus_fanout_recomputes_unknown_target_account_routes_from_catalog() {
-    let authority = checked_torii_test_account_id(
-        0xf1,
-        "derive Nexus target-account fanout authority fixture key",
-    );
-    let governance_dataspace = DataSpaceId::new(1);
-    let restricted_dataspace = DataSpaceId::new(10);
-    let mut app = mk_app_state_for_tests();
-    let (_restricted_lane, configured_restricted_dataspace) =
-        configure_private_ingress_routes_for_test(&mut app);
-    assert_eq!(configured_restricted_dataspace, restricted_dataspace);
-    let routes = super::torii_fanout_scope_routes(
-        app.as_ref(),
-        &ToriiFanoutRouteScopeV1::TargetAccount {
-            account_id: authority.to_string(),
-        },
-    )
-    .expect("Nexus fanout target-account routes should resolve");
-    let dataspaces = routes
-        .into_iter()
-        .map(|route| route.dataspace_id)
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(
-        dataspaces,
-        std::collections::BTreeSet::from([
-            DataSpaceId::UNIVERSAL,
-            governance_dataspace,
-            restricted_dataspace,
-        ]),
-        "Nexus must recompute unknown target-account fanout from its own dataspace catalog",
-    );
+    run_account_route_matrix_case(AccountRouteMatrixCase::NexusTargetUnknown);
 }
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 #[test]
@@ -2283,10 +1984,7 @@ async fn handler_accounts_list_prefers_local_restricted_routes_on_private_ingres
     .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-routed-by")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-routed-by"),
         Some("local"),
         "private ingress account listings should stay on the local restricted lane",
     );
@@ -2316,10 +2014,7 @@ async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
     .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-routed-by")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-routed-by"),
         Some("local"),
         "account asset reads should still execute locally in unit tests",
     );
@@ -2367,10 +2062,7 @@ async fn handler_transactions_query_fan_outs_across_dataspaces() {
     .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-fanout-routes-attempted")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-fanout-routes-attempted"),
         Some("2"),
         "global transaction queries must enter the read-fanout path",
     );
@@ -2438,15 +2130,10 @@ async fn public_dataspace_upstream_serves_routed_account_assets() {
     let response = execute_torii_read_for_route(&app, route, request, None).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-routed-by")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-routed-by"),
         Some("external"),
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("body");
+    let body = torii_body_bytes(response, "body").await;
     let json: Value = norito::json::from_slice(&body).expect("json response");
     assert_eq!(json["items"][0]["quantity"].as_str(), Some("74.7664"));
     assert_eq!(
@@ -2479,10 +2166,7 @@ async fn handler_account_get_fan_outs_across_global_dataspaces() {
     .expect("account get should execute");
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-routed-by")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-routed-by"),
         Some("local"),
         "global account reads should still execute locally in unit tests",
     );
@@ -2577,11 +2261,8 @@ async fn routing_space_directory_manifests_reports_inactive_pending_and_uncatalo
     .expect("inactive manifest read should succeed")
     .into_response();
     assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("inactive manifest body");
-    let json: norito::json::Value =
-        norito::json::from_slice(&body).expect("inactive manifest json");
+    let json =
+        decode_torii_json(response, "inactive manifest body", "inactive manifest json").await;
     assert_eq!(json["total"].as_u64(), Some(2));
     let manifests = json["manifests"].as_array().expect("manifests array");
     assert_eq!(manifests.len(), 2);
@@ -2647,31 +2328,20 @@ async fn handler_space_directory_manifests_executes_configured_dataspace_route_l
     .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-routed-by")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-routed-by"),
         Some("local"),
         "configured dataspace route should execute locally in unit tests",
     );
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-route-lane-id")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-route-lane-id"),
         Some(restricted_lane.as_u32().to_string().as_str())
     );
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-route-dataspace-id")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-route-dataspace-id"),
         Some(restricted_dataspace.as_u64().to_string().as_str())
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("manifest handler body");
-    let json: norito::json::Value = norito::json::from_slice(&body).expect("manifest handler json");
+    let json =
+        decode_torii_json(response, "manifest handler body", "manifest handler json").await;
     assert_eq!(json["total"].as_u64(), Some(1));
     let manifests = json["manifests"].as_array().expect("manifests array");
     assert_eq!(manifests.len(), 1);
@@ -2715,18 +2385,16 @@ async fn handler_explorer_account_detail_uses_target_account_routes_for_internal
     .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-routed-by")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-routed-by"),
         Some("local"),
         "internal explorer account reads should use the routed target-account path",
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("explorer account detail body");
-    let json: norito::json::Value =
-        norito::json::from_slice(&body).expect("explorer account detail json");
+    let json = decode_torii_json(
+        response,
+        "explorer account detail body",
+        "explorer account detail json",
+    )
+    .await;
     let authority_literal = authority.to_string();
     assert_eq!(json["id"].as_str(), Some(authority_literal.as_str()));
 }

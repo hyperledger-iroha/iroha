@@ -591,7 +591,9 @@ impl Root {
             && policy.default_dataspace == DataSpaceId::UNIVERSAL
             && policy.rules.is_empty();
         if is_default_catalog && is_default_dataspace && is_default_policy {
-            self.nexus.lane_catalog = sora_lane_catalog();
+            let lane_catalog = sora_lane_catalog();
+            self.nexus.configured_lane_catalog = lane_catalog.clone();
+            self.nexus.lane_catalog = lane_catalog;
             self.nexus.lane_config = LaneConfig::from_catalog(&self.nexus.lane_catalog);
             self.nexus.dataspace_catalog = sora_dataspace_catalog();
             self.nexus.routing_policy = sora_routing_policy();
@@ -918,6 +920,7 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
     let lanes = vec![
         LaneConfigMetadata {
             id: LaneId::new(0),
+            shard_id: None,
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "core".to_string(),
             description: Some("Primary execution lane".to_string()),
@@ -931,6 +934,7 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
         },
         LaneConfigMetadata {
             id: LaneId::new(1),
+            shard_id: None,
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "governance".to_string(),
             description: Some("Governance & parliament traffic".to_string()),
@@ -944,6 +948,7 @@ pub(crate) fn sora_lane_catalog() -> LaneCatalog {
         },
         LaneConfigMetadata {
             id: LaneId::new(2),
+            shard_id: None,
             dataspace_id: DataSpaceId::UNIVERSAL,
             alias: "zk".to_string(),
             description: Some("Zero-knowledge attachments".to_string()),
@@ -3458,8 +3463,9 @@ fn execution_policy_canonical_set<'a, T: Encode + 'a>(
 /// Compute the canonical first-release identity of process-local execution policy.
 ///
 /// The digest covers every boot-snapshot value which can change transaction admission,
-/// deterministic execution effects, trigger behavior, or block replay. Loaded policy bundles are
-/// supplied as authenticated digests so filesystem placement never becomes consensus state.
+/// deterministic execution effects, trigger behavior, or block replay. Loaded policy bundles and
+/// the complete authenticated Kagemusha release catalog are supplied as canonical digests so
+/// filesystem placement never becomes consensus state.
 ///
 /// Deliberately excluded values are limited to operational implementations which must preserve
 /// identical results: worker and cache sizing, parallel/GPU selection, signature batch sizing,
@@ -3479,7 +3485,7 @@ pub fn execution_policy_digest_v1(
     settlement: &Settlement,
     nexus_policy_digest: [u8; 32],
     zk_policy_digest: [u8; 32],
-    kagemusha_release_policy_digest: Option<[u8; 32]>,
+    kagemusha_release_catalog_digest: Option<[u8; 32]>,
 ) -> [u8; 32] {
     const DOMAIN: &[u8] = b"iroha:execution-policy:v1\0";
     const VERSION: u16 = 1;
@@ -4151,8 +4157,8 @@ pub fn execution_policy_digest_v1(
     policy.push("nexus.policy_digest", &nexus_policy_digest);
     policy.push("zk.policy_digest", &zk_policy_digest);
     policy.push(
-        "kagemusha.release_policy_digest",
-        &kagemusha_release_policy_digest,
+        "kagemusha.release_catalog_digest",
+        &kagemusha_release_catalog_digest,
     );
     let encoded = ExecutionPolicyPreimageV1 {
         version: VERSION,
@@ -4431,7 +4437,6 @@ pub struct LaneConfigEntry {
 }
 impl LaneConfigEntry {
     const MANIFEST_POLICY_METADATA_KEY: &'static str = "da_manifest_policy";
-    const SHARD_ID_METADATA_KEY: &'static str = "da_shard_id";
     const CONFIDENTIAL_FLAG_KEY: &'static str = "confidential_compute";
     const CONFIDENTIAL_MECHANISM_KEY: &'static str = "confidential_mechanism";
     const CONFIDENTIAL_KEY_VERSION_KEY: &'static str = "confidential_key_version";
@@ -4447,11 +4452,7 @@ impl LaneConfigEntry {
             .get(Self::MANIFEST_POLICY_METADATA_KEY)
             .and_then(|raw| DaManifestPolicy::from_metadata_value(raw))
             .unwrap_or_default();
-        let shard_id = meta
-            .metadata
-            .get(Self::SHARD_ID_METADATA_KEY)
-            .and_then(|raw| raw.parse::<u32>().ok())
-            .unwrap_or(lane_numeric);
+        let shard_id = meta.effective_shard_id().as_u32();
         let confidential_compute = meta
             .metadata
             .get(Self::CONFIDENTIAL_FLAG_KEY)
@@ -5013,6 +5014,7 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
     active_validators: &[GenesisActiveNexusLaneRecord],
     lane_lifecycle: &[SumeragiV2LaneLifecycleEntry],
 ) -> Hash {
+    const DATASPACE_COUNT_TAG: &str = "nexus.dataspace_catalog.count";
     fn append<T: Encode>(out: &mut Vec<u8>, tag: &'static str, value: &T) {
         let bytes = value.encode();
         let tag_len = u32::try_from(tag.len()).expect("static projection tag fits in u32");
@@ -5060,13 +5062,8 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
     }
     let mut dataspaces = nexus.dataspace_catalog.entries().iter().collect::<Vec<_>>();
     dataspaces.sort_unstable_by_key(|entry| entry.id);
-    let dataspace_count =
-        u64::try_from(dataspaces.len()).expect("dataspace catalog length fits in u64");
-    append(
-        &mut preimage,
-        "nexus.dataspace_catalog.count",
-        &dataspace_count,
-    );
+    let dataspace_count = u64::try_from(dataspaces.len()).expect("dataspace count fits in u64");
+    append(&mut preimage, DATASPACE_COUNT_TAG, &dataspace_count);
     for entry in dataspaces {
         append(&mut preimage, "nexus.dataspace.id", &entry.id);
         append(&mut preimage, "nexus.dataspace.alias", &entry.alias);
@@ -5218,10 +5215,14 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
         "nexus.fees.settlement_mode",
         &settlement_mode,
     );
+    let mut successful_claim_fee_exempt_authorities =
+        nexus.fees.successful_claim_fee_exempt_authorities.clone();
+    successful_claim_fee_exempt_authorities.sort_unstable();
+    successful_claim_fee_exempt_authorities.dedup();
     append(
         &mut preimage,
         "nexus.fees.successful_claim_exempt_authorities",
-        &nexus.fees.successful_claim_fee_exempt_authorities,
+        &successful_claim_fee_exempt_authorities,
     );
     append(
         &mut preimage,
@@ -5367,6 +5368,21 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
         &mut preimage,
         "nexus.da.per_attester_shards",
         &nexus.da.per_attester_shards.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.ingest_quota_window_blocks",
+        &nexus.da.ingest_quota_window_blocks.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.ingest_quota_max_count_per_account",
+        &nexus.da.ingest_quota_max_count_per_account.get(),
+    );
+    append(
+        &mut preimage,
+        "nexus.da.ingest_quota_max_bytes_per_account",
+        &nexus.da.ingest_quota_max_bytes_per_account.get(),
     );
     append(
         &mut preimage,
@@ -6859,8 +6875,8 @@ pub struct SumeragiV2Config {
 /// Derive the first-release view-zero round deadline and retransmission interval
 /// from the signed block cadence.
 ///
-/// The authoritative runtime applies deterministic linear backoff to the base
-/// deadline for later certified views. The retransmission interval stays fixed.
+/// The runtime applies linear backoff capped at ten base deadlines for later
+/// certified views. The retransmission interval stays fixed.
 ///
 /// # Errors
 ///

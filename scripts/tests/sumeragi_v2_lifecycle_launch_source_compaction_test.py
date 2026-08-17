@@ -18,7 +18,7 @@ GUARD_END = (
     "#[test]\n"
     "fn recovered_decision_fetch_dispatch_reserves_capacity_before_claim_and_failures_leave_no_mutation"
 )
-EXPECTED_FINGERPRINT = "38db94d79ad2c0b8ebe5a2eecb8feea4b0eb014feb67468d49738a7857706bf4"
+EXPECTED_FINGERPRINT = "9b4d84083c993b7c1f6b1712d5d5030e470e2a187e8ab8f4c94eab5d670ae8eb"
 
 
 def guarded_source(source: str = SOURCE) -> str:

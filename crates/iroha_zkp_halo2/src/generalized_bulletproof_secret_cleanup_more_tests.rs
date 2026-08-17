@@ -185,30 +185,7 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         .expect("owned scalar padding boundary")
         .0;
     let mut cursor = 0;
-    for step in [
-        "let source_len = self.len();",
-        "if source_len > len",
-        "return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);",
-        "if source_len == len",
-        "return Ok(());",
-        "let source_pointer = self.0.as_ptr();",
-        "let source_capacity = self.0.capacity();",
-        "let mut padded = Self(Vec::new());",
-        ".try_reserve_exact(len)",
-        ".map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;",
-        "let allocation_capacity = padded.0.capacity();",
-        "if allocation_capacity < len",
-        "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
-        "let allocation_pointer = padded.0.as_ptr();",
-        "for _ in 0..len",
-        "padded.0.push(F::ZERO);",
-        "self.0.iter_mut().zip(&mut padded.0[..source_len])",
-        "core::mem::swap(source, destination);",
-        "source.clear_secret();",
-        "self.0.truncate(0);",
-        "core::mem::swap(&mut self.0, &mut padded.0);",
-        "Ok(())",
-    ] {
+    for step in cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.1") {
         let offset = padding[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing owner-first padding step {step}"));
@@ -249,30 +226,7 @@ fn vector_padding_and_split_clear_replaced_allocations() {
             .count(),
         2
     );
-    for forbidden in [
-        "Self::zero(",
-        "Vec::with_capacity",
-        "vec![",
-        ".reserve(",
-        ".reserve_exact(",
-        "copy_from_slice",
-        "extend_from_slice",
-        ".to_vec(",
-        ".clone(",
-        ".cloned(",
-        ".copied(",
-        ".resize(",
-        ".split_off(",
-        ".drain(",
-        ".collect",
-        "core::mem::replace",
-        "padded.0.push(*",
-        "*destination = *source",
-        "unsafe",
-        "callback",
-        "FnOnce",
-        "FnMut",
-    ] {
+    for forbidden in cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.2") {
         assert!(
             !padding.contains(forbidden),
             "owner-first scalar padding path {forbidden}"
@@ -287,26 +241,13 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         .0;
     assert_eq!(prover.matches(".pad_with_zeroes(n)?;").count(), 4);
     let mut cursor = 0;
-    for step in [
-        "witness.a_l.pad_with_zeroes(n)?;",
-        "witness.a_r.pad_with_zeroes(n)?;",
-        "witness.a_o.pad_with_zeroes(n)?;",
-        "for opening in &mut witness.vector_commitments",
-        "opening.values.pad_with_zeroes(n)?;",
-        "// Validate every opening and every circuit constraint before emitting",
-        "transcript.push_point(ai.expose_ref())?;",
-    ] {
+    for step in cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.3") {
         let offset = prover[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing scalar-padding prover step {step}"));
         cursor += offset + step.len();
     }
-    for callsite in [
-        "witness.a_l.pad_with_zeroes(n)?;",
-        "witness.a_r.pad_with_zeroes(n)?;",
-        "witness.a_o.pad_with_zeroes(n)?;",
-        "opening.values.pad_with_zeroes(n)?;",
-    ] {
+    for callsite in cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.4") {
         assert_eq!(prover.matches(callsite).count(), 1);
     }
     assert!(production.contains("vector: impl Iterator<Item = &'a F>"));
@@ -321,34 +262,7 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         .expect("private response-fold boundary");
     let response_fold = &prover[response_fold_start..response_fold_end];
     let mut cursor = 0;
-    for step in [
-        "let mut tau_ni = SecretScalar::new(S::Scalar::ZERO);",
-        "for (weight, opening) in scalar_commitment_weights",
-        ".iter()",
-        ".zip(&witness.scalar_commitments)",
-        "*tau_ni.expose_mut() += *weight * opening.mask;",
-        "drop(scalar_commitment_weights);",
-        "let mut tau_x = SecretScalar::new(S::Scalar::ZERO);",
-        "for (index, coefficient) in tau_before.0.iter().enumerate()",
-        "*tau_x.expose_mut() += *coefficient * x[index];",
-        "*tau_x.expose_mut() += *tau_ni.expose_ref() * x[ni];",
-        "for (index, coefficient) in tau_after.0.iter().enumerate()",
-        "*tau_x.expose_mut() += *coefficient * x[ni + 1 + index];",
-        "drop(tau_before);",
-        "drop(tau_after);",
-        "drop(tau_ni);",
-        "let mut u = SecretScalar::new(*alpha.expose_ref() * x[ilr]);",
-        "*u.expose_mut() += *beta.expose_ref() * x[io];",
-        "*u.expose_mut() += *rho.expose_ref() * x[is];",
-        "for (mut index, opening) in witness.vector_commitments.iter().enumerate()",
-        "if index >= ilr",
-        "index += 1;",
-        "*u.expose_mut() += x[index] * opening.mask;",
-        "drop(alpha);",
-        "drop(beta);",
-        "drop(rho);",
-        "drop(witness);",
-    ] {
+    for step in cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.5") {
         let offset = response_fold[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing borrowed private-response fold step {step}"));
@@ -384,39 +298,11 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         assert_eq!(prover.matches(borrowed).count(), 2);
         assert_eq!(prover.matches(copied).count(), 0);
     }
-    for source_drop in [
-        "drop(tau_before);",
-        "drop(tau_after);",
-        "drop(tau_ni);",
-        "drop(alpha);",
-        "drop(beta);",
-        "drop(rho);",
-        "drop(witness);",
-    ] {
+    for source_drop in cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.6") {
         assert_eq!(response_fold.matches(source_drop).count(), 1);
     }
     assert_eq!(prover.matches("tau_x_poly").count(), 0);
-    for forbidden in [
-        "expose_copy",
-        ".clone(",
-        ".cloned(",
-        ".copied(",
-        ".to_vec(",
-        "Vec::",
-        "vec![",
-        "reserve",
-        "collect",
-        "copy_from_slice",
-        "extend_from_slice",
-        "core::mem",
-        "unsafe",
-        "callback",
-        "FnOnce",
-        "FnMut",
-        "?",
-        "transcript",
-        "random_scalar",
-    ] {
+    for forbidden in cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.7") {
         assert!(
             !response_fold.contains(forbidden),
             "borrowed private-response fold path {forbidden}"
@@ -430,25 +316,7 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         .expect("owned scalar split boundary")
         .0;
     let mut cursor = 0;
-    for step in [
-        "if self.len() <= 1 || !self.len().is_multiple_of(2)",
-        "return Err(GeneralizedBulletproofErrorV1::ArithmeticInvariant);",
-        "let half = self.len() / 2;",
-        "let mut right = Self(Vec::new());",
-        ".try_reserve_exact(half)",
-        ".map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;",
-        "let allocation_capacity = right.0.capacity();",
-        "if allocation_capacity < half",
-        "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
-        "let allocation_pointer = right.0.as_ptr();",
-        "for _ in 0..half",
-        "right.0.push(F::ZERO);",
-        "self.0[half..].iter_mut().zip(&mut right.0)",
-        "core::mem::swap(source, destination);",
-        "source.clear_secret();",
-        "self.0.truncate(half);",
-        "Ok((self, right))",
-    ] {
+    for step in cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.8") {
         let offset = split[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing owner-first split step {step}"));
@@ -481,26 +349,7 @@ fn vector_padding_and_split_clear_replaced_allocations() {
         1
     );
     assert_eq!(split.matches("source.clear_secret();").count(), 1);
-    for forbidden in [
-        "Vec::with_capacity",
-        "extend_from_slice",
-        "copy_from_slice",
-        ".to_vec(",
-        ".clone(",
-        ".cloned(",
-        ".copied(",
-        ".split_off(",
-        ".drain(",
-        ".collect",
-        "Self::zero(",
-        "core::mem::replace",
-        "right.0.push(*",
-        "*destination = *source",
-        "unsafe",
-        "callback",
-        "FnOnce",
-        "FnMut",
-    ] {
+    for forbidden in cleanup_contract_strings("vector_padding_and_split_clear_replaced_allocations.9") {
         assert!(
             !split.contains(forbidden),
             "owner-first scalar split path {forbidden}"
@@ -702,22 +551,7 @@ fn random_vector_clears_success_and_partial_failure() {
         .expect("random scalar vector boundary")
         .0;
     let mut cursor = 0;
-    for step in [
-        "let mut result = ScalarVector(Vec::new());",
-        ".try_reserve_exact(len)",
-        ".map_err(|_| GeneralizedBulletproofErrorV1::ResourceOverflow)?;",
-        "let allocation_capacity = result.0.capacity();",
-        "if allocation_capacity < len",
-        "return Err(GeneralizedBulletproofErrorV1::ResourceOverflow);",
-        "let allocation_pointer = result.0.as_ptr();",
-        "for _ in 0..len",
-        "result.0.push(F::ZERO);",
-        "for destination in &mut result.0",
-        "let mut sampled = random_scalar::<F, _>(rng)?;",
-        "core::mem::swap(destination, sampled.expose_mut());",
-        "drop(sampled);",
-        "Ok(result)",
-    ] {
+    for step in cleanup_contract_strings("random_vector_clears_success_and_partial_failure.1") {
         let offset = random_vector[cursor..]
             .find(step)
             .unwrap_or_else(|| panic!("missing owner-first random-vector step {step}"));
@@ -735,27 +569,7 @@ fn random_vector_clears_success_and_partial_failure() {
     ] {
         assert_eq!(random_vector.matches(needle).count(), expected);
     }
-    for forbidden in [
-        "Vec::with_capacity",
-        ".reserve(",
-        ".reserve_exact(",
-        "result.0.push(*",
-        "result.0.push(random_scalar",
-        "sampled.expose_ref",
-        "sampled.expose_copy",
-        ".clone(",
-        ".cloned(",
-        ".copied(",
-        ".to_vec(",
-        "copy_from_slice",
-        "extend_from_slice",
-        ".collect",
-        "core::mem::replace",
-        "unsafe",
-        "callback",
-        "FnOnce",
-        "FnMut",
-    ] {
+    for forbidden in cleanup_contract_strings("random_vector_clears_success_and_partial_failure.2") {
         assert!(
             !random_vector.contains(forbidden),
             "owner-first random-vector path {forbidden}"
@@ -768,12 +582,7 @@ fn random_vector_clears_success_and_partial_failure() {
         .split_once("/// Consume and verify one proof transcript")
         .expect("generalized prover boundary")
         .0;
-    for callsite in [
-        "let s_l = random_scalar_vector::<S::Scalar, _>(rng, n)?;",
-        "let s_r = random_scalar_vector::<S::Scalar, _>(rng, n)?;",
-        "let tau_before = random_scalar_vector::<S::Scalar, _>(rng, ni)?;",
-        "let tau_after = random_scalar_vector::<S::Scalar, _>(rng, t_poly_len - ni - 1)?;",
-    ] {
+    for callsite in cleanup_contract_strings("random_vector_clears_success_and_partial_failure.3") {
         assert_eq!(prover.matches(callsite).count(), 1);
     }
     assert_eq!(
@@ -945,18 +754,7 @@ fn vector_commitment_values_rehome_without_copy_or_allocation() {
         values_handoff.contains("core::mem::replace(&mut self.values, ScalarVector(Vec::new()))")
     );
     assert_eq!(values_handoff.matches("Vec::new()").count(), 1);
-    for forbidden in [
-        ".clone(",
-        ".cloned(",
-        ".copied(",
-        ".to_vec(",
-        "copy_from_slice",
-        "extend_from_slice",
-        "reserve",
-        "unsafe",
-        "FnOnce",
-        "FnMut",
-    ] {
+    for forbidden in cleanup_contract_strings("vector_commitment_values_rehome_without_copy_or_allocation.1") {
         assert!(
             !values_handoff.contains(forbidden),
             "retained value-owner handoff path {forbidden}"
@@ -1012,20 +810,7 @@ fn scalar_commitment_opening_source_boundary_stays_private_and_zeroizing() {
         .0;
     assert!(mask_slot_handoff.contains("mask: F::ZERO"));
     assert!(mask_slot_handoff.contains("core::mem::swap(&mut opening.mask, mask)"));
-    for forbidden in [
-        "*mask",
-        ".clone(",
-        ".cloned(",
-        ".copied(",
-        "expose_copy",
-        "BorrowedSecretScalarSlot",
-        "SecretScalar::",
-        "Vec::",
-        "reserve",
-        "unsafe",
-        "FnOnce",
-        "FnMut",
-    ] {
+    for forbidden in cleanup_contract_strings("scalar_commitment_opening_source_boundary_stays_private_and_zeroizing.1") {
         assert!(
             !mask_slot_handoff.contains(forbidden),
             "retained vector-opening mask-slot handoff {forbidden}"

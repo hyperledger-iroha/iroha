@@ -64,9 +64,19 @@ def _sources() -> dict[str, str]:
 
 
 def test_checked_in_shards_are_bounded_ordered_and_uniquely_resolved() -> None:
-    errors, providers = checker._async_liveness_shard_contract(_sources())
+    sources = _sources()
+    errors, providers = checker._async_liveness_shard_contract(sources)
 
     assert errors == []
+    assert sum(
+        kind == "theorem"
+        for _, kind, _, _ in checker._top_level_declarations(
+            sources["SumeragiV2AsyncRankAndInitProofs"]
+        )
+    ) == checker.ASYNC_LIVENESS_SHARD_MAX_THEOREMS
+    assert providers["ModelResponsiveValidators"] == (
+        "SumeragiV2AsyncRankAndInitContinuationProofs"
+    )
     assert providers["AsyncTypeInvariantObligation"] == (
         "SumeragiV2AsyncProtectedSlotProofs"
     )
@@ -160,7 +170,7 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
         + sources[continuation][len(continuation_header) : -len(footer)]
     )
     assert hashlib.sha256(combined_body.encode("utf-8")).hexdigest() == (
-        "b65d1129d878e583e0628a236670e648f3697f0644bf8f7d739b15db86dd8945"
+        "b3c47ede1eb792052dc7519df34ee070186415793364178666269592bbe63505"
     )
 
     errors, providers = checker._async_liveness_shard_contract(sources)
@@ -352,7 +362,7 @@ def test_global_mechanical_body_reconstruction_is_exact() -> None:
         checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256
     )
     assert checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 == (
-        "ee6735723a4cd1aa6f4a061a7d15dc857b5cc90dec095c6d6a081e7564e53922"
+        "51b47a637adee8933d5980cd9c2335d4dbe56e5c7ff6753d7f6b7b77d47fbb54"
     )
 
 

@@ -3,7 +3,9 @@ mod taira;
 use crate::{ExplicitExitError, Outcome, RunArgs};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
-use iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4;
+use iroha_core::smartcontracts::isi::offline::{
+    KagemushaReleaseCatalogV4, isi::validate_offline_attestation_policy_for_release_activation,
+};
 use iroha_core::zk::kagemusha_artifact_v4::{
     kagemusha_artifact_descriptor_v4, read_kagemusha_pasta_cycle_artifact_v4,
 };
@@ -208,6 +210,10 @@ struct PrepareActivationV4Args {
     /// The policy and release are embedded in one composite consensus instruction.
     #[arg(long)]
     device_attestation_policy: PathBuf,
+    /// Explicit Unix timestamp used for the same certificate-validity checks as consensus.
+    /// The activation is checked again against its actual block timestamp on every validator.
+    #[arg(long, value_parser = parse_nonzero_canonical_u64)]
+    policy_evaluation_time_ms: u64,
     /// New private file receiving a JSON array accepted by `iroha ledger multisig propose`.
     #[arg(long)]
     output: PathBuf,
@@ -271,7 +277,10 @@ impl<T: Write> RunArgs<T> for Args {
                 let activation = catalog
                     .build_activation(args.manifest_sha256, args.verifier_version)
                     .map_err(|error| eyre!(error))?;
-                let policy = configured_device_attestation_policy(&args.device_attestation_policy)?;
+                let policy = configured_device_attestation_policy(
+                    &args.device_attestation_policy,
+                    args.policy_evaluation_time_ms,
+                )?;
                 let state_bytes = norito::to_bytes(&policy)
                     .wrap_err("failed to encode governed device-attestation policy state")?;
                 let policy_state_sha256 =
@@ -289,11 +298,12 @@ impl<T: Write> RunArgs<T> for Args {
                 publish_new_durable_file(writer, &args.output, instruction_json.as_bytes())?;
                 writeln!(
                     writer,
-                    "{{\"status\":\"prepared\",\"manifest_sha256\":\"{}\",\"verifier_version\":{},\"instruction_count\":1,\"instructions_hash\":\"{}\",\"device_attestation_policy_state_sha256\":\"{}\"}}",
+                    "{{\"status\":\"prepared\",\"manifest_sha256\":\"{}\",\"verifier_version\":{},\"instruction_count\":1,\"instructions_hash\":\"{}\",\"device_attestation_policy_state_sha256\":\"{}\",\"policy_evaluation_time_ms\":{}}}",
                     hex::encode(args.manifest_sha256),
                     args.verifier_version,
                     instructions_hash,
                     policy_state_sha256,
+                    args.policy_evaluation_time_ms,
                 )?;
             }
             Command::PrepareReleaseCircuitParamsV4(args) => {
@@ -414,7 +424,10 @@ fn configured_policy_bytes(path: &Path) -> Result<Vec<u8>> {
     policy.validate().map_err(|error| eyre!(error))?;
     Ok(configured)
 }
-fn configured_device_attestation_policy(path: &Path) -> Result<OfflineDeviceAttestationPolicy> {
+fn configured_device_attestation_policy(
+    path: &Path,
+    policy_evaluation_time_ms: u64,
+) -> Result<OfflineDeviceAttestationPolicy> {
     let raw = read_external_bounded(
         path,
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1,
@@ -422,7 +435,7 @@ fn configured_device_attestation_policy(path: &Path) -> Result<OfflineDeviceAtte
     )?;
     let policy: OfflineDeviceAttestationPolicy = norito::json::from_slice(&raw)
         .wrap_err("failed to decode governed Offline device-attestation policy JSON")?;
-    validate_device_attestation_policy_for_atomic_activation(&policy)?;
+    validate_device_attestation_policy_for_atomic_activation(&policy, policy_evaluation_time_ms)?;
     let canonical = norito::json::to_string(&policy)
         .wrap_err("failed to encode canonical Offline device-attestation policy JSON")?;
     let reparsed: OfflineDeviceAttestationPolicy = norito::json::from_str(&canonical)
@@ -434,6 +447,7 @@ fn configured_device_attestation_policy(path: &Path) -> Result<OfflineDeviceAtte
 }
 fn validate_device_attestation_policy_for_atomic_activation(
     policy: &OfflineDeviceAttestationPolicy,
+    policy_evaluation_time_ms: u64,
 ) -> Result<()> {
     if policy.version != 1
         || !policy.require_ios_app_policy
@@ -451,6 +465,8 @@ fn validate_device_attestation_policy_for_atomic_activation(
     validate_atomic_activation_revocations(policy)?;
     validate_atomic_activation_ios_apps(policy)?;
     validate_atomic_activation_android_apps(policy)?;
+    validate_offline_attestation_policy_for_release_activation(policy, policy_evaluation_time_ms)
+        .map_err(|error| eyre!("consensus device-attestation policy validation failed: {error}"))?;
     Ok(())
 }
 fn validate_atomic_activation_policy_shape(policy: &OfflineDeviceAttestationPolicy) -> Result<()> {
@@ -556,7 +572,6 @@ fn validate_atomic_activation_ios_apps(policy: &OfflineDeviceAttestationPolicy) 
             || app.environment != "production"
             || app.allowed_validation_categories.is_empty()
             || app.allowed_bundle_versions.is_empty()
-            || app.allow_legacy_auth_data_without_extensions
             || app
                 .allowed_bundle_versions
                 .iter()
@@ -2207,6 +2222,7 @@ mod tests {
         ReleaseCircuitParamsPublicationOutcomeV1, write_new_durable_file_with_hooks_v1,
         write_release_circuit_params_directory_with_hooks_v1,
     };
+    use iroha_core::smartcontracts::isi::offline::isi::production_offline_device_attestation_policy_v1;
     use iroha_data_model::offline::{
         KagemushaStepCircuitParamsV4, OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1,
         OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_SIGNING_CERTIFICATES_V1,
@@ -2225,6 +2241,7 @@ mod tests {
         OfflineIosAppAttestationPolicy,
     };
     use std::{cell::Cell, collections::BTreeSet, fs, rc::Rc};
+    const POLICY_EVALUATION_TIME_MS: u64 = 1_800_000_000_000;
     struct LivePayload {
         live: Rc<Cell<usize>>,
     }
@@ -2234,38 +2251,16 @@ mod tests {
         }
     }
     fn valid_device_attestation_policy() -> OfflineDeviceAttestationPolicy {
-        OfflineDeviceAttestationPolicy {
-            version: 1,
-            trusted_roots: vec![
-                OfflineDeviceAttestationTrustedRoot {
-                    platform: "android-keymint".to_owned(),
-                    der: vec![0x30, 0x01],
-                    not_before_ms: None,
-                    not_after_ms: None,
-                },
-                OfflineDeviceAttestationTrustedRoot {
-                    platform: "ios-appattest".to_owned(),
-                    der: vec![0x30, 0x02],
-                    not_before_ms: None,
-                    not_after_ms: None,
-                },
-            ],
-            revoked_certificate_sha256: vec![],
-            ios_apps: vec![OfflineIosAppAttestationPolicy {
-                team_id: "YLWWUD25VZ".to_owned(),
-                bundle_id: "pk.retail.wallet.ios".to_owned(),
-                environment: "production".to_owned(),
-                allowed_validation_categories: vec![4],
-                allowed_bundle_versions: vec!["202605050324".to_owned()],
-                allow_legacy_auth_data_without_extensions: false,
-            }],
-            android_apps: vec![OfflineAndroidAppAttestationPolicy {
-                package_name: "com.pk.retailwallet".to_owned(),
-                signing_certificate_sha256: vec![vec![0x11; 32]],
-            }],
-            require_ios_app_policy: true,
-            require_android_app_policy: true,
-        }
+        production_offline_device_attestation_policy_v1(
+            "YLWWUD25VZ".to_owned(),
+            "pk.retail.wallet.ios".to_owned(),
+            vec![4],
+            vec!["202605050324".to_owned()],
+            "com.pk.retailwallet".to_owned(),
+            vec![[0x11; 32]],
+            POLICY_EVALUATION_TIME_MS,
+        )
+        .expect("built-in production attestation roots are valid")
     }
     fn bounded_trusted_root(
         platform: &str,
@@ -2293,7 +2288,6 @@ mod tests {
             environment: "production".to_owned(),
             allowed_validation_categories: vec![4],
             allowed_bundle_versions: vec!["1".to_owned()],
-            allow_legacy_auth_data_without_extensions: false,
         }
     }
     fn bounded_android_app(index: usize) -> OfflineAndroidAppAttestationPolicy {
@@ -2302,8 +2296,8 @@ mod tests {
             signing_certificate_sha256: vec![vec![u8::try_from(index + 1).unwrap(); 32]],
         }
     }
-    fn assert_atomic_policy_valid(policy: &OfflineDeviceAttestationPolicy, context: &str) {
-        validate_device_attestation_policy_for_atomic_activation(policy)
+    fn assert_atomic_policy_shape_valid(policy: &OfflineDeviceAttestationPolicy, context: &str) {
+        super::validate_atomic_activation_policy_shape(policy)
             .unwrap_or_else(|error| panic!("{context}: exact-bound policy failed: {error}"));
     }
     fn assert_atomic_policy_cap_rejected(
@@ -2311,7 +2305,7 @@ mod tests {
         expected: &str,
         context: &str,
     ) {
-        let error = validate_device_attestation_policy_for_atomic_activation(policy)
+        let error = super::validate_atomic_activation_policy_shape(policy)
             .expect_err("over-bound policy must fail");
         assert!(
             error.to_string().contains(expected),
@@ -2763,7 +2757,13 @@ mod tests {
     #[test]
     fn atomic_activation_accepts_only_fail_closed_production_app_policy() {
         let policy = valid_device_attestation_policy();
-        assert!(validate_device_attestation_policy_for_atomic_activation(&policy).is_ok());
+        assert!(
+            validate_device_attestation_policy_for_atomic_activation(
+                &policy,
+                POLICY_EVALUATION_TIME_MS,
+            )
+            .is_ok()
+        );
         for mutate in [
             |policy: &mut OfflineDeviceAttestationPolicy| {
                 policy.require_android_app_policy = false;
@@ -2772,15 +2772,18 @@ mod tests {
                 policy.ios_apps[0].environment = "development".to_owned();
             },
             |policy: &mut OfflineDeviceAttestationPolicy| {
-                policy.ios_apps[0].allow_legacy_auth_data_without_extensions = true;
-            },
-            |policy: &mut OfflineDeviceAttestationPolicy| {
                 policy.android_apps[0].signing_certificate_sha256[0].pop();
             },
         ] {
             let mut changed = policy.clone();
             mutate(&mut changed);
-            assert!(validate_device_attestation_policy_for_atomic_activation(&changed).is_err());
+            assert!(
+                validate_device_attestation_policy_for_atomic_activation(
+                    &changed,
+                    POLICY_EVALUATION_TIME_MS,
+                )
+                .is_err()
+            );
         }
     }
     #[test]
@@ -2817,7 +2820,11 @@ mod tests {
             let mut policy = valid_device_attestation_policy();
             mutate(&mut policy);
             assert!(
-                validate_device_attestation_policy_for_atomic_activation(&policy).is_err(),
+                validate_device_attestation_policy_for_atomic_activation(
+                    &policy,
+                    POLICY_EVALUATION_TIME_MS,
+                )
+                .is_err(),
                 "{context} must be rejected"
             );
         }
@@ -2828,24 +2835,42 @@ mod tests {
         let mut missing_platform = policy.clone();
         missing_platform.trusted_roots.pop();
         assert!(
-            validate_device_attestation_policy_for_atomic_activation(&missing_platform).is_err()
+            validate_device_attestation_policy_for_atomic_activation(
+                &missing_platform,
+                POLICY_EVALUATION_TIME_MS,
+            )
+            .is_err()
         );
         let mut duplicate_root = policy.clone();
         duplicate_root
             .trusted_roots
             .push(duplicate_root.trusted_roots[0].clone());
-        assert!(validate_device_attestation_policy_for_atomic_activation(&duplicate_root).is_err());
+        assert!(
+            validate_device_attestation_policy_for_atomic_activation(
+                &duplicate_root,
+                POLICY_EVALUATION_TIME_MS,
+            )
+            .is_err()
+        );
         let mut unsorted_categories = policy.clone();
         unsorted_categories.ios_apps[0].allowed_validation_categories = vec![8, 7];
         assert!(
-            validate_device_attestation_policy_for_atomic_activation(&unsorted_categories).is_err()
+            validate_device_attestation_policy_for_atomic_activation(
+                &unsorted_categories,
+                POLICY_EVALUATION_TIME_MS,
+            )
+            .is_err()
         );
         let mut duplicate_signer = policy;
         duplicate_signer.android_apps[0]
             .signing_certificate_sha256
             .push(vec![0x11; 32]);
         assert!(
-            validate_device_attestation_policy_for_atomic_activation(&duplicate_signer).is_err()
+            validate_device_attestation_policy_for_atomic_activation(
+                &duplicate_signer,
+                POLICY_EVALUATION_TIME_MS,
+            )
+            .is_err()
         );
     }
     #[test]
@@ -2865,7 +2890,7 @@ mod tests {
                 bounded_trusted_root(platform, u8::try_from(index + 1).unwrap(), 2)
             })
             .collect();
-        assert_atomic_policy_valid(&exact_roots, "total trusted-root limit");
+        assert_atomic_policy_shape_valid(&exact_roots, "total trusted-root limit");
         let mut too_many_roots = exact_roots;
         too_many_roots
             .trusted_roots
@@ -2888,7 +2913,7 @@ mod tests {
                 2,
             )))
             .collect();
-        assert_atomic_policy_valid(&exact_platform_roots, "per-platform trusted-root limit");
+        assert_atomic_policy_shape_valid(&exact_platform_roots, "per-platform trusted-root limit");
         let mut too_many_platform_roots = exact_platform_roots;
         too_many_platform_roots
             .trusted_roots
@@ -2905,7 +2930,7 @@ mod tests {
             1,
             OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOT_DER_BYTES_V1,
         );
-        assert_atomic_policy_valid(&exact_der, "trusted-root DER limit");
+        assert_atomic_policy_shape_valid(&exact_der, "trusted-root DER limit");
         exact_der.trusted_roots[0].der.push(0);
         assert_atomic_policy_cap_rejected(
             &exact_der,
@@ -2922,7 +2947,7 @@ mod tests {
                 digest
             })
             .collect();
-        assert_atomic_policy_valid(&exact_revocations, "revocation limit");
+        assert_atomic_policy_shape_valid(&exact_revocations, "revocation limit");
         exact_revocations
             .revoked_certificate_sha256
             .push(vec![0xFF; 32]);
@@ -2936,7 +2961,7 @@ mod tests {
         exact_ios_apps.ios_apps = (0..OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_APPS_V1)
             .map(bounded_ios_app)
             .collect();
-        assert_atomic_policy_valid(&exact_ios_apps, "iOS app limit");
+        assert_atomic_policy_shape_valid(&exact_ios_apps, "iOS app limit");
         exact_ios_apps.ios_apps.push(bounded_ios_app(
             OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_APPS_V1,
         ));
@@ -2951,7 +2976,7 @@ mod tests {
             ..OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1)
             .map(bounded_android_app)
             .collect();
-        assert_atomic_policy_valid(&exact_android_apps, "Android app limit");
+        assert_atomic_policy_shape_valid(&exact_android_apps, "Android app limit");
         exact_android_apps.android_apps.push(bounded_android_app(
             OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_APPS_V1,
         ));
@@ -2971,7 +2996,7 @@ mod tests {
                 .len(),
             OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_VALIDATION_CATEGORIES_V1
         );
-        assert_atomic_policy_valid(&exact_categories, "iOS validation-category limit");
+        assert_atomic_policy_shape_valid(&exact_categories, "iOS validation-category limit");
         exact_categories.ios_apps[0]
             .allowed_validation_categories
             .push(11);
@@ -2986,7 +3011,7 @@ mod tests {
             ..OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSIONS_V1)
             .map(|index| format!("{index:04}"))
             .collect();
-        assert_atomic_policy_valid(&exact_versions, "iOS bundle-version count limit");
+        assert_atomic_policy_shape_valid(&exact_versions, "iOS bundle-version count limit");
         exact_versions.ios_apps[0]
             .allowed_bundle_versions
             .push(format!(
@@ -3002,7 +3027,7 @@ mod tests {
         let mut exact_version_bytes = valid_device_attestation_policy();
         exact_version_bytes.ios_apps[0].allowed_bundle_versions =
             vec!["1".repeat(OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_IOS_BUNDLE_VERSION_BYTES_V1)];
-        assert_atomic_policy_valid(&exact_version_bytes, "iOS bundle-version byte limit");
+        assert_atomic_policy_shape_valid(&exact_version_bytes, "iOS bundle-version byte limit");
         exact_version_bytes.ios_apps[0].allowed_bundle_versions[0].push('1');
         assert_atomic_policy_cap_rejected(
             &exact_version_bytes,
@@ -3015,7 +3040,7 @@ mod tests {
             ..=OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_ANDROID_SIGNING_CERTIFICATES_V1)
             .map(|index| vec![u8::try_from(index).unwrap(); 32])
             .collect();
-        assert_atomic_policy_valid(&exact_signers, "Android signing-certificate limit");
+        assert_atomic_policy_shape_valid(&exact_signers, "Android signing-certificate limit");
         exact_signers.android_apps[0]
             .signing_certificate_sha256
             .push(vec![0xF0; 32]);
@@ -3028,7 +3053,7 @@ mod tests {
         let mut exact_team_id = valid_device_attestation_policy();
         exact_team_id.ios_apps[0].team_id =
             "A".repeat(OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TEAM_ID_BYTES_V1);
-        assert_atomic_policy_valid(&exact_team_id, "iOS Team ID byte limit");
+        assert_atomic_policy_shape_valid(&exact_team_id, "iOS Team ID byte limit");
         exact_team_id.ios_apps[0].team_id.push('A');
         assert_atomic_policy_cap_rejected(
             &exact_team_id,
@@ -3039,7 +3064,7 @@ mod tests {
         let mut exact_bundle_id = valid_device_attestation_policy();
         exact_bundle_id.ios_apps[0].bundle_id =
             "a".repeat(OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1);
-        assert_atomic_policy_valid(&exact_bundle_id, "iOS bundle ID byte limit");
+        assert_atomic_policy_shape_valid(&exact_bundle_id, "iOS bundle ID byte limit");
         exact_bundle_id.ios_apps[0].bundle_id.push('a');
         assert_atomic_policy_cap_rejected(
             &exact_bundle_id,
@@ -3050,7 +3075,7 @@ mod tests {
         let mut exact_package_name = valid_device_attestation_policy();
         exact_package_name.android_apps[0].package_name =
             "a".repeat(OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_APP_IDENTIFIER_BYTES_V1);
-        assert_atomic_policy_valid(&exact_package_name, "Android package-name byte limit");
+        assert_atomic_policy_shape_valid(&exact_package_name, "Android package-name byte limit");
         exact_package_name.android_apps[0].package_name.push('a');
         assert_atomic_policy_cap_rejected(
             &exact_package_name,
@@ -3067,7 +3092,7 @@ mod tests {
                 .len(),
             OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_CANONICAL_BYTES_V1
         );
-        assert_atomic_policy_valid(&exact, "canonical policy byte limit");
+        assert_atomic_policy_shape_valid(&exact, "canonical policy byte limit");
         let mut over = exact;
         assert!(
             over.trusted_roots[3].der.len()

@@ -243,6 +243,10 @@ const NETWORK_MESSAGE_LANE_DRAIN_VOTE_TAG: u32 = 4;
 const NETWORK_MESSAGE_TORII_PROXY_REQUEST_TAG: u32 = 17;
 const NETWORK_MESSAGE_TORII_PROXY_RESPONSE_TAG: u32 = 18;
 const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG: u32 = 20;
+const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG: u32 = 21;
+/// Hard Norito frame bound for one QueuePlan admission-certificate handoff.
+pub const MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES: usize =
+    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES + 64 * 1024;
 const MAX_LANE_DRAIN_VOTE_DECODE_ELEMENTS: usize = MAX_LANE_DRAIN_VOTE_WIRE_BYTES;
 // A canonical 128-member BLS committee needs just over 256 KiB under Norito's
 // conservative nested alignment-copy accounting. Keep deterministic headroom
@@ -550,6 +554,9 @@ pub enum NetworkMessage {
     /// Certified QueuePlan admission disseminated to every live authoritative validator.
     #[codec(index = 20)]
     QueuePlanAdmissionPublication(Arc<torii_proxy::QueuePlanAdmissionPublicationV1>),
+    /// Exact Kura-durable QueuePlan admission certificate handed to the global leader.
+    #[codec(index = 21)]
+    QueuePlanAdmissionCertificate(Arc<Vec<u8>>),
 }
 impl NetworkMessage {
     /// Returns `true` when the message is handled by Torii's proxy-plane P2P
@@ -647,7 +654,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             NetworkMessage::LaneRelay(_)
             | NetworkMessage::MergeCommitteeSignature(_)
             | NetworkMessage::LaneDrainVote(_)
-            | NetworkMessage::NativeAmx(_) => T::Consensus,
+            | NetworkMessage::NativeAmx(_)
+            | NetworkMessage::QueuePlanAdmissionCertificate(_) => T::Consensus,
             NetworkMessage::SoracloudLocalReadProxyRequest(_)
             | NetworkMessage::SoracloudLocalReadProxyResponse(_)
             | NetworkMessage::ToriiProxyRequest(_)
@@ -698,7 +706,8 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             Self::LaneRelay(_)
             | Self::MergeCommitteeSignature(_)
             | Self::LaneDrainVote(_)
-            | Self::NativeAmx(_) => ProgressReconstruction::Retransmit,
+            | Self::NativeAmx(_)
+            | Self::QueuePlanAdmissionCertificate(_) => ProgressReconstruction::Retransmit,
             _ => ProgressReconstruction::Exact,
         }
     }
@@ -722,7 +731,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
         let topic = match tag {
             0 => inbound_sumeragi_topic(field)?,
             1 | 7 => Topic::Other,
-            2..=4 | 6 => Topic::Consensus,
+            2..=4 | 6 | 21 => Topic::Consensus,
             5 => inbound_certified_merge_sidecar_topic(field, flags)?,
             8 => inbound_transaction_gossip_topic(field, flags)?,
             9 => Topic::PeerGossip,
@@ -842,6 +851,23 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                     MAX_CERTIFICATE_BYTES,
                     MAX_WIRE_BYTES.saturating_mul(2),
                     16,
+                )))
+            }
+            NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG => {
+                let max_body = iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
+                if framed_len > MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES {
+                    return Err(norito::core::Error::ArchiveLengthExceeded {
+                        length: u64::try_from(framed_len).unwrap_or(u64::MAX),
+                        limit: u64::try_from(MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES)
+                            .unwrap_or(u64::MAX),
+                    });
+                }
+                Ok(Some(norito::DecodeLimits::new(
+                    max_body,
+                    MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES,
+                    MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES,
+                    8 * MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES,
+                    64,
                 )))
             }
             _ => Ok(None),
@@ -1992,6 +2018,7 @@ mod tests {
             }
         }
     }
+    include!("tests/queue_plan_admission_handoff.rs");
     #[test]
     fn torii_proxy_carriers_preserve_request_wire_and_have_explicit_decode_caps() {
         #[derive(Encode)]

@@ -1194,7 +1194,7 @@ fn recovered_decision_apply_terminal_settlement_is_exact_and_post_fsync_infallib
         .split_once("fn take_next_recovered_lifecycle_completion(")
         .expect("the worker has one unified lifecycle completion classifier")
         .1
-        .split_once("/// Drain only the oldest lifecycle-owned recovered Sign completion.")
+        .split_once("pub(in crate::sumeragi) fn drain_recovered_lifecycle_sign_completion(")
         .expect("the classifier stays bounded before the retained Sign fixture seam")
         .0;
     for required in [

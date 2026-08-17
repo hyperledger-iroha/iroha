@@ -59,20 +59,32 @@ async fn incoming_verified_query_proxy_rejects_future_created_autoscale_lane_hin
     let response = incoming_verified_query_proxy_response_for_route(app, route).await;
     assert_incoming_proxy_stale_route_rejection(&response, route);
 }
+
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-#[tokio::test]
-async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
+enum AuthoritativeLaneFixtureMode {
+    OnlineWithFallback,
+    Offline,
+    OfflineWithHttpBridge,
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+struct AuthoritativeLaneFixture {
+    app: SharedAppState,
+    local_peer_id: PeerId,
+    authoritative_peer_id: PeerId,
+    fallback_peer_id: PeerId,
+    route: RoutingDecision,
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn authoritative_lane_fixture(mode: AuthoritativeLaneFixtureMode) -> AuthoritativeLaneFixture {
     let local_keypair =
         checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
     let authoritative_validator_keypair = checked_torii_test_ed25519_keypair(
         0x5e,
         "derive authoritative-lane manifest validator fixture key",
     );
-    let authoritative_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x5f,
-        Algorithm::BlsNormal,
-        "derive authoritative-lane manifest peer fixture key",
-    );
+    let authoritative_keypair = checked_torii_test_bls_keypair(0x5f, "derive authoritative-lane manifest peer fixture key");
     let fallback_keypair = checked_torii_test_ed25519_keypair(
         0x60,
         "derive authoritative-lane fallback peer fixture key",
@@ -82,30 +94,30 @@ async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
         AccountId::new(authoritative_validator_keypair.public_key().clone());
     let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
     let fallback_peer_id = PeerId::from(fallback_keypair.public_key().clone());
+    let mut online = vec![Peer::new(
+        "127.0.0.1:10001".parse().expect("valid local address"),
+        local_keypair.public_key().clone(),
+    )];
+    if matches!(mode, AuthoritativeLaneFixtureMode::OnlineWithFallback) {
+        online.extend([
+            Peer::new(
+                "127.0.0.1:10002"
+                    .parse()
+                    .expect("valid authoritative address"),
+                authoritative_keypair.public_key().clone(),
+            ),
+            Peer::new(
+                "127.0.0.1:10003".parse().expect("valid fallback address"),
+                fallback_keypair.public_key().clone(),
+            ),
+        ]);
+    }
     let mut app = mk_app_state_for_tests();
     {
         let app_mut = Arc::get_mut(&mut app).expect("unique app state");
         let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
-        let local_peer = Peer::new(
-            "127.0.0.1:10001".parse().expect("valid local address"),
-            local_keypair.public_key().clone(),
-        );
-        let authoritative_peer = Peer::new(
-            "127.0.0.1:10002"
-                .parse()
-                .expect("valid authoritative address"),
-            authoritative_keypair.public_key().clone(),
-        );
-        let fallback_peer = Peer::new(
-            "127.0.0.1:10003".parse().expect("valid fallback address"),
-            fallback_keypair.public_key().clone(),
-        );
         online_tx
-            .send(std::collections::HashSet::from([
-                local_peer,
-                authoritative_peer,
-                fallback_peer,
-            ]))
+            .send(online.into_iter().collect())
             .expect("online peers update should succeed");
         app_mut.online_peers = OnlinePeersProvider::new(online_rx);
         app_mut.local_peer_id = Some(local_peer_id.clone());
@@ -126,15 +138,47 @@ async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
             &authoritative_keypair,
             "authoritative",
         );
-        install_lane_manifest_registry_for_test(
-            state,
-            &[(
-                LaneId::SINGLE,
-                vec![(authoritative_validator, authoritative_peer_id.clone())],
-            )],
-        );
+        if matches!(mode, AuthoritativeLaneFixtureMode::OfflineWithHttpBridge) {
+            install_lane_manifest_registry_with_torii_urls_for_test(
+                state,
+                &[(
+                    LaneId::SINGLE,
+                    vec![(
+                        authoritative_validator,
+                        authoritative_peer_id.clone(),
+                        Some("http://127.0.0.1:19080"),
+                    )],
+                )],
+            );
+        } else {
+            install_lane_manifest_registry_for_test(
+                state,
+                &[(
+                    LaneId::SINGLE,
+                    vec![(authoritative_validator, authoritative_peer_id.clone())],
+                )],
+            );
+        }
     }
-    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    AuthoritativeLaneFixture {
+        app,
+        local_peer_id,
+        authoritative_peer_id,
+        fallback_peer_id,
+        route: RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn torii_proxy_candidate_peers_only_use_authoritative_peers() {
+    let AuthoritativeLaneFixture {
+        app,
+        local_peer_id,
+        fallback_peer_id,
+        route,
+        ..
+    } = authoritative_lane_fixture(AuthoritativeLaneFixtureMode::OnlineWithFallback);
     let authoritative_without_local: Vec<_> = super::authoritative_lane_peers(app.as_ref(), route)
         .authoritative
         .into_iter()
@@ -170,11 +214,7 @@ async fn torii_proxy_candidate_peers_reject_future_created_autoscale_manifest_au
         0x62,
         "derive future-created candidate manifest validator fixture key",
     );
-    let authoritative_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x63,
-        Algorithm::BlsNormal,
-        "derive future-created candidate manifest peer fixture key",
-    );
+    let authoritative_keypair = checked_torii_test_bls_keypair(0x63, "derive future-created candidate manifest peer fixture key");
     let local_peer_id = PeerId::from(local_keypair.public_key().clone());
     let authoritative_validator =
         AccountId::new(authoritative_validator_keypair.public_key().clone());
@@ -249,59 +289,12 @@ async fn torii_proxy_candidate_peers_reject_future_created_autoscale_manifest_au
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn torii_proxy_candidate_peers_fail_closed_when_manifest_authoritative_peers_are_offline() {
-    let local_keypair =
-        checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
-    let authoritative_validator_keypair = checked_torii_test_ed25519_keypair(
-        0x5e,
-        "derive authoritative-lane manifest validator fixture key",
-    );
-    let authoritative_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x5f,
-        Algorithm::BlsNormal,
-        "derive authoritative-lane manifest peer fixture key",
-    );
-    let local_peer_id = PeerId::from(local_keypair.public_key().clone());
-    let authoritative_validator =
-        AccountId::new(authoritative_validator_keypair.public_key().clone());
-    let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
-    let mut app = mk_app_state_for_tests();
-    {
-        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-        let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
-        online_tx
-            .send(std::collections::HashSet::from([Peer::new(
-                "127.0.0.1:10001".parse().expect("valid local address"),
-                local_keypair.public_key().clone(),
-            )]))
-            .expect("online peers update should succeed");
-        app_mut.online_peers = OnlinePeersProvider::new(online_rx);
-        app_mut.local_peer_id = Some(local_peer_id.clone());
-    }
-    {
-        let mut topology = app.state.commit_topology.block();
-        topology.clear();
-        topology.push(local_peer_id.clone());
-        topology.push(authoritative_peer_id.clone());
-        topology.commit();
-    }
-    {
-        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-        let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
-        ensure_runtime_peer_binding_for_test(
-            state,
-            &authoritative_validator,
-            &authoritative_keypair,
-            "authoritative",
-        );
-        install_lane_manifest_registry_for_test(
-            state,
-            &[(
-                LaneId::SINGLE,
-                vec![(authoritative_validator, authoritative_peer_id.clone())],
-            )],
-        );
-    }
-    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let AuthoritativeLaneFixture {
+        app,
+        local_peer_id,
+        route,
+        ..
+    } = authoritative_lane_fixture(AuthoritativeLaneFixtureMode::Offline);
     let candidates =
         super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
     assert_eq!(candidates.authoritative_count, 0);
@@ -318,63 +311,13 @@ async fn torii_proxy_candidate_peers_fail_closed_when_manifest_authoritative_pee
 #[tokio::test]
 async fn torii_proxy_candidate_peers_bridge_to_offline_manifest_authority_when_torii_url_is_present()
  {
-    let local_keypair =
-        checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
-    let authoritative_validator_keypair = checked_torii_test_ed25519_keypair(
-        0x5e,
-        "derive authoritative-lane manifest validator fixture key",
-    );
-    let authoritative_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x5f,
-        Algorithm::BlsNormal,
-        "derive authoritative-lane manifest peer fixture key",
-    );
-    let local_peer_id = PeerId::from(local_keypair.public_key().clone());
-    let authoritative_validator =
-        AccountId::new(authoritative_validator_keypair.public_key().clone());
-    let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
-    let mut app = mk_app_state_for_tests();
-    {
-        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-        let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
-        online_tx
-            .send(std::collections::HashSet::from([Peer::new(
-                "127.0.0.1:10001".parse().expect("valid local address"),
-                local_keypair.public_key().clone(),
-            )]))
-            .expect("online peers update should succeed");
-        app_mut.online_peers = OnlinePeersProvider::new(online_rx);
-        app_mut.local_peer_id = Some(local_peer_id.clone());
-    }
-    {
-        let mut topology = app.state.commit_topology.block();
-        topology.clear();
-        topology.push(local_peer_id.clone());
-        topology.push(authoritative_peer_id.clone());
-        topology.commit();
-    }
-    {
-        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-        let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
-        ensure_runtime_peer_binding_for_test(
-            state,
-            &authoritative_validator,
-            &authoritative_keypair,
-            "authoritative",
-        );
-        install_lane_manifest_registry_with_torii_urls_for_test(
-            state,
-            &[(
-                LaneId::SINGLE,
-                vec![(
-                    authoritative_validator,
-                    authoritative_peer_id.clone(),
-                    Some("http://127.0.0.1:19080"),
-                )],
-            )],
-        );
-    }
-    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let AuthoritativeLaneFixture {
+        app,
+        local_peer_id,
+        authoritative_peer_id,
+        route,
+        ..
+    } = authoritative_lane_fixture(AuthoritativeLaneFixtureMode::OfflineWithHttpBridge);
     let candidates =
         super::torii_proxy_candidate_peer_ids(app.as_ref(), &local_peer_id, route, None, &[]);
     assert_eq!(candidates.authoritative_count, 1);
@@ -416,59 +359,8 @@ async fn torii_proxy_candidate_peers_bridge_to_offline_manifest_authority_when_t
 #[tokio::test]
 async fn execute_torii_proxy_request_with_fallback_returns_route_unavailable_when_manifest_authoritative_peers_are_offline()
  {
-    let local_keypair =
-        checked_torii_test_ed25519_keypair(0x58, "derive authoritative-lane local fixture key");
-    let authoritative_validator_keypair = checked_torii_test_ed25519_keypair(
-        0x5e,
-        "derive authoritative-lane manifest validator fixture key",
-    );
-    let authoritative_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x5f,
-        Algorithm::BlsNormal,
-        "derive authoritative-lane manifest peer fixture key",
-    );
-    let local_peer_id = PeerId::from(local_keypair.public_key().clone());
-    let authoritative_validator =
-        AccountId::new(authoritative_validator_keypair.public_key().clone());
-    let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
-    let mut app = mk_app_state_for_tests();
-    {
-        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-        let (online_tx, online_rx) = tokio::sync::watch::channel(std::collections::HashSet::new());
-        online_tx
-            .send(std::collections::HashSet::from([Peer::new(
-                "127.0.0.1:10001".parse().expect("valid local address"),
-                local_keypair.public_key().clone(),
-            )]))
-            .expect("online peers update should succeed");
-        app_mut.online_peers = OnlinePeersProvider::new(online_rx);
-        app_mut.local_peer_id = Some(local_peer_id.clone());
-    }
-    {
-        let mut topology = app.state.commit_topology.block();
-        topology.clear();
-        topology.push(local_peer_id.clone());
-        topology.push(authoritative_peer_id.clone());
-        topology.commit();
-    }
-    {
-        let app_mut = Arc::get_mut(&mut app).expect("unique app state");
-        let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
-        ensure_runtime_peer_binding_for_test(
-            state,
-            &authoritative_validator,
-            &authoritative_keypair,
-            "authoritative",
-        );
-        install_lane_manifest_registry_for_test(
-            state,
-            &[(
-                LaneId::SINGLE,
-                vec![(authoritative_validator, authoritative_peer_id.clone())],
-            )],
-        );
-    }
-    let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let AuthoritativeLaneFixture { app, route, .. } =
+        authoritative_lane_fixture(AuthoritativeLaneFixtureMode::Offline);
     let response = super::execute_torii_proxy_request_with_fallback(
         &app,
         route,
@@ -479,17 +371,8 @@ async fn execute_torii_proxy_request_with_fallback_returns_route_unavailable_whe
         },
     )
     .await;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("route_unavailable")
-    );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("collect error body");
+    assert_route_unavailable_response(&response);
+    let body = torii_body_bytes(response, "collect error body").await;
     let envelope =
         norito::decode_from_bytes::<super::ErrorEnvelope>(&body).expect("decode error envelope");
     assert_eq!(envelope.code(), "route_unavailable");
@@ -585,21 +468,9 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
         0x65,
         "derive authoritative-lane visited validator fixture key",
     );
-    let authoritative_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x5f,
-        Algorithm::BlsNormal,
-        "derive authoritative-lane manifest peer fixture key",
-    );
-    let sender_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x64,
-        Algorithm::BlsNormal,
-        "derive authoritative-lane sender peer fixture key",
-    );
-    let visited_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x66,
-        Algorithm::BlsNormal,
-        "derive authoritative-lane visited peer fixture key",
-    );
+    let authoritative_keypair = checked_torii_test_bls_keypair(0x5f, "derive authoritative-lane manifest peer fixture key");
+    let sender_keypair = checked_torii_test_bls_keypair(0x64, "derive authoritative-lane sender peer fixture key");
+    let visited_keypair = checked_torii_test_bls_keypair(0x66, "derive authoritative-lane visited peer fixture key");
     let local_peer_id = PeerId::from(local_keypair.public_key().clone());
     let authoritative_validator =
         AccountId::new(authoritative_validator_keypair.public_key().clone());
@@ -754,11 +625,7 @@ async fn torii_proxy_candidates_exclude_self_sender_visited_and_fail_closed_when
 #[tokio::test]
 async fn local_nexus_read_fanout_completes_without_recursive_self_proxying() {
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
-    let local_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x67, "derive local Nexus fanout peer fixture key")
-            .public_key()
-            .clone(),
-    );
+    let local_peer_id = checked_torii_test_peer_id(0x67, "derive local Nexus fanout peer fixture key");
     Arc::get_mut(&mut app)
         .expect("unique local Nexus fanout app")
         .local_peer_id = Some(local_peer_id.clone());
@@ -861,10 +728,7 @@ async fn incoming_torii_proxy_rejects_expired_and_excessive_authenticated_deadli
             "{label} proxy deadline must fail before dispatch"
         );
         assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-reject-code")
-                .and_then(|value| value.to_str().ok()),
+            torii_response_header(&response, "x-iroha-reject-code"),
             Some("proxy_deadline_exceeded")
         );
     }
@@ -961,15 +825,10 @@ async fn internal_torii_proxy_route_accepts_node_signed_requests() {
         .expect("router response");
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-routed-by")
-            .and_then(|value| value.to_str().ok()),
+        torii_response_header(&response, "x-iroha-routed-by"),
         Some("proxy")
     );
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("response body should be readable");
+    let body = torii_body_bytes(response, "response body should be readable").await;
     let payload = std::str::from_utf8(&body).expect("JSON response body");
     assert!(payload.contains(&ALICE_ID.to_string()));
     let untrusted_signer = checked_torii_test_ed25519_keypair(
@@ -1023,14 +882,7 @@ async fn internal_torii_proxy_route_accepts_node_signed_requests() {
 async fn internal_torii_proxy_route_rejects_unsigned_requests() {
     use tower::ServiceExt as _;
     let mut app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
-    let local_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x69,
-            "derive unsigned internal Torii proxy receiver fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
+    let local_peer_id = checked_torii_test_peer_id(0x69, "derive unsigned internal Torii proxy receiver fixture key");
     Arc::get_mut(&mut app)
         .expect("unsigned internal proxy fixture app must be uniquely owned")
         .local_peer_id = Some(local_peer_id);
@@ -1054,14 +906,7 @@ async fn internal_torii_proxy_route_rejects_unsigned_requests() {
         deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
         hop_count: 1,
         max_hops: 3,
-        visited_peer_ids: vec![PeerId::from(
-            checked_torii_test_ed25519_keypair(
-                0x6a,
-                "derive unsigned internal Torii proxy visited peer fixture key",
-            )
-            .public_key()
-            .clone(),
-        )],
+        visited_peer_ids: vec![checked_torii_test_peer_id(0x6a, "derive unsigned internal Torii proxy visited peer fixture key")],
         request: ToriiProxyRequestKindV4::Read(super::torii_read_request(
             ToriiReadEndpointV1::AccountGet,
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -1175,22 +1020,8 @@ async fn sorafs_por_proof_route_requires_fresh_path_bound_operator_signature() {
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn forward_incoming_torii_proxy_request_returns_route_unavailable_when_hops_exhausted() {
-    let local_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x68,
-            "derive internal Torii proxy local peer fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
-    let sender_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x6a,
-            "derive internal Torii proxy sender peer fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
+    let local_peer_id = checked_torii_test_peer_id(0x68, "derive internal Torii proxy local peer fixture key");
+    let sender_peer_id = checked_torii_test_peer_id(0x6a, "derive internal Torii proxy sender peer fixture key");
     let mut app = mk_app_state_for_tests();
     Arc::get_mut(&mut app)
         .expect("unique app state")
@@ -1215,33 +1046,14 @@ async fn forward_incoming_torii_proxy_request_returns_route_unavailable_when_hop
         },
     )
     .await;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(
-        response
-            .headers()
-            .get("x-iroha-reject-code")
-            .and_then(|value| value.to_str().ok()),
-        Some("route_unavailable")
-    );
+    assert_route_unavailable_response(&response);
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
 async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
-    let local_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x6b,
-        Algorithm::BlsNormal,
-        "derive internal Torii forward local peer fixture key",
-    );
-    let authoritative_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x6c,
-        Algorithm::BlsNormal,
-        "derive internal Torii forward authoritative peer fixture key",
-    );
-    let sender_keypair = checked_torii_test_keypair_from_seed_byte(
-        0x6d,
-        Algorithm::BlsNormal,
-        "derive internal Torii forward sender peer fixture key",
-    );
+    let local_keypair = checked_torii_test_bls_keypair(0x6b, "derive internal Torii forward local peer fixture key");
+    let authoritative_keypair = checked_torii_test_bls_keypair(0x6c, "derive internal Torii forward authoritative peer fixture key");
+    let sender_keypair = checked_torii_test_bls_keypair(0x6d, "derive internal Torii forward sender peer fixture key");
     let local_peer_id = PeerId::from(local_keypair.public_key().clone());
     let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
     let sender_peer_id = PeerId::from(sender_keypair.public_key().clone());
@@ -1361,40 +1173,21 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
         .await
         .expect("proxy response task should complete");
     assert_eq!(response.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .expect("forwarded response body should be readable");
+    let body = torii_body_bytes(response, "forwarded response body should be readable").await;
     assert_eq!(body.as_ref(), b"forwarded-ok");
 }
 #[tokio::test]
 async fn validate_incoming_soracloud_proxy_request_authority_accepts_generated_hf_primary() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x70,
-            "derive generated-HF incoming proxy primary fixture key",
-        )
-        .public_key()
-        .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: Some(primary_peer_id),
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "authority validation test should not execute the runtime locally",
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-    }));
+        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime::unavailable(
+        Some(primary_peer_id),
+        "authority validation test should not execute the runtime locally",
+    )));
     let result = super::validate_incoming_soracloud_proxy_request_authority(
         &app,
         &sample_generated_hf_infer_request(service_name, service_version),
@@ -1406,33 +1199,16 @@ async fn validate_incoming_soracloud_proxy_request_authority_accepts_generated_h
 }
 #[tokio::test]
 async fn validate_incoming_soracloud_proxy_request_authority_rejects_commitment_mismatch() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x70,
-            "derive generated-HF incoming proxy primary fixture key",
-        )
-        .public_key()
-        .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: Some(primary_peer_id),
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "commitment validation test should not execute the runtime locally",
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-    }));
+        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime::unavailable(
+        Some(primary_peer_id),
+        "commitment validation test should not execute the runtime locally",
+    )));
     let mut request = sample_generated_hf_infer_request(service_name, service_version);
     request.request_commitment = Hash::new(b"forged-generated-hf-proxy-request");
     let error = super::validate_incoming_soracloud_proxy_request_authority(&app, &request)
@@ -1448,30 +1224,13 @@ async fn validate_incoming_soracloud_proxy_request_authority_rejects_non_generat
     let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: Some(
-            PeerId::from(
-                checked_torii_test_ed25519_keypair(
-                    0x72,
-                    "derive non-generated incoming proxy local fixture key",
-                )
-                .public_key()
-                .clone(),
-            )
+        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime::unavailable(
+        Some(
+            checked_torii_test_peer_id(0x72, "derive non-generated incoming proxy local fixture key")
             .to_string(),
         ),
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "authority validation test should not execute the runtime locally",
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-    }));
+        "authority validation test should not execute the runtime locally",
+    )));
     let error = super::validate_incoming_soracloud_proxy_request_authority(
         &app,
         &sample_public_query_request("web_portal".to_owned(), "2026.02.0".to_owned()),
@@ -1489,42 +1248,18 @@ async fn validate_incoming_soracloud_proxy_request_authority_rejects_non_generat
 }
 #[tokio::test]
 async fn validate_incoming_soracloud_proxy_request_authority_rejects_non_primary_peer() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x70,
-            "derive generated-HF incoming proxy primary fixture key",
-        )
-        .public_key()
-        .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
     .to_string();
-    let local_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x71,
-            "derive generated-HF incoming proxy local fixture key",
-        )
-        .public_key()
-        .clone(),
-    )
+    let local_peer_id = checked_torii_test_peer_id(0x71, "derive generated-HF incoming proxy local fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: Some(local_peer_id),
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "authority validation test should not execute the runtime locally",
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-    }));
+        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime::unavailable(
+        Some(local_peer_id),
+        "authority validation test should not execute the runtime locally",
+    )));
     let error = super::validate_incoming_soracloud_proxy_request_authority(
         &app,
         &sample_generated_hf_infer_request(service_name, service_version),
@@ -1535,14 +1270,7 @@ async fn validate_incoming_soracloud_proxy_request_authority_rejects_non_primary
 }
 #[tokio::test]
 async fn incoming_proxy_authority_failure_requests_generated_hf_reconcile() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x70,
-            "derive generated-HF incoming proxy primary fixture key",
-        )
-        .public_key()
-        .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let local_peer_id =
@@ -1551,20 +1279,13 @@ async fn incoming_proxy_authority_failure_requests_generated_hf_reconcile() {
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: Some(local_peer_id),
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "incoming authority failure test should not execute the runtime locally",
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
-    }));
+        .soracloud_runtime = Some(Arc::new(
+        TestLocalReadRuntime::unavailable(
+            Some(local_peer_id),
+            "incoming authority failure test should not execute the runtime locally",
+        )
+        .capturing_reconcile_requests(Arc::clone(&captured_reconcile_requests)),
+    ));
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let error = super::validate_incoming_soracloud_proxy_request_authority(&app, &request)
         .expect_err("non-primary peer must reject proxy execution");
@@ -1589,14 +1310,7 @@ async fn incoming_proxy_authority_failure_requests_generated_hf_reconcile() {
 #[tokio::test]
 async fn incoming_proxy_forward_failure_reports_remote_primary_health_and_requests_reconcile_once()
 {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x70,
-            "derive generated-HF incoming proxy primary fixture key",
-        )
-        .public_key()
-        .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let local_peer_id =
@@ -1606,20 +1320,14 @@ async fn incoming_proxy_forward_failure_reports_remote_primary_health_and_reques
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: Some(local_peer_id),
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "incoming forward failure test should not execute the runtime locally",
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::clone(&captured_proxy_failures),
-        captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
-    }));
+        .soracloud_runtime = Some(Arc::new(
+        TestLocalReadRuntime::unavailable(
+            Some(local_peer_id),
+            "incoming forward failure test should not execute the runtime locally",
+        )
+        .capturing_proxy_failures(Arc::clone(&captured_proxy_failures))
+        .capturing_reconcile_requests(Arc::clone(&captured_reconcile_requests)),
+    ));
     Arc::get_mut(&mut app).expect("unique app state").p2p =
         Some(iroha_core::IrohaNetwork::closed_for_tests());
     let request = sample_generated_hf_infer_request(service_name, service_version);
@@ -1707,14 +1415,7 @@ async fn incoming_proxy_forward_failure_reports_remote_primary_health_and_reques
 }
 #[tokio::test]
 async fn resolve_incoming_soracloud_proxy_forward_target_returns_primary() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x70,
-            "derive generated-HF incoming proxy primary fixture key",
-        )
-        .public_key()
-        .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let local_peer_id =
@@ -1722,20 +1423,10 @@ async fn resolve_incoming_soracloud_proxy_forward_target_returns_primary() {
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: Some(local_peer_id),
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "forward target resolution test should not execute the runtime locally",
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-    }));
+        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime::unavailable(
+        Some(local_peer_id),
+        "forward target resolution test should not execute the runtime locally",
+    )));
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let error = SoracloudRuntimeExecutionError::new(
         SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -1748,42 +1439,18 @@ async fn resolve_incoming_soracloud_proxy_forward_target_returns_primary() {
 }
 #[tokio::test]
 async fn resolve_incoming_soracloud_proxy_forward_target_rejects_unassigned_receiver() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x70,
-            "derive generated-HF incoming proxy primary fixture key",
-        )
-        .public_key()
-        .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
     .to_string();
-    let local_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x71,
-            "derive generated-HF incoming proxy local fixture key",
-        )
-        .public_key()
-        .clone(),
-    )
+    let local_peer_id = checked_torii_test_peer_id(0x71, "derive generated-HF incoming proxy local fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: Some(local_peer_id),
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "unassigned receiver test should not execute the runtime locally",
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-    }));
+        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime::unavailable(
+        Some(local_peer_id),
+        "unassigned receiver test should not execute the runtime locally",
+    )));
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let error = SoracloudRuntimeExecutionError::new(
         SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -1798,33 +1465,16 @@ async fn resolve_incoming_soracloud_proxy_forward_target_rejects_unassigned_rece
 }
 #[tokio::test]
 async fn resolve_incoming_soracloud_proxy_forward_target_rejects_invalid_request() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x70,
-            "derive generated-HF incoming proxy primary fixture key",
-        )
-        .public_key()
-        .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: Some(primary_peer_id),
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "forward target resolution test should not execute the runtime locally",
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-    }));
+        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime::unavailable(
+        Some(primary_peer_id),
+        "forward target resolution test should not execute the runtime locally",
+    )));
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let error = SoracloudRuntimeExecutionError::new(
         SoracloudRuntimeExecutionErrorKind::InvalidRequest,
@@ -1838,22 +1488,8 @@ async fn resolve_incoming_soracloud_proxy_forward_target_rejects_invalid_request
 async fn soracloud_proxy_response_ignores_unexpected_responder_and_keeps_pending_request() {
     let app = mk_app_state_for_tests();
     let request_id = Hash::new(b"soracloud-proxy-unexpected-peer");
-    let expected_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x74,
-            "derive Soracloud proxy expected responder fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
-    let responder_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x75,
-            "derive Soracloud proxy unexpected responder fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
+    let expected_peer_id = checked_torii_test_peer_id(0x74, "derive Soracloud proxy expected responder fixture key");
+    let responder_peer_id = checked_torii_test_peer_id(0x75, "derive Soracloud proxy unexpected responder fixture key");
     let (tx, rx) = tokio::sync::oneshot::channel();
     let mut rx = Box::pin(rx);
     app.soracloud_proxy_pending.lock().await.insert(
@@ -1945,14 +1581,7 @@ async fn soracloud_proxy_response_ignores_unexpected_responder_and_keeps_pending
 }
 #[tokio::test]
 async fn unexpected_assigned_proxy_responder_requests_generated_hf_reconcile() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x70,
-            "derive generated-HF incoming proxy primary fixture key",
-        )
-        .public_key()
-        .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x70, "derive generated-HF incoming proxy primary fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let unexpected_peer_id =
@@ -1961,30 +1590,16 @@ async fn unexpected_assigned_proxy_responder_requests_generated_hf_reconcile() {
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: Some(
-            PeerId::from(
-                checked_torii_test_ed25519_keypair(
-                    0x76,
-                    "derive generated-HF unexpected responder local fixture key",
-                )
-                .public_key()
-                .clone(),
-            )
+        .soracloud_runtime = Some(Arc::new(
+        TestLocalReadRuntime::unavailable(
+            Some(
+            checked_torii_test_peer_id(0x76, "derive generated-HF unexpected responder local fixture key")
             .to_string(),
-        ),
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "unexpected responder reconcile test should not execute the runtime locally",
             ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
-    }));
+            "unexpected responder reconcile test should not execute the runtime locally",
+        )
+        .capturing_reconcile_requests(Arc::clone(&captured_reconcile_requests)),
+    ));
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let request_id = Hash::new(b"generated-hf-unexpected-assigned-responder");
     let (tx, _rx) = tokio::sync::oneshot::channel();
@@ -2046,14 +1661,7 @@ async fn unexpected_assigned_proxy_responder_requests_generated_hf_reconcile() {
 async fn soracloud_proxy_response_rejects_unsupported_schema() {
     let app = mk_app_state_for_tests();
     let request_id = Hash::new(b"soracloud-proxy-unsupported-schema");
-    let responder_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x77,
-            "derive Soracloud proxy unsupported schema responder fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
+    let responder_peer_id = checked_torii_test_peer_id(0x77, "derive Soracloud proxy unsupported schema responder fixture key");
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.soracloud_proxy_pending.lock().await.insert(
         request_id,
@@ -2160,14 +1768,7 @@ async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
 async fn process_incoming_torii_proxy_response_marks_late_responses_once() {
     let app = mk_app_state_for_tests();
     let request_id = Hash::new(b"torii-proxy-late-response");
-    let responder_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(
-            0x79,
-            "derive Torii proxy late-response responder fixture key",
-        )
-        .public_key()
-        .clone(),
-    );
+    let responder_peer_id = checked_torii_test_peer_id(0x79, "derive Torii proxy late-response responder fixture key");
     super::mark_torii_proxy_request_completed(&app, request_id).await;
     let response = ToriiProxyResponseV1 {
         schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
@@ -2242,37 +1843,22 @@ fn completed_torii_proxy_requests_are_fifo_bounded_and_ttl_pruned() {
 }
 #[tokio::test]
 async fn soracloud_proxy_failure_reports_remote_primary_health() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x7a, "derive generated-HF proxy primary fixture key")
-            .public_key()
-            .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
     .to_string();
-    let local_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x7b, "derive generated-HF proxy local fixture key")
-            .public_key()
-            .clone(),
-    )
+    let local_peer_id = checked_torii_test_peer_id(0x7b, "derive generated-HF proxy local fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let captured_proxy_failures = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: Some(local_peer_id),
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "proxy test should not execute the runtime locally",
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::clone(&captured_proxy_failures),
-        captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-    }));
+        .soracloud_runtime = Some(Arc::new(
+        TestLocalReadRuntime::unavailable(
+            Some(local_peer_id),
+            "proxy test should not execute the runtime locally",
+        )
+        .capturing_proxy_failures(Arc::clone(&captured_proxy_failures)),
+    ));
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let error = SoracloudRuntimeExecutionError::new(
         SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -2298,11 +1884,7 @@ async fn soracloud_proxy_failure_reports_remote_primary_health() {
 }
 #[tokio::test]
 async fn validate_generated_hf_proxy_response_authority_accepts_matching_receipt() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x7a, "derive generated-HF proxy primary fixture key")
-            .public_key()
-            .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let request = sample_generated_hf_infer_request(service_name, service_version);
@@ -2318,11 +1900,7 @@ async fn validate_generated_hf_proxy_response_authority_accepts_matching_receipt
 }
 #[tokio::test]
 async fn validate_generated_hf_proxy_response_authority_rejects_mismatched_receipt() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x7a, "derive generated-HF proxy primary fixture key")
-            .public_key()
-            .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let request = sample_generated_hf_infer_request(service_name, service_version);
@@ -2333,14 +1911,7 @@ async fn validate_generated_hf_proxy_response_authority_rejects_mismatched_recei
         .as_mut()
         .expect("generated HF proxy receipt")
         .selected_peer_id = Some(
-        PeerId::from(
-            checked_torii_test_ed25519_keypair(
-                0x7c,
-                "derive generated-HF proxy mismatched receipt fixture key",
-            )
-            .public_key()
-            .clone(),
-        )
+        checked_torii_test_peer_id(0x7c, "derive generated-HF proxy mismatched receipt fixture key")
         .to_string(),
     );
     let error = super::validate_generated_hf_proxy_response_authority(
@@ -2355,11 +1926,7 @@ async fn validate_generated_hf_proxy_response_authority_rejects_mismatched_recei
 }
 #[tokio::test]
 async fn validate_generated_hf_proxy_response_authority_rejects_result_commitment_mismatch() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x7a, "derive generated-HF proxy primary fixture key")
-            .public_key()
-            .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let request = sample_generated_hf_infer_request(service_name, service_version);
@@ -2380,70 +1947,92 @@ async fn validate_generated_hf_proxy_response_authority_rejects_result_commitmen
     assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
     assert!(error.message.contains("response commitments"));
 }
-#[tokio::test]
-async fn proxy_validation_failure_reports_remote_primary_health_and_requests_reconcile() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x7a, "derive generated-HF proxy primary fixture key")
-            .public_key()
-            .clone(),
+#[derive(Clone, Copy)]
+enum GeneratedHfFailureReportCase {
+    Validation,
+    Execution,
+}
+async fn run_generated_hf_failure_report_case(case: GeneratedHfFailureReportCase) {
+    let primary_peer_id = checked_torii_test_peer_id(
+        0x7a,
+        "derive generated-HF proxy primary fixture key",
     )
     .to_string();
-    let local_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x7b, "derive generated-HF proxy local fixture key")
-            .public_key()
-            .clone(),
+    let local_peer_id = checked_torii_test_peer_id(
+        0x7b,
+        "derive generated-HF proxy local fixture key",
     )
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let captured_proxy_failures = Arc::new(std::sync::Mutex::new(Vec::new()));
     let captured_reconcile_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let runtime_message = match case {
+        GeneratedHfFailureReportCase::Validation => {
+            "validation failure test should not execute the runtime locally"
+        }
+        GeneratedHfFailureReportCase::Execution => {
+            "execution failure test should not execute the runtime locally"
+        }
+    };
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: Some(local_peer_id),
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "validation failure test should not execute the runtime locally",
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::clone(&captured_proxy_failures),
-        captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
-    }));
+        .soracloud_runtime = Some(Arc::new(
+        TestLocalReadRuntime::unavailable(Some(local_peer_id), runtime_message)
+            .capturing_proxy_failures(Arc::clone(&captured_proxy_failures))
+            .capturing_reconcile_requests(Arc::clone(&captured_reconcile_requests)),
+    ));
     let request = sample_generated_hf_infer_request(service_name, service_version);
-    let mut response = sample_generated_hf_proxy_response(&app, &request);
-    response
-        .runtime_receipt
-        .as_mut()
-        .expect("generated HF proxy receipt")
-        .selected_peer_id = Some(
-        PeerId::from(
-            checked_torii_test_ed25519_keypair(
-                0x7c,
-                "derive generated-HF proxy mismatched receipt fixture key",
+    let primary_peer = primary_peer_id.parse().expect("valid peer id");
+    let error = match case {
+        GeneratedHfFailureReportCase::Validation => {
+            let mut response = sample_generated_hf_proxy_response(&app, &request);
+            response
+                .runtime_receipt
+                .as_mut()
+                .expect("generated HF proxy receipt")
+                .selected_peer_id = Some(
+                checked_torii_test_peer_id(
+                    0x7c,
+                    "derive generated-HF proxy mismatched receipt fixture key",
+                )
+                .to_string(),
+            );
+            super::validate_generated_hf_proxy_response_authority(
+                &app,
+                &request,
+                &primary_peer,
+                &response,
             )
-            .public_key()
-            .clone(),
-        )
-        .to_string(),
-    );
-    let error = super::validate_generated_hf_proxy_response_authority(
-        &app,
-        &request,
-        &primary_peer_id.parse().expect("valid peer id"),
-        &response,
-    )
-    .expect_err("mismatched proxy receipt must fail closed");
-    super::handle_soracloud_generated_hf_proxy_validation_failure(
-        &app,
-        &request,
-        &primary_peer_id.parse().expect("valid peer id"),
-        &error,
-    );
+            .expect_err("mismatched proxy receipt must fail closed")
+        }
+        GeneratedHfFailureReportCase::Execution => SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "primary proxy request timed out",
+        ),
+    };
+    match case {
+        GeneratedHfFailureReportCase::Validation => {
+            super::handle_soracloud_generated_hf_proxy_validation_failure(
+                &app,
+                &request,
+                &primary_peer,
+                &error,
+            );
+        }
+        GeneratedHfFailureReportCase::Execution => {
+            super::handle_soracloud_generated_hf_proxy_execution_failure(
+                &app,
+                &request,
+                &primary_peer,
+                &error,
+            );
+        }
+    }
+    let expected_message = match case {
+        GeneratedHfFailureReportCase::Validation => "receipt attribution",
+        GeneratedHfFailureReportCase::Execution => "timed out",
+    };
     let proxy_failures = captured_proxy_failures
         .lock()
         .expect("proxy failure capture lock");
@@ -2454,7 +2043,7 @@ async fn proxy_validation_failure_reports_remote_primary_health_and_requests_rec
         proxy_failures[0].2.kind,
         SoracloudRuntimeExecutionErrorKind::Unavailable
     );
-    assert!(proxy_failures[0].2.message.contains("receipt attribution"));
+    assert!(proxy_failures[0].2.message.contains(expected_message));
     let reconcile_requests = captured_reconcile_requests
         .lock()
         .expect("reconcile capture lock");
@@ -2464,87 +2053,19 @@ async fn proxy_validation_failure_reports_remote_primary_health_and_requests_rec
         reconcile_requests[0].1.kind,
         SoracloudRuntimeExecutionErrorKind::Unavailable
     );
-    assert!(
-        reconcile_requests[0]
-            .1
-            .message
-            .contains("receipt attribution")
-    );
+    assert!(reconcile_requests[0].1.message.contains(expected_message));
+}
+#[tokio::test]
+async fn proxy_validation_failure_reports_remote_primary_health_and_requests_reconcile() {
+    run_generated_hf_failure_report_case(GeneratedHfFailureReportCase::Validation).await;
 }
 #[tokio::test]
 async fn proxy_execution_failure_reports_remote_primary_health_and_requests_reconcile() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x7a, "derive generated-HF proxy primary fixture key")
-            .public_key()
-            .clone(),
-    )
-    .to_string();
-    let local_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x7b, "derive generated-HF proxy local fixture key")
-            .public_key()
-            .clone(),
-    )
-    .to_string();
-    let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
-    let captured_proxy_failures = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let captured_reconcile_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let mut app = mk_app_state_for_tests_with_world(world);
-    Arc::get_mut(&mut app)
-        .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: Some(local_peer_id),
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "execution failure test should not execute the runtime locally",
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::clone(&captured_proxy_failures),
-        captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
-    }));
-    let request = sample_generated_hf_infer_request(service_name, service_version);
-    let error = SoracloudRuntimeExecutionError::new(
-        SoracloudRuntimeExecutionErrorKind::Unavailable,
-        "primary proxy request timed out",
-    );
-    super::handle_soracloud_generated_hf_proxy_execution_failure(
-        &app,
-        &request,
-        &primary_peer_id.parse().expect("valid peer id"),
-        &error,
-    );
-    let proxy_failures = captured_proxy_failures
-        .lock()
-        .expect("proxy failure capture lock");
-    assert_eq!(proxy_failures.len(), 1);
-    assert_eq!(proxy_failures[0].0.service_name, request.service_name);
-    assert_eq!(proxy_failures[0].1, primary_peer_id);
-    assert_eq!(
-        proxy_failures[0].2.kind,
-        SoracloudRuntimeExecutionErrorKind::Unavailable
-    );
-    assert!(proxy_failures[0].2.message.contains("timed out"));
-    let reconcile_requests = captured_reconcile_requests
-        .lock()
-        .expect("reconcile capture lock");
-    assert_eq!(reconcile_requests.len(), 1);
-    assert_eq!(reconcile_requests[0].0.service_name, request.service_name);
-    assert_eq!(
-        reconcile_requests[0].1.kind,
-        SoracloudRuntimeExecutionErrorKind::Unavailable
-    );
-    assert!(reconcile_requests[0].1.message.contains("timed out"));
+    run_generated_hf_failure_report_case(GeneratedHfFailureReportCase::Execution).await;
 }
 #[tokio::test]
 async fn execute_soracloud_local_read_via_proxy_missing_p2p_does_not_blame_primary() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x7a, "derive generated-HF proxy primary fixture key")
-            .public_key()
-            .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let local_peer_id =
@@ -2554,20 +2075,14 @@ async fn execute_soracloud_local_read_via_proxy_missing_p2p_does_not_blame_prima
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: Some(local_peer_id),
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "missing-p2p proxy test should not execute the runtime locally",
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::clone(&captured_proxy_failures),
-        captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
-    }));
+        .soracloud_runtime = Some(Arc::new(
+        TestLocalReadRuntime::unavailable(
+            Some(local_peer_id),
+            "missing-p2p proxy test should not execute the runtime locally",
+        )
+        .capturing_proxy_failures(Arc::clone(&captured_proxy_failures))
+        .capturing_reconcile_requests(Arc::clone(&captured_reconcile_requests)),
+    ));
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let error = super::execute_soracloud_local_read_via_proxy(
         &app,
@@ -2603,31 +2118,20 @@ async fn execute_soracloud_local_read_via_proxy_missing_p2p_does_not_blame_prima
 }
 #[tokio::test]
 async fn soracloud_routing_failure_requests_generated_hf_reconcile() {
-    let primary_peer_id = PeerId::from(
-        checked_torii_test_ed25519_keypair(0x7a, "derive generated-HF proxy primary fixture key")
-            .public_key()
-            .clone(),
-    )
+    let primary_peer_id = checked_torii_test_peer_id(0x7a, "derive generated-HF proxy primary fixture key")
     .to_string();
     let (world, service_name, service_version) = seed_generated_hf_public_world(&primary_peer_id);
     let captured_reconcile_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let mut app = mk_app_state_for_tests_with_world(world);
     Arc::get_mut(&mut app)
         .expect("unique app state")
-        .soracloud_runtime = Some(Arc::new(TestLocalReadRuntime {
-        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
-        state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
-        local_peer_id: None,
-        result: Err(
-            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Unavailable,
-                "routing failure test should not execute the runtime locally",
-            ),
-        ),
-        captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
-        captured_reconcile_requests: Arc::clone(&captured_reconcile_requests),
-    }));
+        .soracloud_runtime = Some(Arc::new(
+        TestLocalReadRuntime::unavailable(
+            None,
+            "routing failure test should not execute the runtime locally",
+        )
+        .capturing_reconcile_requests(Arc::clone(&captured_reconcile_requests)),
+    ));
     let request = sample_generated_hf_infer_request(service_name, service_version);
     let error = SoracloudRuntimeExecutionError::new(
         SoracloudRuntimeExecutionErrorKind::Unavailable,

@@ -71,9 +71,8 @@ use crate::{
         },
         v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig, SerializedV2Runtime},
         v2_worker::{
-            CertifiedServeIngressGate, CertifiedServeNegativeOutcome, CertifiedServePrepareError,
-            DurableExactOutputServiceOwner, KuraReplicaAdvertRefreshOwner,
-            PreparedRecoveredDecisionApplyCompletionV1,
+            CertifiedServeIngressGate, DurableExactOutputServiceOwner,
+            KuraReplicaAdvertRefreshOwner, PreparedRecoveredDecisionApplyCompletionV1,
             PreparedRecoveredDecisionFetchBodyCompletionV1,
             PreparedRecoveredLifecycleSignCompletionV1, ProductionV2Services,
             RecoveredDecisionApplyDeferredRetryV1, RecoveredLifecycleCompletionTakeV1,
@@ -1543,18 +1542,20 @@ pub(in crate::sumeragi) enum ProductionLifecycleFinalizationErrorV1 {
     RetirementCensus(String),
 }
 
-/// Activated height after ingress retirement and reducer/WAL finalization.
+/// Activated height after ingress retirement and reducer finalization.
 ///
 /// Services and the complete lifecycle owner remain sealed here until the
-/// existing lane/output transaction mints its durable handoff. There is no
-/// service, receipt, artifact, or owner parts accessor.
+/// existing lane/output transaction mints its durable handoff. The safety WAL
+/// stays owned here so a crash before that handoff can still recover the
+/// finalized body and its lane-only completion. There is no service, receipt,
+/// artifact, or owner parts accessor.
 #[must_use = "finalized lifecycle output rollover must be consumed"]
 pub(in crate::sumeragi) struct FinalizedProductionLifecycleRolloverV1 {
     owner: ProductionLifecycleOwnerV1,
     services: ProductionV2Services,
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
-    wal_retirement_warning: Option<String>,
+    finalized_adapter: super::super::v2::FinalizedV2Height,
     retired_ingress: ProductionLifecycleRetiredIngressPermitV1,
 }
 
@@ -1901,9 +1902,10 @@ impl ActivatedProductionLifecycleV1 {
     /// Consume the activated height after executor and lifecycle work quiesce.
     ///
     /// Readiness closes before both ingress gates retire jointly. Only then is
-    /// the executor consumed and the adapter's exact WAL retired under one
-    /// fail-stop output operation. Every error consumes the height and leaves
-    /// service teardown armed for restart.
+    /// the executor consumed and the adapter closed under one fail-stop output
+    /// operation. Its exact WAL remains owned by the finalized rollover until
+    /// lane/output durability completes. Every error consumes the height and
+    /// leaves service teardown armed for restart.
     #[allow(dead_code, clippy::result_large_err)]
     pub(in crate::sumeragi) fn into_finalized_rollover(
         mut self,
@@ -1995,7 +1997,7 @@ impl ActivatedProductionLifecycleV1 {
             services,
             receipt,
             artifact,
-            wal_retirement_warning: finalized.into_wal_retirement_warning(),
+            finalized_adapter: finalized,
             retired_ingress,
         })
     }
@@ -2128,7 +2130,7 @@ impl FinalizedProductionLifecycleRolloverV1 {
             services,
             receipt,
             artifact,
-            wal_retirement_warning,
+            finalized_adapter,
             retired_ingress,
         } = self;
         let retained = super::super::v2_runner::rollover_finalized_height_outputs_for_lifecycle(
@@ -2143,6 +2145,7 @@ impl FinalizedProductionLifecycleRolloverV1 {
             control_queue_capacity,
         )
         .map_err(ProductionLifecycleFinalizationErrorV1::OutputRollover)?;
+        let wal_retirement_warning = finalized_adapter.retire_after_output_handoff();
         let retained_serve_payloads = owner
             .refresh_live_serve_retirement_cut(&services, &retired_ingress)
             .map_err(|error| {

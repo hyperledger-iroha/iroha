@@ -1578,8 +1578,10 @@ if exact_target_active
                 ("initial.should_open_predecessor_admission()", 1),
                 ("!initial.has_runnable_predecessor()", 1),
                 ("observation.has_runnable_predecessor()", 1),
-                ("!passive_store.should_open_predecessor_admission()", 1),
-                ("replenished.has_runnable_predecessor()", 1),
+                ("services.store_tasks.is_empty()", 1),
+                ("fixture.executor.ready_bodies.len()", 1),
+                ("!terminal.should_open_predecessor_admission()", 1),
+                ("!terminal.has_runnable_predecessor()", 1),
             ),
         ),
         (

@@ -8,7 +8,6 @@ import copy
 import dataclasses
 import grp
 import hashlib
-import importlib.util
 import json
 import os
 import plistlib
@@ -20,17 +19,30 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from scripts.tests.taira_receipt_signer_test_support import (
+    projection_config_text as _support_projection_config_text,
+    receipt_keypair as _support_receipt_keypair,
+    receipt_signer_map as _support_receipt_signer_map,
+)
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "deploy_taira_v21_reset.py"
-SPEC = importlib.util.spec_from_file_location("deploy_taira_v21_reset", MODULE_PATH)
-MODULE = importlib.util.module_from_spec(SPEC)
-assert SPEC and SPEC.loader
-sys.modules[SPEC.name] = MODULE
-SPEC.loader.exec_module(MODULE)
+from scripts.tests.deploy_taira_v21_reset_test_support import (
+    DPN_VALIDATOR_RELEASE_COMMIT,
+    GENESIS_EXPECTED_HASH,
+    GENESIS_PUBLIC_KEY,
+    MODULE,
+)
 
-GENESIS_PUBLIC_KEY = "ed0120" + "AB" * 32
-GENESIS_EXPECTED_HASH = "00" * 31 + "01"
-DPN_VALIDATOR_RELEASE_COMMIT = "d" * 40
+
+def _receipt_keypair(index: int) -> tuple[str, str, str]:
+    return _support_receipt_keypair(index)
+
+
+def _receipt_signer_map() -> dict[str, dict[str, object]]:
+    return _support_receipt_signer_map()
+
+
+def _projection_config_text() -> str:
+    return _support_projection_config_text()
 
 def _write(path: Path, body: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -146,6 +158,7 @@ def _build_bundle(tmp_path: Path, binary_sha: str, source_commit: str) -> Path:
     _write(rendered / "genesis.json", (bundle / "genesis.json").read_bytes())
     config_hashes: dict[str, str] = {}
     for index, slug in enumerate(MODULE.SLUGS):
+        receipt_public_key, receipt_private_key, _ = _receipt_keypair(index + 1)
         workdir = rendered / slug
         _mkdir(workdir)
         for name in ("codec", "configs", "manifests", "runtime", "storage"):
@@ -158,6 +171,8 @@ address = "addr:127.0.0.1:{MODULE.P2P_PORTS[index]}#0000"
 
 [torii]
 address = "addr:127.0.0.1:{MODULE.TORII_PORTS[index]}#0000"
+receipt_public_key = "{receipt_public_key}"
+receipt_private_key = "{receipt_private_key}"
 
 [nexus.storage]
 local_budget_bytes = {MODULE.NODE_STORAGE_BUDGET_BYTES}
@@ -200,6 +215,7 @@ expected_hash = "{GENESIS_EXPECTED_HASH}"
             (bundle / "base-config.toml").read_bytes()
         ).hexdigest(),
         "configs": config_hashes,
+        "receipt_signers": _receipt_signer_map(),
         "prewarmed_storage_sha256": {
             slug: MODULE.EMPTY_TREE_SHA256 for slug in MODULE.SLUGS
         },
@@ -209,6 +225,113 @@ expected_hash = "{GENESIS_EXPECTED_HASH}"
         (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(),
     )
     return bundle
+
+
+def _write_reset_manifest(bundle: Path, manifest: dict[str, object]) -> None:
+    _write(
+        bundle / "reset-manifest.json",
+        (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(),
+    )
+
+
+def _kagemusha_projection(release_root: Path) -> dict[str, object]:
+    return {
+        "schema": MODULE.KAGEMUSHA_CONFIG_PROJECTION_SCHEMA,
+        "release_root": str(release_root),
+        "release_policy_path": str(
+            release_root / MODULE.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+        ),
+        "artifact_dir": str(release_root / MODULE.KAGEMUSHA_ARTIFACT_RELATIVE_PATH),
+        "catalog_qualification_seal_path": str(
+            release_root / MODULE.KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH
+        ),
+        "max_decoded_bytes": MODULE.KAGEMUSHA_MAX_DECODED_BYTES,
+    }
+
+
+def _configure_kagemusha_bundle(
+    bundle: Path,
+    release_root: Path,
+    *,
+    materialize_external_release: bool,
+) -> tuple[str, str]:
+    policy = b"canonical Kagemusha release policy\n"
+    release_manifest = b"canonical Kagemusha release manifest\n"
+    policy_sha256 = hashlib.sha256(policy).hexdigest()
+    release_manifest_sha256 = hashlib.sha256(release_manifest).hexdigest()
+    if materialize_external_release:
+        _write(
+            release_root / MODULE.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH,
+            policy,
+        )
+        release_dir = (
+            release_root
+            / MODULE.KAGEMUSHA_ARTIFACT_RELATIVE_PATH
+            / release_manifest_sha256
+        )
+        _write(release_dir / "manifest.norito", release_manifest)
+        _write(
+            release_dir / "manifest.norito.sha256",
+            f"{release_manifest_sha256}\n".encode("ascii"),
+        )
+        _write(
+            release_root / MODULE.KAGEMUSHA_QUALIFICATION_SEAL_RELATIVE_PATH,
+            b"canonical bounded qualification seal\n",
+        )
+
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    projection = _kagemusha_projection(release_root)
+    for slug in MODULE.SLUGS:
+        config_path = bundle / "rendered" / slug / "config.toml"
+        config = config_path.read_text(encoding="utf-8") + f"""
+
+[settlement.offline]
+kagemusha_release_policy_path = "{projection['release_policy_path']}"
+kagemusha_artifact_dir = "{projection['artifact_dir']}"
+kagemusha_catalog_qualification_seal_path = "{projection['catalog_qualification_seal_path']}"
+kagemusha_max_decoded_bytes = {projection['max_decoded_bytes']}
+"""
+        _write(config_path, config.encode())
+        manifest["configs"][slug] = hashlib.sha256(config.encode()).hexdigest()
+    manifest.update(
+        {
+            "kagemusha_activation_authority": "test-kagemusha-activation-authority",
+            "kagemusha_config_projection": projection,
+            "kagemusha_config_projection_sha256": hashlib.sha256(
+                MODULE._canonical_kagemusha_config_projection_bytes(projection)
+            ).hexdigest(),
+            "kagemusha_release_policy_sha256": policy_sha256,
+            "kagemusha_release_root": str(release_root),
+        }
+    )
+    _write_reset_manifest(bundle, manifest)
+    return policy_sha256, release_manifest_sha256
+
+
+def _allow_test_owned_kagemusha_release(
+    monkeypatch: pytest.MonkeyPatch,
+    release_root: Path,
+) -> None:
+    """Exercise custody checks below a test-owned temporary trust boundary."""
+
+    capture = MODULE._capture_root_controlled_kagemusha_paths
+
+    def capture_test_paths(root: Path, **kwargs: object):
+        assert root == release_root
+        return capture(
+            root,
+            **kwargs,
+            _trust_boundary=release_root,
+            _trusted_uid=os.getuid(),
+        )
+
+    monkeypatch.setattr(
+        MODULE,
+        "_capture_root_controlled_kagemusha_paths",
+        capture_test_paths,
+    )
+
 
 def _validate(bundle: Path, binary_sha: str, source_commit: str) -> MODULE.BundlePlan:
     manifest_raw = (bundle / "reset-manifest.json").read_bytes()
@@ -222,34 +345,6 @@ def _validate(bundle: Path, binary_sha: str, source_commit: str) -> MODULE.Bundl
         maximum_fsync_latency_ms=10_000,
     )
 
-def _projection_config_text() -> str:
-    return f"""chain = "{MODULE.CHAIN_ID}"
-chain_discriminant = {MODULE.CHAIN_DISCRIMINANT}
-trusted_peers = [
-  "peer-one",
-]
-
-[network]
-address = "addr:127.0.0.1:1337#ABCD"
-
-[torii]
-address = "addr:127.0.0.1:8080#1234"
-
-[nexus.storage]
-local_budget_bytes = {MODULE.NODE_STORAGE_BUDGET_BYTES}
-
-[nexus.storage.disk_budget_weights]
-kura_blocks_bps = 7499
-wsv_snapshots_bps = 2000
-sorafs_bps = 1
-soranet_spool_bps = 250
-soravpn_spool_bps = 250
-
-[genesis]
-file = "/private/reset/genesis.signed.nrt"
-public_key = "{GENESIS_PUBLIC_KEY}"
-expected_hash = "{GENESIS_EXPECTED_HASH}"
-"""
 
 def test_projection_parser_extracts_all_required_fields() -> None:
     config = MODULE.parse_config_projection_text(
@@ -295,6 +390,54 @@ def test_projection_parser_keeps_hash_inside_quoted_address() -> None:
     assert config["network"]["address"] == "addr:127.0.0.1:1337#ABCD"
     assert config["torii"]["address"] == "addr:127.0.0.1:8080#1234"
 
+
+def test_projection_parser_extracts_managed_kagemusha_fields() -> None:
+    release_root = Path("/srv/iroha-kagemusha/taira-v4-r1")
+    expected = _kagemusha_projection(release_root)
+    text = _projection_config_text() + f"""
+
+[settlement.offline]
+kagemusha_release_policy_path = "{expected['release_policy_path']}"
+kagemusha_artifact_dir = "{expected['artifact_dir']}"
+kagemusha_catalog_qualification_seal_path = "{expected['catalog_qualification_seal_path']}"
+kagemusha_max_decoded_bytes = {expected['max_decoded_bytes']}
+"""
+
+    config = MODULE.parse_config_projection_text(text, "validator config")
+
+    assert config["settlement"]["offline"] == {
+        "kagemusha_release_policy_path": expected["release_policy_path"],
+        "kagemusha_artifact_dir": expected["artifact_dir"],
+        "kagemusha_catalog_qualification_seal_path": expected[
+            "catalog_qualification_seal_path"
+        ],
+        "kagemusha_max_decoded_bytes": expected["max_decoded_bytes"],
+    }
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    (
+        'kagemusha_artifact_dir = "/hidden/catalog"',
+        'settlement.offline.kagemusha_artifact_dir = "/hidden/catalog"',
+        '"kagemusha_artifact_dir" = "/hidden/catalog"',
+        (
+            '[settlement.offline]\n'
+            '"kagemusha\\u005fartifact_dir" = "/hidden/catalog"'
+        ),
+        'settlement = { offline = { kagemusha_artifact_dir = "/hidden/catalog" } }',
+    ),
+)
+def test_projection_parser_rejects_noncanonical_managed_kagemusha_assignment(
+    assignment: str,
+) -> None:
+    with pytest.raises(MODULE.DeploymentError, match="managed Kagemusha"):
+        MODULE.parse_config_projection_text(
+            _projection_config_text() + f"\n{assignment}\n",
+            "validator config",
+        )
+
+
 def test_bundle_preflight_authenticates_exact_four_peer_reset(tmp_path: Path) -> None:
     binary_sha = "a" * 64
     source_commit = "b" * 40
@@ -309,6 +452,324 @@ def test_bundle_preflight_authenticates_exact_four_peer_reset(tmp_path: Path) ->
     assert [peer.torii_port for peer in plan.peers] == list(MODULE.TORII_PORTS)
     assert [peer.p2p_port for peer in plan.peers] == list(MODULE.P2P_PORTS)
     assert all(not any(peer.storage.iterdir()) for peer in plan.peers)
+
+
+def test_bundle_preflight_binds_kagemusha_projection_and_bounded_external_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from scripts import prepare_taira_empty_reset_bundle as reset_composer
+
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    release_root = tmp_path / "kagemusha-release"
+    _allow_test_owned_kagemusha_release(monkeypatch, release_root)
+    _policy_sha256, manifest_sha256 = _configure_kagemusha_bundle(
+        bundle,
+        release_root,
+        materialize_external_release=True,
+    )
+    second_manifest = b"second canonical Kagemusha release manifest\n"
+    second_manifest_sha256 = hashlib.sha256(second_manifest).hexdigest()
+    second_release_dir = (
+        release_root
+        / MODULE.KAGEMUSHA_ARTIFACT_RELATIVE_PATH
+        / second_manifest_sha256
+    )
+    _write(second_release_dir / "manifest.norito", second_manifest)
+    _write(
+        second_release_dir / "manifest.norito.sha256",
+        f"{second_manifest_sha256}\n".encode("ascii"),
+    )
+
+    plan = _validate(bundle, binary_sha, source_commit)
+
+    projection = _kagemusha_projection(release_root)
+    assert projection == reset_composer._kagemusha_config_projection(release_root)
+    assert MODULE._canonical_kagemusha_config_projection_bytes(
+        projection
+    ) == reset_composer.canonical_json_bytes(projection)
+    expected_projection_sha256 = hashlib.sha256(
+        MODULE._canonical_kagemusha_config_projection_bytes(projection)
+    ).hexdigest()
+    assert plan.kagemusha_config_projection_sha256 == expected_projection_sha256
+    assert plan.kagemusha_external_release is not None
+    external = plan.kagemusha_external_release
+    assert external.bounded_material_present is True
+    assert external.protected_path_identities
+    expected_manifest_digests = tuple(
+        sorted((manifest_sha256, second_manifest_sha256))
+    )
+    assert external.manifest_directory_digests == expected_manifest_digests
+    expected_inventory = {
+        "schema": MODULE.KAGEMUSHA_MANIFEST_DIRECTORY_INVENTORY_SCHEMA,
+        "manifest_sha256": list(expected_manifest_digests),
+    }
+    assert external.manifest_directory_inventory_sha256 == hashlib.sha256(
+        MODULE.taira_authority_client.canonical_json_bytes(expected_inventory)
+    ).hexdigest()
+    assert external.qualification_seal_sha256 == hashlib.sha256(
+        b"canonical bounded qualification seal\n"
+    ).hexdigest()
+    subject = MODULE._kagemusha_authority_subject(plan)
+    assert subject["config_projection_sha256"] == expected_projection_sha256
+    assert subject["bounded_material_present"] is True
+    assert subject["external_release_verified"] is False
+    assert subject["manifest_directory_digests"] == list(
+        expected_manifest_digests
+    )
+    artifact_names = {
+        artifact.name for artifact in MODULE._kagemusha_authority_artifacts(plan)
+    }
+    expected_artifact_names = {
+        "kagemusha/policy/release-policy-v1.norito",
+        "kagemusha/seals/catalog-qualification-v1.norito",
+    }
+    for digest in expected_manifest_digests:
+        expected_artifact_names.add(
+            f"kagemusha/catalog/{digest}/manifest.norito"
+        )
+        expected_artifact_names.add(
+            f"kagemusha/catalog/{digest}/manifest.norito.sha256"
+        )
+    assert artifact_names == expected_artifact_names
+    preflight_fields = MODULE._kagemusha_report_fields(
+        plan, exact_binary_config_verified=False
+    )
+    assert preflight_fields["kagemusha_external_release_material_present"] is True
+    assert preflight_fields["kagemusha_external_release_verified"] is False
+    assert preflight_fields["kagemusha_exact_binary_config_verified"] is False
+    assert (
+        preflight_fields["kagemusha_external_release_status"]
+        == "blocked-exact-installed-binary-config-pending"
+    )
+
+
+def test_bundle_preflight_marks_unavailable_kagemusha_release_blocked(
+    tmp_path: Path,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    release_root = tmp_path / "not-installed-kagemusha-release"
+    _configure_kagemusha_bundle(
+        bundle,
+        release_root,
+        materialize_external_release=False,
+    )
+
+    plan = _validate(bundle, binary_sha, source_commit)
+    fields = MODULE._kagemusha_report_fields(
+        plan, exact_binary_config_verified=False
+    )
+
+    assert plan.kagemusha_external_release is not None
+    assert plan.kagemusha_external_release.bounded_material_present is False
+    assert fields["kagemusha_external_release_verified"] is False
+    assert (
+        fields["kagemusha_external_release_status"]
+        == "blocked-external-release-unavailable"
+    )
+    assert fields["kagemusha_exact_binary_config_verified"] is False
+
+
+def test_bundle_preflight_rejects_hidden_kagemusha_config_without_manifest(
+    tmp_path: Path,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    slug = MODULE.SLUGS[0]
+    config_path = bundle / "rendered" / slug / "config.toml"
+    config = config_path.read_text(encoding="utf-8") + """
+
+[settlement.offline]
+kagemusha_artifact_dir = "/hidden/catalog"
+"""
+    _write(config_path, config.encode())
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["configs"][slug] = hashlib.sha256(config.encode()).hexdigest()
+    _write_reset_manifest(bundle, manifest)
+
+    with pytest.raises(MODULE.DeploymentError, match="differs from the reset manifest"):
+        _validate(bundle, binary_sha, source_commit)
+
+
+def test_bundle_preflight_rejects_kagemusha_projection_digest_drift(
+    tmp_path: Path,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    _configure_kagemusha_bundle(
+        bundle,
+        tmp_path / "kagemusha-release",
+        materialize_external_release=False,
+    )
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["kagemusha_config_projection_sha256"] = "0" * 64
+    _write_reset_manifest(bundle, manifest)
+
+    with pytest.raises(MODULE.DeploymentError, match="SHA-256 is not canonical"):
+        _validate(bundle, binary_sha, source_commit)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        ("schema", "projection is not canonical"),
+        ("extra-key", "projection keys are not exact"),
+        ("partial-top-level", "partial Kagemusha projection"),
+    ),
+)
+def test_bundle_preflight_requires_exact_kagemusha_manifest_schema_and_keys(
+    tmp_path: Path,
+    mutation: str,
+    message: str,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    _configure_kagemusha_bundle(
+        bundle,
+        tmp_path / "kagemusha-release",
+        materialize_external_release=False,
+    )
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if mutation == "schema":
+        manifest["kagemusha_config_projection"]["schema"] = "wrong"
+        manifest["kagemusha_config_projection_sha256"] = hashlib.sha256(
+            MODULE._canonical_kagemusha_config_projection_bytes(
+                manifest["kagemusha_config_projection"]
+            )
+        ).hexdigest()
+    elif mutation == "extra-key":
+        manifest["kagemusha_config_projection"]["unreviewed"] = True
+        manifest["kagemusha_config_projection_sha256"] = hashlib.sha256(
+            MODULE._canonical_kagemusha_config_projection_bytes(
+                manifest["kagemusha_config_projection"]
+            )
+        ).hexdigest()
+    else:
+        del manifest["kagemusha_activation_authority"]
+    _write_reset_manifest(bundle, manifest)
+
+    with pytest.raises(MODULE.DeploymentError, match=message):
+        _validate(bundle, binary_sha, source_commit)
+
+
+def test_bundle_preflight_rejects_one_peer_kagemusha_projection_drift(
+    tmp_path: Path,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    _configure_kagemusha_bundle(
+        bundle,
+        tmp_path / "kagemusha-release",
+        materialize_external_release=False,
+    )
+    slug = MODULE.SLUGS[-1]
+    config_path = bundle / "rendered" / slug / "config.toml"
+    config = config_path.read_text(encoding="utf-8").replace(
+        str(MODULE.KAGEMUSHA_MAX_DECODED_BYTES),
+        str(MODULE.KAGEMUSHA_MAX_DECODED_BYTES - 1),
+    )
+    _write(config_path, config.encode())
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["configs"][slug] = hashlib.sha256(config.encode()).hexdigest()
+    _write_reset_manifest(bundle, manifest)
+
+    with pytest.raises(MODULE.DeploymentError, match="differs from the reset manifest"):
+        _validate(bundle, binary_sha, source_commit)
+
+
+def test_bundle_preflight_rejects_available_kagemusha_policy_or_manifest_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    release_root = tmp_path / "kagemusha-release"
+    _allow_test_owned_kagemusha_release(monkeypatch, release_root)
+    _policy_sha256, manifest_sha256 = _configure_kagemusha_bundle(
+        bundle,
+        release_root,
+        materialize_external_release=True,
+    )
+    policy_path = release_root / MODULE.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+    _write(policy_path, b"substituted policy\n")
+    with pytest.raises(MODULE.DeploymentError, match="release policy differs"):
+        _validate(bundle, binary_sha, source_commit)
+
+    _write(policy_path, b"canonical Kagemusha release policy\n")
+    sidecar = (
+        release_root
+        / MODULE.KAGEMUSHA_ARTIFACT_RELATIVE_PATH
+        / manifest_sha256
+        / "manifest.norito.sha256"
+    )
+    _write(sidecar, f"{'0' * 64}\n".encode("ascii"))
+    with pytest.raises(MODULE.DeploymentError, match="digest sidecar"):
+        _validate(bundle, binary_sha, source_commit)
+
+
+def test_bundle_preflight_rejects_writable_kagemusha_external_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    release_root = tmp_path / "kagemusha-release"
+    _allow_test_owned_kagemusha_release(monkeypatch, release_root)
+    _configure_kagemusha_bundle(
+        bundle,
+        release_root,
+        materialize_external_release=True,
+    )
+    policy_path = release_root / MODULE.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+    policy_path.chmod(0o620)
+
+    with pytest.raises(MODULE.DeploymentError, match="unsafe protected Kagemusha"):
+        _validate(bundle, binary_sha, source_commit)
+
+
+def test_kagemusha_external_identity_recheck_rejects_same_byte_substitution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    release_root = tmp_path / "kagemusha-release"
+    _allow_test_owned_kagemusha_release(monkeypatch, release_root)
+    _configure_kagemusha_bundle(
+        bundle,
+        release_root,
+        materialize_external_release=True,
+    )
+    plan = _validate(bundle, binary_sha, source_commit)
+    policy_path = release_root / MODULE.KAGEMUSHA_RELEASE_POLICY_RELATIVE_PATH
+    replacement = policy_path.with_name("replacement.norito")
+    _write(replacement, policy_path.read_bytes())
+    os.replace(replacement, policy_path)
+
+    with pytest.raises(
+        MODULE.DeploymentError,
+        match="protected Kagemusha external release changed after preflight",
+    ):
+        MODULE.require_kagemusha_external_release_unchanged(
+            plan,
+            phase="after preflight",
+        )
+
 
 def test_bundle_preflight_rejects_a_config_with_an_alternate_genesis_hash(
     tmp_path: Path,
@@ -407,7 +868,9 @@ def test_binary_config_gate_checks_every_peer_with_bounded_redacted_command(
     ]
     assert all(
         kwargs["stdin"] is MODULE.subprocess.DEVNULL
-        and kwargs["capture_output"] is True
+        and kwargs["stdout"] is MODULE.subprocess.DEVNULL
+        and kwargs["stderr"] is MODULE.subprocess.DEVNULL
+        and "capture_output" not in kwargs
         and kwargs["timeout"] == MODULE.CONFIG_CHECK_TIMEOUT_SECONDS
         and kwargs["env"] == {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
         and callable(kwargs["preexec_fn"])
@@ -440,6 +903,198 @@ def test_binary_config_gate_stops_on_first_rejected_peer(tmp_path: Path) -> None
         )
 
     assert calls == 2
+
+
+def test_kagemusha_dry_run_readiness_requires_exact_installed_binary_semantics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    body = b"exact installed candidate"
+    digest = hashlib.sha256(body).hexdigest()
+    install_root = tmp_path / "install"
+    installed = install_root / "binaries" / digest / "iroha3d"
+    _write(installed, body)
+    installed.chmod(0o700)
+    bundle = SimpleNamespace(
+        kagemusha_config_projection_sha256="5" * 64,
+        kagemusha_external_release=SimpleNamespace(
+            bounded_material_present=True,
+            manifest_directory_digests=(),
+            manifest_directory_inventory_sha256=None,
+            expected_policy_sha256="6" * 64,
+            qualification_seal_sha256=None,
+        ),
+    )
+    sources = SimpleNamespace(binary_sha256=digest)
+    events: list[str] = []
+    monkeypatch.setattr(MODULE, "INSTALL_ROOT", install_root)
+    monkeypatch.setattr(
+        MODULE,
+        "require_root_controlled_file",
+        lambda path, *, executable: path.lstat(),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "require_mutable_bundle_identities",
+        lambda _bundle, *, phase: events.append(phase),
+    )
+
+    def accept(path: Path, checked_bundle: object) -> None:
+        assert path == installed
+        assert checked_bundle is bundle
+        events.append("exact-check")
+
+    assert MODULE.validate_dry_run_kagemusha_exact_config(
+        sources,
+        bundle,
+        checker=accept,
+    )
+    fields = MODULE._kagemusha_report_fields(
+        bundle,
+        exact_binary_config_verified=True,
+    )
+    assert fields["kagemusha_external_release_material_present"] is True
+    assert fields["kagemusha_exact_binary_config_verified"] is True
+    assert fields["kagemusha_external_release_verified"] is True
+    assert MODULE._kagemusha_authority_subject(
+        bundle,
+        exact_binary_config_verified=True,
+    )["external_release_verified"] is True
+    assert events == [
+        "before exact dry-run config validation",
+        "exact-check",
+        "after exact dry-run config validation",
+    ]
+
+    events.clear()
+
+    def reject(_path: Path, _bundle: object) -> None:
+        events.append("semantic-reject")
+        raise MODULE.DeploymentError("injected semantic rejection")
+
+    with pytest.raises(MODULE.DeploymentError, match="semantic rejection"):
+        MODULE.validate_dry_run_kagemusha_exact_config(
+            sources,
+            bundle,
+            checker=reject,
+        )
+    assert events == [
+        "before exact dry-run config validation",
+        "semantic-reject",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (
+            "config",
+            "validator config changed after exact dry-run config validation",
+        ),
+        (
+            "genesis",
+            "signed genesis changed after exact dry-run config validation",
+        ),
+        (
+            "runtime",
+            "fresh-reset runtime path changed after exact dry-run config validation",
+        ),
+    ),
+)
+def test_dry_run_checker_cannot_mutate_bundle_before_authority_or_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    message: str,
+) -> None:
+    body = b"exact installed candidate"
+    digest = hashlib.sha256(body).hexdigest()
+    source_commit = "b" * 40
+    bundle_root = _build_bundle(tmp_path, digest, source_commit)
+    release_root = tmp_path / "kagemusha-release"
+    _allow_test_owned_kagemusha_release(monkeypatch, release_root)
+    _configure_kagemusha_bundle(
+        bundle_root,
+        release_root,
+        materialize_external_release=True,
+    )
+    bundle = _validate(bundle_root, digest, source_commit)
+    install_root = tmp_path / "install"
+    installed = install_root / "binaries" / digest / "iroha3d"
+    _write(installed, body)
+    installed.chmod(0o700)
+    sources = SimpleNamespace(binary_sha256=digest, supervisor_sha256="c" * 64)
+    admission = SimpleNamespace(
+        binary_sha256=digest,
+        source_commit=source_commit,
+        dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
+        restart_generation="d" * 64,
+    )
+    monkeypatch.setattr(MODULE, "INSTALL_ROOT", install_root)
+    monkeypatch.setattr(
+        MODULE,
+        "require_root_controlled_file",
+        lambda path, *, executable: path.lstat(),
+    )
+
+    checker_calls = 0
+
+    def mutate_and_accept(_path: Path, checked_bundle: MODULE.BundlePlan) -> None:
+        nonlocal checker_calls
+        checker_calls += 1
+        peer = checked_bundle.peers[0]
+        if mutation == "config":
+            _write(peer.config, peer.config.read_bytes() + b"\n# substituted\n")
+        elif mutation == "genesis":
+            _write(checked_bundle.root / "genesis.signed.nrt", b"substituted")
+        else:
+            peer.storage.rename(tmp_path / "displaced-storage")
+            _mkdir(peer.storage)
+
+    exact_validator = MODULE.validate_dry_run_kagemusha_exact_config
+    monkeypatch.setattr(
+        MODULE,
+        "validate_dry_run_kagemusha_exact_config",
+        lambda checked_sources, checked_bundle: exact_validator(
+            checked_sources,
+            checked_bundle,
+            checker=mutate_and_accept,
+        ),
+    )
+    monkeypatch.setattr(MODULE, "require_sealed_external_tool_identity", lambda: None)
+    monkeypatch.setattr(MODULE, "validate_arguments", lambda _args: None)
+    monkeypatch.setattr(MODULE, "verify_deployment_admission", lambda _args: admission)
+    monkeypatch.setattr(MODULE, "validate_bundle", lambda *_args, **_kwargs: bundle)
+    monkeypatch.setattr(MODULE, "validate_sources", lambda *_args, **_kwargs: sources)
+    monkeypatch.setattr(MODULE, "require_inputs_match_admission", lambda *_args: None)
+    monkeypatch.setattr(
+        MODULE,
+        "capture_old_cohort",
+        lambda *_args, **_kwargs: pytest.fail(
+            "dry-run mutation reached cohort capture and report construction"
+        ),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "_authorize_deploy_lease",
+        lambda *_args, **_kwargs: pytest.fail(
+            "dry-run mutation reached deploy authority"
+        ),
+    )
+    args = SimpleNamespace(
+        apply=False,
+        bundle=bundle_root,
+        expected_production_reset_manifest_sha256=bundle.manifest_sha256,
+        minimum_free_bytes=0,
+        maximum_fsync_latency_ms=10_000,
+        allow_absent_old_child=False,
+    )
+
+    with pytest.raises(MODULE.DeploymentError, match=message):
+        MODULE._execute_after_provisioned_authority_contracts(args)
+
+    assert checker_calls == 1
+
 
 def test_binary_config_gate_privilege_drop_clears_groups_before_uid(
     monkeypatch: pytest.MonkeyPatch,
@@ -541,6 +1196,8 @@ def test_fresh_plist_has_all_five_binary_stat_seals_and_known_paths(
         installed_supervisor=installed_supervisor,
         runtime_root=runtime,
         restart_generation="4" * 64,
+        lifecycle_journal_root=runtime / "lifecycle" / bundle.peers[0].slug,
+        authenticated_node_id=_receipt_keypair(1)[2],
     )
     payload = plistlib.loads(body)
     arguments = payload["ProgramArguments"]
@@ -569,12 +1226,9 @@ def test_fresh_plist_has_all_five_binary_stat_seals_and_known_paths(
         bundle.peers[0].config_sha256,
         "4" * 64,
     )
-    assert arguments[arguments.index("--terminal-unhealthy-file") + 1] == str(
-        runtime / "terminal" / f"validator-1-{terminal_binding}-terminal-unhealthy.json"
-    )
-    assert payload["EnvironmentVariables"]["GENESIS"] == str(
-        bundle.root / "genesis.signed.nrt"
-    )
+    expected_terminal = runtime / "terminal" / f"validator-1-{terminal_binding}-terminal-unhealthy.json"
+    assert arguments[arguments.index("--terminal-unhealthy-file") + 1] == str(expected_terminal)
+    assert payload["EnvironmentVariables"]["GENESIS"] == str(bundle.root / "genesis.signed.nrt")
 
 def test_validate_sources_uses_validated_runtime_not_controller_python(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1132,7 +1786,7 @@ def test_four_peer_health_rejects_noncanonical_lane_bindings(
     [
         (("protocol_version",), 3),
         (("height_context", "validator_count"), 1),
-        (("last_commit_qc", "signer_count"), 2),
+        (("last_commit_qc", "signer_count"), 2), (("last_commit_qc", "signer_count"), 4),
         (("last_commit_qc", "signed_power"), 2),
         (("last_commit_qc", "certificate", "phase", "phase"), "prepare"),
     ],
@@ -1686,50 +2340,12 @@ def _old_capture_payload(pid_file: Path) -> tuple[dict[str, object], tuple[str, 
         supervisor_argv,
     )
 
-def _framework_python_capture_payload(
-    tmp_path: Path,
-) -> tuple[
-    dict[str, object],
-    tuple[str, ...],
-    tuple[str, ...],
-    Path,
-]:
-    package = tmp_path / "Cellar/python@3.14/3.14.6"
-    version_root = package / "Frameworks/Python.framework/Versions/3.14"
-    resolved_launcher = version_root / "bin/python3.14"
-    runtime = version_root / "Resources/Python.app/Contents/MacOS/Python"
-    _write(resolved_launcher, b"launcher")
-    _write(runtime, b"runtime")
-    resolved_launcher.chmod(0o500)
-    runtime.chmod(0o500)
-    launcher = package / "bin/python3.14"
-    launcher.parent.mkdir(parents=True, exist_ok=True)
-    launcher.symlink_to(resolved_launcher)
-    pid_file = tmp_path / "absent-framework.pid"
-    tail = (
-        "/old/taira_peer_supervisor.py",
-        "--binary",
-        "/old/iroha3d",
-        "--config",
-        "/old/config.toml",
-        "--pid-file",
-        str(pid_file),
-    )
-    plist_argv = (str(launcher), *tail)
-    runtime_argv = (str(runtime.resolve(strict=True)), *tail)
-    payload = {
-        "ProgramArguments": list(plist_argv),
-        "UserName": pwd.getpwuid(os.getuid()).pw_name,
-        "GroupName": grp.getgrgid(os.getgid()).gr_name,
-    }
-    return payload, plist_argv, runtime_argv, runtime
 
-def test_framework_python_rewrite_requires_flag_and_binds_observed_rollback_argv(
+def test_old_supervisor_requires_exact_program_arguments(
     tmp_path: Path,
 ) -> None:
-    payload, _plist_argv, runtime_argv, _runtime = _framework_python_capture_payload(
-        tmp_path
-    )
+    payload, plist_argv = _old_capture_payload(tmp_path / "absent.pid")
+    runtime_argv = ("/different/python3", *plist_argv[1:])
     ops = _OldCaptureOps(46, runtime_argv)
 
     with pytest.raises(MODULE.DeploymentError, match="differs from its plist"):
@@ -1741,51 +2357,6 @@ def test_framework_python_rewrite_requires_flag_and_binds_observed_rollback_argv
             allow_absent_child=True,
         )
 
-    managed = MODULE.inspect_old_managed_identity(
-        payload,
-        "old-job",
-        46,
-        ops,
-        allow_absent_child=True,
-        allow_framework_python_argv0_rewrite=True,
-    )
-    assert managed.supervisor_argv == runtime_argv
-    snapshot = MODULE.PlistSnapshot(
-        path=tmp_path / "old-job.plist",
-        body=b"plist",
-        mode=0o644,
-        uid=0,
-        gid=0,
-        managed=managed,
-    )
-    MODULE.verify_restored_snapshot(snapshot, ops)
-
-    ops.processes[46] = dataclasses.replace(
-        ops.processes[46], argv=tuple(payload["ProgramArguments"])
-    )
-    with pytest.raises(MODULE.DeploymentError, match="identity is wrong"):
-        MODULE.verify_restored_snapshot(snapshot, ops)
-
-@pytest.mark.parametrize("mutation", ["wrong-root", "tail", "writable"])
-def test_framework_python_rewrite_rejects_any_nonstructural_difference(
-    tmp_path: Path, mutation: str
-) -> None:
-    _payload, plist_argv, runtime_argv, runtime = _framework_python_capture_payload(
-        tmp_path
-    )
-    if mutation == "wrong-root":
-        other = tmp_path / "other/Resources/Python.app/Contents/MacOS/Python"
-        _write(other, b"runtime")
-        other.chmod(0o500)
-        runtime_argv = (str(other.resolve(strict=True)), *runtime_argv[1:])
-    elif mutation == "tail":
-        runtime_argv = (*runtime_argv[:-1], "/other/pid")
-    else:
-        runtime.chmod(0o520)
-
-    assert not MODULE.framework_python_argv0_rewrite_matches(
-        plist_argv, runtime_argv, owner_uid=os.getuid()
-    )
 
 def test_absent_old_child_requires_explicit_reset_authorization(
     tmp_path: Path,
@@ -1909,7 +2480,28 @@ def test_degraded_rollback_accepts_absence_or_exact_recovery_only(
     with pytest.raises(MODULE.DeploymentError, match="identity differs"):
         MODULE.verify_restored_snapshot(snapshot, ops)
 
-def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> None:
+
+@pytest.mark.parametrize(
+    ("material_present", "expected_mode", "expected_status"),
+    (
+        (
+            False,
+            "blocked-kagemusha-external-release-dry-run",
+            "blocked-external-release-unavailable",
+        ),
+        (
+            True,
+            "blocked-kagemusha-semantic-validation-dry-run",
+            "blocked-exact-installed-binary-config-pending",
+        ),
+    ),
+)
+def test_dry_run_execute_never_calls_apply(
+    monkeypatch: pytest.MonkeyPatch,
+    material_present: bool,
+    expected_mode: str,
+    expected_status: str,
+) -> None:
     events: list[str] = []
     admission = SimpleNamespace(
         archive_sha256="0" * 64,
@@ -1929,6 +2521,12 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         bundle_bytes=1,
         free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
         fsync_latency_ms=1.0,
+        kagemusha_config_projection_sha256="5" * 64,
+        kagemusha_external_release=SimpleNamespace(
+            bounded_material_present=material_present,
+            manifest_directory_inventory_sha256=None,
+            qualification_seal_sha256=None,
+        ),
     )
     sources = SimpleNamespace(
         binary_sha256="a" * 64,
@@ -1949,6 +2547,16 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         lambda _args: events.append("admission-verify") or admission,
     )
     monkeypatch.setattr(MODULE, "require_inputs_match_admission", lambda *args: None)
+    monkeypatch.setattr(
+        MODULE,
+        "validate_dry_run_kagemusha_exact_config",
+        lambda *_args: False,
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "require_mutable_bundle_identities",
+        lambda *_args, phase: events.append(f"bundle-recheck:{phase}"),
+    )
     monkeypatch.setattr(
         MODULE,
         "require_admission_archive_unchanged",
@@ -2027,7 +2635,12 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
     report = MODULE._execute_after_provisioned_authority_contracts(
         args, ops=MODULE.SystemOps()
     )
-    assert report["mode"] == "verified-read-only-dry-run"
+    assert report["mode"] == expected_mode
+    assert report["deployment_ready"] is False
+    assert report["kagemusha_config_projection_sha256"] == "5" * 64
+    assert report["kagemusha_external_release_material_present"] is material_present
+    assert report["kagemusha_external_release_verified"] is False
+    assert report["kagemusha_external_release_status"] == expected_status
     assert report["applied"] is False
     assert report["admission_receipt_consumed"] is False
     assert report["boi_artifact_inventory_sha256"] == "2" * 64
@@ -2037,131 +2650,58 @@ def test_dry_run_execute_never_calls_apply(monkeypatch: pytest.MonkeyPatch) -> N
         "admission-verify",
         "capture",
         "archive-recheck",
+        "bundle-recheck:immediately before dry-run authority",
         "authority:False",
+        "bundle-recheck:immediately after dry-run authority",
     ]
 
-def test_deployment_admission_requires_and_binds_qualified_boi_result(
+
+def test_apply_rejects_missing_kagemusha_material_before_authority_or_receipt(
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    archive_state = SimpleNamespace(sha256="a" * 64)
-    source = {
-        "cargo_lock_sha256": "d" * 64,
-        "commit": "c" * 40,
-        "dpn_validator_release_commit": DPN_VALIDATOR_RELEASE_COMMIT,
-        "workspace_source_manifest_sha256": "e" * 64,
-    }
-    result = {
-        "artifact_handoff_sha256": "9" * 64,
-        "archive_sha256": "a" * 64,
-        "boi_artifact_inventory_sha256": "b" * 64,
-        "deployment_performed": False,
-        "linux_authority_manifest_sha256": "3" * 64,
-        "macos_end_block_hash": "4" * 64,
-        "macos_end_height": 42,
-        "peer_count": MODULE.PEER_COUNT,
-        "privacy_protocol_receipt_id": "5" * 64,
-        "receipt_id": "f" * 64,
-        "release_manifest_sha256": "6" * 64,
-        "release_manifest_verifier_sha256": "2" * 64,
-        "reset_manifest_sha256": "7" * 64,
-        "restart_generation": "8" * 64,
-        "schema": MODULE.rollout_admission.VERIFICATION_SCHEMA,
-        "schema_version": MODULE.rollout_admission.VERIFICATION_SCHEMA_VERSION,
-        "signer_fingerprint_sha256": "1" * 64,
-        "source": source,
-        "supervisor_sha256": "0" * 64,
-        "validator_binary_sha256": "a" * 64,
-        "validator_config_sha256": {
-            slug: f"{index}" * 64
-            for index, slug in enumerate(MODULE.SLUGS, start=1)
-        },
-        "verified": True,
-    }
-    snapshot = SimpleNamespace(
-        boi_inventory_sha256="b" * 64,
-        candidate_archive_sha256="a" * 64,
-        candidate_boi_artifact_inventory_sha256="b" * 64,
-        candidate_release_manifest_sha256="6" * 64,
-        qualification_receipt_id="7" * 64,
-        source=source,
-    )
-    seen: list[Path] = []
-    monkeypatch.setattr(MODULE, "canonical_path", lambda path, _label: path)
-    monkeypatch.setattr(MODULE, "require_protected_replay_ledger", lambda _path: None)
-    monkeypatch.setattr(MODULE, "_stable_admission_file", lambda *_args: archive_state)
-    monkeypatch.setattr(
-        MODULE.rollout_admission, "verify_admission", lambda **_kwargs: result
-    )
-    monkeypatch.setattr(
-        MODULE.rollout_admission,
-        "scan_inventory_paths",
-        lambda _root: list(MODULE.rollout_admission.FINAL_AUTHORITY_FILES),
-    )
-    monkeypatch.setattr(
-        MODULE.rollout_admission,
-        "stable_hash_relative",
-        lambda _root, relative: SimpleNamespace(sha256=relative, size=1),
-    )
-
-    def verify_boi(root: Path, **_kwargs):
-        seen.append(root)
-        return snapshot
-
-    monkeypatch.setattr(MODULE.boi_handoff, "verify_qualified_boi_handoff", verify_boi)
-    args = argparse.Namespace(
-        admission_archive=Path("/candidate.tar.gz"),
-        admission_authority_dir=Path("/authority"),
-        boi_qualified_handoff_root=Path("/qualified-boi"),
-        expected_source_commit="c" * 40,
-        expected_dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
-        expected_cargo_lock_sha256="d" * 64,
-        expected_workspace_source_manifest_sha256="e" * 64,
-        expected_receipt_id="f" * 64,
-        expected_artifact_handoff_sha256="9" * 64,
-        trusted_signing_fingerprint="1" * 64,
-        trusted_boi_qualification_public_key=Path("/qualification.pub"),
-        trusted_boi_qualification_signing_fingerprint="3" * 64,
-        expected_boi_qualification_host_id="boi-host-v1",
-        expected_boi_qualification_installation_id="boi-installation-v1",
-        expected_boi_qualification_controller_digest="4" * 64,
-        expected_workflow_run_id=101,
-        expected_workflow_run_attempt=2,
-        release_manifest_verifier=Path("/verifier"),
-        trusted_release_manifest_verifier_sha256="2" * 64,
-    )
-
-    plan = MODULE.verify_deployment_admission(args)
-
-    assert seen == [Path("/qualified-boi")]
-    assert plan.boi_artifact_inventory_sha256 == "b" * 64
-    assert plan.boi_qualified_inventory_sha256 == "b" * 64
-    assert plan.boi_qualification_receipt_id == "7" * 64
-    assert plan.privacy_protocol_receipt_id == "5" * 64
-    assert plan.release_manifest_sha256 == "6" * 64
-
-    snapshot.candidate_archive_sha256 = "0" * 64
-    with pytest.raises(MODULE.DeploymentError, match="differs from the exact signed"):
-        MODULE.verify_deployment_admission(args)
-
-@pytest.mark.parametrize("apply", [False, True], ids=("dry-run", "apply"))
-def test_admission_failure_precedes_every_deployment_preflight(
-    monkeypatch: pytest.MonkeyPatch,
-    apply: bool,
 ) -> None:
     events: list[str] = []
+    admission = SimpleNamespace(
+        binary_sha256="a" * 64,
+        supervisor_sha256="b" * 64,
+        source_commit="c" * 40,
+        dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
+        restart_generation="9" * 64,
+    )
+    bundle = SimpleNamespace(
+        kagemusha_config_projection_sha256="5" * 64,
+        kagemusha_external_release=SimpleNamespace(
+            bounded_material_present=False,
+        ),
+    )
     monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
     monkeypatch.setenv(MODULE.EXTERNAL_TOOL_UID_ENV, "41")
     monkeypatch.setenv(MODULE.EXTERNAL_TOOL_GID_ENV, "42")
-
-    def reject_admission(_args):
-        events.append("admission-verify")
-        raise MODULE.DeploymentError("injected admission refusal")
-
-    monkeypatch.setattr(MODULE, "verify_deployment_admission", reject_admission)
     monkeypatch.setattr(
         MODULE,
-        "validate_bundle",
-        lambda *_args, **_kwargs: pytest.fail("bundle preflight preceded admission"),
+        "verify_deployment_admission",
+        lambda _args: events.append("admission") or admission,
+    )
+    monkeypatch.setattr(MODULE, "validate_bundle", lambda *_args, **_kwargs: bundle)
+    monkeypatch.setattr(
+        MODULE,
+        "validate_sources",
+        lambda *_args, **_kwargs: SimpleNamespace(),
+    )
+    monkeypatch.setattr(MODULE, "require_inputs_match_admission", lambda *_args: None)
+    monkeypatch.setattr(
+        MODULE,
+        "_authorize_deploy_lease",
+        lambda *_args, **_kwargs: pytest.fail("apply reached deploy authority"),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "consume_admission_receipt",
+        lambda *_args: pytest.fail("apply reached receipt consumption"),
+    )
+    monkeypatch.setattr(
+        MODULE,
+        "exclusive_deployment_lock",
+        lambda: pytest.fail("blocked apply acquired deployment lock"),
     )
     args = argparse.Namespace(
         bundle=Path("/bundle"),
@@ -2185,833 +2725,31 @@ def test_admission_failure_precedes_every_deployment_preflight(
         minimum_free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
         maximum_fsync_latency_ms=250,
         allow_absent_old_child=False,
-        operator_network_id="taira", operator_private_key_file=Path("/operator.key"),
-        apply=apply,
-    )
-
-    with pytest.raises(MODULE.DeploymentError, match="admission refusal"):
-        MODULE._execute_after_provisioned_authority_contracts(args, ops=MODULE.SystemOps())
-
-    assert events == ["admission-verify"]
-
-def test_apply_lock_spans_old_cohort_capture_and_rollout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    events: list[str] = []
-    admission = SimpleNamespace(
-        archive_sha256="0" * 64,
-        boi_artifact_inventory_sha256="2" * 64,
-        boi_qualified_inventory_sha256="3" * 64,
-        boi_qualification_receipt_id="4" * 64,
-        receipt_id="f" * 64,
-        reset_manifest_sha256="1" * 64,
-        binary_sha256="a" * 64,
-        supervisor_sha256="b" * 64,
-        source_commit="c" * 40,
-        dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
-        restart_generation="9" * 64,
-    )
-    bundle = SimpleNamespace()
-    sources = SimpleNamespace()
-    cohort = tuple(object() for _ in range(MODULE.PEER_COUNT))
-    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
-    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_UID_ENV, "41")
-    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_GID_ENV, "42")
-    monkeypatch.setattr(MODULE, "validate_bundle", lambda *args, **kwargs: bundle)
-    monkeypatch.setattr(MODULE, "validate_sources", lambda *args, **kwargs: sources)
-    monkeypatch.setattr(
-        MODULE,
-        "verify_deployment_admission",
-        lambda _args: events.append("admission-verify") or admission,
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "require_inputs_match_admission",
-        lambda *args: events.append("bind-inputs"),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "require_admission_bound_inputs_unchanged",
-        lambda *args: events.append("recheck-inputs"),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "require_admission_archive_unchanged",
-        lambda *_args: events.append("recheck-admission-evidence"),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "capture_old_cohort",
-        lambda _ops, *, allow_absent_child: (
-            events.append(f"capture:{allow_absent_child}") or cohort
-        ),
-    )
-
-    def apply(*_args, **kwargs):
-        events.append("apply")
-        kwargs["rollout_starter"]()
-        return {"applied": True}
-
-    monkeypatch.setattr(MODULE, "apply_reset", apply)
-
-    consumed_lease = MODULE.taira_authority_client.AuthorityResult(
-        role="deploy-issuance",
-        operation_id="7" * 64,
-        run_id="8" * 64,
-        status="authorized",
-        authority_envelope={"schema": "test-deploy-envelope"},
-        durable_receipt={"schema": "test-deploy-receipt"},
-    )
-    finalization = MODULE.taira_authority_client.AuthorityResult(
-        role="deploy-issuance",
-        operation_id="7" * 64,
-        run_id="8" * 64,
-        status="finalized",
-        authority_envelope={"schema": "test-final-envelope"},
-        durable_receipt={"schema": "test-final-receipt"},
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "_authorize_deploy_lease",
-        lambda *_args, apply, **_kwargs: (
-            events.append(f"authority:{apply}") or consumed_lease
-        ),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "_finalize_deploy_lease",
-        lambda *_args, outcome, **_kwargs: (
-            events.append(f"finalize:{outcome}") or finalization
-        ),
-    )
-
-    @contextlib.contextmanager
-    def consume(_admission):
-        events.append("consume-enter")
-        transaction = SimpleNamespace(
-            mark_rollout_started=lambda: events.append("rollout-start")
-        )
-        try:
-            yield transaction
-        finally:
-            events.append("consume-exit")
-
-    @contextlib.contextmanager
-    def lock():
-        events.append("lock-enter")
-        try:
-            yield
-        finally:
-            events.append("lock-exit")
-
-    monkeypatch.setattr(MODULE, "exclusive_deployment_lock", lock)
-    monkeypatch.setattr(MODULE, "consume_admission_receipt", consume)
-    monkeypatch.setattr(MODULE, "build_operator_http_getter", lambda *_args: object())
-    args = argparse.Namespace(
-        bundle=Path("/bundle"),
-        binary=Path("/binary"),
-        supervisor=Path("/supervisor"),
-        admission_archive=Path("/candidate.tar.gz"),
-        admission_authority_dir=Path("/authority"),
-        supervisor_python=MODULE.DEFAULT_SUPERVISOR_PYTHON,
-        expected_source_commit="c" * 40,
-        expected_dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
-        expected_cargo_lock_sha256="d" * 64,
-        expected_workspace_source_manifest_sha256="e" * 64,
-        expected_receipt_id="f" * 64,
-        expected_artifact_handoff_sha256="9" * 64,
-        expected_production_reset_manifest_sha256="a" * 64,
-        trusted_signing_fingerprint="1" * 64,
-        trusted_boi_qualification_signing_fingerprint="3" * 64,
-        release_manifest_verifier=Path("/sorafs-validate"),
-        trusted_release_manifest_verifier_sha256="2" * 64,
-        health_timeout_seconds=240,
-        minimum_free_bytes=MODULE.DEFAULT_MINIMUM_FREE_BYTES,
-        maximum_fsync_latency_ms=250,
-        allow_absent_old_child=True,
-        operator_network_id="taira", operator_private_key_file=Path("/operator.key"),
+        operator_network_id="taira",
+        operator_private_key_file=Path("/operator.key"),
         apply=True,
     )
 
-    assert MODULE._execute_after_provisioned_authority_contracts(args, ops=MODULE.SystemOps()) == {
-        "admission_archive_sha256": "0" * 64,
-        "admission_receipt_consumed": True,
-        "admission_receipt_id": "f" * 64,
-        "applied": True,
-        "boi_artifact_inventory_sha256": "2" * 64,
-        "boi_qualified_inventory_sha256": "3" * 64,
-        "boi_qualification_receipt_id": "4" * 64,
-        "deploy_authority_final_status": "finalized",
-        "deploy_authority_operation_id": "7" * 64,
-        "deploy_authority_result_receipt_sha256": hashlib.sha256(
-            finalization.durable_receipt_bytes
-        ).hexdigest(),
-        "deploy_authority_status": "authorized",
-    }
-    assert events == [
-        "admission-verify",
-        "bind-inputs",
-        "lock-enter",
-        "admission-verify",
-        "recheck-admission-evidence",
-        "recheck-inputs",
-        "capture:True",
-        "recheck-inputs",
-        "recheck-admission-evidence",
-        "authority:True",
-        "consume-enter",
-        "apply",
-        "rollout-start",
-        "consume-exit",
-        "finalize:success",
-        "lock-exit",
-    ]
-
-def _receipt_transaction_plan(tmp_path: Path) -> MODULE.AdmissionPlan:
-    archive = tmp_path / "candidate.tar.gz"
-    _write(archive, b"signed candidate archive")
-    ledger = tmp_path / "rollout-admission-replay-v1.json"
-    ledger.write_bytes(MODULE.rollout_admission.canonical_replay_ledger_bytes([]))
-    return MODULE.AdmissionPlan(
-        archive=archive,
-        archive_state=MODULE._stable_admission_file(archive, "test archive"),
-        authority_dir=tmp_path,
-        authority_state=(),
-        boi_qualified_handoff=SimpleNamespace(),
-        replay_ledger=ledger,
-        receipt_id="a" * 64,
-        artifact_handoff_sha256="9" * 64,
-        boi_artifact_inventory_sha256="0" * 64,
-        boi_qualified_inventory_sha256="1" * 64,
-        boi_qualification_receipt_id="4" * 64,
-        archive_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
-        privacy_protocol_receipt_id="2" * 64,
-        release_manifest_sha256="3" * 64,
-        source_commit="b" * 40,
-        dpn_validator_release_commit=DPN_VALIDATOR_RELEASE_COMMIT,
-        cargo_lock_sha256="c" * 64,
-        workspace_source_manifest_sha256="d" * 64,
-        reset_manifest_sha256="e" * 64,
-        binary_sha256="f" * 64,
-        supervisor_sha256="1" * 64,
-        validator_config_sha256=tuple(
-            (slug, f"{index}" * 64) for index, slug in enumerate(MODULE.SLUGS, start=2)
-        ),
-        restart_generation="6" * 64,
-        signer_fingerprint_sha256="7" * 64,
-        release_manifest_verifier_sha256="8" * 64,
-    )
-
-def _use_unprivileged_transaction_ledger(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        MODULE,
-        "require_protected_replay_ledger",
-        MODULE.rollout_admission.load_replay_ledger,
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "atomic_replace_owned",
-        lambda path, body, **_kwargs: path.write_bytes(body),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "require_admission_archive_unchanged",
-        lambda _admission: None,
-    )
-
-def _transaction_receipt_ids(admission: MODULE.AdmissionPlan) -> tuple[str, str]:
-    return tuple(
-        sorted((admission.receipt_id, admission.boi_qualification_receipt_id))
-    )
-
-def test_receipt_consumption_restores_exact_ledger_when_rollout_does_not_begin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    admission = _receipt_transaction_plan(tmp_path)
-    _use_unprivileged_transaction_ledger(monkeypatch)
-    prior = admission.replay_ledger.read_bytes()
-
-    with pytest.raises(MODULE.DeploymentError, match="injected pre-cutover failure"):
-        with MODULE.consume_admission_receipt(admission):
-            assert (
-                admission.receipt_id
-                in MODULE.rollout_admission.load_replay_ledger(
-                    admission.replay_ledger
-                ).consumed_receipt_ids
-            )
-            assert (
-                admission.boi_qualification_receipt_id
-                in MODULE.rollout_admission.load_replay_ledger(
-                    admission.replay_ledger
-                ).consumed_receipt_ids
-            )
-            raise MODULE.DeploymentError("injected pre-cutover failure")
-
-    assert admission.replay_ledger.read_bytes() == prior
-
-def test_receipt_consumption_remains_committed_after_rollout_begins(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    admission = _receipt_transaction_plan(tmp_path)
-    _use_unprivileged_transaction_ledger(monkeypatch)
-
-    with pytest.raises(MODULE.DeploymentError, match="injected post-cutover failure"):
-        with MODULE.consume_admission_receipt(admission) as transaction:
-            transaction.mark_rollout_started()
-            raise MODULE.DeploymentError("injected post-cutover failure")
-
-    consumed = MODULE.rollout_admission.load_replay_ledger(
-        admission.replay_ledger
-    ).consumed_receipt_ids
-    assert consumed == _transaction_receipt_ids(admission)
-
-def test_successful_receipt_transaction_rechecks_committed_ledger(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    admission = _receipt_transaction_plan(tmp_path)
-    _use_unprivileged_transaction_ledger(monkeypatch)
-
-    with MODULE.consume_admission_receipt(admission) as transaction:
-        transaction.mark_rollout_started()
-
-    assert MODULE.rollout_admission.load_replay_ledger(
-        admission.replay_ledger
-    ).consumed_receipt_ids == _transaction_receipt_ids(admission)
-
-def test_receipt_consumption_cannot_succeed_without_rollout_start(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    admission = _receipt_transaction_plan(tmp_path)
-    _use_unprivileged_transaction_ledger(monkeypatch)
-    prior = admission.replay_ledger.read_bytes()
-
-    with pytest.raises(MODULE.DeploymentError, match="without beginning"):
-        with MODULE.consume_admission_receipt(admission):
-            pass
-
-    assert admission.replay_ledger.read_bytes() == prior
-
-def test_rollout_start_rejects_removed_receipt_and_preserves_prior_ledger(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    admission = _receipt_transaction_plan(tmp_path)
-    _use_unprivileged_transaction_ledger(monkeypatch)
-    prior = admission.replay_ledger.read_bytes()
-
-    with pytest.raises(MODULE.DeploymentError, match="changed before rollout"):
-        with MODULE.consume_admission_receipt(admission) as transaction:
-            admission.replay_ledger.write_bytes(prior)
-            transaction.mark_rollout_started()
-
-    assert admission.replay_ledger.read_bytes() == prior
-
-def test_unstarted_receipt_rollback_refuses_foreign_ledger_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    admission = _receipt_transaction_plan(tmp_path)
-    _use_unprivileged_transaction_ledger(monkeypatch)
-    foreign_receipt = "b" * 64
-
-    with pytest.raises(MODULE.DeploymentError, match="receipt rollback failed"):
-        with MODULE.consume_admission_receipt(admission):
-            admission.replay_ledger.write_bytes(
-                MODULE.rollout_admission.canonical_replay_ledger_bytes(
-                    [*_transaction_receipt_ids(admission), foreign_receipt]
-                )
-            )
-            raise MODULE.DeploymentError("injected failure after foreign mutation")
-
-    assert MODULE.rollout_admission.load_replay_ledger(
-        admission.replay_ledger
-    ).consumed_receipt_ids == tuple(
-        sorted((*_transaction_receipt_ids(admission), foreign_receipt))
-    )
-
-@pytest.mark.parametrize(
-    "replayed_field", ["receipt_id", "boi_qualification_receipt_id"]
-)
-def test_receipt_consumption_rejects_replay_under_lock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replayed_field: str
-) -> None:
-    admission = _receipt_transaction_plan(tmp_path)
-    admission.replay_ledger.write_bytes(
-        MODULE.rollout_admission.canonical_replay_ledger_bytes(
-            [getattr(admission, replayed_field)]
-        )
-    )
-    _use_unprivileged_transaction_ledger(monkeypatch)
-
-    with pytest.raises(MODULE.DeploymentError, match="already consumed"):
-        with MODULE.consume_admission_receipt(admission):
-            pytest.fail("replayed receipt entered deployment transaction")
-
-def test_receipt_consumption_rejects_ledger_capacity_before_publication(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    admission = _receipt_transaction_plan(tmp_path)
-    _use_unprivileged_transaction_ledger(monkeypatch)
-    prior = admission.replay_ledger.read_bytes()
-    consumed = MODULE.rollout_admission.canonical_replay_ledger_bytes(
-        list(_transaction_receipt_ids(admission))
-    )
-    assert len(prior) < len(consumed)
-    monkeypatch.setattr(
-        MODULE.rollout_admission,
-        "MAX_JSON_BYTES",
-        len(consumed) - 1,
-    )
-
-    with pytest.raises(MODULE.DeploymentError, match="no capacity"):
-        with MODULE.consume_admission_receipt(admission):
-            pytest.fail("oversized replay ledger was published")
-
-    assert admission.replay_ledger.read_bytes() == prior
-
-def test_archive_substitution_is_rejected_before_rollout(tmp_path: Path) -> None:
-    admission = _receipt_transaction_plan(tmp_path)
-    replacement = tmp_path / "replacement.tar.gz"
-    _write(replacement, b"signed candidate archive")
-    os.replace(replacement, admission.archive)
-
-    with pytest.raises(MODULE.DeploymentError, match="substituted"):
-        MODULE.require_admission_archive_unchanged(admission)
-
-def test_production_config_may_differ_from_secret_free_qualification(tmp_path: Path) -> None:
-    admission = _receipt_transaction_plan(tmp_path)
-    peers = tuple(
-        SimpleNamespace(slug=slug, config_sha256=digest)
-        for slug, digest in admission.validator_config_sha256
-    )
-    peers = (
-        SimpleNamespace(slug=peers[0].slug, config_sha256="9" * 64),
-        *peers[1:],
-    )
-    bundle = SimpleNamespace(
-        manifest_sha256=admission.reset_manifest_sha256,
-        manifest={
-            "source_commit": admission.source_commit,
-            "dpn_validator_release_commit": (
-                admission.dpn_validator_release_commit
-            ),
-        },
-        peers=peers,
-    )
-    sources = SimpleNamespace(
-        binary_sha256=admission.binary_sha256,
-        supervisor_sha256=admission.supervisor_sha256,
-    )
-
-    MODULE.require_inputs_match_admission(bundle, sources, admission)
-
-    sources.binary_sha256 = "0" * 64
-    with pytest.raises(MODULE.DeploymentError, match="do not match"):
-        MODULE.require_inputs_match_admission(bundle, sources, admission)
-
-def test_under_lock_recheck_rejects_python_runtime_identity_drift(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    binary = Path("/candidate/iroha3d")
-    supervisor = Path("/candidate/supervisor.py")
-    runtime = Path("/Library/Developer/CommandLineTools/Python.app/Python")
-    stable = SimpleNamespace(
-        st_dev=1,
-        st_ino=2,
-        st_mode=stat.S_IFREG | 0o555,
-        st_uid=0,
-        st_gid=0,
-        st_nlink=1,
-        st_size=3,
-        st_mtime_ns=4,
-        st_ctime_ns=5,
-    )
-    changed = copy.copy(stable)
-    changed.st_ino = 9
-    sources = MODULE.SourcePlan(
-        binary=binary,
-        binary_sha256="a" * 64,
-        supervisor=supervisor,
-        supervisor_sha256="b" * 64,
-        python=runtime,
-        python_identity=MODULE.metadata_identity(stable),
-    )
-    admission = SimpleNamespace(
-        binary_sha256=sources.binary_sha256,
-        supervisor_sha256=sources.supervisor_sha256,
-    )
-    monkeypatch.setattr(
-        MODULE, "require_bundle_runtime_unchanged", lambda _bundle: None
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "sha256_regular",
-        lambda path, _maximum: (
-            sources.binary_sha256 if path == binary else sources.supervisor_sha256,
-            stable,
-        ),
-    )
-    monkeypatch.setattr(
-        MODULE,
-        "require_root_controlled_file",
-        lambda path, *, executable: changed,
-    )
-
-    with pytest.raises(MODULE.DeploymentError, match="Python changed"):
-        MODULE.require_admission_bound_inputs_unchanged(
-            SimpleNamespace(), sources, admission
-        )
-
-def test_exclusive_deployment_lock_refuses_contention(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    lock_path = tmp_path / "deploy.lock"
-    _write(lock_path, b"")
-    real_fstat = os.fstat
-
-    def root_fstat(descriptor: int) -> SimpleNamespace:
-        info = real_fstat(descriptor)
-        return SimpleNamespace(
-            st_mode=info.st_mode,
-            st_nlink=info.st_nlink,
-            st_uid=0,
-            st_gid=0,
-        )
-
-    def contended_flock(_descriptor: int, operation: int) -> None:
-        if operation & MODULE.fcntl.LOCK_NB:
-            raise BlockingIOError
-
-    monkeypatch.setattr(MODULE, "DEPLOYMENT_LOCK", lock_path)
-    monkeypatch.setattr(MODULE, "ensure_root_directory", lambda *args, **kwargs: None)
-    monkeypatch.setattr(MODULE.os, "fstat", root_fstat)
-    monkeypatch.setattr(MODULE.fcntl, "flock", contended_flock)
-
-    with pytest.raises(MODULE.DeploymentError, match="holds the deployment lock"):
-        with MODULE.exclusive_deployment_lock():
-            pytest.fail("contended lock was acquired")
-
-def test_headroom_is_required_on_every_distinct_filesystem(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    first = SimpleNamespace(
-        stat=lambda: SimpleNamespace(st_dev=11),
-        name="first",
-    )
-    second = SimpleNamespace(
-        stat=lambda: SimpleNamespace(st_dev=22),
-        name="second",
-    )
-    roots = {Path("/first"): first, Path("/second"): second}
-    monkeypatch.setattr(MODULE, "existing_ancestor", lambda path: roots[path])
-    monkeypatch.setattr(
-        MODULE.shutil,
-        "disk_usage",
-        lambda path: SimpleNamespace(free=20_000 if path is first else 9_999),
-    )
-
-    with pytest.raises(MODULE.DeploymentError, match="device 22"):
-        MODULE.require_filesystem_headroom([Path("/first"), Path("/second")], 10_000)
-
-class _RollbackOps:
-    def __init__(
-        self,
-        snapshots: tuple[MODULE.PlistSnapshot, ...],
-        *,
-        fail_bootout_label: str | None = None,
-    ) -> None:
-        self.loaded = set(MODULE.LABELS)
-        self.calls: list[tuple[str, str]] = []
-        self.fail_bootout_label = fail_bootout_label
-        self.supervisor_pids = {
-            snapshot.path.stem: 40 + index for index, snapshot in enumerate(snapshots)
-        }
-        self.processes: dict[int, MODULE.ProcessInfo] = {}
-        for index, snapshot in enumerate(snapshots):
-            supervisor_pid = self.supervisor_pids[snapshot.path.stem]
-            child_pid = 140 + index
-            self.processes[supervisor_pid] = MODULE.ProcessInfo(
-                pid=supervisor_pid,
-                ppid=1,
-                uid=snapshot.managed.supervisor_uid,
-                argv=snapshot.managed.supervisor_argv,
-            )
-            self.processes[child_pid] = MODULE.ProcessInfo(
-                pid=child_pid,
-                ppid=supervisor_pid,
-                uid=snapshot.managed.child_uid,
-                argv=snapshot.managed.child_argv,
-            )
-
-    def launchd_print(self, label: str) -> str | None:
-        return (
-            f"\tpid = {self.supervisor_pids[label]}\n" if label in self.loaded else None
-        )
-
-    def bootout(self, label: str) -> None:
-        self.calls.append(("bootout", label))
-        self.loaded.discard(label)
-        if label == self.fail_bootout_label:
-            raise MODULE.DeploymentError("injected bootout failure")
-
-    def bootstrap(self, path: Path) -> None:
-        self.calls.append(("bootstrap", path.stem))
-        self.loaded.add(path.stem)
-
-    def inspect_process(self, pid: int) -> MODULE.ProcessInfo:
-        return self.processes[pid]
-
-    def child_pids(self, parent_pid: int) -> tuple[int, ...]:
-        return tuple(
-            sorted(
-                process.pid
-                for process in self.processes.values()
-                if process.ppid == parent_pid
-            )
-        )
-
-def _rollback_snapshots(tmp_path: Path) -> tuple[MODULE.PlistSnapshot, ...]:
-    snapshots: list[MODULE.PlistSnapshot] = []
-    for index, label in enumerate(MODULE.LABELS):
-        pid_file = tmp_path / f"{label}.pid"
-        _write(pid_file, f"{140 + index}\n".encode())
-        binary = f"/old/bin/iroha3d-{index}"
-        config = f"/old/config-{index}.toml"
-        supervisor_argv = (
-            "/usr/bin/python3",
-            "/old/taira_peer_supervisor.py",
-            "--binary",
-            binary,
-            "--config",
-            config,
-            "--pid-file",
-            str(pid_file),
-        )
-        managed = MODULE.OldManagedIdentity(
-            supervisor_uid=os.getuid(),
-            supervisor_argv=supervisor_argv,
-            child_uid=os.getuid(),
-            child_argv=(binary, "--sora", "--config", config),
-            pid_file=pid_file,
-            pid_file_gid=os.getgid(),
-            child_was_present=True,
-        )
-        snapshots.append(
-            MODULE.PlistSnapshot(
-                path=tmp_path / f"{label}.plist",
-                body=f"old-{label}".encode(),
-                mode=0o644,
-                uid=0,
-                gid=0,
-                managed=managed,
-            )
-        )
-    return tuple(snapshots)
-
-def test_rollback_unloads_and_restores_the_whole_four_job_cohort(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    snapshots = _rollback_snapshots(tmp_path)
-    restored: list[str] = []
-    monkeypatch.setattr(
-        MODULE,
-        "atomic_replace_owned",
-        lambda path, body, **kwargs: restored.append(path.stem),
-    )
-    ops = _RollbackOps(snapshots)
-
-    MODULE.rollback_cohort(snapshots, ops)  # type: ignore[arg-type]
-
-    assert restored == list(MODULE.LABELS)
-    assert [label for action, label in ops.calls if action == "bootout"] == list(
-        MODULE.LABELS
-    )
-    assert [label for action, label in ops.calls if action == "bootstrap"] == list(
-        MODULE.LABELS
-    )
-    assert ops.loaded == set(MODULE.LABELS)
-
-def test_rollback_attempts_full_restore_after_injected_bootout_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    snapshots = _rollback_snapshots(tmp_path)
-    restored: list[str] = []
-    monkeypatch.setattr(
-        MODULE,
-        "atomic_replace_owned",
-        lambda path, body, **kwargs: restored.append(path.stem),
-    )
-    ops = _RollbackOps(snapshots, fail_bootout_label=MODULE.LABELS[1])
-
-    with pytest.raises(MODULE.DeploymentError, match="rollback was incomplete"):
-        MODULE.rollback_cohort(snapshots, ops)  # type: ignore[arg-type]
-
-    assert restored == list(MODULE.LABELS)
-    assert [label for action, label in ops.calls if action == "bootstrap"] == list(
-        MODULE.LABELS
-    )
-
-def test_cli_defaults_match_the_audited_operator_contract() -> None:
-    argv = [
-            "--bundle",
-            "/bundle",
-            "--binary",
-            "/binary",
-            "--supervisor",
-            "/supervisor",
-            "--admission-archive",
-            "/candidate.tar.gz",
-            "--admission-authority-dir",
-            "/authority",
-            "--boi-qualified-handoff-root",
-            "/qualified-boi",
-            "--expected-source-commit",
-            "c" * 40,
-            "--expected-dpn-validator-release-commit",
-            DPN_VALIDATOR_RELEASE_COMMIT,
-            "--expected-cargo-lock-sha256",
-            "d" * 64,
-            "--expected-workspace-source-manifest-sha256",
-            "e" * 64,
-                "--expected-receipt-id",
-                "f" * 64,
-                "--expected-artifact-handoff-sha256",
-                "9" * 64,
-                "--expected-production-reset-manifest-sha256",
-                "a" * 64,
-            "--trusted-signing-fingerprint",
-            "1" * 64,
-            "--trusted-boi-qualification-public-key",
-            "/qualification.pub",
-            "--trusted-boi-qualification-signing-fingerprint",
-            "3" * 64,
-            "--expected-boi-qualification-host-id",
-            "boi-host-v1",
-            "--expected-boi-qualification-installation-id",
-            "boi-installation-v1",
-            "--expected-boi-qualification-controller-digest",
-            "4" * 64,
-            "--expected-workflow-run-id",
-            "101",
-            "--expected-workflow-run-attempt",
-            "2",
-            "--release-manifest-verifier",
-            "/sorafs-validate",
-            "--trusted-release-manifest-verifier-sha256",
-            "2" * 64,
-        ]
-    args = MODULE.build_parser().parse_args(argv)
-    assert args.health_timeout_seconds == 240
-    assert args.minimum_free_bytes == 17_179_869_184
-    assert args.maximum_fsync_latency_ms == 250
-    assert args.supervisor_python == MODULE.DEFAULT_SUPERVISOR_PYTHON
-    assert args.boi_qualified_handoff_root == Path("/qualified-boi")
-    assert not hasattr(args, "restart_generation")
-    assert not hasattr(args, "expected_binary_sha256")
-    assert not hasattr(args, "expected_supervisor_sha256")
-    assert args.allow_absent_old_child is False
-    assert args.allow_framework_python_argv0_rewrite is False
-    assert args.apply is False
-    missing_boi = list(argv)
-    index = missing_boi.index("--boi-qualified-handoff-root")
-    del missing_boi[index : index + 2]
-    with pytest.raises(SystemExit):
-        MODULE.build_parser().parse_args(missing_boi)
-
-def test_release_and_boi_qualification_signers_must_be_distinct() -> None:
-    assert MODULE.require_distinct_signing_fingerprints("1" * 64, "2" * 64) == (
-        "1" * 64,
-        "2" * 64,
-    )
-    with pytest.raises(MODULE.DeploymentError, match="must be distinct"):
-        MODULE.require_distinct_signing_fingerprints("1" * 64, "1" * 64)
-
-@pytest.mark.parametrize("apply", [False, True], ids=("dry-run", "apply"))
-def test_deploy_issuance_barrier_precedes_identity_paths_admission_and_state(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    apply: bool,
-) -> None:
-    calls: list[str] = []
-
-    def forbidden(name: str):
-        def call(*_args, **_kwargs):
-            calls.append(name)
-            raise AssertionError(f"deploy barrier reached forbidden operation: {name}")
-
-        return call
-
-    for name in (
-        "require_sealed_external_tool_identity",
-        "validate_arguments",
-        "verify_deployment_admission",
-        "validate_bundle",
-        "validate_sources",
-        "exclusive_deployment_lock",
-        "consume_admission_receipt",
-        "apply_reset",
+    with pytest.raises(
+        MODULE.DeploymentError,
+        match="requires protected bounded external release material",
     ):
-        monkeypatch.setattr(MODULE, name, forbidden(name))
-    monkeypatch.setattr(MODULE.os, "geteuid", forbidden("geteuid"))
-    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_UID_ENV, "41")
-    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_GID_ENV, "42")
-    state = tmp_path / "deployment-state"
-    state.write_bytes(b"unchanged\n")
+        MODULE._execute_after_provisioned_authority_contracts(
+            args,
+            ops=MODULE.SystemOps(),
+        )
+    assert events == ["admission"]
 
-    with pytest.raises(MODULE.DeploymentError) as error:
-        MODULE.execute(argparse.Namespace(apply=apply), ops=object())
 
-    assert MODULE.DEPLOY_AUTHENTICATED_RUN_NONCE_CONTRACT in str(error.value)
-    assert MODULE.COMPLETE_SOURCE_IDENTITY_ATTESTATION_CONTRACT in str(error.value)
-    assert calls == []
-    assert state.read_bytes() == b"unchanged\n"
-
-@pytest.mark.parametrize(
-    ("raw_uid", "raw_gid", "message"),
-    [
-        (None, "41", "incomplete"),
-        ("41", None, "incomplete"),
-        ("0", "41", "positive canonical"),
-        ("41", "0", "positive canonical"),
-        ("041", "42", "positive canonical"),
-        ("+41", "42", "noncanonical"),
-        ("41 ", "42", "noncanonical"),
-        ("４１", "42", "noncanonical"),
-    ],
+pytest.register_assert_rewrite(
+    "scripts.tests.deploy_taira_v21_reset_test_components"
 )
-def test_sealed_external_tool_identity_rejects_malformed_ids(
-    monkeypatch: pytest.MonkeyPatch,
-    raw_uid: str | None,
-    raw_gid: str | None,
-    message: str,
-) -> None:
-    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(MODULE.os, "getegid", lambda: 0)
-    for name, value in (
-        (MODULE.EXTERNAL_TOOL_UID_ENV, raw_uid),
-        (MODULE.EXTERNAL_TOOL_GID_ENV, raw_gid),
-    ):
-        if value is None:
-            monkeypatch.delenv(name, raising=False)
-        else:
-            monkeypatch.setenv(name, value)
+from scripts.tests.deploy_taira_v21_reset_test_components import (
+    EXPORTED_TESTS as _EXPORTED_TESTS,
+    _receipt_transaction_plan,
+)
 
-    with pytest.raises(MODULE.DeploymentError, match=message):
-        MODULE.require_sealed_external_tool_identity()
-
-def test_sealed_external_tool_identity_is_exact_for_root_and_non_root(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_UID_ENV, "41")
-    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_GID_ENV, "42")
-    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 0)
-    monkeypatch.setattr(MODULE.os, "getegid", lambda: 0)
-    assert MODULE.require_sealed_external_tool_identity() == (41, 42)
-
-    monkeypatch.setattr(MODULE.os, "geteuid", lambda: 41)
-    monkeypatch.setattr(MODULE.os, "getegid", lambda: 42)
-    assert MODULE.require_sealed_external_tool_identity() is None
-
-    monkeypatch.setenv(MODULE.EXTERNAL_TOOL_UID_ENV, "43")
-    with pytest.raises(MODULE.DeploymentError, match="differs from the current identity"):
-        MODULE.require_sealed_external_tool_identity()
+for _test in _EXPORTED_TESTS:
+    _test.__module__ = __name__
+    globals()[_test.__name__] = _test
+del _test, _EXPORTED_TESTS

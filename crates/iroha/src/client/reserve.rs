@@ -781,8 +781,7 @@ mod tests {
                 ReserveDuration, ReserveFinalizedCursorV1, ReserveFinalizedEventPageV1,
                 ReserveFinalizedEventV1, ReserveLifecycleStage, ReserveMovementKindV1,
                 ReserveMovementPageV1, ReserveMovementRecordV1, ReserveMovementStatusV1,
-                ReservePolicyV1, ReserveProviderAccountPageV1, ReserveProviderAccountV1,
-                ReserveProviderTermsV1, ReserveTier,
+                ReservePolicyV1, ReserveProviderAccountV1, ReserveProviderTermsV1, ReserveTier,
             },
         },
         transaction::{
@@ -1115,75 +1114,66 @@ mod tests {
             || client.post_sorafs_reserve_transaction(route, transaction),
         );
     }
-    #[test]
-    fn reserve_route_validation_accepts_every_exact_instruction() {
+    fn assert_reserve_route_contract() {
         let client = client_with_base_url(base_url());
         for (route, instruction) in exact_route_instructions() {
             let transaction = sign_instruction(&client, instruction);
             assert_eq!(transaction.time_to_live(), Some(EXACT_RESERVE_TTL));
             validate_transaction_route(route, &transaction).expect("matching reserve route");
         }
-    }
-    #[test]
-    fn reserve_route_validation_rejects_wrong_kind_and_identifiers_before_http() {
-        let client = client_with_base_url(base_url());
-        let withdrawal = sign_instruction(&client, movement(ReserveMovementKindV1::Withdrawal));
-        assert_rejected_before_http(&client, SorafsReserveCommandRoute::TopUp, &withdrawal);
-        let movement = sign_instruction(&client, movement_decision(MOVEMENT_ID));
-        assert_rejected_before_http(
-            &client,
-            SorafsReserveCommandRoute::MovementDecision([0x71; 32]),
-            &movement,
-        );
-        let appeal = sign_instruction(&client, appeal_decision(APPEAL_ID));
-        assert_rejected_before_http(
-            &client,
-            SorafsReserveCommandRoute::AppealDecision([0x72; 32]),
-            &appeal,
-        );
-        for (route, transaction) in [
+
+        let mismatches = [
+            (
+                SorafsReserveCommandRoute::TopUp,
+                sign_instruction(&client, movement(ReserveMovementKindV1::Withdrawal)),
+            ),
+            (
+                SorafsReserveCommandRoute::MovementDecision([0x71; 32]),
+                sign_instruction(&client, movement_decision(MOVEMENT_ID)),
+            ),
             (
                 SorafsReserveCommandRoute::MovementDecision([0; 32]),
                 sign_instruction(&client, movement_decision([0; 32])),
             ),
             (
+                SorafsReserveCommandRoute::AppealDecision([0x72; 32]),
+                sign_instruction(&client, appeal_decision(APPEAL_ID)),
+            ),
+            (
                 SorafsReserveCommandRoute::AppealDecision([0; 32]),
                 sign_instruction(&client, appeal_decision([0; 32])),
             ),
-        ] {
+        ];
+        for (route, transaction) in mismatches {
             assert_rejected_before_http(&client, route, &transaction);
         }
-    }
-    #[test]
-    fn reserve_route_validation_rejects_wrong_type_non_native_and_non_singleton_before_http() {
-        let client = client_with_base_url(base_url());
-        let draw = sign_instruction(
-            &client,
-            DrawSorafsReserveCredit::new(
-                ProviderId::new([0x63; 32]),
-                1,
-                "1".parse().expect("credit amount"),
-                [0x64; 32],
-            ),
+
+        let draw = DrawSorafsReserveCredit::new(
+            ProviderId::new([0x63; 32]),
+            1,
+            "1".parse().expect("credit amount"),
+            [0x64; 32],
         );
-        assert_rejected_before_http(&client, SorafsReserveCommandRoute::TopUp, &draw);
-        let log = sign_instruction(
-            &client,
-            Log::new(Level::INFO, "not a reserve instruction".into()),
-        );
-        assert_rejected_before_http(&client, SorafsReserveCommandRoute::TopUp, &log);
         let top_up: InstructionBox = movement(ReserveMovementKindV1::TopUp).into();
-        let multiple = sign_executable(
-            &client,
-            Executable::Instructions(vec![top_up.clone(), top_up].into()),
-        );
-        assert_rejected_before_http(&client, SorafsReserveCommandRoute::TopUp, &multiple);
-        let ivm = sign_executable(
-            &client,
-            Executable::Ivm(IvmBytecode::from_compiled(vec![0x00])),
-        );
-        assert_rejected_before_http(&client, SorafsReserveCommandRoute::TopUp, &ivm);
+        for transaction in [
+            sign_instruction(&client, draw),
+            sign_instruction(
+                &client,
+                Log::new(Level::INFO, "not a reserve instruction".into()),
+            ),
+            sign_executable(
+                &client,
+                Executable::Instructions(vec![top_up.clone(), top_up].into()),
+            ),
+            sign_executable(
+                &client,
+                Executable::Ivm(IvmBytecode::from_compiled(vec![0x00])),
+            ),
+        ] {
+            assert_rejected_before_http(&client, SorafsReserveCommandRoute::TopUp, &transaction);
+        }
     }
+
     #[test]
     fn reserve_read_response_binding_accepts_exact_typed_records_and_pages() {
         let client = client_with_base_url(base_url());
@@ -1703,11 +1693,10 @@ mod tests {
                 .contains("payload exceeds the requested limit")
         );
     }
-    #[test]
-    fn reserve_malformed_filters_fail_before_http_and_non_ok_is_unchanged() {
+    fn assert_reserve_request_contract() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::default();
-        let filter = SorafsReserveEventsReadbackFilter {
+        let incomplete = SorafsReserveEventsReadbackFilter {
             after_sequence: Some(1),
             ..SorafsReserveEventsReadbackFilter::default()
         };
@@ -1715,26 +1704,25 @@ mod tests {
             respond_with(&snapshots, empty_response(StatusCode::OK)),
             || {
                 client
-                    .get_sorafs_reserve_events(filter)
-                    .expect_err("incomplete event cursor must fail locally")
+                    .get_sorafs_reserve_events(incomplete)
+                    .expect_err("incomplete event cursor")
             },
         );
         assert!(error.to_string().contains("event cursor is incomplete"));
         assert!(snapshots.lock().expect("snapshot lock").is_empty());
-        assert!(
-            validate_providers_request(&SorafsReserveProvidersReadbackFilter {
+        assert_rejected(&validate_providers_request(
+            &SorafsReserveProvidersReadbackFilter {
                 limit: Some(RESERVE_QUERY_MAX_ITEMS_V1 + 1),
                 ..SorafsReserveProvidersReadbackFilter::default()
-            })
-            .is_err()
-        );
-        assert!(
-            validate_appeals_request(&SorafsReserveAppealReadbackFilter {
+            },
+        ));
+        assert_rejected(&validate_appeals_request(
+            &SorafsReserveAppealReadbackFilter {
                 after_appeal_id_hex: Some("AA"),
                 ..SorafsReserveAppealReadbackFilter::default()
-            })
-            .is_err()
-        );
+            },
+        ));
+
         let response =
             validate_policy_response(non_ok_response(), &SorafsReserveFinalizedAnchor::default())
                 .expect("non-OK response is preserved");
@@ -1745,10 +1733,7 @@ mod tests {
         );
         assert_eq!(response.headers()["x-reserve-proof"], "opaque");
         assert_eq!(response.body(), &[0x00, 0xFF, 0x51, 0x00]);
-    }
-    #[test]
-    fn reserve_read_requests_pin_identity_json_and_transport_bound() {
-        let client = client_with_base_url(base_url());
+
         let provider_id = hex::encode([0x21; 32]);
         let movement_id = hex::encode([0x22; 32]);
         let appeal_id = hex::encode([0x23; 32]);
@@ -1783,7 +1768,7 @@ mod tests {
                 }
             },
         );
-        let expected_paths = [
+        let paths = [
             "/v1/sorafs/reserve/policy".to_owned(),
             "/v1/sorafs/reserve/providers".to_owned(),
             format!("/v1/sorafs/reserve/providers/{provider_id}"),
@@ -1794,9 +1779,19 @@ mod tests {
             "/v1/sorafs/reserve/events".to_owned(),
         ];
         let snapshots = snapshots.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), expected_paths.len());
-        for (snapshot, path) in snapshots.iter().zip(expected_paths) {
+        assert_eq!(snapshots.len(), paths.len());
+        for (snapshot, path) in snapshots.iter().zip(paths) {
             assert_exact_read_request(snapshot, &path);
         }
+    }
+
+    #[test]
+    fn reserve_route_contract() {
+        assert_reserve_route_contract();
+    }
+
+    #[test]
+    fn reserve_request_contract() {
+        assert_reserve_request_contract();
     }
 }

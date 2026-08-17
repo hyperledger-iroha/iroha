@@ -68,7 +68,7 @@ use iroha_data_model::{
         LaneFastpqProofMaterial, LaneFinalityAuthorityV1, LaneFinalityStatement, LaneId,
         LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError, LaneStorageProfile,
         LaneVisibility, ManifestVersion, ProofBlob, PublicLaneRewardRole, PublicLaneRewardShare,
-        PublicLaneUnbonding, RemoteSpendIntent, SpendOp, TouchManifest,
+        PublicLaneUnbonding, RemoteSpendIntent, ShardId, SpendOp, TouchManifest,
     },
     peer::PeerId,
     proof::{ProofId, ProofRecord, ProofStatus},
@@ -229,14 +229,7 @@ macro_rules! public_lane {
             id: $id,
             dataspace_id: $dataspace_id,
             alias: $alias,
-            description: None,
-            visibility: iroha_data_model::nexus::LaneVisibility::Public,
-            lane_type: None,
-            governance: None,
-            settlement: None,
-            storage: iroha_data_model::nexus::LaneStorageProfile::FullReplica,
-            proof_scheme: DaProofScheme::default(),
-            metadata: BTreeMap::new(),
+            ..LaneConfig::default()
         }
     };
 }
@@ -6135,7 +6128,7 @@ state_test! { sync autoscale_elastic_lane_config_uses_policy_dataspace_and_manag
 }
 #[test]
 fn autoscale_elastic_lane_config_inherits_public_base_profile_and_rejects_restricted_base() {
-    let_row! { mut base_lane = LaneConfig { id: LaneId::new(2), dataspace_id: DataSpaceId::new(9), alias: "regulated-base".to_owned(), description: Some("base profile".to_owned()), visibility: LaneVisibility::Public, lane_type: Some("regulated-public".to_owned()), governance: Some("governance-v2".to_owned()), settlement: Some("settlement-v3".to_owned()), storage: LaneStorageProfile::SplitReplica, proof_scheme: DaProofScheme::MerkleSha256, metadata: BTreeMap::new(), } };
+    let_row! { mut base_lane = LaneConfig { id: LaneId::new(2), shard_id: None, dataspace_id: DataSpaceId::new(9), alias: "regulated-base".to_owned(), description: Some("base profile".to_owned()), visibility: LaneVisibility::Public, lane_type: Some("regulated-public".to_owned()), governance: Some("governance-v2".to_owned()), settlement: Some("settlement-v3".to_owned()), storage: LaneStorageProfile::SplitReplica, proof_scheme: DaProofScheme::MerkleSha256, metadata: BTreeMap::new(), } };
     base_lane
         .metadata
         .insert("security.profile".to_owned(), "strict".to_owned());
@@ -8235,43 +8228,32 @@ fn stage_autoscale_scale_in_for_commit_revalidation<'state>(
         retired_snapshot_dir,
     }
 }
-#[test]
-fn autoscale_commit_rejects_tampered_pending_transition_metadata_before_storage_publish() {
-    #[derive(Clone, Copy)]
-    enum PendingTamper {
-        TransitionHeight,
-        TransitionLane,
-        TransitionCapacity,
-    }
-    for tamper in [
-        PendingTamper::TransitionHeight,
-        PendingTamper::TransitionLane,
-        PendingTamper::TransitionCapacity,
-    ] {
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let store_root = temp_dir.path().join("kura");
-        let cold_root = temp_dir.path().join("cold");
-        let initial_config = RuntimeLaneConfig::default();
-        let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        state
-            .set_nexus(autoscale_transition_test_nexus(
-                vec![LaneConfig::default()],
-                1,
-                3,
-                100,
-            ))
-            .expect("apply autoscale tampered pending test nexus config");
-        *state.tiered_backend.lock() =
-            TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
-        let_row! { AutoscaleCommitRevalidationStage { mut state_block, elastic_blocks_dir, elastic_snapshot_dir, } = stage_autoscale_scale_out_for_commit_revalidation( &mut state, &kura, &store_root, &cold_root, ) };
-        let_row! { pending = state_block .pending_autoscale_lifecycle .as_mut() .expect("scale-out transition should be staged before tampering") };
-        match tamper {
-            PendingTamper::TransitionHeight => {
+#[derive(Clone, Copy)]
+enum PendingAutoscaleTamper {
+    TransitionHeight,
+    TransitionLane,
+    TransitionCapacity,
+    ExistingLaneMutation,
+    BackdatedOrPreservedLane,
+    DerivedLaneConfig,
+}
+impl PendingAutoscaleTamper {
+    const TRANSITION_CASES: [Self; 3] = [
+        Self::TransitionHeight,
+        Self::TransitionLane,
+        Self::TransitionCapacity,
+    ];
+    const CATALOG_CASES: [Self; 3] = [
+        Self::ExistingLaneMutation,
+        Self::BackdatedOrPreservedLane,
+        Self::DerivedLaneConfig,
+    ];
+    fn apply(self, pending: &mut PendingAutoscaleLaneLifecycle, scale_in: bool) {
+        match (self, scale_in) {
+            (Self::TransitionHeight, _) => {
                 pending.transition_height = pending.transition_height.saturating_sub(1);
             }
-            PendingTamper::TransitionLane => {
+            (Self::TransitionLane, false) => {
                 pending.transition = PendingAutoscaleTransition::ScaleOut {
                     lane: LaneId::new(2),
                     active_lanes: 1,
@@ -8280,7 +8262,7 @@ fn autoscale_commit_rejects_tampered_pending_transition_metadata_before_storage_
                     out_utilization_p95_permille: 0,
                 };
             }
-            PendingTamper::TransitionCapacity => {
+            (Self::TransitionCapacity, false) => {
                 pending.transition = PendingAutoscaleTransition::ScaleOut {
                     lane: LaneId::new(1),
                     active_lanes: 2,
@@ -8289,145 +8271,7 @@ fn autoscale_commit_rejects_tampered_pending_transition_metadata_before_storage_
                     out_utilization_p95_permille: 0,
                 };
             }
-        }
-        let_row! { err = state_block .commit() .expect_err("tampered pending autoscale transition must abort commit") };
-        assert!(matches!(
-            err,
-            TransactionsBlockError::AutoscaleLaneLifecycle
-        ));
-        let nexus = state.nexus_snapshot();
-        assert_lane_ids!(
-            nexus,
-            vec![LaneId::SINGLE],
-            "tampered pending autoscale transition must not publish the staged elastic lane"
-        );
-        assert_eq!(nexus.autoscale.last_transition_height, 0);
-        assert_eq!(state.transactions.view().latest_height_for_tests(), 1);
-        assert!(
-            !elastic_blocks_dir.exists(),
-            "tampered pending transition must reject before creating Kura storage"
-        );
-        assert!(
-            !elastic_snapshot_dir.exists(),
-            "tampered pending transition must reject before creating tiered storage"
-        );
-    }
-}
-state_test! { sync autoscale_commit_rejects_tampered_pending_catalog_update_before_storage_publish
-    #[derive(Clone, Copy)]
-    enum PendingCatalogTamper {
-        ExistingLaneMutation,
-        BackdatedCreatedHeight,
-        DerivedLaneConfig,
-    }
-    for tamper in [
-        PendingCatalogTamper::ExistingLaneMutation,
-        PendingCatalogTamper::BackdatedCreatedHeight,
-        PendingCatalogTamper::DerivedLaneConfig,
-    ] {
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let store_root = temp_dir.path().join("kura");
-        let cold_root = temp_dir.path().join("cold");
-        let initial_config = RuntimeLaneConfig::default();
-        let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        state
-            .set_nexus(autoscale_transition_test_nexus(
-                vec![LaneConfig::default()],
-                1,
-                3,
-                100,
-            ))
-            .expect("apply autoscale tampered pending catalog test nexus config");
-        *state.tiered_backend.lock() =
-            TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
-        let_row! { AutoscaleCommitRevalidationStage { mut state_block, elastic_blocks_dir, elastic_snapshot_dir, } = stage_autoscale_scale_out_for_commit_revalidation( &mut state, &kura, &store_root, &cold_root, ) };
-        let_row! { pending = state_block .pending_autoscale_lifecycle .as_mut() .expect("scale-out transition should be staged before catalog tampering") };
-        match tamper {
-            PendingCatalogTamper::ExistingLaneMutation => {
-                let mut lanes = pending.catalog_update.updated_catalog.lanes().to_vec();
-                let_row! { default_lane = lanes .iter_mut() .find(|lane| lane.id == LaneId::SINGLE) .expect("default lane in staged catalog") };
-                default_lane.alias = "tampered-default-lane".to_owned();
-                pending.catalog_update.updated_catalog =
-                    LaneCatalog::new(pending.catalog_update.updated_catalog.lane_count(), lanes)
-                        .expect("tampered updated catalog");
-            }
-            PendingCatalogTamper::BackdatedCreatedHeight => {
-                let mut lanes = pending.catalog_update.updated_catalog.lanes().to_vec();
-                let_row! { elastic_lane = lanes .iter_mut() .find(|lane| lane.id == LaneId::new(1)) .expect("elastic lane in staged catalog") };
-                elastic_lane
-                    .metadata
-                    .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "1".to_owned());
-                pending.catalog_update.updated_catalog =
-                    LaneCatalog::new(pending.catalog_update.updated_catalog.lane_count(), lanes)
-                        .expect("backdated updated catalog");
-            }
-            PendingCatalogTamper::DerivedLaneConfig => {
-                pending.catalog_update.updated_lane_config =
-                    pending.catalog_update.previous_lane_config.clone();
-            }
-        }
-        let_row! { err = state_block .commit() .expect_err("tampered pending autoscale catalog update must abort commit") };
-        assert!(matches!(
-            err,
-            TransactionsBlockError::AutoscaleLaneLifecycle
-        ));
-        let nexus = state.nexus_snapshot();
-        assert_lane_ids!(
-            nexus,
-            vec![LaneId::SINGLE],
-            "tampered pending catalog update must not publish the staged elastic lane"
-        );
-        assert_eq!(nexus.autoscale.last_transition_height, 0);
-        assert_eq!(state.transactions.view().latest_height_for_tests(), 1);
-        assert!(
-            !elastic_blocks_dir.exists(),
-            "tampered pending catalog update must reject before creating Kura storage"
-        );
-        assert!(
-            !elastic_snapshot_dir.exists(),
-            "tampered pending catalog update must reject before creating tiered storage"
-        );
-    }
-}
-#[test]
-fn autoscale_commit_scale_in_rejects_tampered_pending_transition_metadata_before_storage_publish() {
-    #[derive(Clone, Copy)]
-    enum PendingTamper {
-        TransitionHeight,
-        TransitionLane,
-        TransitionCapacity,
-    }
-    for tamper in [
-        PendingTamper::TransitionHeight,
-        PendingTamper::TransitionLane,
-        PendingTamper::TransitionCapacity,
-    ] {
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let store_root = temp_dir.path().join("kura");
-        let cold_root = temp_dir.path().join("cold");
-        let initial_config = RuntimeLaneConfig::default();
-        let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        state
-            .set_nexus(autoscale_transition_test_nexus(
-                vec![LaneConfig::default()],
-                1,
-                2,
-                200,
-            ))
-            .expect("apply autoscale scale-in tampered pending test nexus config");
-        *state.tiered_backend.lock() =
-            TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
-        let_row! { AutoscaleScaleInCommitRevalidationStage { mut state_block, retired_lane_id, retired_blocks_dir, retired_snapshot_dir, } = stage_autoscale_scale_in_for_commit_revalidation( &mut state, &kura, &store_root, &cold_root, ) };
-        let_row! { pending = state_block .pending_autoscale_lifecycle .as_mut() .expect("scale-in transition should be staged before tampering") };
-        match tamper {
-            PendingTamper::TransitionHeight => {
-                pending.transition_height = pending.transition_height.saturating_sub(1);
-            }
-            PendingTamper::TransitionLane => {
+            (Self::TransitionLane, true) => {
                 pending.transition = PendingAutoscaleTransition::ScaleIn {
                     lane: LaneId::new(2),
                     active_lanes: 2,
@@ -8436,112 +8280,169 @@ fn autoscale_commit_scale_in_rejects_tampered_pending_transition_metadata_before
                     in_utilization_p95_permille: 0,
                 };
             }
-            PendingTamper::TransitionCapacity => {
+            (Self::TransitionCapacity, true) => {
                 pending.transition = PendingAutoscaleTransition::ScaleIn {
-                    lane: retired_lane_id,
+                    lane: LaneId::new(1),
                     active_lanes: 1,
                     autoscale_capacity_lanes: 2,
                     in_latency_ratio_permille: 0,
                     in_utilization_p95_permille: 0,
                 };
             }
-        }
-        let_row! { err = commit_state_block_with_empty_autoscale_queue(state_block) .expect_err("tampered pending autoscale scale-in transition must abort commit") };
-        assert!(matches!(
-            err,
-            TransactionsBlockError::AutoscaleLaneLifecycle
-        ));
-        let nexus = state.nexus_snapshot();
-        assert_lane_ids!(
-            nexus,
-            vec![LaneId::SINGLE, retired_lane_id],
-            "tampered pending scale-in transition must not publish the staged retirement"
-        );
-        assert_eq!(nexus.autoscale.last_transition_height, 1);
-        assert_eq!(state.transactions.view().latest_height_for_tests(), 2);
-        assert!(
-            retired_blocks_dir.exists(),
-            "tampered pending scale-in transition must reject before retiring Kura storage"
-        );
-        assert!(
-            retired_snapshot_dir.exists(),
-            "tampered pending scale-in transition must reject before retiring tiered storage"
-        );
-    }
-}
-#[test]
-fn autoscale_commit_scale_in_rejects_tampered_pending_catalog_update_before_storage_publish() {
-    #[derive(Clone, Copy)]
-    enum PendingCatalogTamper {
-        SurvivorLaneMutation,
-        RetiredLanePreserved,
-        DerivedLaneConfig,
-    }
-    for tamper in [
-        PendingCatalogTamper::SurvivorLaneMutation,
-        PendingCatalogTamper::RetiredLanePreserved,
-        PendingCatalogTamper::DerivedLaneConfig,
-    ] {
-        let temp_dir = tempfile::tempdir().expect("temp dir");
-        let store_root = temp_dir.path().join("kura");
-        let cold_root = temp_dir.path().join("cold");
-        let initial_config = RuntimeLaneConfig::default();
-        let kura = strict_kura_for_testing(store_root.clone(), &initial_config);
-        let query_handle = LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
-        state
-            .set_nexus(autoscale_transition_test_nexus(
-                vec![LaneConfig::default()],
-                1,
-                2,
-                200,
-            ))
-            .expect("apply autoscale scale-in tampered catalog test nexus config");
-        *state.tiered_backend.lock() =
-            TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
-        let_row! { AutoscaleScaleInCommitRevalidationStage { mut state_block, retired_lane_id, retired_blocks_dir, retired_snapshot_dir, } = stage_autoscale_scale_in_for_commit_revalidation( &mut state, &kura, &store_root, &cold_root, ) };
-        let_row! { pending = state_block .pending_autoscale_lifecycle .as_mut() .expect("scale-in transition should be staged before catalog tampering") };
-        match tamper {
-            PendingCatalogTamper::SurvivorLaneMutation => {
+            (Self::ExistingLaneMutation, scale_in) => {
                 let mut lanes = pending.catalog_update.updated_catalog.lanes().to_vec();
-                let_row! { default_lane = lanes .iter_mut() .find(|lane| lane.id == LaneId::SINGLE) .expect("default lane in staged scale-in catalog") };
-                default_lane.alias = "tampered-default-lane-after-scale-in".to_owned();
+                let default_lane = lanes
+                    .iter_mut()
+                    .find(|lane| lane.id == LaneId::SINGLE)
+                    .expect("default lane in staged catalog");
+                default_lane.alias = if scale_in {
+                    "tampered-default-lane-after-scale-in"
+                } else {
+                    "tampered-default-lane"
+                }
+                .to_owned();
                 pending.catalog_update.updated_catalog =
                     LaneCatalog::new(pending.catalog_update.updated_catalog.lane_count(), lanes)
-                        .expect("tampered scale-in updated catalog");
+                        .expect("tampered updated catalog");
             }
-            PendingCatalogTamper::RetiredLanePreserved => {
+            (Self::BackdatedOrPreservedLane, false) => {
+                let mut lanes = pending.catalog_update.updated_catalog.lanes().to_vec();
+                lanes
+                    .iter_mut()
+                    .find(|lane| lane.id == LaneId::new(1))
+                    .expect("elastic lane in staged catalog")
+                    .metadata
+                    .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "1".to_owned());
+                pending.catalog_update.updated_catalog =
+                    LaneCatalog::new(pending.catalog_update.updated_catalog.lane_count(), lanes)
+                        .expect("backdated updated catalog");
+            }
+            (Self::BackdatedOrPreservedLane, true) => {
                 pending.catalog_update.updated_catalog =
                     pending.catalog_update.previous_catalog.clone();
             }
-            PendingCatalogTamper::DerivedLaneConfig => {
+            (Self::DerivedLaneConfig, _) => {
                 pending.catalog_update.updated_lane_config =
                     pending.catalog_update.previous_lane_config.clone();
             }
         }
-        let_row! { err = commit_state_block_with_empty_autoscale_queue(state_block) .expect_err("tampered pending autoscale scale-in catalog update must abort commit") };
-        assert!(matches!(
-            err,
-            TransactionsBlockError::AutoscaleLaneLifecycle
-        ));
-        let nexus = state.nexus_snapshot();
-        assert_lane_ids!(
-            nexus,
-            vec![LaneId::SINGLE, retired_lane_id],
-            "tampered pending scale-in catalog update must not publish the staged retirement"
-        );
-        assert_eq!(nexus.autoscale.last_transition_height, 1);
-        assert_eq!(state.transactions.view().latest_height_for_tests(), 2);
-        assert!(
-            retired_blocks_dir.exists(),
-            "tampered pending scale-in catalog update must reject before retiring Kura storage"
-        );
-        assert!(
-            retired_snapshot_dir.exists(),
-            "tampered pending scale-in catalog update must reject before retiring tiered storage"
-        );
     }
 }
+fn autoscale_commit_revalidation_fixture(
+    max_lanes: u32,
+    target_block_ms: u64,
+) -> (tempfile::TempDir, PathBuf, PathBuf, Arc<Kura>, State) {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    let store_root = temp_dir.path().join("kura");
+    let cold_root = temp_dir.path().join("cold");
+    let kura = strict_kura_for_testing(store_root.clone(), &RuntimeLaneConfig::default());
+    let mut state = blank_test_state_from_kura(&kura);
+    state
+        .set_nexus(autoscale_transition_test_nexus(
+            vec![LaneConfig::default()],
+            1,
+            max_lanes,
+            target_block_ms,
+        ))
+        .expect("apply autoscale commit-revalidation Nexus config");
+    *state.tiered_backend.lock() =
+        TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
+    (temp_dir, store_root, cold_root, kura, state)
+}
+fn assert_scale_out_pending_tamper_rejected(tamper: PendingAutoscaleTamper) {
+    let (_temp_dir, store_root, cold_root, kura, mut state) =
+        autoscale_commit_revalidation_fixture(3, 100);
+    let AutoscaleCommitRevalidationStage {
+        mut state_block,
+        elastic_blocks_dir,
+        elastic_snapshot_dir,
+    } = stage_autoscale_scale_out_for_commit_revalidation(
+        &mut state,
+        &kura,
+        &store_root,
+        &cold_root,
+    );
+    tamper.apply(
+        state_block
+            .pending_autoscale_lifecycle
+            .as_mut()
+            .expect("scale-out transition should be staged before tampering"),
+        false,
+    );
+    let error = state_block
+        .commit()
+        .expect_err("tampered pending autoscale scale-out must abort commit");
+    assert!(matches!(
+        error,
+        TransactionsBlockError::AutoscaleLaneLifecycle
+    ));
+    let nexus = state.nexus_snapshot();
+    assert_lane_ids!(nexus, vec![LaneId::SINGLE]);
+    assert_eq!(nexus.autoscale.last_transition_height, 0);
+    assert_eq!(state.transactions.view().latest_height_for_tests(), 1);
+    assert!(!elastic_blocks_dir.exists());
+    assert!(!elastic_snapshot_dir.exists());
+}
+fn assert_scale_in_pending_tamper_rejected(tamper: PendingAutoscaleTamper) {
+    let (_temp_dir, store_root, cold_root, kura, mut state) =
+        autoscale_commit_revalidation_fixture(2, 200);
+    let AutoscaleScaleInCommitRevalidationStage {
+        mut state_block,
+        retired_lane_id,
+        retired_blocks_dir,
+        retired_snapshot_dir,
+    } = stage_autoscale_scale_in_for_commit_revalidation(
+        &mut state,
+        &kura,
+        &store_root,
+        &cold_root,
+    );
+    tamper.apply(
+        state_block
+            .pending_autoscale_lifecycle
+            .as_mut()
+            .expect("scale-in transition should be staged before tampering"),
+        true,
+    );
+    let error = commit_state_block_with_empty_autoscale_queue(state_block)
+        .expect_err("tampered pending autoscale scale-in must abort commit");
+    assert!(matches!(
+        error,
+        TransactionsBlockError::AutoscaleLaneLifecycle
+    ));
+    let nexus = state.nexus_snapshot();
+    assert_lane_ids!(nexus, vec![LaneId::SINGLE, retired_lane_id]);
+    assert_eq!(nexus.autoscale.last_transition_height, 1);
+    assert_eq!(state.transactions.view().latest_height_for_tests(), 2);
+    assert!(retired_blocks_dir.exists());
+    assert!(retired_snapshot_dir.exists());
+}
+macro_rules! pending_autoscale_tamper_tests {
+    ($scale_out:ident, $scale_in:ident, $cases:ident) => {
+        #[test]
+        fn $scale_out() {
+            PendingAutoscaleTamper::$cases
+                .into_iter()
+                .for_each(assert_scale_out_pending_tamper_rejected);
+        }
+        #[test]
+        fn $scale_in() {
+            PendingAutoscaleTamper::$cases
+                .into_iter()
+                .for_each(assert_scale_in_pending_tamper_rejected);
+        }
+    };
+}
+pending_autoscale_tamper_tests!(
+    autoscale_commit_rejects_tampered_pending_transition_metadata_before_storage_publish,
+    autoscale_commit_scale_in_rejects_tampered_pending_transition_metadata_before_storage_publish,
+    TRANSITION_CASES
+);
+pending_autoscale_tamper_tests!(
+    autoscale_commit_rejects_tampered_pending_catalog_update_before_storage_publish,
+    autoscale_commit_scale_in_rejects_tampered_pending_catalog_update_before_storage_publish,
+    CATALOG_CASES
+);
 #[derive(Clone, Copy, Debug)]
 enum CommittedAutoscaleDrift {
     Disabled,
@@ -8690,133 +8591,19 @@ fn autoscale_commit_rejects_committed_lane_config_drift_before_storage_publish()
 }
 
 state_test! { sync autoscale_commit_failure_does_not_publish_staged_da_indexes
-    let (mut state, kura) = blank_test_state_with_kura();
-    install_default_autoscale_test_nexus(&mut state, "apply autoscale test nexus config");
-    seed_autoscale_committee_for_test(&state, 4);
-    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-    let mut first_state_block = state.block(first.header());
-    let_row! { committed_first = ValidBlock::new_unverified_for_tests(first.clone()) .commit_unchecked() .unpack(|_| {}) };
-    let _ = first_state_block.apply_without_execution(&committed_first, Vec::new());
-    first_state_block
-        .commit()
-        .expect("commit first block before autoscale test block");
-    store_committed_autoscale_history_block_for_test(&state, &kura, &first);
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let cold_root = temp_dir.path().join("cold");
-    std::fs::write(&cold_root, b"blocker file").expect("blocker file");
-    *state.tiered_backend.lock() =
-        TieredStateBackend::new(true, 0, 0, 0, Some(cold_root), None, 1, 0);
-    let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xC0);
-    let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), LaneId::new(0), 1, 0, StorageTicketId::new([0xC1; 32]), ManifestDigest::new([0xC2; 32]), ) };
-    intent.alias = Some("autoscale-commit-failure-pin".to_owned());
-    let mut signed_second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-    signed_second.set_da_commitments(Some(DaCommitmentBundle::new(vec![record])));
-    signed_second.set_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])));
-    let mut state_block = state.block(signed_second.header());
-    state_block.add_committed_fragments(20);
-    let_row! { committed_second = ValidBlock::new_unverified_for_tests(signed_second) .commit_unchecked() .unpack(|_| {}) };
-    let _events = state_block.apply_without_execution(&committed_second, Vec::new());
-    assert_autoscale_da_effects_staged(&state_block);
-    let_row! { err = state_block .commit() .expect_err("storage reconciliation failure must abort state commit") };
-    assert!(matches!(
-        err,
-        TransactionsBlockError::AutoscaleLaneLifecycle
-    ));
-    let nexus = state.nexus_snapshot();
-    assert_lane_ids!(
-        nexus,
-        vec![LaneId::SINGLE],
-        "failed autoscale commit must not publish the staged lane catalog"
-    );
-    assert_eq!(nexus.autoscale.last_transition_height, 0);
-    assert_eq!(state.transactions.view().latest_height_for_tests(), 1);
-    assert!(state.da_commitments().bundle_at(3).is_none());
-    assert!(
-        state
-            .da_receipt_cursors()
-            .highest(LaneEpoch::new(LaneId::new(0), 1))
-            .is_none()
-    );
-    assert!(
-        state
-            .da_pin_intents()
-            .get_by_alias("autoscale-commit-failure-pin")
-            .is_none()
+    assert_autoscale_scale_out_preflight_failure_is_atomic(
+        AutoscaleScaleOutStorageFailure::BackendRoot,
     );
 }
-#[test]
-fn autoscale_commit_kura_preflight_failure_does_not_publish_staged_da_or_tiered_state() {
-    autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle, state);
-    install_default_autoscale_test_nexus(&mut state, "apply autoscale test nexus config");
-    seed_autoscale_committee_for_test(&state, 4);
-    *state.tiered_backend.lock() =
-        TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
-    let first = autoscale_signed_block_with_committed_fragments(None, 100, 0);
-    let mut first_state_block = state.block(first.header());
-    let_row! { committed_first = ValidBlock::new_unverified_for_tests(first.clone()) .commit_unchecked() .unpack(|_| {}) };
-    let _ = first_state_block.apply_without_execution(&committed_first, Vec::new());
-    first_state_block
-        .commit()
-        .expect("commit first block before autoscale test block");
-    store_committed_autoscale_history_block_for_test(&state, &kura, &first);
-    let elastic_lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 2);
-    let_row! { updated_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane]) .expect("autoscale updated catalog") };
-    let updated_config = RuntimeLaneConfig::from_catalog(&updated_catalog);
-    let_row! { elastic_entry = updated_config .entry(LaneId::new(1)) .expect("elastic lane entry") };
-    let conflicting_blocks_dir = elastic_entry.blocks_dir(&store_root);
-    if let Some(parent) = conflicting_blocks_dir.parent() {
-        std::fs::create_dir_all(parent).expect("create conflicting Kura parent");
-    }
-    std::fs::write(&conflicting_blocks_dir, b"blocker file").expect("seed conflicting Kura file");
-    let elastic_snapshot_dir = cold_root.join("lanes").join(&elastic_entry.kura_segment);
-    let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xD0);
-    let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), LaneId::new(0), 1, 0, StorageTicketId::new([0xD1; 32]), ManifestDigest::new([0xD2; 32]), ) };
-    intent.alias = Some("autoscale-kura-preflight-failure-pin".to_owned());
-    let mut signed_second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
-    signed_second.set_da_commitments(Some(DaCommitmentBundle::new(vec![record])));
-    signed_second.set_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])));
-    let mut state_block = state.block(signed_second.header());
-    state_block.add_committed_fragments(20);
-    let_row! { committed_second = ValidBlock::new_unverified_for_tests(signed_second) .commit_unchecked() .unpack(|_| {}) };
-    let _events = state_block.apply_without_execution(&committed_second, Vec::new());
-    assert_autoscale_da_effects_staged(&state_block);
-    let_row! { err = state_block .commit() .expect_err("Kura preflight failure must abort state commit") };
-    assert!(matches!(
-        err,
-        TransactionsBlockError::AutoscaleLaneLifecycle
-    ));
-    let nexus = state.nexus_snapshot();
-    assert_lane_ids!(
-        nexus,
-        vec![LaneId::SINGLE],
-        "failed autoscale commit must not publish the staged lane catalog"
-    );
-    assert_eq!(nexus.autoscale.last_transition_height, 0);
-    assert_eq!(state.transactions.view().latest_height_for_tests(), 1);
-    assert!(
-        !elastic_snapshot_dir.exists(),
-        "tiered snapshot directory must not be created after autoscale Kura preflight failure"
-    );
-    assert!(
-        conflicting_blocks_dir.is_file(),
-        "Kura preflight must leave the conflicting path unchanged"
-    );
-    assert!(state.da_commitments().bundle_at(2).is_none());
-    assert!(
-        state
-            .da_receipt_cursors()
-            .highest(LaneEpoch::new(LaneId::new(0), 1))
-            .is_none()
-    );
-    assert!(
-        state
-            .da_pin_intents()
-            .get_by_alias("autoscale-kura-preflight-failure-pin")
-            .is_none()
-    );
+#[derive(Clone, Copy)]
+enum AutoscaleScaleOutStorageFailure {
+    BackendRoot,
+    Kura,
+    Tiered,
 }
-#[test]
-fn autoscale_commit_tiered_preflight_failure_does_not_publish_staged_da_or_kura_state() {
+fn assert_autoscale_scale_out_preflight_failure_is_atomic(
+    conflict: AutoscaleScaleOutStorageFailure,
+) {
     autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle, state);
     install_default_autoscale_test_nexus(&mut state, "apply autoscale test nexus config");
     seed_autoscale_committee_for_test(&state, 4);
@@ -8836,14 +8623,41 @@ fn autoscale_commit_tiered_preflight_failure_does_not_publish_staged_da_or_kura_
     let_row! { elastic_entry = updated_config .entry(LaneId::new(1)) .expect("elastic lane entry") };
     let elastic_blocks_dir = elastic_entry.blocks_dir(&store_root);
     let elastic_snapshot_dir = cold_root.join("lanes").join(&elastic_entry.kura_segment);
-    if let Some(parent) = elastic_snapshot_dir.parent() {
-        std::fs::create_dir_all(parent).expect("create tiered lanes parent");
+    let (conflict_path, record_tag, ticket_tag, manifest_tag, pin_alias, bundle_height) =
+        match conflict {
+            AutoscaleScaleOutStorageFailure::BackendRoot => (
+                &cold_root,
+                0xC0,
+                0xC1,
+                0xC2,
+                "autoscale-commit-failure-pin",
+                3,
+            ),
+            AutoscaleScaleOutStorageFailure::Kura => (
+                &elastic_blocks_dir,
+                0xD0,
+                0xD1,
+                0xD2,
+                "autoscale-kura-preflight-failure-pin",
+                2,
+            ),
+            AutoscaleScaleOutStorageFailure::Tiered => (
+                &elastic_snapshot_dir,
+                0xD4,
+                0xD5,
+                0xD6,
+                "autoscale-tiered-preflight-failure-pin",
+                2,
+            ),
+        };
+    if let Some(parent) = conflict_path.parent() {
+        std::fs::create_dir_all(parent).expect("create autoscale conflict parent");
     }
-    std::fs::write(&elastic_snapshot_dir, b"tiered blocker")
-        .expect("seed conflicting tiered snapshot path");
-    let record = sample_da_commitment_record(LaneId::new(0), 1, 0, 0xD4);
-    let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), LaneId::new(0), 1, 0, StorageTicketId::new([0xD5; 32]), ManifestDigest::new([0xD6; 32]), ) };
-    intent.alias = Some("autoscale-tiered-preflight-failure-pin".to_owned());
+    std::fs::write(conflict_path, b"autoscale preflight blocker")
+        .expect("seed autoscale storage conflict");
+    let record = sample_da_commitment_record(LaneId::SINGLE, 1, 0, record_tag);
+    let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), LaneId::SINGLE, 1, 0, StorageTicketId::new([ticket_tag; 32]), ManifestDigest::new([manifest_tag; 32]), ) };
+    intent.alias = Some(pin_alias.to_owned());
     let mut signed_second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
     signed_second.set_da_commitments(Some(DaCommitmentBundle::new(vec![record])));
     signed_second.set_da_pin_intents(Some(DaPinIntentBundle::new(vec![intent])));
@@ -8852,54 +8666,38 @@ fn autoscale_commit_tiered_preflight_failure_does_not_publish_staged_da_or_kura_
     let_row! { committed_second = ValidBlock::new_unverified_for_tests(signed_second) .commit_unchecked() .unpack(|_| {}) };
     let _events = state_block.apply_without_execution(&committed_second, Vec::new());
     assert_autoscale_da_effects_staged(&state_block);
-    let_row! { err = state_block .commit() .expect_err("tiered preflight failure must abort state commit") };
+    let_row! { error = state_block .commit() .expect_err("autoscale storage preflight failure must abort state commit") };
     assert!(matches!(
-        err,
+        error,
         TransactionsBlockError::AutoscaleLaneLifecycle
     ));
     let nexus = state.nexus_snapshot();
-    assert_lane_ids!(
-        nexus,
-        vec![LaneId::SINGLE],
-        "failed autoscale commit must not publish the staged lane catalog"
-    );
+    assert_lane_ids!(nexus, vec![LaneId::SINGLE]);
     assert_eq!(nexus.autoscale.last_transition_height, 0);
     assert_eq!(state.transactions.view().latest_height_for_tests(), 1);
-    assert!(
-        !elastic_blocks_dir.exists(),
-        "Kura storage must not be created after autoscale tiered preflight failure"
-    );
-    assert!(
-        elastic_snapshot_dir.is_file(),
-        "tiered preflight must leave the conflicting snapshot path unchanged"
-    );
-    assert!(state.da_commitments().bundle_at(2).is_none());
+    assert!(conflict_path.is_file());
+    let untouched_path = match conflict {
+        AutoscaleScaleOutStorageFailure::BackendRoot => None,
+        AutoscaleScaleOutStorageFailure::Kura => Some(&elastic_snapshot_dir),
+        AutoscaleScaleOutStorageFailure::Tiered => Some(&elastic_blocks_dir),
+    };
+    assert!(untouched_path.is_none_or(|path| !path.exists()));
+    assert!(state.da_commitments().bundle_at(bundle_height).is_none());
     assert!(
         state
             .da_receipt_cursors()
-            .highest(LaneEpoch::new(LaneId::new(0), 1))
+            .highest(LaneEpoch::new(LaneId::SINGLE, 1))
             .is_none()
     );
-    assert!(
-        state
-            .da_pin_intents()
-            .get_by_alias("autoscale-tiered-preflight-failure-pin")
-            .is_none()
-    );
+    assert!(state.da_pin_intents().get_by_alias(pin_alias).is_none());
 }
-#[derive(Clone, Copy)]
-enum AutoscaleScaleInPreflightFailure {
-    Kura,
-    Tiered,
-}
-fn assert_autoscale_scale_in_preflight_failure_is_atomic(
-    failure: AutoscaleScaleInPreflightFailure,
-) {
+state_test! { sync autoscale_commit_kura_preflight_failure_does_not_publish_staged_da_or_tiered_state assert_autoscale_scale_out_preflight_failure_is_atomic(AutoscaleScaleOutStorageFailure::Kura); }
+state_test! { sync autoscale_commit_tiered_preflight_failure_does_not_publish_staged_da_or_kura_state assert_autoscale_scale_out_preflight_failure_is_atomic(AutoscaleScaleOutStorageFailure::Tiered); }
+fn assert_autoscale_scale_in_preflight_failure_is_atomic(conflict: LaneRetirementStorageConflict) {
     let_row! { _status_guard = crate::sumeragi::status::nexus_fee_test_lock() .lock() .expect("nexus status test lock") };
     crate::sumeragi::status::reset_nexus_economics_for_tests();
     autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle, state);
     let retired_lane_id = LaneId::new(1);
-    let elastic_lane = autoscale_elastic_lane_config(retired_lane_id, DataSpaceId::UNIVERSAL, 1);
     state
         .set_nexus(autoscale_transition_test_nexus(
             vec![LaneConfig::default()],
@@ -8910,80 +8708,60 @@ fn assert_autoscale_scale_in_preflight_failure_is_atomic(
         .expect("apply autoscale scale-in test nexus config");
     *state.tiered_backend.lock() =
         TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
+    let elastic_lane = autoscale_elastic_lane_config(retired_lane_id, DataSpaceId::UNIVERSAL, 1);
     seed_elastic_lane!(state, elastic_lane);
     let source_config = state.nexus_snapshot().lane_config;
     let_row! { source_entry = source_config .entry(retired_lane_id) .expect("managed lane entry exists") };
     let source_blocks_dir = source_entry.blocks_dir(&store_root);
     let source_snapshot_dir = cold_root.join("lanes").join(&source_entry.kura_segment);
-    assert!(
-        source_blocks_dir.exists(),
-        "managed lane Kura segment should exist before scale-in"
-    );
-    assert!(
-        source_snapshot_dir.exists(),
-        "managed lane tiered snapshot should exist before scale-in"
-    );
+    assert!(source_blocks_dir.exists());
+    assert!(source_snapshot_dir.exists());
     install_certified_autoscale_drain_for_test(&state, retired_lane_id);
     let close = autoscale_signed_block_with_committed_fragments(None, 100, 0);
     let carrier = autoscale_signed_block_with_committed_fragments(Some(&close), 200, 0);
     commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &close);
     commit_and_store_autoscale_previous_block_for_test(&mut state, &kura, &carrier);
-    let retired_path = match failure {
-        AutoscaleScaleInPreflightFailure::Kura => store_root.join("retired").join("blocks"),
-        AutoscaleScaleInPreflightFailure::Tiered => cold_root.join("retired").join("lanes"),
+    let (
+        conflict_path,
+        cleanup_tag,
+        epoch,
+        bonded,
+        record_tag,
+        ticket_tag,
+        manifest_tag,
+        pin_alias,
+    ) = match conflict {
+        LaneRetirementStorageConflict::Kura => (
+            store_root.join("retired").join("blocks"),
+            0xD1,
+            41_u64,
+            841_u32,
+            0xE0,
+            0xE1,
+            0xE2,
+            "autoscale-scale-in-kura-preflight-failure-pin",
+        ),
+        LaneRetirementStorageConflict::Tiered => (
+            cold_root.join("retired").join("lanes"),
+            0x94,
+            94_u64,
+            894_u32,
+            0xE4,
+            0xE5,
+            0xE6,
+            "autoscale-scale-in-tiered-preflight-failure-pin",
+        ),
     };
-    if let Some(parent) = retired_path.parent() {
-        std::fs::create_dir_all(parent).expect(match failure {
-            AutoscaleScaleInPreflightFailure::Kura => "create retired root parent",
-            AutoscaleScaleInPreflightFailure::Tiered => "create retired tiered parent",
-        });
+    if let Some(parent) = conflict_path.parent() {
+        std::fs::create_dir_all(parent).expect("create retired storage parent");
     }
-    let blocker = match failure {
-        AutoscaleScaleInPreflightFailure::Kura => b"retire blocker".as_slice(),
-        AutoscaleScaleInPreflightFailure::Tiered => b"tiered retire blocker".as_slice(),
-    };
-    std::fs::write(&retired_path, blocker).expect(match failure {
-        AutoscaleScaleInPreflightFailure::Kura => "seed conflicting retired Kura root",
-        AutoscaleScaleInPreflightFailure::Tiered => "seed conflicting retired tiered root",
-    });
-    let (cleanup_seed, cleanup_index, bonded, record_tag, ticket_tag, manifest_tag, pin_alias) =
-        match failure {
-            AutoscaleScaleInPreflightFailure::Kura => (
-                0xD1,
-                41,
-                841_u32,
-                0xE0,
-                0xE1,
-                0xE2,
-                "autoscale-scale-in-kura-preflight-failure-pin",
-            ),
-            AutoscaleScaleInPreflightFailure::Tiered => (
-                0x94,
-                94,
-                894_u32,
-                0xE4,
-                0xE5,
-                0xE6,
-                "autoscale-scale-in-tiered-preflight-failure-pin",
-            ),
-        };
-    let cleanup_fixture = seed_lane_scoped_cleanup_fixture_for_lifecycle_test(
-        &state,
-        retired_lane_id,
-        cleanup_seed,
-        cleanup_index,
-    );
+    std::fs::write(&conflict_path, b"autoscale retirement blocker")
+        .expect("seed conflicting retired storage root");
+    let_row! { cleanup_fixture = seed_lane_scoped_cleanup_fixture_for_lifecycle_test( &state, retired_lane_id, cleanup_tag, epoch, ) };
     let retired_status_bonded = Quantity::from(bonded);
     record_public_lane_staking_status_for_test(retired_lane_id, &retired_status_bonded);
-    let record = sample_da_commitment_record(LaneId::new(0), 1, 0, record_tag);
-    let mut intent = test_da_pin_intent(
-        *state.network_id_ref(),
-        LaneId::new(0),
-        1,
-        0,
-        StorageTicketId::new([ticket_tag; 32]),
-        ManifestDigest::new([manifest_tag; 32]),
-    );
+    let record = sample_da_commitment_record(LaneId::SINGLE, 1, 0, record_tag);
+    let_row! { mut intent = test_da_pin_intent( *state.network_id_ref(), LaneId::SINGLE, 1, 0, StorageTicketId::new([ticket_tag; 32]), ManifestDigest::new([manifest_tag; 32]), ) };
     intent.alias = Some(pin_alias.to_owned());
     let mut retirement = autoscale_signed_block_with_committed_fragments(Some(&carrier), 300, 0);
     retirement.set_da_commitments(Some(DaCommitmentBundle::new(vec![record])));
@@ -8992,89 +8770,30 @@ fn assert_autoscale_scale_in_preflight_failure_is_atomic(
     let mut state_block = state.block(retirement.header());
     let_row! { committed_retirement = ValidBlock::new_unverified_for_tests(retirement) .commit_unchecked() .unpack(|_| {}) };
     let _events = state_block.apply_without_execution(&committed_retirement, Vec::new());
-    assert!(
-        state_block.pending_autoscale_lifecycle.is_some(),
-        "scale-in transition should be staged before commit"
-    );
-    assert!(
-        state_block.pending_da_commitments.is_some(),
-        "DA commitments should be staged before commit"
-    );
-    assert!(
-        state_block.pending_da_pin_intents.is_some(),
-        "DA pin intents should be staged before commit"
-    );
+    assert_autoscale_da_effects_staged(&state_block);
     assert_lane_scoped_cleanup_fixture_pruned_from_state_block(
         &state_block,
         retired_lane_id,
         &cleanup_fixture,
-        match failure {
-            AutoscaleScaleInPreflightFailure::Kura => "autoscale Kura retire preflight failure",
-            AutoscaleScaleInPreflightFailure::Tiered => "autoscale tiered retire preflight failure",
-        },
+        "autoscale retire preflight failure",
     );
-    let err =
-        commit_state_block_with_empty_autoscale_queue(state_block).expect_err(match failure {
-            AutoscaleScaleInPreflightFailure::Kura => {
-                "Kura retire preflight failure must abort state commit"
-            }
-            AutoscaleScaleInPreflightFailure::Tiered => {
-                "tiered retire preflight failure must abort state commit"
-            }
-        });
+    let_row! { error = commit_state_block_with_empty_autoscale_queue(state_block) .expect_err("autoscale retire preflight failure must abort state commit") };
     assert!(matches!(
-        err,
+        error,
         TransactionsBlockError::AutoscaleLaneLifecycle
     ));
     let nexus = state.nexus_snapshot();
-    assert_lane_ids!(
-        nexus,
-        vec![LaneId::SINGLE, retired_lane_id],
-        "failed scale-in commit must not publish the staged lane retirement"
-    );
+    assert_lane_ids!(nexus, vec![LaneId::SINGLE, retired_lane_id]);
     assert_eq!(nexus.autoscale.last_transition_height, 1);
     assert_eq!(state.transactions.view().latest_height_for_tests(), 2);
-    assert!(
-        source_blocks_dir.exists(),
-        "{}",
-        match failure {
-            AutoscaleScaleInPreflightFailure::Kura => {
-                "managed lane Kura segment must remain after failed scale-in"
-            }
-            AutoscaleScaleInPreflightFailure::Tiered => {
-                "Kura retirement must not run after tiered preflight failure"
-            }
-        }
-    );
-    assert!(
-        source_snapshot_dir.exists(),
-        "{}",
-        match failure {
-            AutoscaleScaleInPreflightFailure::Kura => {
-                "managed lane tiered snapshot must remain after failed scale-in"
-            }
-            AutoscaleScaleInPreflightFailure::Tiered => {
-                "source tiered snapshot must remain after failed retire preflight"
-            }
-        }
-    );
-    assert!(
-        retired_path.is_file(),
-        "{}",
-        match failure {
-            AutoscaleScaleInPreflightFailure::Kura => {
-                "Kura preflight must leave the conflicting retired root unchanged"
-            }
-            AutoscaleScaleInPreflightFailure::Tiered => {
-                "tiered preflight must leave the conflicting retired root unchanged"
-            }
-        }
-    );
+    assert!(source_blocks_dir.exists());
+    assert!(source_snapshot_dir.exists());
+    assert!(conflict_path.is_file());
     assert!(state.da_commitments().bundle_at(3).is_none());
     assert!(
         state
             .da_receipt_cursors()
-            .highest(LaneEpoch::new(LaneId::new(0), 1))
+            .highest(LaneEpoch::new(LaneId::SINGLE, 1))
             .is_none()
     );
     assert!(state.da_pin_intents().get_by_alias(pin_alias).is_none());
@@ -9082,33 +8801,17 @@ fn assert_autoscale_scale_in_preflight_failure_is_atomic(
         &state,
         retired_lane_id,
         &cleanup_fixture,
-        match failure {
-            AutoscaleScaleInPreflightFailure::Kura => "failed autoscale Kura retire preflight",
-            AutoscaleScaleInPreflightFailure::Tiered => "failed autoscale tiered retire preflight",
-        },
+        "failed autoscale retire preflight",
     );
     assert_public_lane_staking_status_bonded(
         retired_lane_id,
         &retired_status_bonded,
-        match failure {
-            AutoscaleScaleInPreflightFailure::Kura => {
-                "Kura storage failure must not clear retired-lane operator staking status"
-            }
-            AutoscaleScaleInPreflightFailure::Tiered => {
-                "storage failure must not clear retired-lane operator staking status"
-            }
-        },
+        "storage failure must preserve retired-lane operator staking status",
     );
     crate::sumeragi::status::reset_nexus_economics_for_tests();
 }
-#[test]
-fn autoscale_commit_scale_in_kura_preflight_failure_does_not_publish_staged_da_or_tiered_state() {
-    assert_autoscale_scale_in_preflight_failure_is_atomic(AutoscaleScaleInPreflightFailure::Kura);
-}
-#[test]
-fn autoscale_commit_scale_in_tiered_preflight_failure_does_not_publish_staged_da_or_kura_state() {
-    assert_autoscale_scale_in_preflight_failure_is_atomic(AutoscaleScaleInPreflightFailure::Tiered);
-}
+state_test! { sync autoscale_commit_scale_in_kura_preflight_failure_does_not_publish_staged_da_or_tiered_state assert_autoscale_scale_in_preflight_failure_is_atomic(LaneRetirementStorageConflict::Kura); }
+state_test! { sync autoscale_commit_scale_in_tiered_preflight_failure_does_not_publish_staged_da_or_kura_state assert_autoscale_scale_in_preflight_failure_is_atomic(LaneRetirementStorageConflict::Tiered); }
 #[derive(Clone, Copy, Debug)]
 enum AutoscaleNoopReason {
     NexusDisabled,
@@ -14436,7 +14139,7 @@ state_test! { sync lanes_requiring_state_reset_tracks_manifest_policy_changes
 }
 state_test! { sync lanes_requiring_state_reset_tracks_shard_mapping_changes
     let lane_id = LaneId::new(1);
-    let_row! { mapped_lane = |shard_id: u32| { let mut metadata = BTreeMap::new(); metadata.insert("da_shard_id".to_string(), shard_id.to_string()); LaneConfig { id: lane_id, alias: "mapped-shard".to_string(), metadata, ..LaneConfig::default() } } };
+    let_row! { mapped_lane = |shard_id: u32| LaneConfig { id: lane_id, shard_id: Some(ShardId::new(shard_id)), alias: "mapped-shard".to_string(), ..LaneConfig::default() } };
     let_row! { previous_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), mapped_lane(5)]) .expect("previous catalog") };
     let_row! { current_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), mapped_lane(7)]) .expect("current catalog") };
     let previous = RuntimeLaneConfig::from_catalog(&previous_catalog);
@@ -18552,112 +18255,8 @@ state_test! { sync set_nexus_kura_preflight_failure_does_not_create_tiered_lane_
         "Kura preflight must leave the conflicting path unchanged"
     );
 }
-state_test! { sync set_nexus_relabel_kura_conflict_preserves_catalog_and_tiered_storage
-    autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle);
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
-    state
-        .set_tiered_backend(&tiered_state_config!(cold_root.clone()))
-        .expect("configure tiered state before Kura relabel test");
-    let lane_id = LaneId::new(1);
-    let_row! { source_lane = LaneConfig { id: lane_id, alias: "set-nexus-relabel-source".to_string(), ..LaneConfig::default() } };
-    let_row! { source_catalog = LaneCatalog::new( nonzero!(2_u32), vec![LaneConfig::default(), source_lane.clone()], ) .expect("source lane catalog") };
-    state
-        .set_nexus(iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            lane_catalog: source_catalog.clone(),
-            ..iroha_config::parameters::actual::Nexus::default()
-        })
-        .expect("seed source Nexus lane");
-    let source_config = RuntimeLaneConfig::from_catalog(&source_catalog);
-    let_row! { source_entry = source_config .entry(lane_id) .expect("source lane entry exists") };
-    let source_blocks_dir = source_entry.blocks_dir(&store_root);
-    assert!(
-        source_blocks_dir.exists(),
-        "source lane blocks directory should exist before relabel"
-    );
-    let_row! { relabelled_lane = LaneConfig { alias: "set-nexus-relabel-target".to_string(), ..source_lane } };
-    let_row! { relabelled_catalog = LaneCatalog::new( nonzero!(2_u32), vec![LaneConfig::default(), relabelled_lane], ) .expect("relabelled lane catalog") };
-    let relabelled_config = RuntimeLaneConfig::from_catalog(&relabelled_catalog);
-    let_row! { relabelled_entry = relabelled_config .entry(lane_id) .expect("relabelled lane entry exists") };
-    let conflicting_blocks_dir = relabelled_entry.blocks_dir(&store_root);
-    std::fs::create_dir_all(&conflicting_blocks_dir).expect("seed conflicting Kura relabel target");
-    let conflict_marker = conflicting_blocks_dir.join("marker");
-    std::fs::write(&conflict_marker, b"existing target").expect("seed conflicting target marker");
-    let relabelled_snapshot_dir = cold_root.join("lanes").join(&relabelled_entry.kura_segment);
-    let_row! { err = state .set_nexus(iroha_config::parameters::actual::Nexus { enabled: true, lane_catalog: relabelled_catalog, ..iroha_config::parameters::actual::Nexus::default() }) .expect_err("Kura relabel target conflict should abort set_nexus") };
-    assert!(matches!(err, LaneLifecycleError::Storage(_)));
-    assert_eq!(state.nexus_snapshot().lane_catalog, source_catalog);
-    assert!(
-        source_blocks_dir.exists(),
-        "source lane blocks directory must remain after failed relabel"
-    );
-    assert!(
-        conflict_marker.is_file(),
-        "Kura relabel preflight must leave the conflicting target unchanged"
-    );
-    assert!(
-        !relabelled_snapshot_dir.exists(),
-        "tiered snapshot directory must not be created for a failed relabel"
-    );
-}
-state_test! { sync set_nexus_relabel_tiered_preflight_failure_preserves_catalog_and_kura_storage
-    autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle);
-    let mut state = State::new_for_testing(World::default(), kura, query_handle);
-    state
-        .set_tiered_backend(&tiered_state_config!(cold_root.clone()))
-        .expect("configure tiered state before tiered relabel preflight test");
-    let lane_id = LaneId::new(1);
-    let_row! { source_lane = LaneConfig { id: lane_id, alias: "set-nexus-tiered-source".to_string(), ..LaneConfig::default() } };
-    let_row! { source_catalog = LaneCatalog::new( nonzero!(2_u32), vec![LaneConfig::default(), source_lane.clone()], ) .expect("source lane catalog") };
-    state
-        .set_nexus(iroha_config::parameters::actual::Nexus {
-            enabled: true,
-            lane_catalog: source_catalog.clone(),
-            ..iroha_config::parameters::actual::Nexus::default()
-        })
-        .expect("seed source Nexus lane");
-    let source_config = RuntimeLaneConfig::from_catalog(&source_catalog);
-    let_row! { source_entry = source_config .entry(lane_id) .expect("source lane entry exists") };
-    let source_blocks_dir = source_entry.blocks_dir(&store_root);
-    let source_snapshot_dir = cold_root.join("lanes").join(&source_entry.kura_segment);
-    assert!(
-        source_blocks_dir.exists(),
-        "source lane blocks directory should exist before relabel"
-    );
-    assert!(
-        source_snapshot_dir.exists(),
-        "source tiered snapshot directory should exist before relabel"
-    );
-    let_row! { relabelled_lane = LaneConfig { alias: "set-nexus-tiered-target".to_string(), ..source_lane } };
-    let_row! { relabelled_catalog = LaneCatalog::new( nonzero!(2_u32), vec![LaneConfig::default(), relabelled_lane], ) .expect("relabelled lane catalog") };
-    let relabelled_config = RuntimeLaneConfig::from_catalog(&relabelled_catalog);
-    let_row! { relabelled_entry = relabelled_config .entry(lane_id) .expect("relabelled lane entry exists") };
-    let relabelled_blocks_dir = relabelled_entry.blocks_dir(&store_root);
-    let relabelled_snapshot_dir = cold_root.join("lanes").join(&relabelled_entry.kura_segment);
-    std::fs::create_dir_all(&relabelled_snapshot_dir)
-        .expect("seed conflicting tiered relabel target");
-    let target_marker = relabelled_snapshot_dir.join("marker");
-    std::fs::write(&target_marker, b"existing tiered target").expect("seed tiered target marker");
-    let_row! { err = state .set_nexus(iroha_config::parameters::actual::Nexus { enabled: true, lane_catalog: relabelled_catalog, ..iroha_config::parameters::actual::Nexus::default() }) .expect_err("tiered relabel target conflict should abort set_nexus") };
-    assert!(matches!(err, LaneLifecycleError::Storage(_)));
-    assert_eq!(state.nexus_snapshot().lane_catalog, source_catalog);
-    assert!(
-        source_blocks_dir.exists(),
-        "source Kura segment must remain after failed tiered relabel preflight"
-    );
-    assert!(
-        !relabelled_blocks_dir.exists(),
-        "Kura relabel must not run after tiered preflight failure"
-    );
-    assert!(
-        source_snapshot_dir.exists(),
-        "source tiered snapshot must remain after failed relabel preflight"
-    );
-    assert!(
-        target_marker.is_file(),
-        "tiered preflight must leave the conflicting target unchanged"
-    );
-}
+state_test! { sync set_nexus_relabel_kura_conflict_preserves_catalog_and_tiered_storage assert_lane_relabel_preflight_is_atomic(LaneRetirementApi::SetNexus, LaneRelabelStorageConflict::KuraBlocks); }
+state_test! { sync set_nexus_relabel_tiered_preflight_failure_preserves_catalog_and_kura_storage assert_lane_relabel_preflight_is_atomic(LaneRetirementApi::SetNexus, LaneRelabelStorageConflict::Tiered); }
 #[derive(Clone, Copy, Debug)]
 enum LaneRetirementApi {
     SetNexus,
@@ -18667,6 +18266,148 @@ enum LaneRetirementApi {
 enum LaneRetirementStorageConflict {
     Kura,
     Tiered,
+}
+#[derive(Clone, Copy, Debug)]
+enum LaneRelabelStorageConflict {
+    KuraBlocks,
+    KuraMerge,
+    Tiered,
+}
+fn assert_lane_relabel_preflight_is_atomic(
+    api: LaneRetirementApi,
+    conflict: LaneRelabelStorageConflict,
+) {
+    autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle);
+    let mut state = State::new_for_testing(World::default(), kura, query_handle);
+    match api {
+        LaneRetirementApi::SetNexus => state
+            .set_tiered_backend(&tiered_state_config!(cold_root.clone()))
+            .expect("configure tiered state before relabel preflight"),
+        LaneRetirementApi::Lifecycle => {
+            state.nexus.write().enabled = true;
+            *state.tiered_backend.lock() =
+                TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
+        }
+    }
+    let (source_alias, target_alias) = match (api, conflict) {
+        (LaneRetirementApi::SetNexus, LaneRelabelStorageConflict::KuraBlocks) => {
+            ("set-nexus-relabel-source", "set-nexus-relabel-target")
+        }
+        (LaneRetirementApi::SetNexus, LaneRelabelStorageConflict::Tiered) => {
+            ("set-nexus-tiered-source", "set-nexus-tiered-target")
+        }
+        (LaneRetirementApi::Lifecycle, LaneRelabelStorageConflict::KuraBlocks) => {
+            ("lifecycle-relabel-source", "lifecycle-relabel-target")
+        }
+        (LaneRetirementApi::Lifecycle, LaneRelabelStorageConflict::KuraMerge) => {
+            ("lifecycle-merge-source", "lifecycle-merge-target")
+        }
+        (LaneRetirementApi::Lifecycle, LaneRelabelStorageConflict::Tiered) => {
+            ("lifecycle-tiered-source", "lifecycle-tiered-target")
+        }
+        (LaneRetirementApi::SetNexus, LaneRelabelStorageConflict::KuraMerge) => {
+            panic!("set_nexus relabel fixtures do not exercise a merge-only conflict")
+        }
+    };
+    let lane_id = LaneId::new(1);
+    let_row! { source_lane = LaneConfig { id: lane_id, alias: source_alias.to_owned(), ..LaneConfig::default() } };
+    match api {
+        LaneRetirementApi::SetNexus => state
+            .set_nexus(iroha_config::parameters::actual::Nexus {
+                enabled: true,
+                lane_catalog: LaneCatalog::new(
+                    nonzero!(2_u32),
+                    vec![LaneConfig::default(), source_lane.clone()],
+                )
+                .expect("source lane catalog"),
+                ..Default::default()
+            })
+            .expect("seed source Nexus lane"),
+        LaneRetirementApi::Lifecycle => state
+            .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![source_lane.clone()],
+                retire: Vec::new(),
+            })
+            .expect("seed source lifecycle lane"),
+    }
+    let source_catalog = state.nexus_snapshot().lane_catalog;
+    let source_config = RuntimeLaneConfig::from_catalog(&source_catalog);
+    let source_entry = source_config.entry(lane_id).expect("source lane entry");
+    let source_blocks_dir = source_entry.blocks_dir(&store_root);
+    let source_merge_log = source_entry.merge_log_path(&store_root);
+    let source_snapshot_dir = cold_root.join("lanes").join(&source_entry.kura_segment);
+    assert!(source_blocks_dir.exists());
+    let_row! { target_lane = LaneConfig { alias: target_alias.to_owned(), ..source_lane } };
+    let_row! { target_catalog = LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), target_lane.clone()]) .expect("target lane catalog") };
+    let target_config = RuntimeLaneConfig::from_catalog(&target_catalog);
+    let target_entry = target_config.entry(lane_id).expect("target lane entry");
+    let target_blocks_dir = target_entry.blocks_dir(&store_root);
+    let target_merge_log = target_entry.merge_log_path(&store_root);
+    let target_snapshot_dir = cold_root.join("lanes").join(&target_entry.kura_segment);
+    let conflict_marker = match conflict {
+        LaneRelabelStorageConflict::KuraBlocks => {
+            std::fs::create_dir_all(&target_blocks_dir).expect("seed conflicting blocks target");
+            target_blocks_dir.join("marker")
+        }
+        LaneRelabelStorageConflict::KuraMerge => {
+            std::fs::create_dir_all(
+                target_merge_log
+                    .parent()
+                    .expect("target merge log has a parent"),
+            )
+            .expect("seed conflicting merge parent");
+            target_merge_log.clone()
+        }
+        LaneRelabelStorageConflict::Tiered => {
+            std::fs::create_dir_all(&target_snapshot_dir).expect("seed conflicting tiered target");
+            target_snapshot_dir.join("marker")
+        }
+    };
+    std::fs::write(&conflict_marker, b"existing relabel target")
+        .expect("seed relabel conflict marker");
+    let error = match api {
+        LaneRetirementApi::SetNexus => state.set_nexus(iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            lane_catalog: target_catalog,
+            ..Default::default()
+        }),
+        LaneRetirementApi::Lifecycle => {
+            state.apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
+                additions: vec![target_lane],
+                retire: vec![lane_id],
+            })
+        }
+    }
+    .expect_err("storage target conflict must reject relabel before publication");
+    match conflict {
+        LaneRelabelStorageConflict::KuraMerge => assert!(
+            matches!(&error, LaneLifecycleError::Storage(reason) if reason.contains("kura preflight")),
+            "unexpected relabel error: {error:?}"
+        ),
+        LaneRelabelStorageConflict::Tiered => assert!(
+            matches!(&error, LaneLifecycleError::Storage(reason) if reason.contains("tiered preflight")),
+            "unexpected relabel error: {error:?}"
+        ),
+        LaneRelabelStorageConflict::KuraBlocks => {
+            assert!(matches!(error, LaneLifecycleError::Storage(_)));
+        }
+    }
+    assert_eq!(state.nexus_snapshot().lane_catalog, source_catalog);
+    assert!(source_blocks_dir.exists());
+    assert!(conflict_marker.is_file());
+    match conflict {
+        LaneRelabelStorageConflict::KuraBlocks => assert!(!target_snapshot_dir.exists()),
+        LaneRelabelStorageConflict::KuraMerge => {
+            assert!(source_merge_log.exists());
+            assert!(!target_blocks_dir.exists());
+            assert!(source_snapshot_dir.exists());
+            assert!(!target_snapshot_dir.exists());
+        }
+        LaneRelabelStorageConflict::Tiered => {
+            assert!(!target_blocks_dir.exists());
+            assert!(source_snapshot_dir.exists());
+        }
+    }
 }
 #[derive(Clone, Copy, Debug)]
 struct LaneRetirementPreflightCase {
@@ -18764,26 +18505,8 @@ fn assert_lane_retirement_preflight_is_atomic(case: LaneRetirementPreflightCase)
     assert_public_lane_staking_status_bonded(lane_id, &lane_status_bonded, &context);
     crate::sumeragi::status::reset_nexus_economics_for_tests();
 }
-#[test]
-fn set_nexus_retire_kura_preflight_failure_preserves_catalog_and_tiered_storage() {
-    assert_lane_retirement_preflight_is_atomic(LaneRetirementPreflightCase {
-        api: LaneRetirementApi::SetNexus,
-        conflict: LaneRetirementStorageConflict::Kura,
-        seed: 0x91,
-        epoch: 91,
-        bonded: 991,
-    });
-}
-#[test]
-fn set_nexus_retire_tiered_preflight_failure_preserves_catalog_and_kura_storage() {
-    assert_lane_retirement_preflight_is_atomic(LaneRetirementPreflightCase {
-        api: LaneRetirementApi::SetNexus,
-        conflict: LaneRetirementStorageConflict::Tiered,
-        seed: 0x95,
-        epoch: 95,
-        bonded: 995,
-    });
-}
+state_test! { sync set_nexus_retire_kura_preflight_failure_preserves_catalog_and_tiered_storage assert_lane_retirement_preflight_is_atomic(LaneRetirementPreflightCase { api: LaneRetirementApi::SetNexus, conflict: LaneRetirementStorageConflict::Kura, seed: 0x91, epoch: 91, bonded: 991, }); }
+state_test! { sync set_nexus_retire_tiered_preflight_failure_preserves_catalog_and_kura_storage assert_lane_retirement_preflight_is_atomic(LaneRetirementPreflightCase { api: LaneRetirementApi::SetNexus, conflict: LaneRetirementStorageConflict::Tiered, seed: 0x95, epoch: 95, bonded: 995, }); }
 
 #[test]
 fn apply_lane_lifecycle_same_plan_replace_archives_old_storage_before_provisioning_fresh_lane() {
@@ -18870,214 +18593,13 @@ fn apply_lane_lifecycle_same_plan_replace_archives_old_storage_before_provisioni
         "old tiered segment should be retained as retired historical storage"
     );
 }
-#[test]
-fn apply_lane_lifecycle_replacement_target_conflict_preserves_catalog_and_tiered_storage() {
-    autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle);
-    let state = State::new_for_testing(World::default(), kura, query_handle);
-    state.nexus.write().enabled = true;
-    *state.tiered_backend.lock() =
-        TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
-    let lane_id = LaneId::new(1);
-    let_row! { source_lane = LaneConfig { id: lane_id, alias: "lifecycle-relabel-source".to_string(), ..LaneConfig::default() } };
-    state
-        .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
-            additions: vec![source_lane.clone()],
-            retire: Vec::new(),
-        })
-        .expect("seed source lane");
-    let source_catalog = state.nexus_snapshot().lane_catalog;
-    let source_config = RuntimeLaneConfig::from_catalog(&source_catalog);
-    let_row! { source_entry = source_config .entry(lane_id) .expect("source lane entry exists") };
-    let source_blocks_dir = source_entry.blocks_dir(&store_root);
-    assert!(
-        source_blocks_dir.exists(),
-        "source lane blocks directory should exist before relabel"
-    );
-    let_row! { relabelled_lane = LaneConfig { alias: "lifecycle-relabel-target".to_string(), ..source_lane } };
-    let_row! { relabelled_catalog = LaneCatalog::new( nonzero!(2_u32), vec![LaneConfig::default(), relabelled_lane.clone()], ) .expect("relabelled lane catalog") };
-    let relabelled_config = RuntimeLaneConfig::from_catalog(&relabelled_catalog);
-    let_row! { relabelled_entry = relabelled_config .entry(lane_id) .expect("relabelled lane entry exists") };
-    let conflicting_blocks_dir = relabelled_entry.blocks_dir(&store_root);
-    std::fs::create_dir_all(&conflicting_blocks_dir).expect("seed conflicting Kura relabel target");
-    let conflict_marker = conflicting_blocks_dir.join("marker");
-    std::fs::write(&conflict_marker, b"existing target").expect("seed conflicting target marker");
-    let relabelled_snapshot_dir = cold_root.join("lanes").join(&relabelled_entry.kura_segment);
-    let_row! { err = state .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![relabelled_lane], retire: vec![lane_id], }) .expect_err("replacement target conflict should abort lifecycle plan") };
-    assert!(matches!(err, LaneLifecycleError::Storage(_)));
-    assert_eq!(state.nexus_snapshot().lane_catalog, source_catalog);
-    assert!(
-        source_blocks_dir.exists(),
-        "source lane blocks directory must remain after failed relabel"
-    );
-    assert!(
-        conflict_marker.is_file(),
-        "Kura relabel preflight must leave the conflicting target unchanged"
-    );
-    assert!(
-        !relabelled_snapshot_dir.exists(),
-        "tiered snapshot directory must not be created for a failed relabel"
-    );
-}
-#[test]
-fn apply_lane_lifecycle_replacement_merge_conflict_preserves_catalog_and_tiered_storage() {
-    autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle);
-    let state = State::new_for_testing(World::default(), kura, query_handle);
-    state.nexus.write().enabled = true;
-    *state.tiered_backend.lock() =
-        TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
-    let lane_id = LaneId::new(1);
-    let_row! { source_lane = LaneConfig { id: lane_id, alias: "lifecycle-merge-source".to_string(), ..LaneConfig::default() } };
-    state
-        .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
-            additions: vec![source_lane.clone()],
-            retire: Vec::new(),
-        })
-        .expect("seed source lane");
-    let source_catalog = state.nexus_snapshot().lane_catalog;
-    let source_config = RuntimeLaneConfig::from_catalog(&source_catalog);
-    let_row! { source_entry = source_config .entry(lane_id) .expect("source lane entry exists") };
-    let source_blocks_dir = source_entry.blocks_dir(&store_root);
-    let source_merge_log = source_entry.merge_log_path(&store_root);
-    let source_snapshot_dir = cold_root.join("lanes").join(&source_entry.kura_segment);
-    assert!(
-        source_blocks_dir.exists(),
-        "source Kura segment should exist before failed replacement"
-    );
-    assert!(
-        source_merge_log.exists(),
-        "source merge ledger should exist before failed replacement"
-    );
-    assert!(
-        source_snapshot_dir.exists(),
-        "source tiered snapshot should exist before failed replacement"
-    );
-    let_row! { replacement_lane = LaneConfig { alias: "lifecycle-merge-target".to_string(), ..source_lane } };
-    let_row! { replacement_catalog = LaneCatalog::new( nonzero!(2_u32), vec![LaneConfig::default(), replacement_lane.clone()], ) .expect("replacement lane catalog") };
-    let replacement_config = RuntimeLaneConfig::from_catalog(&replacement_catalog);
-    let_row! { replacement_entry = replacement_config .entry(lane_id) .expect("replacement lane entry exists") };
-    let replacement_blocks_dir = replacement_entry.blocks_dir(&store_root);
-    let replacement_merge_log = replacement_entry.merge_log_path(&store_root);
-    if let Some(parent) = replacement_merge_log.parent() {
-        std::fs::create_dir_all(parent).expect("seed conflicting merge parent");
-    }
-    std::fs::write(&replacement_merge_log, b"existing merge target")
-        .expect("seed conflicting merge target");
-    let_row! { replacement_snapshot_dir = cold_root .join("lanes") .join(&replacement_entry.kura_segment) };
-    let_row! { err = state .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![replacement_lane], retire: vec![lane_id], }) .expect_err("merge-ledger replacement target conflict should abort lifecycle plan") };
-    assert!(
-        matches!(&err, LaneLifecycleError::Storage(reason) if reason.contains("kura preflight")),
-        "unexpected lifecycle error: {err:?}"
-    );
-    assert_eq!(state.nexus_snapshot().lane_catalog, source_catalog);
-    assert!(
-        source_blocks_dir.exists(),
-        "source Kura segment must remain after failed Kura preflight"
-    );
-    assert!(
-        source_merge_log.exists(),
-        "source merge ledger must remain after failed Kura preflight"
-    );
-    assert!(
-        replacement_merge_log.is_file(),
-        "Kura preflight must leave the conflicting merge target unchanged"
-    );
-    assert!(
-        !replacement_blocks_dir.exists(),
-        "Kura blocks replacement target must not be created after failed merge preflight"
-    );
-    assert!(
-        source_snapshot_dir.exists(),
-        "source tiered snapshot must remain after failed Kura preflight"
-    );
-    assert!(
-        !replacement_snapshot_dir.exists(),
-        "tiered snapshot target must not be created after failed Kura preflight"
-    );
-}
-#[test]
-fn apply_lane_lifecycle_replacement_tiered_conflict_preserves_catalog_and_kura_storage() {
-    autoscale_storage_fixture!(temp_dir, store_root, cold_root, kura, query_handle);
-    let state = State::new_for_testing(World::default(), kura, query_handle);
-    state.nexus.write().enabled = true;
-    *state.tiered_backend.lock() =
-        TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 1, 0);
-    let lane_id = LaneId::new(1);
-    let_row! { source_lane = LaneConfig { id: lane_id, alias: "lifecycle-tiered-source".to_string(), ..LaneConfig::default() } };
-    state
-        .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
-            additions: vec![source_lane.clone()],
-            retire: Vec::new(),
-        })
-        .expect("seed source lane");
-    let source_catalog = state.nexus_snapshot().lane_catalog;
-    let source_config = RuntimeLaneConfig::from_catalog(&source_catalog);
-    let_row! { source_entry = source_config .entry(lane_id) .expect("source lane entry exists") };
-    let source_blocks_dir = source_entry.blocks_dir(&store_root);
-    let source_snapshot_dir = cold_root.join("lanes").join(&source_entry.kura_segment);
-    assert!(
-        source_blocks_dir.exists(),
-        "source Kura segment should exist before failed replacement"
-    );
-    assert!(
-        source_snapshot_dir.exists(),
-        "source tiered snapshot should exist before failed replacement"
-    );
-    let_row! { replacement_lane = LaneConfig { alias: "lifecycle-tiered-target".to_string(), ..source_lane } };
-    let_row! { replacement_catalog = LaneCatalog::new( nonzero!(2_u32), vec![LaneConfig::default(), replacement_lane.clone()], ) .expect("replacement lane catalog") };
-    let replacement_config = RuntimeLaneConfig::from_catalog(&replacement_catalog);
-    let_row! { replacement_entry = replacement_config .entry(lane_id) .expect("replacement lane entry exists") };
-    let replacement_blocks_dir = replacement_entry.blocks_dir(&store_root);
-    let_row! { replacement_snapshot_dir = cold_root .join("lanes") .join(&replacement_entry.kura_segment) };
-    std::fs::create_dir_all(&replacement_snapshot_dir)
-        .expect("seed conflicting tiered replacement target");
-    let conflict_marker = replacement_snapshot_dir.join("marker");
-    std::fs::write(&conflict_marker, b"existing tiered target")
-        .expect("seed conflicting tiered target marker");
-    let_row! { err = state .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan { additions: vec![replacement_lane], retire: vec![lane_id], }) .expect_err("tiered replacement target conflict should abort lifecycle plan") };
-    assert!(
-        matches!(&err, LaneLifecycleError::Storage(reason) if reason.contains("tiered preflight")),
-        "unexpected lifecycle error: {err:?}"
-    );
-    assert_eq!(state.nexus_snapshot().lane_catalog, source_catalog);
-    assert!(
-        source_blocks_dir.exists(),
-        "source Kura segment must remain after failed tiered preflight"
-    );
-    assert!(
-        !replacement_blocks_dir.exists(),
-        "Kura replacement target must not be created after failed tiered preflight"
-    );
-    assert!(
-        source_snapshot_dir.exists(),
-        "source tiered snapshot must remain after failed tiered preflight"
-    );
-    assert!(
-        conflict_marker.is_file(),
-        "tiered preflight must leave the conflicting replacement target unchanged"
-    );
-}
+state_test! { sync apply_lane_lifecycle_replacement_target_conflict_preserves_catalog_and_tiered_storage assert_lane_relabel_preflight_is_atomic(LaneRetirementApi::Lifecycle, LaneRelabelStorageConflict::KuraBlocks); }
+state_test! { sync apply_lane_lifecycle_replacement_merge_conflict_preserves_catalog_and_tiered_storage assert_lane_relabel_preflight_is_atomic(LaneRetirementApi::Lifecycle, LaneRelabelStorageConflict::KuraMerge); }
+state_test! { sync apply_lane_lifecycle_replacement_tiered_conflict_preserves_catalog_and_kura_storage assert_lane_relabel_preflight_is_atomic(LaneRetirementApi::Lifecycle, LaneRelabelStorageConflict::Tiered); }
 
-#[test]
-fn apply_lane_lifecycle_retire_kura_preflight_failure_preserves_catalog_and_tiered_storage() {
-    assert_lane_retirement_preflight_is_atomic(LaneRetirementPreflightCase {
-        api: LaneRetirementApi::Lifecycle,
-        conflict: LaneRetirementStorageConflict::Kura,
-        seed: 0x92,
-        epoch: 92,
-        bonded: 992,
-    });
-}
+state_test! { sync apply_lane_lifecycle_retire_kura_preflight_failure_preserves_catalog_and_tiered_storage assert_lane_retirement_preflight_is_atomic(LaneRetirementPreflightCase { api: LaneRetirementApi::Lifecycle, conflict: LaneRetirementStorageConflict::Kura, seed: 0x92, epoch: 92, bonded: 992, }); }
 
-#[test]
-fn apply_lane_lifecycle_retire_tiered_preflight_failure_preserves_catalog_and_kura_storage() {
-    assert_lane_retirement_preflight_is_atomic(LaneRetirementPreflightCase {
-        api: LaneRetirementApi::Lifecycle,
-        conflict: LaneRetirementStorageConflict::Tiered,
-        seed: 0x93,
-        epoch: 93,
-        bonded: 993,
-    });
-}
+state_test! { sync apply_lane_lifecycle_retire_tiered_preflight_failure_preserves_catalog_and_kura_storage assert_lane_retirement_preflight_is_atomic(LaneRetirementPreflightCase { api: LaneRetirementApi::Lifecycle, conflict: LaneRetirementStorageConflict::Tiered, seed: 0x93, epoch: 93, bonded: 993, }); }
 
 state_test! { sync apply_lane_lifecycle_retire_prunes_direct_lane_application_markers
     let state = blank_test_state();
@@ -21133,15 +20655,11 @@ impl SameLaneDaResetCase {
                 (initial, updated)
             }
             Self::ShardMapping => {
-                let mapped = |shard_id: u32| {
-                    let mut metadata = BTreeMap::new();
-                    metadata.insert("da_shard_id".to_owned(), shard_id.to_string());
-                    LaneConfig {
-                        id: lane_id,
-                        alias: "mapped-shard".to_owned(),
-                        metadata,
-                        ..LaneConfig::default()
-                    }
+                let mapped = |shard_id: u32| LaneConfig {
+                    id: lane_id,
+                    shard_id: Some(ShardId::new(shard_id)),
+                    alias: "mapped-shard".to_owned(),
+                    ..LaneConfig::default()
                 };
                 (mapped(5), mapped(7))
             }
@@ -25150,6 +24668,23 @@ state_test! { sync lane_active_for_authority_respects_future_created_autoscale_h
     seed_latest_lane_authority_height_for_test(&state, 7);
     assert!(state.is_lane_active_for_authority(lane_id));
 }
+state_test! { sync disabled_nexus_authority_accepts_only_canonical_single_lane
+    let state = blank_test_state();
+    state.nexus.write().enabled = false;
+    let lanes = [(LaneId::SINGLE, true), (LaneId::new(1), false)];
+    for (lane, active) in lanes {
+        assert_eq!(state.is_lane_active_for_authority(lane), active);
+        assert_eq!(state.staking_authority_lane(lane), active.then_some(lanes[0].0));
+    }
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+    let mut state_block = state.block(header);
+    let state_transaction = state_block.transaction();
+    for (lane, active) in lanes {
+        let staking = active.then_some(LaneId::SINGLE);
+        assert_eq!(state_transaction.is_lane_active_for_authority(lane), active);
+        assert_eq!(state_transaction.staking_authority_lane(lane), staking);
+    }
+}
 fn commit_topology_signers_for_lane_relay_test(
     state: &State,
     lane_id: LaneId,
@@ -27570,7 +27105,7 @@ fn hydrate_da_indexes_replays_multiple_shards() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let store_root = temp_dir.path().join("kura");
     let lane_count = nonzero!(2_u32);
-    let_row! { catalog = LaneCatalog::new( lane_count, vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), alias: "lane1".to_string(), metadata: { let mut map = BTreeMap::new(); map.insert("da_shard_id".to_string(), "5".to_string()); map }, ..LaneConfig::default() }, ], ) .expect("lane catalog") };
+    let_row! { catalog = LaneCatalog::new( lane_count, vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), shard_id: Some(ShardId::new(5)), alias: "lane1".to_string(), ..LaneConfig::default() }, ], ) .expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let kura_cfg = strict_kura_config_for_testing(store_root);
     let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
@@ -27633,7 +27168,7 @@ state_test! { sync resharding_clears_stale_shard_cursors
         let_row! { cursor = cursors .get(initial_shard) .expect("cursor stored under original shard") };
         assert_eq!(cursor.last_block_height, 3);
     }
-    let_row! { reshard_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: target_lane, alias: "reshard-target".to_owned(), metadata: { let mut map = BTreeMap::new(); map.insert("da_shard_id".to_string(), "5".to_string()); map }, ..LaneConfig::default() }, ], ) .expect("reshard catalog") };
+    let_row! { reshard_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: target_lane, shard_id: Some(ShardId::new(5)), alias: "reshard-target".to_owned(), ..LaneConfig::default() }, ], ) .expect("reshard catalog") };
     let reshard_config = RuntimeLaneConfig::from_catalog(&reshard_catalog);
     state
         .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -27718,9 +27253,7 @@ state_test! { sync rewind_da_indexes_truncates_to_requested_height
 fn hydrate_da_indexes_replays_multi_shard_bundle() {
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let store_root = temp_dir.path().join("kura");
-    let mut lane_one_meta = BTreeMap::new();
-    lane_one_meta.insert("da_shard_id".to_string(), "5".to_string());
-    let_row! { catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), alias: "lane1".to_string(), metadata: lane_one_meta, ..LaneConfig::default() }, ], ) .expect("lane catalog") };
+    let_row! { catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: LaneId::new(1), shard_id: Some(ShardId::new(5)), alias: "lane1".to_string(), ..LaneConfig::default() }, ], ) .expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
     let kura_cfg = strict_kura_config_for_testing(store_root);
     let (kura, _) = Kura::new(&kura_cfg, &lane_config).expect("init kura");
@@ -29290,9 +28823,7 @@ state_test! { sync da_shard_cursor_journal_drops_on_reshard
     let temp_dir = tempfile::tempdir().expect("temp dir");
     let store_root = temp_dir.path().join("kura");
     let target_lane = LaneId::new(1);
-    let mut metadata = BTreeMap::new();
-    metadata.insert("da_shard_id".to_string(), "1".to_string());
-    let_row! { initial_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: target_lane, alias: "cursor-reshard-target".to_owned(), metadata: metadata.clone(), ..LaneConfig::default() }, ], ) .expect("lane catalog") };
+    let_row! { initial_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: target_lane, shard_id: Some(ShardId::new(1)), alias: "cursor-reshard-target".to_owned(), ..LaneConfig::default() }, ], ) .expect("lane catalog") };
     let initial_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
     let kura_cfg = strict_kura_config_for_testing(store_root);
     let (kura, _) = Kura::new(&kura_cfg, &initial_config).expect("init kura");
@@ -29310,9 +28841,7 @@ state_test! { sync da_shard_cursor_journal_drops_on_reshard
         .advance_da_shard_cursors_from_bundle(2, std::slice::from_ref(&record))
         .expect("advance cursor");
     state.persist_da_shard_cursor_journal();
-    let mut updated_metadata = metadata;
-    updated_metadata.insert("da_shard_id".to_string(), "3".to_string());
-    let_row! { updated_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: target_lane, alias: "cursor-reshard-target".to_owned(), metadata: updated_metadata, ..LaneConfig::default() }, ], ) .expect("updated catalog") };
+    let_row! { updated_catalog = LaneCatalog::new( nonzero!(2_u32), vec![ LaneConfig::default(), LaneConfig { id: target_lane, shard_id: Some(ShardId::new(3)), alias: "cursor-reshard-target".to_owned(), ..LaneConfig::default() }, ], ) .expect("updated catalog") };
     let updated_config = RuntimeLaneConfig::from_catalog(&updated_catalog);
     state
         .set_nexus(iroha_config::parameters::actual::Nexus {
@@ -30561,7 +30090,7 @@ state_test! { sync axt_policy_snapshot_metrics_record_cache_hit
         block.axt_policies.insert(dsid, policy);
         block.commit();
     }
-    let_row! { lane_catalog = LaneCatalog::new( nonzero!(5_u32), vec![LaneConfig { id: policy.target_lane, dataspace_id: dsid, alias: "axt-cache-hit".to_owned(), description: None, visibility: LaneVisibility::Public, lane_type: None, governance: None, settlement: None, storage: LaneStorageProfile::FullReplica, proof_scheme: DaProofScheme::default(), metadata: BTreeMap::new(), }], ) .expect("AXT cache-hit test lane catalog") };
+    let_row! { lane_catalog = LaneCatalog::new( nonzero!(5_u32), vec![LaneConfig { id: policy.target_lane, shard_id: None, dataspace_id: dsid, alias: "axt-cache-hit".to_owned(), description: None, visibility: LaneVisibility::Public, lane_type: None, governance: None, settlement: None, storage: LaneStorageProfile::FullReplica, proof_scheme: DaProofScheme::default(), metadata: BTreeMap::new(), }], ) .expect("AXT cache-hit test lane catalog") };
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
     install_test_nexus_lane_catalog(&mut nexus, lane_catalog);
     nexus.routing_policy.default_lane = policy.target_lane;
@@ -31244,7 +30773,7 @@ fn axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation() {
     let dsid = DataSpaceId::new(81);
     let lane = LaneId::new(0);
     let manifest_root = [0x77; 32];
-    let_row! { lane_catalog = LaneCatalog::new( nonzero!(1_u32), vec![LaneConfig { id: lane, dataspace_id: dsid, alias: "primary".to_owned(), description: None, visibility: LaneVisibility::Public, lane_type: None, governance: None, settlement: None, storage: LaneStorageProfile::FullReplica, proof_scheme: DaProofScheme::default(), metadata: BTreeMap::new(), }], ) .expect("lane catalog") };
+    let_row! { lane_catalog = LaneCatalog::new( nonzero!(1_u32), vec![LaneConfig { id: lane, shard_id: None, dataspace_id: dsid, alias: "primary".to_owned(), description: None, visibility: LaneVisibility::Public, lane_type: None, governance: None, settlement: None, storage: LaneStorageProfile::FullReplica, proof_scheme: DaProofScheme::default(), metadata: BTreeMap::new(), }], ) .expect("lane catalog") };
     let_row! { mut nexus = iroha_config::parameters::actual::Nexus { lane_catalog: lane_catalog.clone(), lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog), dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata { id: dsid, alias: "axt-replay".to_owned(), description: None, fault_tolerance: 1, }]) .expect("axt replay dataspace catalog"), ..Default::default() } };
     nexus.axt.slot_length_ms = NonZeroU64::new(10).expect("slot length");
     nexus.axt.replay_retention_slots = NonZeroU64::new(4).expect("retention");

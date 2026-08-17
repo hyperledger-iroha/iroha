@@ -1,0 +1,1163 @@
+{
+  "schema": "iroha_core.fcmp_source_contract_groups.v1",
+  "preimage": {
+    "tests_rs": "4b6267d86f7bd45203188e665215c83eaa58b5f7",
+    "commitment_mask_rs": "cf118c236e6fc1fb88b70a7dcb6c66189e27c23a",
+    "runtime_rs": "e81723d0b934b2295c2ed6fd198aab880867c61c"
+  },
+  "groups": [
+    {
+      "id": "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/00",
+      "kind": "contains",
+      "needles": [
+        "prover_secret_selene_x_v1(&current_selene)?",
+        "prover_secret_helios_x_v1(",
+        "encode_secret_helioselene_scalar_v1(child.expose_ref())",
+        "encode_secret_field25519_scalar_v1(child.expose_ref())",
+        "prover_secret_hash_helios_v1(core::slice::from_ref(",
+        "prover_secret_hash_selene_v1(core::slice::from_ref(child.expose_ref()))?",
+        "push_fcmp_fixture_secret_branch_v1(",
+        "fcmp_fixture_secret_helios_encoding_v1(",
+        ".expose_public_copy_v1()"
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/01",
+      "kind": "excludes",
+      "needles": [
+        ".expose_ref()\n                .x()",
+        "branches.push(vec![",
+        "Some(hash_helios(&[child])?)",
+        "let mut next_selene = hash_selene(&[child])?",
+        "current_helios\n                .ok_or",
+        ".expose_copy()\n            .encode()"
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/02",
+      "kind": "excludes",
+      "needles": [
+        ".secret_coordinates_v1()",
+        "ProverSecretCopyValueV1::new("
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/03",
+      "kind": "order",
+      "needles": [
+        "mut encoded: SecretEncodedScalarV1",
+        "let branches_capacity = branches.capacity()",
+        "let outer_preflight = require_preallocated_push(",
+        "let mut branch = zeroizing_exact_secret_buffer_v1::<[u8; 32]>(1)?",
+        "let branch_capacity = branch.capacity()",
+        "let inner_preflight = require_preallocated_push(",
+        "let branch_index = branches.len()",
+        "branches.push(core::mem::take(&mut *branch))",
+        "let final_branch = &mut branches[branch_index]",
+        "final_branch.push([0; 32])",
+        "let destination = final_branch.len() - 1",
+        "core::mem::swap(&mut final_branch[destination], encoded.as_mut())"
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/04",
+      "kind": "counts",
+      "needles": [
+        "require_preallocated_push(",
+        "branches.push(",
+        "final_branch.push([0; 32])",
+        "core::mem::swap(",
+        "drop(encoded);"
+      ],
+      "counts": [
+        2,
+        1,
+        1,
+        1,
+        3
+      ]
+    },
+    {
+      "id": "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/05",
+      "kind": "excludes",
+      "needles": [
+        "*encoded.as_ref()",
+        "encoded.expose_copy()",
+        "ProverSecretCopyValueV1::take",
+        "mut encoded: [u8; 32]",
+        "fn push_fcmp_fixture_secret_branch_scalar_v1(",
+        "callback",
+        "FnOnce"
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/06",
+      "kind": "counts",
+      "needles": [
+        "push_fcmp_fixture_secret_branch_v1(",
+        "encode_secret_helioselene_scalar_v1(child.expose_ref())",
+        "encode_secret_field25519_scalar_v1(child.expose_ref())"
+      ],
+      "counts": [
+        2,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/07",
+      "kind": "order",
+      "needles": [
+        "encode_secret_helioselene_scalar_v1(child.expose_ref())",
+        "encode_secret_field25519_scalar_v1(child.expose_ref())"
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/08",
+      "kind": "contains",
+      "needles": [
+        "let integer = SecretU256V1(value.retrieve())",
+        "SecretEncodedScalarV1(SecretCopyValueV1::new("
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/09",
+      "kind": "contains",
+      "needles": [
+        "self.z.invert()",
+        "BorrowedZeroizingCopySlot(&mut inverse)",
+        "SecretCycleScalarV1(SecretCopyValueV1::new(",
+        "self.x.mul_ref(inverse.as_ref())",
+        "drop(inverse);"
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/10",
+      "kind": "contains",
+      "needles": [
+        "BorrowedZeroizingCopySlot(&mut self)",
+        "BorrowedZeroizingCopySlot(&mut inverse)",
+        "let x = SecretCopyValueV1::new(",
+        "let y = SecretCopyValueV1::new(",
+        "let integer = SecretU256V1(x.as_ref().retrieve())",
+        "let y_integer = SecretU256V1(y.as_ref().retrieve())",
+        "let y_bytes = SecretCopyValueV1::new(y_integer.0.to_le_bytes())",
+        "encoded.as_mut()[31] |= (y_bytes.as_ref()[0] & 1) << 7",
+        "Some(encoded)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/11",
+      "kind": "order",
+      "needles": [
+        "BorrowedZeroizingCopySlot(&mut self)",
+        "point.as_ref().z.invert()",
+        "BorrowedZeroizingCopySlot(&mut inverse)",
+        "if !bool::from(is_some)",
+        "let x = SecretCopyValueV1::new(",
+        "let y = SecretCopyValueV1::new(",
+        "let integer = SecretU256V1(x.as_ref().retrieve())",
+        "SecretEncodedScalarV1(SecretCopyValueV1::new(integer.0.to_le_bytes()))",
+        "let y_integer = SecretU256V1(y.as_ref().retrieve())",
+        "let y_bytes = SecretCopyValueV1::new(y_integer.0.to_le_bytes())",
+        "encoded.as_mut()[31] |= (y_bytes.as_ref()[0] & 1) << 7",
+        "drop(inverse);",
+        "drop(point);",
+        "Some(encoded)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps/00",
+      "kind": "order",
+      "needles": [
+        "AdditionalBranch::ToHelios(values) => {",
+        "let destination = values",
+        "ProverSecretCopyValueV1::take(destination)",
+        "let difference =",
+        ".sub_ref(&HelioseleneField::ONE)",
+        "let mut replacement =",
+        "HelioseleneField::conditional_select(",
+        "difference.expose_ref().ct_is_zero()",
+        "drop(difference)",
+        "core::mem::swap(destination, &mut replacement.0)",
+        "drop(replacement)",
+        "drop(original)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps/01",
+      "kind": "order",
+      "needles": [
+        "let destination = values",
+        "ProverSecretCopyValueV1::take(destination)",
+        "let difference =",
+        ".sub_ref(&Field25519::ONE)",
+        "let mut replacement =",
+        "Field25519::conditional_select(",
+        "difference.expose_ref().ct_is_zero()",
+        "drop(difference)",
+        "core::mem::swap(destination, &mut replacement.0)",
+        "drop(replacement)",
+        "drop(original)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps/02",
+      "kind": "counts",
+      "needles": [
+        "AdditionalBranch::ToHelios(values) => {",
+        "AdditionalBranch::ToSelene(values) => {",
+        ".first_mut()",
+        "ProverSecretCopyValueV1::take(destination)",
+        "let difference =",
+        "let mut replacement =",
+        "ProverSecretCopyValueV1::new(",
+        "::conditional_select(",
+        "difference.expose_ref().ct_is_zero()",
+        "core::mem::swap(destination, &mut replacement.0)",
+        "drop(difference);",
+        "drop(replacement);",
+        "drop(original);"
+      ],
+      "counts": [
+        1,
+        1,
+        2,
+        2,
+        2,
+        2,
+        4,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "id": "invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps/03",
+      "kind": "excludes",
+      "needles": [
+        "<T:",
+        "impl FnOnce",
+        "-> T",
+        "replacement(original",
+        ".expose_copy()",
+        "*destination =",
+        "fn expose_",
+        "fn as_",
+        "fn get_",
+        "fn into_",
+        ".get_copy()",
+        ".into_inner()",
+        "replacement.expose_ref()",
+        "impl Deref",
+        "trait ",
+        "callback"
+      ],
+      "counts": []
+    },
+    {
+      "id": "invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps/04",
+      "kind": "order",
+      "needles": [
+        "let first_branch = first_input",
+        ".additional_branches",
+        "replace_first_secret_coordinate_v1(first_branch)?",
+        "Ok((inputs, outputs, root))"
+      ],
+      "counts": []
+    },
+    {
+      "id": "invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps/05",
+      "kind": "counts",
+      "needles": [
+        "replace_first_secret_coordinate_v1(first_branch)?"
+      ],
+      "counts": [
+        1
+      ]
+    },
+    {
+      "id": "invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps/06",
+      "kind": "excludes",
+      "needles": [
+        "AdditionalBranch::ToHelios",
+        "AdditionalBranch::ToSelene",
+        "::conditional_select(",
+        ".sub_ref(",
+        "FnOnce",
+        ".expose_copy()"
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash/00",
+      "kind": "contains",
+      "needles": [
+        "fn zeroizing_exact_secret_buffer_v1<T: Zeroize>(",
+        "fn prover_secret_leaf_coordinates_v1(",
+        "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\n         fn with_fcmp_fixture_leaf_coordinate_owners_v1<T>("
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash/01",
+      "kind": "order",
+      "needles": [
+        "try_reserve_exact(exact_capacity)",
+        "values.capacity() < exact_capacity",
+        "Ok(Zeroizing::new(values))"
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash/02",
+      "kind": "contains",
+      "needles": [
+        "mut convert: impl FnMut(",
+        ") -> Result<SecretCycleCoordinatesV1<Field25519>, FcmpNativeErrorV1>"
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash/03",
+      "kind": "order",
+      "needles": [
+        ".checked_mul(6)",
+        "zeroizing_exact_secret_buffer_v1::<Field25519>(padded_capacity)?",
+        "let coordinate_pair = convert(point)?",
+        "let (coordinate_x, coordinate_y) = coordinate_pair.component_refs()",
+        "push_borrowed_secret_scalar_v1(&mut leaf_coordinates, coordinate_x)?",
+        "push_borrowed_secret_scalar_v1(&mut leaf_coordinates, coordinate_y)?",
+        "leaf_coordinates.len() != populated_len",
+        "leaf_coordinates.resize(padded_capacity, Field25519::ZERO)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash/04",
+      "kind": "excludes",
+      "needles": [
+        ".components()",
+        "let (x, y) = edwards_to_wei25519",
+        "Result<(Field25519, Field25519)",
+        "ProverSecretCopyValueV1::new(convert(point)?)",
+        "coordinate_pair.expose_ref()",
+        "coordinate_pair.0",
+        "coordinate_pair.1",
+        "push_secret_scalar_v1(&mut leaf_coordinates",
+        "ProverSecretCopyValueV1::new(convert(&point)?)",
+        "Vec::with_capacity(6 * leaves.len())",
+        "leaf_coordinates.extend([x, y])",
+        "leaf_coordinates.push("
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash/05",
+      "kind": "order",
+      "needles": [
+        "with_fcmp_fixture_leaf_coordinate_owners_v1(",
+        "secret_edwards_to_wei25519_v1",
+        "prover_secret_hash_selene_v1"
+      ],
+      "counts": []
+    },
+    {
+      "id": "fixture_leaf_coordinate_source_keeps_exact_erasing_owners_through_hash/06",
+      "kind": "excludes",
+      "needles": [
+        "&leaves, edwards_to_wei25519, hash_selene",
+        "let mut leaf_coordinates = Vec::with_capacity",
+        "leaf_coordinates.extend([x, y])"
+      ],
+      "counts": []
+    },
+    {
+      "id": "private_output_identifier_callsites_use_only_borrowed_owned_insertion/00",
+      "kind": "order",
+      "needles": [
+        "value: FcmpSecretOutputIdV1",
+        "require_preallocated_push(values.len(), values.capacity())?",
+        "values.push(*value.as_ref())",
+        "drop(value)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "private_output_identifier_callsites_use_only_borrowed_owned_insertion/01",
+      "kind": "contains",
+      "needles": [
+        "require_preallocated_push(leaf_ids.len(), leaf_ids.capacity())?",
+        "push_owned_secret_output_id_v1(&mut leaf_ids, leaf.secret_output_id_v1())?",
+        "let output_id = output.secret_output_id_v1()",
+        "ct_digest_slice_contains(&leaf_ids, output_id.as_ref())"
+      ],
+      "counts": []
+    },
+    {
+      "id": "private_output_identifier_callsites_use_only_borrowed_owned_insertion/02",
+      "kind": "excludes",
+      "needles": [
+        "leaf.output_id()",
+        "output.output_id()",
+        "leaf_ids.push("
+      ],
+      "counts": []
+    },
+    {
+      "id": "private_output_identifier_callsites_use_only_borrowed_owned_insertion/03",
+      "kind": "contains",
+      "needles": [
+        "require_preallocated_push(spent_outputs.len(), spent_outputs.capacity())?",
+        "push_owned_secret_output_id_v1(",
+        "input.output.secret_output_id_v1()"
+      ],
+      "counts": []
+    },
+    {
+      "id": "private_output_identifier_callsites_use_only_borrowed_owned_insertion/04",
+      "kind": "counts",
+      "needles": [
+        "new_output_ids.push(output.output_id())",
+        ".output_id()"
+      ],
+      "counts": [
+        2,
+        2
+      ]
+    },
+    {
+      "id": "duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time/00",
+      "kind": "order",
+      "needles": [
+        "value: ProverSecretCopyValueV1<[u8; 32]>",
+        "require_preallocated_push(values.len(), values.capacity())?",
+        "values.push(*value.expose_ref())",
+        "drop(value)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time/01",
+      "kind": "excludes",
+      "needles": [
+        "value: [u8; 32]",
+        "value.expose_copy()",
+        "values.reserve("
+      ],
+      "counts": []
+    },
+    {
+      "id": "duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time/02",
+      "kind": "contains",
+      "needles": [
+        "linking_bytes: &[u8; 32]",
+        "spend_x: &Scalar",
+        "prover_secret_decode_edwards_point_v1(linking_bytes)?",
+        "secret_edwards_product_v1(linking.expose_ref(), spend_x)",
+        "Ok(prover_secret_edwards_encoding_v1(&key_image))"
+      ],
+      "counts": []
+    },
+    {
+      "id": "duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time/03",
+      "kind": "excludes",
+      "needles": [
+        "decode_edwards_point(",
+        "linking *",
+        ".compress().to_bytes()",
+        "spend_x: Scalar",
+        "-> Result<[u8; 32]",
+        "pub fn"
+      ],
+      "counts": []
+    },
+    {
+      "id": "duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time/04",
+      "kind": "order",
+      "needles": [
+        "push_owned_secret_output_id_v1(&mut spent_outputs",
+        "require_preallocated_push(derived_key_images.len(), derived_key_images.capacity())?",
+        "input.output.component_refs_v1().1",
+        "prover_secret_key_image_id_v1(linking_bytes, &input.spend_x)?",
+        "push_owned_prover_secret_digest_v1(&mut derived_key_images, key_image)?",
+        "ct_has_duplicate_digests(&spent_outputs)",
+        "ct_has_duplicate_digests(&derived_key_images)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "duplicate_key_image_precheck_source_is_borrowed_owned_and_constant_time/05",
+      "kind": "excludes",
+      "needles": [
+        "input.output.components().1",
+        "decode_edwards_point(input.output",
+        "(linking * input.spend_x).compress().to_bytes()",
+        "derived_key_images.push(",
+        "derived_key_images.sort",
+        "HashSet"
+      ],
+      "counts": []
+    },
+    {
+      "id": "assert_sal_scalar_encoding_owner_handoff_source/00",
+      "kind": "order",
+      "needles": [
+        "let sal_y =",
+        "prover_secret_edwards_scalar_sum_v1(&input.output_y, &rerandomization.output)",
+        "let sal_y_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(",
+        "let sal_linking_bytes =",
+        "FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&rerandomization.linking)",
+        "let sal_spend_x_bytes =",
+        "FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&input.spend_x)",
+        "let sal_rerandomization_blind_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(",
+        "&rerandomization.rerandomization_blind,\n        );",
+        "let sal_witness = FcmpSalWitnessV1::from_secret_scalar_encoding_owners_v1(",
+        "sal_spend_x_bytes,",
+        "sal_y_bytes,",
+        "sal_linking_bytes,",
+        "sal_rerandomization_blind_bytes,",
+        "let sal = prove_fcmp_sal_with_checked_rng_v1(",
+        "drop(sal_witness)",
+        "prepared_inputs.push(PreparedInput {"
+      ],
+      "counts": []
+    },
+    {
+      "id": "assert_sal_scalar_encoding_owner_handoff_source/01",
+      "kind": "counts",
+      "needles": [
+        "FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(",
+        "FcmpSalWitnessV1::from_secret_scalar_encoding_owners_v1(",
+        "sal_spend_x_bytes,",
+        "sal_y_bytes,",
+        "sal_linking_bytes,",
+        "sal_rerandomization_blind_bytes,",
+        "prove_fcmp_sal_with_checked_rng_v1(",
+        "drop(sal_witness)"
+      ],
+      "counts": [
+        4,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "id": "assert_sal_scalar_encoding_owner_handoff_source/02",
+      "kind": "excludes",
+      "needles": [
+        ".expose_copy()",
+        "FcmpSalWitnessV1::new(",
+        "sal_y.expose_ref().to_bytes()",
+        "rerandomization.linking.to_bytes()",
+        "input.spend_x.to_bytes()",
+        "rerandomization.rerandomization_blind.to_bytes()",
+        "ProverSecretCopyValueV1::new(sal_y",
+        "FcmpSalSecretScalarEncodingV1(",
+        "drop(sal_linking_bytes)",
+        "drop(sal_spend_x_bytes)",
+        "drop(sal_y_bytes)",
+        "drop(sal_rerandomization_blind_bytes)",
+        "mem::take(&mut sal_linking_bytes)",
+        "FnOnce",
+        "callback"
+      ],
+      "counts": []
+    },
+    {
+      "id": "assert_sal_scalar_encoding_owner_handoff_source/03",
+      "kind": "order",
+      "needles": [
+        "mut x: [u8; 32]",
+        "mut y: [u8; 32]",
+        "mut r_i: [u8; 32]",
+        "mut r_r_i: [u8; 32]",
+        "let x_bytes = FcmpSalSecretScalarEncodingV1::take(&mut x)",
+        "let y_bytes = FcmpSalSecretScalarEncodingV1::take(&mut y)",
+        "let r_i_bytes = FcmpSalSecretScalarEncodingV1::take(&mut r_i)",
+        "let r_r_i_bytes = FcmpSalSecretScalarEncodingV1::take(&mut r_r_i)",
+        "Self::from_secret_scalar_encoding_owners_v1(",
+        "pub(super) fn from_secret_scalar_encoding_owners_v1(",
+        "x_bytes: FcmpSalSecretScalarEncodingV1",
+        "y_bytes: FcmpSalSecretScalarEncodingV1",
+        "r_i_bytes: FcmpSalSecretScalarEncodingV1",
+        "r_r_i_bytes: FcmpSalSecretScalarEncodingV1",
+        "let mut x = secret_scalar_from_bytes_v1(x_bytes.0.expose_ref())?",
+        "let mut y = secret_scalar_from_bytes_v1(y_bytes.0.expose_ref())?",
+        "let mut r_i = secret_scalar_from_bytes_v1(r_i_bytes.0.expose_ref())?",
+        "let mut r_r_i = secret_scalar_from_bytes_v1(r_r_i_bytes.0.expose_ref())?",
+        "let mut witness = Self {",
+        "core::mem::swap(&mut witness.x, &mut x.0)",
+        "drop(x)",
+        "core::mem::swap(&mut witness.y, &mut y.0)",
+        "drop(y)",
+        "core::mem::swap(&mut witness.r_i, &mut r_i.0)",
+        "drop(r_i)",
+        "core::mem::swap(&mut witness.r_r_i, &mut r_r_i.0)",
+        "drop(r_r_i)",
+        "Ok(witness)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "assert_sal_scalar_encoding_owner_handoff_source/04",
+      "kind": "counts",
+      "needles": [
+        "FcmpSalSecretScalarEncodingV1::take(&mut",
+        "secret_scalar_from_bytes_v1(",
+        "Scalar::ZERO",
+        "core::mem::swap("
+      ],
+      "counts": [
+        4,
+        4,
+        4,
+        4
+      ]
+    },
+    {
+      "id": "assert_sal_scalar_encoding_owner_handoff_source/05",
+      "kind": "excludes",
+      "needles": [
+        ".expose_copy()",
+        "Ok(Self {",
+        "FnOnce",
+        "callback",
+        "Deref"
+      ],
+      "counts": []
+    },
+    {
+      "id": "assert_sal_scalar_encoding_owner_handoff_source/06",
+      "kind": "contains",
+      "needles": [
+        "SalSecretCopyValueV1<[u8; 32]>",
+        "pub(super) fn from_scalar_ref_v1(scalar: &Scalar) -> Self",
+        "let mut encoded = scalar.to_bytes()",
+        "Self::take(&mut encoded)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "assert_sal_scalar_encoding_owner_handoff_source/07",
+      "kind": "excludes",
+      "needles": [
+        "#[derive(",
+        "impl Clone",
+        "impl Copy",
+        "Deref",
+        "AsRef",
+        "Borrow",
+        "fn expose_",
+        "fn get",
+        "fn as_",
+        "fn with_",
+        "FnOnce",
+        "FnMut",
+        ") -> [u8; 32]",
+        ") -> Scalar",
+        "callback"
+      ],
+      "counts": []
+    },
+    {
+      "id": "sal_y_sum_source_borrows_operands_and_retains_owners_through_constructor/00",
+      "kind": "contains",
+      "needles": [
+        "left: &Scalar",
+        "right: &Scalar",
+        "let mut sum = left + right",
+        "ProverSecretCopyValueV1::take(&mut sum)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "sal_y_sum_source_borrows_operands_and_retains_owners_through_constructor/01",
+      "kind": "excludes",
+      "needles": [
+        "*left",
+        "*right",
+        ".clone()",
+        ".to_owned()",
+        "Zeroizing::new("
+      ],
+      "counts": []
+    },
+    {
+      "id": "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/00",
+      "kind": "contains",
+      "needles": [
+        "_coordinates: SecretCycleCoordinatesV1<Field25519>",
+        "padding: ProverSecretCopyValueV1<[Field25519; 2]>",
+        "bytes: &[u8; 32]",
+        "let coordinates = secret_edwards_to_wei25519_v1(bytes)?",
+        "let (coordinate_x, coordinate_y) = coordinates.component_refs()",
+        "ProverSecretCopyValueV1::new([*coordinate_x, *coordinate_y])",
+        "output_bytes: &[u8; 32]",
+        "linking_bytes: &[u8; 32]",
+        "commitment_bytes: &[u8; 32]",
+        "output: prover_secret_edwards_coordinate_owner_v1(output_bytes)?",
+        "linking: prover_secret_edwards_coordinate_owner_v1(linking_bytes)?",
+        "commitment: prover_secret_edwards_coordinate_owner_v1(commitment_bytes)?"
+      ],
+      "counts": []
+    },
+    {
+      "id": "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/01",
+      "kind": "counts",
+      "needles": [
+        "SecretCycleCoordinatesV1<Field25519>",
+        "ProverSecretCopyValueV1<[Field25519; 2]>",
+        "prover_secret_edwards_coordinate_owner_v1("
+      ],
+      "counts": [
+        1,
+        1,
+        4
+      ]
+    },
+    {
+      "id": "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/02",
+      "kind": "excludes",
+      "needles": [
+        "edwards_to_wei25519(*bytes)",
+        "bytes: [u8; 32]",
+        "ProverSecretCopyValueV1::new(secret_edwards_to_wei25519_v1",
+        "coordinates.expose_ref()",
+        "coordinates.0",
+        "coordinates.1",
+        ".expose_copy()",
+        "#[cfg(",
+        "pub struct ProverSecret",
+        "pub(super) struct ProverSecret",
+        "pub(crate) struct ProverSecret",
+        "pub fn prover_secret",
+        "pub(super) fn prover_secret",
+        "pub(crate) fn prover_secret",
+        "#[derive(Clone",
+        "impl Clone for ProverSecret",
+        "impl Copy for ProverSecret"
+      ],
+      "counts": []
+    },
+    {
+      "id": "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/03",
+      "kind": "order",
+      "needles": [
+        "let (output_bytes, linking_bytes, commitment_bytes) = input.output.component_refs_v1()",
+        "let public = input.public_input()?",
+        "prepare_ed_blind(generator_t(), &rerandomization.output, true)?",
+        "prepare_ed_blind(generator_u(), &rerandomization.linking, true)?",
+        "prepare_ed_blind(generator_v(), &rerandomization.linking, true)?",
+        "prepare_ed_blind(generator_t(), &rerandomization.rerandomization_blind, false)?",
+        "prepare_ed_blind(ED25519_BASEPOINT_POINT, &rerandomization.commitment, true)?",
+        "prover_secret_output_coordinate_owners_v1(",
+        "let (input_blind_v_x, input_blind_v_y) = input_blind_v.coordinates.component_refs()",
+        "let input_blind_v_padding =\n            ProverSecretCopyValueV1::new([",
+        "let (output_blind_claim, output_variables) = c1_tape.append_claimed_point(",
+        "output_blind.coordinates.component_pair_ref()",
+        "output_coordinates.output.padding.expose_ref().as_slice()",
+        "output_coordinates.linking.padding.expose_ref().as_slice()",
+        "let (input_blind_v_divisor, _) = c1_tape.append_divisor(",
+        "let (input_blind_blind_claim, input_blind_v_variables) = c1_tape.append_claimed_point(",
+        "input_blind_blind.coordinates.component_pair_ref()",
+        "input_blind_v_padding.expose_ref().as_slice()",
+        "output_coordinates\n                .commitment\n                .padding",
+        "prover_secret_edwards_scalar_sum_v1(&input.output_y, &rerandomization.output)",
+        "let sal_y_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(",
+        "FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&rerandomization.linking)",
+        "let sal_witness = FcmpSalWitnessV1::from_secret_scalar_encoding_owners_v1(",
+        "sal_y_bytes,",
+        "sal_linking_bytes,",
+        "drop(sal_witness)",
+        "prepared_inputs.push(PreparedInput {"
+      ],
+      "counts": []
+    },
+    {
+      "id": "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/04",
+      "kind": "counts",
+      "needles": [
+        "let (output_bytes, linking_bytes, commitment_bytes) = input.output.component_refs_v1()",
+        "prover_secret_output_coordinate_owners_v1("
+      ],
+      "counts": [
+        1,
+        1
+      ]
+    },
+    {
+      "id": "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/05",
+      "kind": "excludes",
+      "needles": [
+        "input.output.components()",
+        "edwards_to_wei25519(output_bytes)",
+        "edwards_to_wei25519(linking_bytes)",
+        "edwards_to_wei25519(commitment_bytes)",
+        "let output_padding = Zeroizing::new(",
+        "let linking_padding = Zeroizing::new(",
+        "let commitment_padding = Zeroizing::new(",
+        "Zeroizing::new([input_blind_v.coordinates.0, input_blind_v.coordinates.1])",
+        "input_blind_v.coordinates.0",
+        "input_blind_v.coordinates.1",
+        "coordinates: *coordinates",
+        "&input_blind_v_padding[..]",
+        "drop(output_coordinates)",
+        "mem::take(&mut output_coordinates)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/06",
+      "kind": "counts",
+      "needles": [
+        "let input_blind_v_padding =\n            ProverSecretCopyValueV1::new(["
+      ],
+      "counts": [
+        1
+      ]
+    },
+    {
+      "id": "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/07",
+      "kind": "contains",
+      "needles": [
+        "bytes: &[u8; 32]",
+        "SecretCopyValueV1::new(CompressedEdwardsY(*bytes))",
+        ".decompress()",
+        "SecretCopyValueV1::new(point.as_ref().compress())",
+        "secret_invert_field25519_v1(denominator.as_ref())",
+        "let wei_x = SecretCopyValueV1::new(",
+        "let wei_y = SecretCopyValueV1::new(",
+        "Ok(SecretCycleCoordinatesV1::from_secret_coordinate_owners_v1(",
+        "wei_x, wei_y,"
+      ],
+      "counts": []
+    },
+    {
+      "id": "proof_input_coordinate_source_is_borrowed_owned_and_production_visible/08",
+      "kind": "excludes",
+      "needles": [
+        "Result<(Field25519, Field25519)",
+        "Ok((",
+        "wei_x.expose_copy()",
+        "wei_y.expose_copy()",
+        "callback",
+        "FnOnce",
+        "FnMut",
+        "Deref",
+        "Clone"
+      ],
+      "counts": []
+    },
+    {
+      "id": "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/00",
+      "kind": "order",
+      "needles": [
+        "scalar,",
+        "decomposition: core::mem::take(&mut *decomposition)",
+        "divisor,",
+        "point,"
+      ],
+      "counts": []
+    },
+    {
+      "id": "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/01",
+      "kind": "order",
+      "needles": [
+        "c1_non_root.push(c1_tape.append_branch(branch)?)",
+        "require_preallocated_push(c1_branch_masks.len(), c1_branch_masks.capacity())?",
+        "require_preallocated_push(selene_blinds.len(), selene_blinds.capacity())?",
+        "let blind = prepare_selene_blind(random_proof_scalar(rng)?)?",
+        "push_owned_secret_scalar_v1(&mut c1_branch_masks, blind.scalar.negated_owner_v1())?",
+        "selene_blinds.push(blind)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/02",
+      "kind": "order",
+      "needles": [
+        "c2_non_root.push(c2_tape.append_branch(branch)?)",
+        "require_preallocated_push(c2_branch_masks.len(), c2_branch_masks.capacity())?",
+        "require_preallocated_push(helios_blinds.len(), helios_blinds.capacity())?",
+        "let blind = prepare_helios_blind(random_proof_scalar(rng)?)?",
+        "push_owned_secret_scalar_v1(&mut c2_branch_masks, blind.scalar.negated_owner_v1())?",
+        "helios_blinds.push(blind)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/03",
+      "kind": "order",
+      "needles": [
+        "for branch in &path.c1_non_root {",
+        "push_owned_secret_scalar_v1(&mut c1_branch_masks, blind.scalar.negated_owner_v1())?",
+        "for branch in &path.c2_non_root {",
+        "push_owned_secret_scalar_v1(&mut c2_branch_masks, blind.scalar.negated_owner_v1())?"
+      ],
+      "counts": []
+    },
+    {
+      "id": "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/04",
+      "kind": "order",
+      "needles": [
+        "let coordinates = blind",
+        ".secret_coordinates_ref_v1()",
+        ".append_claimed_point(",
+        "coordinates.component_pair_ref()"
+      ],
+      "counts": []
+    },
+    {
+      "id": "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/05",
+      "kind": "order",
+      "needles": [
+        "fn copy_from_borrowed(value: &u64) -> Self",
+        "fn into_scalar_owner_v1<F: ProofScalar>(self) -> SecretScalarGuard<F>",
+        "SecretScalarGuard::new(F::from_u64(self.0))",
+        "drop(self)",
+        "self.0.zeroize()",
+        "compiler_fence(core::sync::atomic::Ordering::SeqCst)",
+        "core::hint::black_box(&mut self.0)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/06",
+      "kind": "order",
+      "needles": [
+        "let allocation_capacity = self.values.capacity()",
+        "let allocation_ptr = self.values.as_ptr()",
+        "if self.values.len() >= self.logical_capacity",
+        "self.values.push(F::ZERO)",
+        "core::mem::swap(&mut self.values[destination], &mut value.0)",
+        "drop(value)",
+        "debug_assert_eq!(self.values.capacity(), allocation_capacity)",
+        "debug_assert_eq!(self.values.as_ptr(), allocation_ptr)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/07",
+      "kind": "order",
+      "needles": [
+        "if self.values.len() >= self.logical_capacity",
+        "SecretScalarGuard::copy_from_borrowed(value)",
+        "self.push_owned(value)?"
+      ],
+      "counts": []
+    },
+    {
+      "id": "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/08",
+      "kind": "order",
+      "needles": [
+        "let start_len = self.values.len()",
+        "let allocation_capacity = self.values.capacity()",
+        "let allocation_ptr = self.values.as_ptr()",
+        "let end = start_len",
+        ".checked_add(values.len())",
+        "if end > self.logical_capacity || end > allocation_capacity",
+        "for value in values",
+        "self.push_borrowed(value)?",
+        "debug_assert_eq!(self.values.len(), end)",
+        "debug_assert_eq!(self.values.capacity(), allocation_capacity)",
+        "debug_assert_eq!(self.values.as_ptr(), allocation_ptr)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/09",
+      "kind": "order",
+      "needles": [
+        "if values.len() != COMMITMENT_WORD_LEN",
+        "if starts_commitment && !self.has_commitment_capacity()",
+        "let mut destination = starts_commitment",
+        "let variables = self.layout.append_word()?",
+        "destination.extend_borrowed_v1(values)?",
+        "self.push_commitment(destination)?",
+        ".last_mut()",
+        ".extend_borrowed_v1(values)?"
+      ],
+      "counts": []
+    },
+    {
+      "id": "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/10",
+      "kind": "order",
+      "needles": [
+        "if !self.has_commitment_capacity()",
+        "let mut destination = ZeroizingScalarVec::new",
+        "let variables = self.layout.append_branch(branch.len())?",
+        "destination.extend_borrowed_v1(branch)?",
+        "self.push_commitment(destination)?"
+      ],
+      "counts": []
+    },
+    {
+      "id": "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/11",
+      "kind": "order",
+      "needles": [
+        "parameters.validate()?",
+        "if dlog.len() != parameters.scalar_bits",
+        "let mut witness = ZeroizingScalarVec::new",
+        "for coefficient in dlog",
+        "SecretDlogCoefficientV1::copy_from_borrowed(coefficient)",
+        "coefficient.into_scalar_owner_v1::<F>()",
+        "witness.push_owned(scalar)?",
+        "witness.extend_borrowed_v1(padding)?"
+      ],
+      "counts": []
+    },
+    {
+      "id": "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/12",
+      "kind": "order",
+      "needles": [
+        "mut wei_x: SecretCopyValueV1<Field25519>",
+        "mut wei_y: SecretCopyValueV1<Field25519>",
+        "Field25519::ZERO",
+        "let (destination_x, destination_y) = &mut coordinates.0.0",
+        "core::mem::swap(destination_x, &mut wei_x.0)",
+        "core::mem::swap(destination_y, &mut wei_y.0)",
+        "drop(wei_x)",
+        "drop(wei_y)",
+        "\n        coordinates\n"
+      ],
+      "counts": []
+    },
+    {
+      "id": "commitment_mask_openings_remain_borrowed_until_the_membership_boundary/13",
+      "kind": "order",
+      "needles": [
+        "let sal_y_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(sal_y.expose_ref())",
+        "let sal_linking_bytes =",
+        "FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&rerandomization.linking)",
+        "let sal_spend_x_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(&input.spend_x)",
+        "let sal_rerandomization_blind_bytes = FcmpSalSecretScalarEncodingV1::from_scalar_ref_v1(",
+        "&rerandomization.rerandomization_blind,\n        );",
+        "let sal_witness = FcmpSalWitnessV1::from_secret_scalar_encoding_owners_v1(",
+        "sal_spend_x_bytes,",
+        "sal_y_bytes,",
+        "sal_linking_bytes,",
+        "sal_rerandomization_blind_bytes,",
+        "let sal = prove_fcmp_sal_with_checked_rng_v1(",
+        "drop(sal_witness)"
+      ],
+      "counts": []
+    },
+    {
+      "id": "sampled_scalar_slots_are_owned_before_rejection_or_return/00",
+      "kind": "excludes",
+      "needles": [
+        "Result<F, FcmpNativeErrorV1>",
+        "if let Some(mut scalar)",
+        "ProverSecretScalarV1::take(&mut scalar)",
+        "scalar.expose_copy().is_zero()",
+        "return Ok(scalar.expose_copy())"
+      ],
+      "counts": []
+    },
+    {
+      "id": "sampled_scalar_slots_are_owned_before_rejection_or_return/01",
+      "kind": "excludes",
+      "needles": [
+        "Self::take",
+        "Self::new",
+        "BorrowedProverScalarSlotV1"
+      ],
+      "counts": []
+    },
+    {
+      "id": "sampled_scalar_slots_are_owned_before_rejection_or_return/02",
+      "kind": "excludes",
+      "needles": [
+        "-> F",
+        "neg_ref",
+        "expose_ref",
+        "expose_copy",
+        "copy_from_borrowed",
+        "let negated",
+        "callback",
+        "getter",
+        "FnOnce",
+        "FnMut",
+        "Deref",
+        "Clone",
+        ".clone(",
+        ".copied("
+      ],
+      "counts": []
+    },
+    {
+      "id": "sampled_scalar_slots_are_owned_before_rejection_or_return/03",
+      "kind": "counts",
+      "needles": [
+        "random_proof_scalar",
+        "push_owned_secret_scalar_v1(&mut",
+        "push_owned_secret_scalar_v1(",
+        "blind.scalar.negated_owner_v1()",
+        "let nonce = random_proof_scalar::<"
+      ],
+      "counts": [
+        8,
+        6,
+        6,
+        2,
+        2
+      ]
+    },
+    {
+      "id": "sampled_scalar_slots_are_owned_before_rejection_or_return/04",
+      "kind": "contains",
+      "needles": [
+        "prepare_selene_blind(random_proof_scalar(rng)?)?",
+        "prepare_helios_blind(random_proof_scalar(rng)?)?",
+        "push_owned_secret_scalar_v1(&mut c1_branch_masks, blind.scalar.negated_owner_v1())?",
+        "push_owned_secret_scalar_v1(&mut c2_branch_masks, blind.scalar.negated_owner_v1())?",
+        "push_owned_secret_scalar_v1(&mut c1_branch_masks, random_proof_scalar(rng)?)?",
+        "push_owned_secret_scalar_v1(&mut c2_branch_masks, random_proof_scalar(rng)?)?",
+        "push_owned_secret_scalar_v1(&mut c1_masks, random_proof_scalar(rng)?)?",
+        "push_owned_secret_scalar_v1(&mut c2_masks, random_proof_scalar(rng)?)?",
+        "let nonce = random_proof_scalar::<Field25519>(rng)?",
+        "let nonce = random_proof_scalar::<HelioseleneField>(rng)?"
+      ],
+      "counts": []
+    },
+    {
+      "id": "sampled_scalar_slots_are_owned_before_rejection_or_return/05",
+      "kind": "excludes",
+      "needles": [
+        "push_secret_scalar_v1(&mut c1_branch_masks, random_proof_scalar(rng)?)?",
+        "push_secret_scalar_v1(&mut c2_branch_masks, random_proof_scalar(rng)?)?",
+        "push_secret_scalar_v1(&mut c1_masks, random_proof_scalar(rng)?)?",
+        "push_secret_scalar_v1(&mut c2_masks, random_proof_scalar(rng)?)?",
+        "push_secret_scalar_v1(&mut c1_branch_masks",
+        "push_secret_scalar_v1(&mut c2_branch_masks",
+        "blind.scalar.expose_ref().neg_ref()",
+        "blind.scalar.neg_ref()",
+        "-blind.scalar",
+        "let mut nonce = random_proof_scalar",
+        "ProverSecretScalarV1::take(&mut nonce)"
+      ],
+      "counts": []
+    }
+  ]
+}

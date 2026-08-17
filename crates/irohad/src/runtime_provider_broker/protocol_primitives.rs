@@ -120,40 +120,20 @@ pub(super) const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
 pub(super) struct SignRequestWireV1 {
     pub(super) payload: Vec<u8>,
 }
-impl fmt::Debug for SignRequestWireV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("SignRequestWireV1")
-            .field("payload_len", &self.payload.len())
-            .finish_non_exhaustive()
-    }
-}
-impl Drop for SignRequestWireV1 {
-    fn drop(&mut self) {
-        self.payload.fill(0);
-        let _ = std::hint::black_box(&self.payload);
-    }
-}
+impl_broker_debug_fields!(SignRequestWireV1 as value {
+    "payload_len" => value.payload.len(),
+} => finish_non_exhaustive);
+impl_scrub_fields_on_drop!(SignRequestWireV1 { payload });
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PurposeSignRequestWireV1 {
     pub(super) purpose: u8,
     pub(super) payload: Vec<u8>,
 }
-impl fmt::Debug for PurposeSignRequestWireV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("PurposeSignRequestWireV1")
-            .field("purpose", &self.purpose)
-            .field("payload_len", &self.payload.len())
-            .finish_non_exhaustive()
-    }
-}
-impl Drop for PurposeSignRequestWireV1 {
-    fn drop(&mut self) {
-        self.payload.fill(0);
-        let _ = std::hint::black_box(&self.payload);
-    }
-}
+impl_broker_debug_fields!(PurposeSignRequestWireV1 as value {
+    "purpose" => value.purpose,
+    "payload_len" => value.payload.len(),
+} => finish_non_exhaustive);
+impl_scrub_fields_on_drop!(PurposeSignRequestWireV1 { payload });
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SignResultWireV1 {
     pub(super) signature: [u8; 64],
@@ -162,14 +142,9 @@ pub(super) struct SignResultWireV1 {
 pub(super) struct VariableSignatureResultWireV1 {
     pub(super) signature: Vec<u8>,
 }
-impl fmt::Debug for VariableSignatureResultWireV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("VariableSignatureResultWireV1")
-            .field("signature_len", &self.signature.len())
-            .finish_non_exhaustive()
-    }
-}
+impl_broker_debug_fields!(VariableSignatureResultWireV1 as value {
+    "signature_len" => value.signature.len(),
+} => finish_non_exhaustive);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PopIssuerSignRequestWireV1 {
     pub(super) purpose: u8,
@@ -327,21 +302,11 @@ pub(super) struct PopRecipientOpenRequestWireV1 {
     pub(super) encrypted_payload: sorafs_manifest::hybrid_envelope::HybridPayloadEnvelopeV1,
     pub(super) aad: Vec<u8>,
 }
-impl fmt::Debug for PopRecipientOpenRequestWireV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("PopRecipientOpenRequestWireV1")
-            .field("encrypted_payload", &"[REDACTED]")
-            .field("aad_len", &self.aad.len())
-            .finish_non_exhaustive()
-    }
-}
-impl Drop for PopRecipientOpenRequestWireV1 {
-    fn drop(&mut self) {
-        self.aad.fill(0);
-        let _ = std::hint::black_box(&self.aad);
-    }
-}
+impl_broker_debug_fields!(PopRecipientOpenRequestWireV1 as value {
+    "encrypted_payload" => "[REDACTED]",
+    "aad_len" => value.aad.len(),
+} => finish_non_exhaustive);
+impl_scrub_fields_on_drop!(PopRecipientOpenRequestWireV1 { aad });
 #[derive(PartialEq, Eq, Decode, Encode)]
 pub(super) struct PopRecipientOpenResultWireV1 {
     pub(super) plaintext: Vec<u8>,
@@ -351,20 +316,10 @@ impl PopRecipientOpenResultWireV1 {
         std::mem::take(&mut self.plaintext)
     }
 }
-impl fmt::Debug for PopRecipientOpenResultWireV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("PopRecipientOpenResultWireV1")
-            .field("plaintext", &"[REDACTED]")
-            .finish_non_exhaustive()
-    }
-}
-impl Drop for PopRecipientOpenResultWireV1 {
-    fn drop(&mut self) {
-        self.plaintext.fill(0);
-        let _ = std::hint::black_box(&self.plaintext);
-    }
-}
+impl_broker_debug_fields!(PopRecipientOpenResultWireV1 as value {
+    "plaintext" => "[REDACTED]",
+} => finish_non_exhaustive);
+impl_scrub_fields_on_drop!(PopRecipientOpenResultWireV1 { plaintext });
 pub(super) fn validate_pop_open_result(
     result: &PopRuntimeOpenResultWireV1,
     exact: &PopCredentialRuntimeBindingWireV1,
@@ -651,28 +606,18 @@ impl std::ops::DerefMut for ScrubbedBytes {
         &mut self.bytes
     }
 }
-impl fmt::Debug for ScrubbedBytes {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("ScrubbedBytes")
-            .field("len", &self.bytes.len())
-            .field("inbound_budgeted", &self.inbound_permit.is_some())
-            .field("decode_budgeted", &self.decode_admission.is_some())
-            .finish_non_exhaustive()
-    }
-}
+impl_broker_debug_fields!(ScrubbedBytes as value {
+    "len" => value.bytes.len(),
+    "inbound_budgeted" => value.inbound_permit.is_some(),
+    "decode_budgeted" => value.decode_admission.is_some(),
+} => finish_non_exhaustive);
 impl PartialEq for ScrubbedBytes {
     fn eq(&self, other: &Self) -> bool {
         self.bytes == other.bytes
     }
 }
 impl Eq for ScrubbedBytes {}
-impl Drop for ScrubbedBytes {
-    fn drop(&mut self) {
-        self.bytes.fill(0);
-        let _ = std::hint::black_box(&self.bytes);
-    }
-}
+impl_scrub_fields_on_drop!(ScrubbedBytes { bytes });
 pub(super) struct ScrubbedReadChunk(pub(super) Box<[u8]>);
 impl std::ops::Deref for ScrubbedReadChunk {
     type Target = [u8];
@@ -698,22 +643,12 @@ pub(super) struct BrokerFrameV1 {
     pub(super) kind: u8,
     pub(super) body: Vec<u8>,
 }
-impl fmt::Debug for BrokerFrameV1 {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("BrokerFrameV1")
-            .field("version", &self.version)
-            .field("kind", &self.kind)
-            .field("body_len", &self.body.len())
-            .finish_non_exhaustive()
-    }
-}
-impl Drop for BrokerFrameV1 {
-    fn drop(&mut self) {
-        self.body.fill(0);
-        let _ = std::hint::black_box(&self.body);
-    }
-}
+impl_broker_debug_fields!(BrokerFrameV1 as value {
+    "version" => value.version,
+    "kind" => value.kind,
+    "body_len" => value.body.len(),
+} => finish_non_exhaustive);
+impl_scrub_fields_on_drop!(BrokerFrameV1 { body });
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct ProviderBindingWireV1 {
     pub(super) slot: u16,

@@ -6,9 +6,9 @@
 //! returned [`AdapterEffect`] values are handed to callers unchanged. The only
 //! effect inspected here is `EnterView`, because installing a certified view is
 //! the sole event allowed to restart the round and retransmission clocks. The
-//! round deadline grows linearly with the certified view while retransmission
-//! retains its fixed base interval. This deterministic backoff eventually gives
-//! a post-GST view enough time for bounded transport and durable body service.
+//! round deadline grows linearly through a finite protocol ceiling while
+//! retransmission stays fixed. This gives post-GST service additional room
+//! without turning a long-idle height's view into an hours-long wait.
 //! Every admitted owner freezes both its receiver-local physical predecessor
 //! cut and its logical lifecycle ordinal. A replay admitted at or after that
 //! cut cannot overtake the owner even when the replay retains an older logical
@@ -89,6 +89,8 @@ use std::{
     time::{Duration, Instant},
 };
 const RETRANSMIT_DIVISOR: u32 = 5;
+/// Maximum base intervals assigned to one certified view.
+const MAX_ROUND_TIMEOUT_MULTIPLIER: u128 = 10;
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
 /// Actor-global source for immutable lifecycle admission ordinals.
 ///
@@ -231,13 +233,11 @@ impl RuntimeLifecycleOrdinalSource {
 }
 /// Derive the deadline for one certified view from the immutable base timeout.
 ///
-/// View zero receives the configured base timeout. Each later view adds one
-/// more base interval, so any finite representable post-GST service bound is
-/// eventually exceeded. Saturation avoids wraparound at the platform duration
-/// limit; the protocol's liveness argument is conditioned on its finite bound
-/// being representable by [`Duration`].
-fn round_timeout_for_view(base_timeout: Duration, view: u64) -> Duration {
-    let multiplier = u128::from(view) + 1;
+/// Later views add one base interval through
+/// [`MAX_ROUND_TIMEOUT_MULTIPLIER`], then stay fixed. Saturating arithmetic
+/// avoids wraparound; liveness assumes post-GST service fits below the cap.
+pub(super) fn round_timeout_for_view(base_timeout: Duration, view: u64) -> Duration {
+    let multiplier = (u128::from(view) + 1).min(MAX_ROUND_TIMEOUT_MULTIPLIER);
     let total_nanos = base_timeout.as_nanos().saturating_mul(multiplier);
     let bounded_nanos = total_nanos.min(Duration::MAX.as_nanos());
     let seconds = u64::try_from(bounded_nanos / NANOS_PER_SECOND)

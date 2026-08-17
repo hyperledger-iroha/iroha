@@ -912,6 +912,31 @@ where
         value.zeroize_sensitive();
     })
 }
+/// Read one bounded opaque archive without selecting a Norito schema.
+macro_rules! read_kagemusha_bytes {
+    ($ptr:expr, $len:expr, $maximum:expr) => {{ unsafe { read_kagemusha_archive_bytes_bounded($ptr, $len, $maximum) } }};
+}
+/// Canonically encode and publish one public Kagemusha archive.
+macro_rules! write_kagemusha_archive {
+    ($value:expr, $out_ptr:expr, $out_len:expr, $maximum:expr) => {{
+        let archive = norito::to_bytes($value).map_err(|_| BridgeError::KagemushaProve)?;
+        if kagemusha_archive_out_of_bounds_for(archive.len(), $maximum) {
+            return Err(BridgeError::KagemushaProve);
+        }
+        unsafe { write_kagemusha_archive_bridge($out_ptr, $out_len, &archive) }
+    }};
+}
+/// Canonically encode and publish one secret Kagemusha archive through the wiping allocator.
+macro_rules! write_kagemusha_secret_archive {
+    ($value:expr, $out_ptr:expr, $out_len:expr, $maximum:expr) => {{
+        let archive =
+            Zeroizing::new(norito::to_bytes($value).map_err(|_| BridgeError::KagemushaProve)?);
+        if kagemusha_archive_out_of_bounds_for(archive.len(), $maximum) {
+            return Err(BridgeError::KagemushaProve);
+        }
+        unsafe { write_kagemusha_secret_bytes($out_ptr, $out_len, archive.as_slice()) }
+    }};
+}
 unsafe fn write_kagemusha_archive_bridge(
     out_ptr: *mut *mut c_uchar,
     out_len: *mut c_ulong,
@@ -9224,13 +9249,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_output_derive_v2(
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_result_ptr, out_result_len)?;
-        let request = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                request_norito_ptr,
-                request_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
-            )
-        }?;
+        let request = read_kagemusha_bytes!(
+            request_norito_ptr,
+            request_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        )?;
         let opening = Zeroizing::new(unsafe {
             read_kagemusha_archive_bytes_bounded(
                 receiver_note_opening_ptr,
@@ -9239,8 +9262,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_output_derive_v2(
             )
         }?);
         let result = kagemusha_recipient_output_derive_v2(&request, &opening)?;
-        let archive = norito::to_bytes(&result).map_err(|_| BridgeError::KagemushaProve)?;
-        unsafe { write_kagemusha_archive_bridge(out_result_ptr, out_result_len, &archive) }
+        write_kagemusha_archive!(
+            &result,
+            out_result_ptr,
+            out_result_len,
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+        )
     })();
     bridge_result_to_code(result)
 }
@@ -9276,16 +9303,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redemption_cha
             &request.operation_id,
             &request.entropy,
         )?;
-        let archive = Zeroizing::new(
-            norito::to_bytes(&preparation).map_err(|_| BridgeError::KagemushaProve)?,
-        );
-        if kagemusha_archive_out_of_bounds_for(
-            archive.len(),
-            KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_RESULT_MAX_BYTES_V4,
-        ) {
-            return Err(BridgeError::KagemushaProve);
-        }
-        unsafe { write_kagemusha_secret_bytes(out_result_ptr, out_result_len, archive.as_slice()) }
+        write_kagemusha_secret_archive!(
+            &preparation,
+            out_result_ptr,
+            out_result_len,
+            KAGEMUSHA_RECURSIVE_SPEND_REDEMPTION_CHANGE_PREPARE_RESULT_MAX_BYTES_V4
+        )
     })();
     bridge_result_to_code(result)
 }
@@ -9324,16 +9347,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_peer_split_cha
             &request.operation_id,
             &request.entropy,
         )?;
-        let archive = Zeroizing::new(
-            norito::to_bytes(&preparation).map_err(|_| BridgeError::KagemushaProve)?,
-        );
-        if kagemusha_archive_out_of_bounds_for(
-            archive.len(),
-            KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_RESULT_MAX_BYTES_V4,
-        ) {
-            return Err(BridgeError::KagemushaProve);
-        }
-        unsafe { write_kagemusha_secret_bytes(out_result_ptr, out_result_len, archive.as_slice()) }
+        write_kagemusha_secret_archive!(
+            &preparation,
+            out_result_ptr,
+            out_result_len,
+            KAGEMUSHA_RECURSIVE_SPEND_PEER_SPLIT_CHANGE_PREPARE_RESULT_MAX_BYTES_V4
+        )
     })();
     bridge_result_to_code(result)
 }
@@ -9347,8 +9366,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_receiver_key_reference_v2(
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_reference_ptr, out_reference_len)?;
-        let public_key_bytes =
-            unsafe { read_kagemusha_archive_bytes_bounded(public_key_ptr, public_key_len, 65) }?;
+        let public_key_bytes = read_kagemusha_bytes!(public_key_ptr, public_key_len, 65)?;
         let public_key = iroha_data_model::offline::KagemushaDevicePublicKeyV2::from_sec1_bytes(
             &public_key_bytes,
         )
@@ -9724,13 +9742,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_payment_request_sign
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_signing_bytes_ptr, out_signing_bytes_len)?;
-        let bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                payload_norito_ptr,
-                payload_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
-            )
-        }?;
+        let bytes = read_kagemusha_bytes!(
+            payload_norito_ptr,
+            payload_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        )?;
         let signing_bytes = kagemusha_recipient_payment_request_signing_bytes_v2(&bytes)?;
         unsafe {
             write_kagemusha_archive_bridge(
@@ -9754,18 +9770,19 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_payment_request_crea
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_request_ptr, out_request_len)?;
-        let payload = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                payload_norito_ptr,
-                payload_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
-            )
-        }?;
-        let signature =
-            unsafe { read_kagemusha_archive_bytes_bounded(signature_ptr, signature_len, 128) }?;
+        let payload = read_kagemusha_bytes!(
+            payload_norito_ptr,
+            payload_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        )?;
+        let signature = read_kagemusha_bytes!(signature_ptr, signature_len, 128)?;
         let request = kagemusha_recipient_payment_request_create_v2(&payload, &signature)?;
-        let archive = norito::to_bytes(&request).map_err(|_| BridgeError::KagemushaProve)?;
-        unsafe { write_kagemusha_archive_bridge(out_request_ptr, out_request_len, &archive) }
+        write_kagemusha_archive!(
+            &request,
+            out_request_ptr,
+            out_request_len,
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+        )
     })();
     bridge_result_to_code(result)
 }
@@ -9782,13 +9799,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_payment_request_veri
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_digest_ptr, out_digest_len)?;
-        let request = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                request_norito_ptr,
-                request_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
-            )
-        }?;
+        let request = read_kagemusha_bytes!(
+            request_norito_ptr,
+            request_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        )?;
         let digest = kagemusha_recipient_payment_request_verify_v2(&request, verified_at_ms)?;
         unsafe { write_kagemusha_archive_bridge(out_digest_ptr, out_digest_len, &digest) }
     })();
@@ -9865,20 +9880,16 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_registration_lineage
     let result = (|| {
         clear_bridge_output_or_null(out_lineage_ptr, out_lineage_len)?;
         clear_bridge_output_or_null(out_promoted_checkpoint_ptr, out_promoted_checkpoint_len)?;
-        let request = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                request_norito_ptr,
-                request_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
-            )
-        }?;
-        let lineage = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                lineage_norito_ptr,
-                lineage_norito_len,
-                iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_RESPONSE_BYTES,
-            )
-        }?;
+        let request = read_kagemusha_bytes!(
+            request_norito_ptr,
+            request_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        )?;
+        let lineage = read_kagemusha_bytes!(
+            lineage_norito_ptr,
+            lineage_norito_len,
+            iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_RESPONSE_BYTES
+        )?;
         let trusted_checkpoint_context_id = unsafe {
             read_fixed_array::<32>(
                 trusted_checkpoint_context_id_ptr,
@@ -9920,27 +9931,21 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_receive_offer_create
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_offer_ptr, out_offer_len)?;
-        let request = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                request_norito_ptr,
-                request_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
-            )
-        }?;
-        let lineage = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                lineage_norito_ptr,
-                lineage_norito_len,
-                iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_RESPONSE_BYTES,
-            )
-        }?;
-        let publisher_checkpoint_envelope = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                publisher_checkpoint_envelope_ptr,
-                publisher_checkpoint_envelope_len,
-                iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_OFFER_MAX_PUBLISHER_ENVELOPE_BYTES,
-            )
-        }?;
+        let request = read_kagemusha_bytes!(
+            request_norito_ptr,
+            request_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        )?;
+        let lineage = read_kagemusha_bytes!(
+            lineage_norito_ptr,
+            lineage_norito_len,
+            iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_RESPONSE_BYTES
+        )?;
+        let publisher_checkpoint_envelope = read_kagemusha_bytes!(
+            publisher_checkpoint_envelope_ptr,
+            publisher_checkpoint_envelope_len,
+            iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_OFFER_MAX_PUBLISHER_ENVELOPE_BYTES
+        )?;
         let offer = kagemusha_recipient_receive_offer_create_v2(
             &request,
             &lineage,
@@ -9972,13 +9977,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_receive_offer_projec
             out_publisher_checkpoint_envelope_ptr,
             out_publisher_checkpoint_envelope_len,
         )?;
-        let offer = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                offer_norito_ptr,
-                offer_norito_len,
-                iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES,
-            )
-        }?;
+        let offer = read_kagemusha_bytes!(
+            offer_norito_ptr,
+            offer_norito_len,
+            iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES
+        )?;
         let projected = kagemusha_recipient_receive_offer_project_v2(&offer)?;
         unsafe {
             write_kagemusha_archive_triple_bridge(
@@ -10031,13 +10034,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recipient_receive_offer_verify
             out_publisher_checkpoint_envelope_len,
         )?;
         clear_bridge_output_or_null(out_promoted_checkpoint_ptr, out_promoted_checkpoint_len)?;
-        let offer = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                offer_norito_ptr,
-                offer_norito_len,
-                iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES,
-            )
-        }?;
+        let offer = read_kagemusha_bytes!(
+            offer_norito_ptr,
+            offer_norito_len,
+            iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES
+        )?;
         let trusted_checkpoint_context_id = unsafe {
             read_fixed_array::<32>(
                 trusted_checkpoint_context_id_ptr,
@@ -10091,13 +10092,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_signing_
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_signing_bytes_ptr, out_signing_bytes_len)?;
-        let preparation_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                preparation_norito_ptr,
-                preparation_norito_len,
-                KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2,
-            )
-        }?;
+        let preparation_bytes = read_kagemusha_bytes!(
+            preparation_norito_ptr,
+            preparation_norito_len,
+            KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2
+        )?;
         let preparation = kagemusha_request_authorization_preparation_v2(&preparation_bytes)?;
         let signing_bytes = preparation.signing_bytes()?;
         unsafe {
@@ -10131,13 +10130,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_finalize
     let result = (|| {
         clear_bridge_output_or_null(out_authorization_ptr, out_authorization_len)?;
         clear_bridge_output_or_null(out_signature_raw_ptr, out_signature_raw_len)?;
-        let preparation_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                preparation_norito_ptr,
-                preparation_norito_len,
-                KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2,
-            )
-        }?;
+        let preparation_bytes = read_kagemusha_bytes!(
+            preparation_norito_ptr,
+            preparation_norito_len,
+            KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2
+        )?;
         let authenticator_data = if authenticator_data_len == 0 {
             Vec::new()
         } else {
@@ -10149,9 +10146,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_finalize
                 )
             }?
         };
-        let signature_der = unsafe {
-            read_kagemusha_archive_bytes_bounded(signature_der_ptr, signature_der_len, 72)
-        }?;
+        let signature_der = read_kagemusha_bytes!(signature_der_ptr, signature_der_len, 72)?;
         let (archive, signature_raw) = kagemusha_finalize_hardware_authorization_archive_v2(
             &preparation_bytes,
             authenticator_data,
@@ -10203,20 +10198,16 @@ pub unsafe extern "C" fn connect_norito_kagemusha_request_authorization_finalize
         {
             return Err(BridgeError::NullPtr);
         }
-        let preparation_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                preparation_norito_ptr,
-                preparation_norito_len,
-                KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2,
-            )
-        }?;
-        let assertion_object = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                assertion_object_ptr,
-                assertion_object_len,
-                KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_OBJECT_MAX_BYTES_V1,
-            )
-        }?;
+        let preparation_bytes = read_kagemusha_bytes!(
+            preparation_norito_ptr,
+            preparation_norito_len,
+            KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2
+        )?;
+        let assertion_object = read_kagemusha_bytes!(
+            assertion_object_ptr,
+            assertion_object_len,
+            KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_OBJECT_MAX_BYTES_V1
+        )?;
         let (archive, signature_raw, authenticator_data) =
             kagemusha_finalize_ios_app_attest_authorization_archive_v2(
                 &preparation_bytes,
@@ -10257,20 +10248,16 @@ pub unsafe extern "C" fn connect_norito_kagemusha_receiver_acknowledgement_paylo
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_payload_ptr, out_payload_len)?;
-        let request_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                request_norito_ptr,
-                request_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
-            )
-        }?;
-        let payment_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                peer_payment_norito_ptr,
-                peer_payment_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4,
-            )
-        }?;
+        let request_bytes = read_kagemusha_bytes!(
+            request_norito_ptr,
+            request_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        )?;
+        let payment_bytes = read_kagemusha_bytes!(
+            peer_payment_norito_ptr,
+            peer_payment_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
+        )?;
         let request = decode_canonical_kagemusha_archive::<
             iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
         >(&request_bytes)?;
@@ -10279,8 +10266,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_receiver_acknowledgement_paylo
         >(&payment_bytes)?;
         let payload =
             kagemusha_receiver_acknowledgement_payload_v2(&request, &payment, accepted_at_ms)?;
-        let archive = norito::to_bytes(&payload).map_err(|_| BridgeError::KagemushaProve)?;
-        unsafe { write_kagemusha_archive_bridge(out_payload_ptr, out_payload_len, &archive) }
+        write_kagemusha_archive!(
+            &payload,
+            out_payload_ptr,
+            out_payload_len,
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+        )
     })();
     bridge_result_to_code(result)
 }
@@ -10294,13 +10285,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_receiver_acknowledgement_signi
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_signing_bytes_ptr, out_signing_bytes_len)?;
-        let payload_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                payload_norito_ptr,
-                payload_norito_len,
-                KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2,
-            )
-        }?;
+        let payload_bytes = read_kagemusha_bytes!(
+            payload_norito_ptr,
+            payload_norito_len,
+            KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2
+        )?;
         let payload = decode_canonical_kagemusha_archive::<
             iroha_data_model::offline::KagemushaReceiverAcknowledgementPayloadV2,
         >(&payload_bytes)?;
@@ -10333,29 +10322,22 @@ pub unsafe extern "C" fn connect_norito_kagemusha_receiver_acknowledgement_creat
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_acknowledgement_ptr, out_acknowledgement_len)?;
-        let payload_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                payload_norito_ptr,
-                payload_norito_len,
-                KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2,
-            )
-        }?;
-        let signature =
-            unsafe { read_kagemusha_archive_bytes_bounded(signature_ptr, signature_len, 128) }?;
-        let request_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                request_norito_ptr,
-                request_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
-            )
-        }?;
-        let payment_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                peer_payment_norito_ptr,
-                peer_payment_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4,
-            )
-        }?;
+        let payload_bytes = read_kagemusha_bytes!(
+            payload_norito_ptr,
+            payload_norito_len,
+            KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2
+        )?;
+        let signature = read_kagemusha_bytes!(signature_ptr, signature_len, 128)?;
+        let request_bytes = read_kagemusha_bytes!(
+            request_norito_ptr,
+            request_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        )?;
+        let payment_bytes = read_kagemusha_bytes!(
+            peer_payment_norito_ptr,
+            peer_payment_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
+        )?;
         let payload = decode_canonical_kagemusha_archive::<
             iroha_data_model::offline::KagemushaReceiverAcknowledgementPayloadV2,
         >(&payload_bytes)?;
@@ -10402,27 +10384,21 @@ pub unsafe extern "C" fn connect_norito_kagemusha_receiver_acknowledgement_verif
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_result_ptr, out_result_len)?;
-        let acknowledgement_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                acknowledgement_norito_ptr,
-                acknowledgement_norito_len,
-                KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2,
-            )
-        }?;
-        let request_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                request_norito_ptr,
-                request_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
-            )
-        }?;
-        let payment_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                peer_payment_norito_ptr,
-                peer_payment_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4,
-            )
-        }?;
+        let acknowledgement_bytes = read_kagemusha_bytes!(
+            acknowledgement_norito_ptr,
+            acknowledgement_norito_len,
+            KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2
+        )?;
+        let request_bytes = read_kagemusha_bytes!(
+            request_norito_ptr,
+            request_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        )?;
+        let payment_bytes = read_kagemusha_bytes!(
+            peer_payment_norito_ptr,
+            peer_payment_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
+        )?;
         let acknowledgement = decode_canonical_kagemusha_archive::<
             iroha_data_model::offline::KagemushaReceiverAcknowledgementV2,
         >(&acknowledgement_bytes)?;
@@ -10441,8 +10417,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_receiver_acknowledgement_verif
         result
             .validate_public_binding()
             .map_err(|_| BridgeError::KagemushaProve)?;
-        let archive = norito::to_bytes(&result).map_err(|_| BridgeError::KagemushaProve)?;
-        unsafe { write_kagemusha_archive_bridge(out_result_ptr, out_result_len, &archive) }
+        write_kagemusha_archive!(
+            &result,
+            out_result_ptr,
+            out_result_len,
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+        )
     })();
     bridge_result_to_code(result)
 }
@@ -10458,13 +10438,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_peer_payment_f
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_payment_ptr, out_payment_len)?;
-        let split_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                split_result_norito_ptr,
-                split_result_norito_len,
-                KAGEMUSHA_RECURSIVE_SPEND_LIFECYCLE_RESULT_MAX_BYTES_V4,
-            )
-        }?;
+        let split_bytes = read_kagemusha_bytes!(
+            split_result_norito_ptr,
+            split_result_norito_len,
+            KAGEMUSHA_RECURSIVE_SPEND_LIFECYCLE_RESULT_MAX_BYTES_V4
+        )?;
         let split = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendSplitResultV4,
         >(&split_bytes)?;
@@ -10473,14 +10451,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_peer_payment_f
                 &split,
             )
             .map_err(|_| BridgeError::KagemushaProve)?;
-        let archive = norito::to_bytes(&payment).map_err(|_| BridgeError::KagemushaProve)?;
-        if kagemusha_archive_out_of_bounds_for(
-            archive.len(),
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4,
-        ) {
-            return Err(BridgeError::KagemushaProve);
-        }
-        unsafe { write_kagemusha_archive_bridge(out_payment_ptr, out_payment_len, &archive) }
+        write_kagemusha_archive!(
+            &payment,
+            out_payment_ptr,
+            out_payment_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
+        )
     })();
     bridge_result_to_code(result)
 }
@@ -10497,21 +10473,23 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_peer_payment_v
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_payment_ptr, out_payment_len)?;
-        let payment_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                payment_norito_ptr,
-                payment_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4,
-            )
-        }?;
+        let payment_bytes = read_kagemusha_bytes!(
+            payment_norito_ptr,
+            payment_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
+        )?;
         let payment = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendPeerPaymentV4,
         >(&payment_bytes)?;
         payment
             .validate_public_binding()
             .map_err(|_| BridgeError::KagemushaProve)?;
-        let canonical = norito::to_bytes(&payment).map_err(|_| BridgeError::KagemushaProve)?;
-        unsafe { write_kagemusha_archive_bridge(out_payment_ptr, out_payment_len, &canonical) }
+        write_kagemusha_archive!(
+            &payment,
+            out_payment_ptr,
+            out_payment_len,
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+        )
     })();
     bridge_result_to_code(result)
 }
@@ -10525,13 +10503,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_bundle_summary
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_summary_ptr, out_summary_len)?;
-        let bundle_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                bundle_norito_ptr,
-                bundle_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4,
-            )
-        }?;
+        let bundle_bytes = read_kagemusha_bytes!(
+            bundle_norito_ptr,
+            bundle_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
+        )?;
         let bundle = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
         >(&bundle_bytes)?;
@@ -10539,8 +10515,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_bundle_summary
             .validate_public_binding()
             .map_err(|_| BridgeError::KagemushaProve)?;
         let summary = bundle.summary().map_err(|_| BridgeError::KagemushaProve)?;
-        let archive = norito::to_bytes(&summary).map_err(|_| BridgeError::KagemushaProve)?;
-        unsafe { write_kagemusha_archive_bridge(out_summary_ptr, out_summary_len, &archive) }
+        write_kagemusha_archive!(
+            &summary,
+            out_summary_ptr,
+            out_summary_len,
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+        )
     })();
     bridge_result_to_code(result)
 }
@@ -10559,23 +10539,19 @@ pub unsafe extern "C" fn connect_norito_kagemusha_output_membership_frontier_bui
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_frontier_ptr, out_frontier_len)?;
-        let flattened = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                flattened_siblings_ptr,
-                flattened_siblings_len,
-                iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 * 32,
-            )
-        }?;
+        let flattened = read_kagemusha_bytes!(
+            flattened_siblings_ptr,
+            flattened_siblings_len,
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 * 32
+        )?;
         if flattened.len() != iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 * 32 {
             return Err(BridgeError::KagemushaProve);
         }
-        let directions = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                directions_ptr,
-                directions_len,
-                iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2,
-            )
-        }?;
+        let directions = read_kagemusha_bytes!(
+            directions_ptr,
+            directions_len,
+            iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2
+        )?;
         if directions.len() != iroha_core::zk::confidential_v2::CONFIDENTIAL_TREE_DEPTH_V2 {
             return Err(BridgeError::KagemushaProve);
         }
@@ -10595,14 +10571,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_output_membership_frontier_bui
             },
         };
         frontier.validate()?;
-        let archive = norito::to_bytes(&frontier).map_err(|_| BridgeError::KagemushaProve)?;
-        if kagemusha_archive_out_of_bounds_for(
-            archive.len(),
-            KAGEMUSHA_OUTPUT_MEMBERSHIP_FRONTIER_MAX_BYTES_V4,
-        ) {
-            return Err(BridgeError::KagemushaProve);
-        }
-        unsafe { write_kagemusha_archive_bridge(out_frontier_ptr, out_frontier_len, &archive) }
+        write_kagemusha_archive!(
+            &frontier,
+            out_frontier_ptr,
+            out_frontier_len,
+            KAGEMUSHA_OUTPUT_MEMBERSHIP_FRONTIER_MAX_BYTES_V4
+        )
     })();
     bridge_result_to_code(result)
 }
@@ -10620,13 +10594,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_output_membership_paths_derive
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_paths_ptr, out_paths_len)?;
-        let frontier_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                frontier_norito_ptr,
-                frontier_norito_len,
-                KAGEMUSHA_OUTPUT_MEMBERSHIP_FRONTIER_MAX_BYTES_V4,
-            )
-        }?;
+        let frontier_bytes = read_kagemusha_bytes!(
+            frontier_norito_ptr,
+            frontier_norito_len,
+            KAGEMUSHA_OUTPUT_MEMBERSHIP_FRONTIER_MAX_BYTES_V4
+        )?;
         let frontier = decode_canonical_kagemusha_archive::<KagemushaOutputMembershipFrontierV4>(
             &frontier_bytes,
         )?;
@@ -10645,14 +10617,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_output_membership_paths_derive
         let change = optional_commitment(change_commitment_ptr, change_commitment_len)?;
         let paths =
             kagemusha_output_membership_paths_from_frontier_v4(&frontier, recipient, change)?;
-        let archive = norito::to_bytes(&paths).map_err(|_| BridgeError::KagemushaProve)?;
-        if kagemusha_archive_out_of_bounds_for(
-            archive.len(),
-            KAGEMUSHA_OUTPUT_MEMBERSHIP_PATHS_MAX_BYTES_V4,
-        ) {
-            return Err(BridgeError::KagemushaProve);
-        }
-        unsafe { write_kagemusha_archive_bridge(out_paths_ptr, out_paths_len, &archive) }
+        write_kagemusha_archive!(
+            &paths,
+            out_paths_ptr,
+            out_paths_len,
+            KAGEMUSHA_OUTPUT_MEMBERSHIP_PATHS_MAX_BYTES_V4
+        )
     })();
     bridge_result_to_code(result)
 }
@@ -10793,35 +10763,27 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_provenan
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_provenance_ptr, out_provenance_len)?;
-        let bundle_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                bundle_norito_ptr,
-                bundle_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4,
-            )
-        }?;
-        let roster_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                roster_norito_ptr,
-                roster_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2
-                    as usize,
-            )
-        }?;
-        let anchor_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                anchor_norito_ptr,
-                anchor_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2 as usize,
-            )
-        }?;
-        let proof_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                finality_proof_norito_ptr,
-                finality_proof_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2 as usize,
-            )
-        }?;
+        let bundle_bytes = read_kagemusha_bytes!(
+            bundle_norito_ptr,
+            bundle_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
+        )?;
+        let roster_bytes = read_kagemusha_bytes!(
+            roster_norito_ptr,
+            roster_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2
+                as usize
+        )?;
+        let anchor_bytes = read_kagemusha_bytes!(
+            anchor_norito_ptr,
+            anchor_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2 as usize
+        )?;
+        let proof_bytes = read_kagemusha_bytes!(
+            finality_proof_norito_ptr,
+            finality_proof_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2 as usize
+        )?;
         let bundle = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
         >(&bundle_bytes)?;
@@ -10844,14 +10806,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_provenan
             ],
         };
         validate_kagemusha_topup_provenance_for_bundle_v4(&bundle, &provenance, block_height)?;
-        let archive = norito::to_bytes(&provenance).map_err(|_| BridgeError::KagemushaProve)?;
-        if kagemusha_archive_out_of_bounds_for(
-            archive.len(),
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4,
-        ) {
-            return Err(BridgeError::KagemushaProve);
-        }
-        unsafe { write_kagemusha_archive_bridge(out_provenance_ptr, out_provenance_len, &archive) }
+        write_kagemusha_archive!(
+            &provenance,
+            out_provenance_ptr,
+            out_provenance_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4
+        )
     })();
     bridge_result_to_code(result)
 }
@@ -10868,20 +10828,16 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_provenan
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_provenance_ptr, out_provenance_len)?;
-        let bundle_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                bundle_norito_ptr,
-                bundle_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4,
-            )
-        }?;
-        let provenance_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                provenance_norito_ptr,
-                provenance_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4,
-            )
-        }?;
+        let bundle_bytes = read_kagemusha_bytes!(
+            bundle_norito_ptr,
+            bundle_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4
+        )?;
+        let provenance_bytes = read_kagemusha_bytes!(
+            provenance_norito_ptr,
+            provenance_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4
+        )?;
         let bundle = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
         >(&bundle_bytes)?;
@@ -10889,8 +10845,12 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_provenan
             iroha_data_model::offline::KagemushaRecursiveSpendTopUpProvenanceV4,
         >(&provenance_bytes)?;
         validate_kagemusha_topup_provenance_for_bundle_v4(&bundle, &provenance, block_height)?;
-        let archive = norito::to_bytes(&provenance).map_err(|_| BridgeError::KagemushaProve)?;
-        unsafe { write_kagemusha_archive_bridge(out_provenance_ptr, out_provenance_len, &archive) }
+        write_kagemusha_archive!(
+            &provenance,
+            out_provenance_ptr,
+            out_provenance_len,
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+        )
     })();
     bridge_result_to_code(result)
 }
@@ -11123,35 +11083,27 @@ pub unsafe extern "C" fn connect_norito_kagemusha_topup_finality_verify_v4(
         {
             return Err(BridgeError::KagemushaProve);
         }
-        let proof_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                proof_norito_ptr,
-                proof_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2 as usize,
-            )
-        }?;
-        let roster_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                roster_norito_ptr,
-                roster_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2
-                    as usize,
-            )
-        }?;
-        let anchor_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                anchor_norito_ptr,
-                anchor_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2 as usize,
-            )
-        }?;
-        let manifest_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                manifest_norito_ptr,
-                manifest_norito_len,
-                KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4 as usize,
-            )
-        }?;
+        let proof_bytes = read_kagemusha_bytes!(
+            proof_norito_ptr,
+            proof_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2 as usize
+        )?;
+        let roster_bytes = read_kagemusha_bytes!(
+            roster_norito_ptr,
+            roster_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2
+                as usize
+        )?;
+        let anchor_bytes = read_kagemusha_bytes!(
+            anchor_norito_ptr,
+            anchor_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2 as usize
+        )?;
+        let manifest_bytes = read_kagemusha_bytes!(
+            manifest_norito_ptr,
+            manifest_norito_len,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4 as usize
+        )?;
         let expected_manifest_sha256: [u8; 32] = unsafe {
             read_kagemusha_archive_bytes_bounded(
                 expected_manifest_sha256_ptr,
@@ -11209,13 +11161,11 @@ fn decode_kagemusha_recursive_spend_manifest_v4(
     {
         return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
     }
-    let manifest_bytes = unsafe {
-        read_kagemusha_archive_bytes_bounded(
-            manifest_norito_ptr,
-            manifest_norito_len,
-            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4 as usize,
-        )
-    }?;
+    let manifest_bytes = read_kagemusha_bytes!(
+        manifest_norito_ptr,
+        manifest_norito_len,
+        KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V4 as usize
+    )?;
     let expected_manifest_sha256: [u8; 32] = unsafe {
         read_kagemusha_archive_bytes_bounded(
             expected_manifest_sha256_ptr,
@@ -11928,13 +11878,11 @@ fn decode_kagemusha_candidate_evidence_lab_candidate_v4(
     {
         return Err(BridgeError::KagemushaRecursiveSpendV4Artifact);
     }
-    let candidate_bytes = unsafe {
-        read_kagemusha_archive_bytes_bounded(
-            candidate_norito_ptr,
-            candidate_norito_len,
-            KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_MAX_CANDIDATE_BYTES_V4 as usize,
-        )
-    }?;
+    let candidate_bytes = read_kagemusha_bytes!(
+        candidate_norito_ptr,
+        candidate_norito_len,
+        KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_MAX_CANDIDATE_BYTES_V4 as usize
+    )?;
     let expected_candidate_sha256: [u8; 32] = unsafe {
         read_kagemusha_archive_bytes_bounded(
             expected_candidate_sha256_ptr,
@@ -12639,13 +12587,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_unsigned
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_digest_ptr, out_digest_len)?;
-        let bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                unsigned_norito_ptr,
-                unsigned_norito_len,
-                KAGEMUSHA_RECURSIVE_SPEND_TOPUP_MAX_BYTES_V4,
-            )
-        }?;
+        let bytes = read_kagemusha_bytes!(
+            unsigned_norito_ptr,
+            unsigned_norito_len,
+            KAGEMUSHA_RECURSIVE_SPEND_TOPUP_MAX_BYTES_V4
+        )?;
         let unsigned = decode_canonical_kagemusha_topup_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendTopUpUnsignedV4,
         >(&bytes)?;
@@ -12666,20 +12612,16 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_finalize
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_request_ptr, out_request_len)?;
-        let unsigned_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                unsigned_norito_ptr,
-                unsigned_norito_len,
-                KAGEMUSHA_RECURSIVE_SPEND_TOPUP_MAX_BYTES_V4,
-            )
-        }?;
-        let authorization_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                authorization_norito_ptr,
-                authorization_norito_len,
-                KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2,
-            )
-        }?;
+        let unsigned_bytes = read_kagemusha_bytes!(
+            unsigned_norito_ptr,
+            unsigned_norito_len,
+            KAGEMUSHA_RECURSIVE_SPEND_TOPUP_MAX_BYTES_V4
+        )?;
+        let authorization_bytes = read_kagemusha_bytes!(
+            authorization_norito_ptr,
+            authorization_norito_len,
+            KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2
+        )?;
         let unsigned = decode_canonical_kagemusha_topup_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendTopUpUnsignedV4,
         >(&unsigned_bytes)?;
@@ -12707,13 +12649,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_unsigne
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_digest_ptr, out_digest_len)?;
-        let bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                unsigned_norito_ptr,
-                unsigned_norito_len,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4,
-            )
-        }?;
+        let bytes = read_kagemusha_bytes!(
+            unsigned_norito_ptr,
+            unsigned_norito_len,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+        )?;
         let unsigned = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendRedeemUnsignedV4,
         >(&bytes)?;
@@ -12738,20 +12678,16 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_finaliz
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_result_ptr, out_result_len)?;
-        let build_result_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                build_result_norito_ptr,
-                build_result_norito_len,
-                KAGEMUSHA_RECURSIVE_SPEND_LIFECYCLE_RESULT_MAX_BYTES_V4,
-            )
-        }?;
-        let authorization_bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                authorization_norito_ptr,
-                authorization_norito_len,
-                KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2,
-            )
-        }?;
+        let build_result_bytes = read_kagemusha_bytes!(
+            build_result_norito_ptr,
+            build_result_norito_len,
+            KAGEMUSHA_RECURSIVE_SPEND_LIFECYCLE_RESULT_MAX_BYTES_V4
+        )?;
+        let authorization_bytes = read_kagemusha_bytes!(
+            authorization_norito_ptr,
+            authorization_norito_len,
+            KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_ARCHIVE_BYTES_V2
+        )?;
         let build_result = decode_canonical_kagemusha_recursive_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendRedeemBuildResultV4,
         >(&build_result_bytes)?;
@@ -12778,13 +12714,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_v4(
 ) -> c_int {
     let result = (|| {
         clear_bridge_output_or_null(out_instruction_ptr, out_instruction_len)?;
-        let bytes = unsafe {
-            read_kagemusha_archive_bytes_bounded(
-                request_norito_ptr,
-                request_norito_len,
-                KAGEMUSHA_RECURSIVE_SPEND_TOPUP_MAX_BYTES_V4,
-            )
-        }?;
+        let bytes = read_kagemusha_bytes!(
+            request_norito_ptr,
+            request_norito_len,
+            KAGEMUSHA_RECURSIVE_SPEND_TOPUP_MAX_BYTES_V4
+        )?;
         let request = decode_canonical_kagemusha_topup_archive::<
             iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV4,
         >(&bytes)?;
@@ -12792,722 +12726,370 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_topup_v4(
             .validate_public_binding()
             .map_err(|_| BridgeError::KagemushaProve)?;
         let instruction = iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4::new(request);
-        let archive = norito::to_bytes(&instruction).map_err(|_| BridgeError::KagemushaProve)?;
-        unsafe {
-            write_kagemusha_archive_bridge(out_instruction_ptr, out_instruction_len, &archive)
-        }
+        write_kagemusha_archive!(
+            &instruction,
+            out_instruction_ptr,
+            out_instruction_len,
+            KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES
+        )
     })();
     bridge_result_to_code(result)
 }
-/// ABI-21 initialization boundary using only the authenticated V4 release.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init_v4(
-    request_norito_ptr: *const c_uchar,
-    request_norito_len: c_ulong,
-    out_init_result_ptr: *mut *mut c_uchar,
-    out_init_result_len: *mut c_ulong,
+unsafe fn write_kagemusha_lifecycle_result_v4(
+    result: BridgeResult<Vec<u8>>,
+    out_ptr: *mut *mut c_uchar,
+    out_len: *mut c_ulong,
 ) -> c_int {
-    clear_bridge_output(out_init_result_ptr, out_init_result_len);
-    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
-        Ok(permit) => permit,
-        Err(error) => return error.code(),
-    };
-    let request_bytes = match unsafe {
-        read_kagemusha_archive_bytes_bounded(
-            request_norito_ptr,
-            request_norito_len,
-            KAGEMUSHA_RECURSIVE_SPEND_INIT_LOCAL_MAX_BYTES_V4,
-        )
-    } {
-        Ok(bytes) => Zeroizing::new(bytes),
-        Err(error) => return error.code(),
-    };
-    let mut local = match decode_canonical_kagemusha_recursive_archive::<
-        KagemushaRecursiveSpendInitLocalRequestV4,
-    >(&request_bytes)
-    {
-        Ok(request) => request,
-        Err(error) => return error.code(),
-    };
-    if local.validate_shape().is_err() {
-        local.zeroize();
-        return BridgeError::KagemushaProve.code();
-    }
-    let binding = local.request.artifact_binding.clone();
-    let installed = match require_kagemusha_recursive_spend_artifact_binding_v4(&binding) {
-        Ok(installed) => installed,
-        Err(error) => {
-            local.zeroize();
-            return error.code();
-        }
-    };
-    let anchor = &local.request.topup_anchor;
-    if validate_kagemusha_recursive_spend_release_context_v4(
-        &installed,
-        &anchor.network_id,
-        anchor.asset.definition(),
-        anchor.asset_scale,
-        anchor.finalized_height,
-        true,
-    )
-    .is_err()
-        || verify_kagemusha_topup_roster_binding_v4(
-            &local.request.topup_finality_roster_artifact,
-            installed.manifest(),
-        )
-        .is_err()
-    {
-        local.zeroize();
-        return BridgeError::KagemushaRecursiveSpendV4Artifact.code();
-    }
-    let result = run_kagemusha_recursive_spend_worker_v4(
-        "krv4-init",
-        BridgeError::KagemushaProve,
-        move || execute_kagemusha_recursive_spend_init_v4(&local, &installed),
-    );
     match result {
-        Ok(result) => {
-            let archive = match norito::to_bytes(&result) {
-                Ok(archive) => archive,
-                Err(_) => return BridgeError::KagemushaProve.code(),
-            };
-            bridge_result_to_code(unsafe {
-                write_kagemusha_archive_bridge(out_init_result_ptr, out_init_result_len, &archive)
-            })
-        }
+        Ok(archive) => bridge_result_to_code(unsafe {
+            write_kagemusha_archive_bridge(out_ptr, out_len, &archive)
+        }),
         Err(error) => error.code(),
     }
 }
-/// ABI-21 append boundary. It never falls back to the V2/V3 lifecycle.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_append_v4(
-    request_norito_ptr: *const c_uchar,
-    request_norito_len: c_ulong,
-    recipient_request_norito_ptr: *const c_uchar,
-    recipient_request_norito_len: c_ulong,
-    verified_at_ms: u64,
-    out_split_result_ptr: *mut *mut c_uchar,
-    out_split_result_len: *mut c_ulong,
-) -> c_int {
-    clear_bridge_output(out_split_result_ptr, out_split_result_len);
-    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
-        Ok(permit) => permit,
-        Err(error) => return error.code(),
-    };
-    let request_bytes = match unsafe {
-        read_kagemusha_archive_bytes_bounded(
-            request_norito_ptr,
-            request_norito_len,
-            KAGEMUSHA_RECURSIVE_SPEND_APPEND_LOCAL_MAX_BYTES_V4,
-        )
-    } {
-        Ok(bytes) => Zeroizing::new(bytes),
-        Err(error) => return error.code(),
-    };
-    let recipient_bytes = match unsafe {
-        read_kagemusha_archive_bytes_bounded(
-            recipient_request_norito_ptr,
-            recipient_request_norito_len,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
-        )
-    } {
-        Ok(bytes) => bytes,
-        Err(error) => return error.code(),
-    };
-    let mut local = match decode_canonical_kagemusha_recursive_archive::<
-        KagemushaRecursiveSpendAppendLocalRequestV4,
-    >(&request_bytes)
-    {
-        Ok(request) => request,
-        Err(error) => return error.code(),
-    };
-    let recipient_request = match decode_canonical_kagemusha_archive::<
-        iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
-    >(&recipient_bytes)
-    {
-        Ok(request) => request,
-        Err(error) => {
-            local.zeroize();
-            return error.code();
-        }
-    };
-    if local
-        .validate_for_recipient_request(&recipient_request, verified_at_ms)
-        .is_err()
-    {
-        local.zeroize();
-        return BridgeError::KagemushaProve.code();
-    }
-    let binding = local.output_artifact_binding.clone();
-    let installed = match require_kagemusha_recursive_spend_artifact_binding_v4(&binding) {
-        Ok(installed) => installed,
-        Err(error) => {
-            local.zeroize();
-            return error.code();
-        }
-    };
-    let statement = &local.previous_inputs[0].previous_bundle.statement;
-    if validate_kagemusha_recursive_spend_release_context_v4(
-        &installed,
-        &statement.network_id,
-        &statement.asset,
-        statement.asset_scale,
-        local.block_height,
-        true,
-    )
-    .is_err()
-    {
-        local.zeroize();
-        return BridgeError::KagemushaRecursiveSpendV4Artifact.code();
-    }
-    let result = run_kagemusha_recursive_spend_worker_v4(
-        "krv4-append",
-        BridgeError::KagemushaProve,
-        move || {
-            execute_kagemusha_recursive_spend_append_v4(
-                &local,
-                &recipient_request,
-                verified_at_ms,
-                &installed,
-            )
-        },
-    );
-    match result {
-        Ok(result) => {
-            let archive = match norito::to_bytes(&result) {
-                Ok(archive) => archive,
-                Err(_) => return BridgeError::KagemushaProve.code(),
-            };
-            bridge_result_to_code(unsafe {
-                write_kagemusha_archive_bridge(out_split_result_ptr, out_split_result_len, &archive)
-            })
-        }
-        Err(error) => error.code(),
-    }
-}
-/// ABI-21 terminal-verification boundary over the installed V4 verifier set.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_verify_v4(
-    request_norito_ptr: *const c_uchar,
-    request_norito_len: c_ulong,
-    out_result_ptr: *mut *mut c_uchar,
-    out_result_len: *mut c_ulong,
-) -> c_int {
-    clear_bridge_output(out_result_ptr, out_result_len);
-    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
-        Ok(permit) => permit,
-        Err(error) => return error.code(),
-    };
-    if usize::try_from(request_norito_len).map_or(true, |len| {
-        len == 0 || len > KAGEMUSHA_RECURSIVE_SPEND_VERIFY_LOCAL_MAX_BYTES_V4
-    }) {
-        return BridgeError::KagemushaProve.code();
-    }
-    let request_bytes = match unsafe {
-        read_kagemusha_archive_bytes_bounded(
-            request_norito_ptr,
-            request_norito_len,
-            KAGEMUSHA_RECURSIVE_SPEND_VERIFY_LOCAL_MAX_BYTES_V4,
-        )
-    } {
-        Ok(bytes) => bytes,
-        Err(error) => return error.code(),
-    };
-    let local = match decode_canonical_kagemusha_recursive_archive::<
-        KagemushaRecursiveSpendVerifyLocalRequestV4,
-    >(&request_bytes)
-    {
-        Ok(request) => request,
-        Err(error) => return error.code(),
-    };
-    if local.validate_shape().is_err() {
-        return BridgeError::KagemushaProve.code();
-    }
-    let request = &local.request;
-    let installed =
-        match require_kagemusha_recursive_spend_artifact_binding_v4(&request.artifact_binding) {
-            Ok(installed) => installed,
+
+macro_rules! read_kagemusha_lifecycle_input {
+    ($ptr:expr, $len:expr; max $max:expr; precheck $precheck:expr) => {{
+        let permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
+            Ok(permit) => permit,
             Err(error) => return error.code(),
         };
-    let statement = &request.bundle.statement;
-    if validate_kagemusha_recursive_spend_release_context_v4(
-        &installed,
-        &statement.network_id,
-        &statement.asset,
-        statement.asset_scale,
-        request.block_height,
-        false,
-    )
-    .is_err()
-        || verify_kagemusha_topup_roster_binding_v4(
-            &request.topup_provenance.topup_finality_roster_artifact,
-            installed.manifest(),
-        )
-        .is_err()
-        || request
-            .topup_provenance
-            .topup_finality_evidence
-            .iter()
-            .any(|evidence| {
-                evidence.topup_anchor.network_id != statement.network_id
-                    || evidence.topup_anchor.asset.definition() != &statement.asset
-                    || evidence.topup_anchor.asset_scale != statement.asset_scale
-                    || validate_kagemusha_recursive_spend_release_context_v4(
-                        &installed,
-                        &evidence.topup_anchor.network_id,
-                        evidence.topup_anchor.asset.definition(),
-                        evidence.topup_anchor.asset_scale,
-                        evidence.topup_anchor.finalized_height,
-                        false,
-                    )
-                    .is_err()
-            })
-    {
-        return BridgeError::KagemushaRecursiveSpendV4Artifact.code();
-    }
-    let result = run_kagemusha_recursive_spend_worker_v4(
-        "krv4-verify",
-        BridgeError::KagemushaProve,
-        move || execute_kagemusha_recursive_spend_verify_v4(&local, &installed),
-    );
-    match result {
-        Ok(result) => {
-            let archive = match norito::to_bytes(&result) {
-                Ok(archive) => archive,
-                Err(_) => return BridgeError::KagemushaProve.code(),
-            };
-            bridge_result_to_code(unsafe {
-                write_kagemusha_archive_bridge(out_result_ptr, out_result_len, &archive)
-            })
+        if $precheck && usize::try_from($len).map_or(true, |len| len == 0 || len > $max) {
+            return BridgeError::KagemushaProve.code();
         }
-        Err(error) => error.code(),
-    }
+        let bytes = match unsafe { read_kagemusha_archive_bytes_bounded($ptr, $len, $max) } {
+            Ok(bytes) => bytes,
+            Err(error) => return error.code(),
+        };
+        (permit, bytes)
+    }};
 }
-/// ABI-21 full-terminal or partial-with-change redemption boundary.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_redeem_v4(
-    request_norito_ptr: *const c_uchar,
-    request_norito_len: c_ulong,
-    out_build_result_ptr: *mut *mut c_uchar,
-    out_build_result_len: *mut c_ulong,
-) -> c_int {
-    clear_bridge_output(out_build_result_ptr, out_build_result_len);
-    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
-        Ok(permit) => permit,
-        Err(error) => return error.code(),
-    };
-    let request_bytes = match unsafe {
-        read_kagemusha_archive_bytes_bounded(
-            request_norito_ptr,
-            request_norito_len,
-            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_LOCAL_MAX_BYTES_V4,
-        )
-    } {
-        Ok(bytes) => Zeroizing::new(bytes),
-        Err(error) => return error.code(),
-    };
-    let mut local = match decode_canonical_kagemusha_recursive_archive::<
-        KagemushaRecursiveSpendRedeemLocalRequestV4,
-    >(&request_bytes)
-    {
-        Ok(request) => request,
-        Err(error) => return error.code(),
-    };
-    if local.validate_shape().is_err() {
-        local.zeroize();
-        return BridgeError::KagemushaProve.code();
-    }
-    let binding = local.bundle.statement.artifact_binding.clone();
-    let installed = match require_kagemusha_recursive_spend_artifact_binding_v4(&binding) {
-        Ok(installed) => installed,
-        Err(error) => {
-            local.zeroize();
-            return error.code();
-        }
-    };
-    if validate_kagemusha_recursive_spend_release_context_v4(
-        &installed,
-        &local.bundle.statement.network_id,
-        &local.bundle.statement.asset,
-        local.bundle.statement.asset_scale,
-        local.block_height,
-        local.change_opening.is_some(),
-    )
-    .is_err()
-    {
-        local.zeroize();
-        return BridgeError::KagemushaRecursiveSpendV4Artifact.code();
-    }
-    let result = run_kagemusha_recursive_spend_worker_v4(
-        "krv4-redeem",
-        BridgeError::KagemushaProve,
-        move || execute_kagemusha_recursive_spend_redeem_v4(&local, &installed),
-    );
-    match result {
-        Ok(result) => {
-            let archive = match norito::to_bytes(&result) {
-                Ok(archive) => archive,
-                Err(_) => return BridgeError::KagemushaProve.code(),
-            };
-            bridge_result_to_code(unsafe {
-                write_kagemusha_archive_bridge(out_build_result_ptr, out_build_result_len, &archive)
-            })
-        }
-        Err(error) => error.code(),
-    }
+
+macro_rules! finish_kagemusha_lifecycle {
+    ($result:expr => $out_ptr:expr, $out_len:expr) => {{
+        let archive = $result
+            .and_then(|result| norito::to_bytes(&result).map_err(|_| BridgeError::KagemushaProve));
+        unsafe { write_kagemusha_lifecycle_result_v4(archive, $out_ptr, $out_len) }
+    }};
 }
-/// Candidate-lab initialization boundary. It differs only in the separately
-/// validated candidate registry; proof generation and verification call the
-/// same ABI-21 implementation as production.
-#[cfg(feature = "kagemusha-candidate-evidence-lab")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4(
-    request_norito_ptr: *const c_uchar,
-    request_norito_len: c_ulong,
-    out_init_result_ptr: *mut *mut c_uchar,
-    out_init_result_len: *mut c_ulong,
-) -> c_int {
-    clear_bridge_output(out_init_result_ptr, out_init_result_len);
-    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
-        Ok(permit) => permit,
-        Err(error) => return error.code(),
-    };
-    let request_bytes = match unsafe {
-        read_kagemusha_archive_bytes_bounded(
-            request_norito_ptr,
-            request_norito_len,
-            KAGEMUSHA_RECURSIVE_SPEND_INIT_LOCAL_MAX_BYTES_V4,
-        )
-    } {
-        Ok(bytes) => Zeroizing::new(bytes),
-        Err(error) => return error.code(),
-    };
-    let mut local = match decode_canonical_kagemusha_recursive_archive::<
-        KagemushaRecursiveSpendInitLocalRequestV4,
-    >(&request_bytes)
-    {
-        Ok(request) => request,
-        Err(error) => return error.code(),
-    };
-    if local.validate_shape().is_err() {
-        local.zeroize();
-        return BridgeError::KagemushaProve.code();
-    }
-    let binding = local.request.artifact_binding.clone();
-    let installed = match require_kagemusha_candidate_evidence_lab_artifact_binding_v4(&binding) {
-        Ok(installed) => installed,
-        Err(error) => {
-            local.zeroize();
-            return error.code();
-        }
-    };
-    let anchor = &local.request.topup_anchor;
-    if validate_kagemusha_recursive_spend_release_context_v4(
-        &installed,
-        &anchor.network_id,
-        anchor.asset.definition(),
-        anchor.asset_scale,
-        anchor.finalized_height,
-        true,
-    )
-    .is_err()
-        || installed
-            .verify_topup_roster_binding(&local.request.topup_finality_roster_artifact)
-            .is_err()
-    {
-        local.zeroize();
-        return BridgeError::KagemushaRecursiveSpendV4Artifact.code();
-    }
-    let result = run_kagemusha_recursive_spend_worker_v4(
-        "krv4-lab-init",
-        BridgeError::KagemushaProve,
-        move || execute_kagemusha_recursive_spend_init_v4(&local, &installed),
-    );
-    match result {
-        Ok(result) => {
-            let archive = match norito::to_bytes(&result) {
-                Ok(archive) => archive,
-                Err(_) => return BridgeError::KagemushaProve.code(),
+
+/// Generates one complete ABI-21 lifecycle surface over a selected artifact registry.
+macro_rules! kagemusha_recursive_spend_lifecycle_exports {
+    (
+        resolver = $resolver:path;
+        verify_precheck = $verify_precheck:literal;
+        init $(#[$init_attribute:meta])* => $init_name:ident, $init_worker:literal;
+        append $(#[$append_attribute:meta])* => $append_name:ident, $append_worker:literal;
+        verify $(#[$verify_attribute:meta])* => $verify_name:ident, $verify_worker:literal;
+        redeem $(#[$redeem_attribute:meta])* => $redeem_name:ident, $redeem_worker:literal;
+    ) => {
+        $(#[$init_attribute])*
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $init_name(
+            request_norito_ptr: *const c_uchar,
+            request_norito_len: c_ulong,
+            out_init_result_ptr: *mut *mut c_uchar,
+            out_init_result_len: *mut c_ulong,
+        ) -> c_int {
+            clear_bridge_output(out_init_result_ptr, out_init_result_len);
+            let (_permit, request_bytes) = read_kagemusha_lifecycle_input! {
+                request_norito_ptr, request_norito_len;
+                max KAGEMUSHA_RECURSIVE_SPEND_INIT_LOCAL_MAX_BYTES_V4;
+                precheck false
             };
-            bridge_result_to_code(unsafe {
-                write_kagemusha_archive_bridge(out_init_result_ptr, out_init_result_len, &archive)
-            })
-        }
-        Err(error) => error.code(),
-    }
-}
-#[cfg(feature = "kagemusha-candidate-evidence-lab")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_append_v4(
-    request_norito_ptr: *const c_uchar,
-    request_norito_len: c_ulong,
-    recipient_request_norito_ptr: *const c_uchar,
-    recipient_request_norito_len: c_ulong,
-    verified_at_ms: u64,
-    out_split_result_ptr: *mut *mut c_uchar,
-    out_split_result_len: *mut c_ulong,
-) -> c_int {
-    clear_bridge_output(out_split_result_ptr, out_split_result_len);
-    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
-        Ok(permit) => permit,
-        Err(error) => return error.code(),
-    };
-    let request_bytes = match unsafe {
-        read_kagemusha_archive_bytes_bounded(
-            request_norito_ptr,
-            request_norito_len,
-            KAGEMUSHA_RECURSIVE_SPEND_APPEND_LOCAL_MAX_BYTES_V4,
-        )
-    } {
-        Ok(bytes) => Zeroizing::new(bytes),
-        Err(error) => return error.code(),
-    };
-    let recipient_bytes = match unsafe {
-        read_kagemusha_archive_bytes_bounded(
-            recipient_request_norito_ptr,
-            recipient_request_norito_len,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
-        )
-    } {
-        Ok(bytes) => bytes,
-        Err(error) => return error.code(),
-    };
-    let mut local = match decode_canonical_kagemusha_recursive_archive::<
-        KagemushaRecursiveSpendAppendLocalRequestV4,
-    >(&request_bytes)
-    {
-        Ok(request) => request,
-        Err(error) => return error.code(),
-    };
-    let recipient_request = match decode_canonical_kagemusha_archive::<
-        iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
-    >(&recipient_bytes)
-    {
-        Ok(request) => request,
-        Err(error) => {
-            local.zeroize();
-            return error.code();
-        }
-    };
-    if local
-        .validate_for_recipient_request(&recipient_request, verified_at_ms)
-        .is_err()
-    {
-        local.zeroize();
-        return BridgeError::KagemushaProve.code();
-    }
-    let installed = match require_kagemusha_candidate_evidence_lab_artifact_binding_v4(
-        &local.output_artifact_binding,
-    ) {
-        Ok(installed) => installed,
-        Err(error) => {
-            local.zeroize();
-            return error.code();
-        }
-    };
-    let statement = &local.previous_inputs[0].previous_bundle.statement;
-    if validate_kagemusha_recursive_spend_release_context_v4(
-        &installed,
-        &statement.network_id,
-        &statement.asset,
-        statement.asset_scale,
-        local.block_height,
-        true,
-    )
-    .is_err()
-    {
-        local.zeroize();
-        return BridgeError::KagemushaRecursiveSpendV4Artifact.code();
-    }
-    let result = run_kagemusha_recursive_spend_worker_v4(
-        "krv4-lab-app",
-        BridgeError::KagemushaProve,
-        move || {
-            execute_kagemusha_recursive_spend_append_v4(
-                &local,
-                &recipient_request,
-                verified_at_ms,
+            let request_bytes = Zeroizing::new(request_bytes);
+            let mut local = match decode_canonical_kagemusha_recursive_archive::<
+                KagemushaRecursiveSpendInitLocalRequestV4,
+            >(&request_bytes)
+            {
+                Ok(request) => request,
+                Err(error) => return error.code(),
+            };
+            if local.validate_shape().is_err() {
+                local.zeroize();
+                return BridgeError::KagemushaProve.code();
+            }
+            let binding = local.request.artifact_binding.clone();
+            let installed = match $resolver(&binding) {
+                Ok(installed) => installed,
+                Err(error) => {
+                    local.zeroize();
+                    return error.code();
+                }
+            };
+            let anchor = &local.request.topup_anchor;
+            if validate_kagemusha_recursive_spend_release_context_v4(
                 &installed,
+                &anchor.network_id,
+                anchor.asset.definition(),
+                anchor.asset_scale,
+                anchor.finalized_height,
+                true,
             )
-        },
-    );
-    match result {
-        Ok(result) => {
-            let archive = match norito::to_bytes(&result) {
-                Ok(archive) => archive,
-                Err(_) => return BridgeError::KagemushaProve.code(),
-            };
-            bridge_result_to_code(unsafe {
-                write_kagemusha_archive_bridge(out_split_result_ptr, out_split_result_len, &archive)
-            })
-        }
-        Err(error) => error.code(),
-    }
-}
-#[cfg(feature = "kagemusha-candidate-evidence-lab")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4(
-    request_norito_ptr: *const c_uchar,
-    request_norito_len: c_ulong,
-    out_result_ptr: *mut *mut c_uchar,
-    out_result_len: *mut c_ulong,
-) -> c_int {
-    clear_bridge_output(out_result_ptr, out_result_len);
-    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
-        Ok(permit) => permit,
-        Err(error) => return error.code(),
-    };
-    let request_bytes = match unsafe {
-        read_kagemusha_archive_bytes_bounded(
-            request_norito_ptr,
-            request_norito_len,
-            KAGEMUSHA_RECURSIVE_SPEND_VERIFY_LOCAL_MAX_BYTES_V4,
-        )
-    } {
-        Ok(bytes) => bytes,
-        Err(error) => return error.code(),
-    };
-    let local = match decode_canonical_kagemusha_recursive_archive::<
-        KagemushaRecursiveSpendVerifyLocalRequestV4,
-    >(&request_bytes)
-    {
-        Ok(request) => request,
-        Err(error) => return error.code(),
-    };
-    if local.validate_shape().is_err() {
-        return BridgeError::KagemushaProve.code();
-    }
-    let request = &local.request;
-    let installed = match require_kagemusha_candidate_evidence_lab_artifact_binding_v4(
-        &request.artifact_binding,
-    ) {
-        Ok(installed) => installed,
-        Err(error) => return error.code(),
-    };
-    let statement = &request.bundle.statement;
-    if validate_kagemusha_recursive_spend_release_context_v4(
-        &installed,
-        &statement.network_id,
-        &statement.asset,
-        statement.asset_scale,
-        request.block_height,
-        false,
-    )
-    .is_err()
-        || installed
-            .verify_topup_roster_binding(&request.topup_provenance.topup_finality_roster_artifact)
             .is_err()
-        || request
-            .topup_provenance
-            .topup_finality_evidence
-            .iter()
-            .any(|evidence| {
-                evidence.topup_anchor.network_id != statement.network_id
-                    || evidence.topup_anchor.asset.definition() != &statement.asset
-                    || evidence.topup_anchor.asset_scale != statement.asset_scale
-                    || validate_kagemusha_recursive_spend_release_context_v4(
+                || installed
+                    .verify_topup_roster_binding(&local.request.topup_finality_roster_artifact)
+                    .is_err()
+            {
+                local.zeroize();
+                return BridgeError::KagemushaRecursiveSpendV4Artifact.code();
+            }
+            let result = run_kagemusha_recursive_spend_worker_v4(
+                $init_worker,
+                BridgeError::KagemushaProve,
+                move || execute_kagemusha_recursive_spend_init_v4(&local, &installed),
+            );
+            finish_kagemusha_lifecycle! { result => out_init_result_ptr, out_init_result_len }
+        }
+
+        $(#[$append_attribute])*
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $append_name(
+            request_norito_ptr: *const c_uchar,
+            request_norito_len: c_ulong,
+            recipient_request_norito_ptr: *const c_uchar,
+            recipient_request_norito_len: c_ulong,
+            verified_at_ms: u64,
+            out_split_result_ptr: *mut *mut c_uchar,
+            out_split_result_len: *mut c_ulong,
+        ) -> c_int {
+            clear_bridge_output(out_split_result_ptr, out_split_result_len);
+            let (_permit, request_bytes) = read_kagemusha_lifecycle_input! {
+                request_norito_ptr, request_norito_len;
+                max KAGEMUSHA_RECURSIVE_SPEND_APPEND_LOCAL_MAX_BYTES_V4;
+                precheck false
+            };
+            let request_bytes = Zeroizing::new(request_bytes);
+            let recipient_bytes = match unsafe {
+                read_kagemusha_archive_bytes_bounded(
+                    recipient_request_norito_ptr,
+                    recipient_request_norito_len,
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2,
+                )
+            } {
+                Ok(bytes) => bytes,
+                Err(error) => return error.code(),
+            };
+            let mut local = match decode_canonical_kagemusha_recursive_archive::<
+                KagemushaRecursiveSpendAppendLocalRequestV4,
+            >(&request_bytes)
+            {
+                Ok(request) => request,
+                Err(error) => return error.code(),
+            };
+            let recipient_request = match decode_canonical_kagemusha_archive::<
+                iroha_data_model::offline::KagemushaRecipientPaymentRequestV2,
+            >(&recipient_bytes)
+            {
+                Ok(request) => request,
+                Err(error) => {
+                    local.zeroize();
+                    return error.code();
+                }
+            };
+            if local
+                .validate_for_recipient_request(&recipient_request, verified_at_ms)
+                .is_err()
+            {
+                local.zeroize();
+                return BridgeError::KagemushaProve.code();
+            }
+            let binding = local.output_artifact_binding.clone();
+            let installed = match $resolver(&binding) {
+                Ok(installed) => installed,
+                Err(error) => {
+                    local.zeroize();
+                    return error.code();
+                }
+            };
+            let statement = &local.previous_inputs[0].previous_bundle.statement;
+            if validate_kagemusha_recursive_spend_release_context_v4(
+                &installed,
+                &statement.network_id,
+                &statement.asset,
+                statement.asset_scale,
+                local.block_height,
+                true,
+            )
+            .is_err()
+            {
+                local.zeroize();
+                return BridgeError::KagemushaRecursiveSpendV4Artifact.code();
+            }
+            let result = run_kagemusha_recursive_spend_worker_v4(
+                $append_worker,
+                BridgeError::KagemushaProve,
+                move || {
+                    execute_kagemusha_recursive_spend_append_v4(
+                        &local,
+                        &recipient_request,
+                        verified_at_ms,
                         &installed,
-                        &evidence.topup_anchor.network_id,
-                        evidence.topup_anchor.asset.definition(),
-                        evidence.topup_anchor.asset_scale,
-                        evidence.topup_anchor.finalized_height,
-                        false,
+                    )
+                },
+            );
+            finish_kagemusha_lifecycle! { result => out_split_result_ptr, out_split_result_len }
+        }
+
+        $(#[$verify_attribute])*
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $verify_name(
+            request_norito_ptr: *const c_uchar,
+            request_norito_len: c_ulong,
+            out_result_ptr: *mut *mut c_uchar,
+            out_result_len: *mut c_ulong,
+        ) -> c_int {
+            clear_bridge_output(out_result_ptr, out_result_len);
+            let (_permit, request_bytes) = read_kagemusha_lifecycle_input! {
+                request_norito_ptr, request_norito_len;
+                max KAGEMUSHA_RECURSIVE_SPEND_VERIFY_LOCAL_MAX_BYTES_V4;
+                precheck $verify_precheck
+            };
+            let local = match decode_canonical_kagemusha_recursive_archive::<
+                KagemushaRecursiveSpendVerifyLocalRequestV4,
+            >(&request_bytes)
+            {
+                Ok(request) => request,
+                Err(error) => return error.code(),
+            };
+            if local.validate_shape().is_err() {
+                return BridgeError::KagemushaProve.code();
+            }
+            let request = &local.request;
+            let installed = match $resolver(&request.artifact_binding) {
+                Ok(installed) => installed,
+                Err(error) => return error.code(),
+            };
+            let statement = &request.bundle.statement;
+            if validate_kagemusha_recursive_spend_release_context_v4(
+                &installed,
+                &statement.network_id,
+                &statement.asset,
+                statement.asset_scale,
+                request.block_height,
+                false,
+            )
+            .is_err()
+                || installed
+                    .verify_topup_roster_binding(
+                        &request.topup_provenance.topup_finality_roster_artifact,
                     )
                     .is_err()
-            })
-    {
-        return BridgeError::KagemushaRecursiveSpendV4Artifact.code();
-    }
-    let result = run_kagemusha_recursive_spend_worker_v4(
-        "krv4-lab-ver",
-        BridgeError::KagemushaProve,
-        move || execute_kagemusha_recursive_spend_verify_v4(&local, &installed),
-    );
-    match result {
-        Ok(result) => {
-            let archive = match norito::to_bytes(&result) {
-                Ok(archive) => archive,
-                Err(_) => return BridgeError::KagemushaProve.code(),
-            };
-            bridge_result_to_code(unsafe {
-                write_kagemusha_archive_bridge(out_result_ptr, out_result_len, &archive)
-            })
+                || request
+                    .topup_provenance
+                    .topup_finality_evidence
+                    .iter()
+                    .any(|evidence| {
+                        evidence.topup_anchor.network_id != statement.network_id
+                            || evidence.topup_anchor.asset.definition() != &statement.asset
+                            || evidence.topup_anchor.asset_scale != statement.asset_scale
+                            || validate_kagemusha_recursive_spend_release_context_v4(
+                                &installed,
+                                &evidence.topup_anchor.network_id,
+                                evidence.topup_anchor.asset.definition(),
+                                evidence.topup_anchor.asset_scale,
+                                evidence.topup_anchor.finalized_height,
+                                false,
+                            )
+                            .is_err()
+                    })
+            {
+                return BridgeError::KagemushaRecursiveSpendV4Artifact.code();
+            }
+            let result = run_kagemusha_recursive_spend_worker_v4(
+                $verify_worker,
+                BridgeError::KagemushaProve,
+                move || execute_kagemusha_recursive_spend_verify_v4(&local, &installed),
+            );
+            finish_kagemusha_lifecycle! { result => out_result_ptr, out_result_len }
         }
-        Err(error) => error.code(),
-    }
+
+        $(#[$redeem_attribute])*
+        #[unsafe(no_mangle)]
+        pub unsafe extern "C" fn $redeem_name(
+            request_norito_ptr: *const c_uchar,
+            request_norito_len: c_ulong,
+            out_build_result_ptr: *mut *mut c_uchar,
+            out_build_result_len: *mut c_ulong,
+        ) -> c_int {
+            clear_bridge_output(out_build_result_ptr, out_build_result_len);
+            let (_permit, request_bytes) = read_kagemusha_lifecycle_input! {
+                request_norito_ptr, request_norito_len;
+                max KAGEMUSHA_RECURSIVE_SPEND_REDEEM_LOCAL_MAX_BYTES_V4;
+                precheck false
+            };
+            let request_bytes = Zeroizing::new(request_bytes);
+            let mut local = match decode_canonical_kagemusha_recursive_archive::<
+                KagemushaRecursiveSpendRedeemLocalRequestV4,
+            >(&request_bytes)
+            {
+                Ok(request) => request,
+                Err(error) => return error.code(),
+            };
+            if local.validate_shape().is_err() {
+                local.zeroize();
+                return BridgeError::KagemushaProve.code();
+            }
+            let binding = local.bundle.statement.artifact_binding.clone();
+            let installed = match $resolver(&binding) {
+                Ok(installed) => installed,
+                Err(error) => {
+                    local.zeroize();
+                    return error.code();
+                }
+            };
+            if validate_kagemusha_recursive_spend_release_context_v4(
+                &installed,
+                &local.bundle.statement.network_id,
+                &local.bundle.statement.asset,
+                local.bundle.statement.asset_scale,
+                local.block_height,
+                local.change_opening.is_some(),
+            )
+            .is_err()
+            {
+                local.zeroize();
+                return BridgeError::KagemushaRecursiveSpendV4Artifact.code();
+            }
+            let result = run_kagemusha_recursive_spend_worker_v4(
+                $redeem_worker,
+                BridgeError::KagemushaProve,
+                move || execute_kagemusha_recursive_spend_redeem_v4(&local, &installed),
+            );
+            finish_kagemusha_lifecycle! { result => out_build_result_ptr, out_build_result_len }
+        }
+    };
 }
+
+kagemusha_recursive_spend_lifecycle_exports! {
+    resolver = require_kagemusha_recursive_spend_artifact_binding_v4;
+    verify_precheck = true;
+    init
+        /// ABI-21 initialization boundary using only the authenticated V4 release.
+        => connect_norito_kagemusha_recursive_spend_init_v4, "krv4-init";
+    append
+        /// ABI-21 append boundary. It never falls back to the V2/V3 lifecycle.
+        => connect_norito_kagemusha_recursive_spend_append_v4, "krv4-append";
+    verify
+        /// ABI-21 terminal-verification boundary over the installed V4 verifier set.
+        => connect_norito_kagemusha_recursive_spend_verify_v4, "krv4-verify";
+    redeem
+        /// ABI-21 full-terminal or partial-with-change redemption boundary.
+        => connect_norito_kagemusha_recursive_spend_redeem_v4, "krv4-redeem";
+}
+
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4(
-    request_norito_ptr: *const c_uchar,
-    request_norito_len: c_ulong,
-    out_build_result_ptr: *mut *mut c_uchar,
-    out_build_result_len: *mut c_ulong,
-) -> c_int {
-    clear_bridge_output(out_build_result_ptr, out_build_result_len);
-    let _permit = match try_acquire_kagemusha_heavy_proof_permit_v4() {
-        Ok(permit) => permit,
-        Err(error) => return error.code(),
-    };
-    let request_bytes = match unsafe {
-        read_kagemusha_archive_bytes_bounded(
-            request_norito_ptr,
-            request_norito_len,
-            KAGEMUSHA_RECURSIVE_SPEND_REDEEM_LOCAL_MAX_BYTES_V4,
-        )
-    } {
-        Ok(bytes) => Zeroizing::new(bytes),
-        Err(error) => return error.code(),
-    };
-    let mut local = match decode_canonical_kagemusha_recursive_archive::<
-        KagemushaRecursiveSpendRedeemLocalRequestV4,
-    >(&request_bytes)
-    {
-        Ok(request) => request,
-        Err(error) => return error.code(),
-    };
-    if local.validate_shape().is_err() {
-        local.zeroize();
-        return BridgeError::KagemushaProve.code();
-    }
-    let binding = local.bundle.statement.artifact_binding.clone();
-    let installed = match require_kagemusha_candidate_evidence_lab_artifact_binding_v4(&binding) {
-        Ok(installed) => installed,
-        Err(error) => {
-            local.zeroize();
-            return error.code();
-        }
-    };
-    if validate_kagemusha_recursive_spend_release_context_v4(
-        &installed,
-        &local.bundle.statement.network_id,
-        &local.bundle.statement.asset,
-        local.bundle.statement.asset_scale,
-        local.block_height,
-        local.change_opening.is_some(),
-    )
-    .is_err()
-    {
-        local.zeroize();
-        return BridgeError::KagemushaRecursiveSpendV4Artifact.code();
-    }
-    let result = run_kagemusha_recursive_spend_worker_v4(
-        "krv4-lab-red",
-        BridgeError::KagemushaProve,
-        move || execute_kagemusha_recursive_spend_redeem_v4(&local, &installed),
-    );
-    match result {
-        Ok(result) => {
-            let archive = match norito::to_bytes(&result) {
-                Ok(archive) => archive,
-                Err(_) => return BridgeError::KagemushaProve.code(),
-            };
-            bridge_result_to_code(unsafe {
-                write_kagemusha_archive_bridge(out_build_result_ptr, out_build_result_len, &archive)
-            })
-        }
-        Err(error) => error.code(),
-    }
+kagemusha_recursive_spend_lifecycle_exports! {
+    resolver = require_kagemusha_candidate_evidence_lab_artifact_binding_v4;
+    verify_precheck = false;
+    init
+        /// Candidate-lab initialization boundary. It differs only in the separately
+        /// validated candidate registry; proof generation and verification call the
+        /// same ABI-21 implementation as production.
+        => connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4, "krv4-lab-init";
+    append => connect_norito_kagemusha_recursive_spend_candidate_lab_append_v4, "krv4-lab-app";
+    verify => connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4, "krv4-lab-ver";
+    redeem => connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4, "krv4-lab-red";
 }
 /// Zeroize and release a Kagemusha secret buffer returned by the bridge.
 ///
@@ -14172,6 +13754,7 @@ mod kagemusha_bridge_tests {
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
         offline::{
+            KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1 as IOS_AUTH_DATA_MIN,
             KAGEMUSHA_REVIEWED_SOURCE_CLOSURE_SCHEMA_V1,
             KagemushaRecipientOutputDerivationRequestV2, KagemushaReviewedSourceClosureV1,
             KagemushaScaledAmountV2,
@@ -15908,26 +15491,24 @@ mod kagemusha_bridge_tests {
         push_test_cbor_head(encoded, 2, value.len());
         encoded.extend_from_slice(value);
     }
+    fn ios_app_attest_assertion_authenticator_data() -> Vec<u8> {
+        let mut authenticator_data = vec![0x47; 32];
+        authenticator_data.extend_from_slice(&[0x80, 0, 0, 0, 1, 0xA0]);
+        assert_eq!(authenticator_data.len(), IOS_AUTH_DATA_MIN);
+        authenticator_data
+    }
     fn ios_app_attest_assertion_object(
         authenticator_data: &[u8],
         signature_der: &[u8],
         signature_first: bool,
     ) -> Vec<u8> {
+        let auth = ("authenticatorData", authenticator_data);
+        let signature = ("signature", signature_der);
+        let fields = [[auth, signature], [signature, auth]][signature_first as usize];
         let mut encoded = vec![0xA2];
-        let push_authenticator_data = |encoded: &mut Vec<u8>| {
-            push_test_cbor_text(encoded, "authenticatorData");
-            push_test_cbor_bytes(encoded, authenticator_data);
-        };
-        let push_signature = |encoded: &mut Vec<u8>| {
-            push_test_cbor_text(encoded, "signature");
-            push_test_cbor_bytes(encoded, signature_der);
-        };
-        if signature_first {
-            push_signature(&mut encoded);
-            push_authenticator_data(&mut encoded);
-        } else {
-            push_authenticator_data(&mut encoded);
-            push_signature(&mut encoded);
+        for (key, value) in fields {
+            push_test_cbor_text(&mut encoded, key);
+            push_test_cbor_bytes(&mut encoded, value);
         }
         encoded
     }
@@ -15938,9 +15519,7 @@ mod kagemusha_bridge_tests {
         );
         let preparation_archive = norito::to_bytes(&preparation).expect("encode preparation");
         let client_data_hash = preparation.signing_bytes().expect("clientDataHash");
-        let mut authenticator_data = vec![0x47; 32];
-        authenticator_data.push(0);
-        authenticator_data.extend_from_slice(&1_u32.to_be_bytes());
+        let authenticator_data = ios_app_attest_assertion_authenticator_data();
         let mut signed = authenticator_data.clone();
         signed.extend_from_slice(&client_data_hash);
         let signature: p256::ecdsa::Signature = p256_signing_key().sign(&signed);
@@ -16209,9 +15788,7 @@ mod kagemusha_bridge_tests {
         );
         let ios_client_data_hash = ios.signing_bytes().expect("iOS clientDataHash");
         assert_eq!(ios_client_data_hash.len(), 32);
-        let mut authenticator_data = vec![0x47; 32];
-        authenticator_data.push(0);
-        authenticator_data.extend_from_slice(&1_u32.to_be_bytes());
+        let authenticator_data = ios_app_attest_assertion_authenticator_data();
         let mut signed = authenticator_data.clone();
         signed.extend_from_slice(&ios_client_data_hash);
         let ios_signature: p256::ecdsa::Signature = p256_signing_key().sign(&signed);
@@ -16246,7 +15823,11 @@ mod kagemusha_bridge_tests {
         let canonical =
             kagemusha_device_signature_from_strict_der_v2(signature.to_der().as_bytes())
                 .expect("strict DER");
-        assert!(android.finalize(vec![0; 37], canonical).is_err());
+        assert!(
+            android
+                .finalize(ios_app_attest_assertion_authenticator_data(), canonical)
+                .is_err()
+        );
         let ios = request_authorization_preparation(
             KagemushaRequestAuthorizationPlatformV2::IosAppAttest,
         );
@@ -16468,14 +16049,6 @@ mod kagemusha_bridge_tests {
         for symbol in [
             "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
             "connect_norito_kagemusha_recursive_spend_branch_validate_v4",
-            "connect_norito_kagemusha_recursive_spend_init_v4",
-            "connect_norito_kagemusha_recursive_spend_append_v4",
-            "connect_norito_kagemusha_recursive_spend_verify_v4",
-            "connect_norito_kagemusha_recursive_spend_redeem_v4",
-            "connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4",
-            "connect_norito_kagemusha_recursive_spend_candidate_lab_append_v4",
-            "connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4",
-            "connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4",
         ] {
             let implementation = source
                 .split_once(&format!("fn {symbol}("))
@@ -16497,154 +16070,146 @@ mod kagemusha_bridge_tests {
                 "{symbol} must reject busy work before copying caller input"
             );
         }
+        let input_adapter = source
+            .split_once("macro_rules! read_kagemusha_lifecycle_input")
+            .expect("Kagemusha lifecycle input adapter")
+            .1
+            .split_once("macro_rules! finish_kagemusha_lifecycle")
+            .expect("end of Kagemusha lifecycle input adapter")
+            .0;
+        let permit = input_adapter
+            .find("try_acquire_kagemusha_heavy_proof_permit_v4()")
+            .expect("lifecycle input adapter must acquire the proof permit");
+        let input_copy = input_adapter
+            .find("read_kagemusha_archive_bytes_bounded(")
+            .expect("lifecycle input adapter must bound the input copy");
+        assert!(permit < input_copy);
+
+        let generator = source
+            .split_once("macro_rules! kagemusha_recursive_spend_lifecycle_exports")
+            .expect("Kagemusha lifecycle generator")
+            .1
+            .split_once("kagemusha_recursive_spend_lifecycle_exports! {")
+            .expect("Kagemusha lifecycle inventory")
+            .0;
+        assert_eq!(generator.matches("pub unsafe extern \"C\" fn $").count(), 4);
+        assert_eq!(
+            generator.matches("read_kagemusha_lifecycle_input!").count(),
+            4
+        );
+        let inventory = source
+            .split_once("kagemusha_recursive_spend_lifecycle_exports! {")
+            .expect("generated lifecycle inventory")
+            .1
+            .split_once("/// Zeroize and release a Kagemusha secret buffer")
+            .expect("end of generated lifecycle inventory")
+            .0;
+        assert_eq!(
+            inventory
+                .matches("=> connect_norito_kagemusha_recursive_spend")
+                .count(),
+            8
+        );
     }
     #[test]
     fn kagemusha_jni_boundaries_preacquire_before_copying_java_arrays() {
         let source = bridge_source();
-        for (symbol, input_copy) in [
-            (
-                "java_native_kagemusha_prepare_top_up_v4",
-                "java_kagemusha_text(",
-            ),
-            (
-                "java_native_kagemusha_artifact_set_install_v4",
-                "read_java_byte_array_bounded(",
-            ),
-            (
-                "java_native_kagemusha_candidate_lab_artifact_set_install_v4",
-                "read_java_byte_array_bounded(",
-            ),
-            (
-                "java_native_kagemusha_lifecycle_archive_bounded",
-                "read_java_byte_array_bounded(",
-            ),
-            (
-                "java_native_kagemusha_append_spend_v4",
-                "read_java_byte_array_bounded(",
-            ),
-            (
-                "java_native_kagemusha_candidate_lab_append_v4",
-                "read_java_byte_array_bounded(",
-            ),
-            (
-                "java_native_kagemusha_validate_spendable_branch_v4",
-                "read_java_byte_array_bounded(",
-            ),
-            (
-                "java_native_kagemusha_candidate_lab_validate_branch_v4",
-                "java_kagemusha_decode_archive_bounded::<",
-            ),
-        ] {
-            let signature = if symbol == "java_native_kagemusha_lifecycle_archive_bounded" {
-                format!("fn {symbol}<F>(")
-            } else {
-                format!("fn {symbol}(")
-            };
-            let implementation = source
-                .rsplit_once(&signature)
-                .unwrap_or_else(|| panic!("missing Kagemusha JNI boundary {symbol}"))
-                .1
-                .split_once("\n}\n")
-                .unwrap_or_else(|| panic!("missing end of Kagemusha JNI boundary {symbol}"))
-                .0;
-            let permit = implementation
-                .find("try_preacquire_kagemusha_heavy_proof_permit_v4()")
-                .unwrap_or_else(|| panic!("{symbol} must preacquire the proof permit"));
-            let input_copy = implementation
-                .find(input_copy)
-                .unwrap_or_else(|| panic!("{symbol} must retain its bounded Java input copy"));
-            assert!(
-                permit < input_copy,
-                "{symbol} must reject busy work before copying Java arrays"
-            );
+        macro_rules! assert_preacquisition {
+            ($($symbol:literal copies $copy:literal;)*) => {$({
+                let signature = if $symbol == "java_native_kagemusha_lifecycle_archive_bounded" {
+                    format!("fn {}<F>(", $symbol)
+                } else {
+                    format!("fn {}(", $symbol)
+                };
+                let body = source
+                    .rsplit_once(&signature)
+                    .unwrap_or_else(|| panic!("missing Kagemusha JNI boundary {}", $symbol))
+                    .1
+                    .split_once("\n}\n")
+                    .expect("end of Kagemusha JNI boundary")
+                    .0;
+                let permit = body
+                    .find("try_preacquire_kagemusha_heavy_proof_permit_v4()")
+                    .expect("JNI boundary must preacquire the proof permit");
+                assert!(permit < body.find($copy).expect("bounded Java input copy"));
+            })*};
         }
-        let nested_c_acquisition = source
+        assert_preacquisition! {
+            "java_native_kagemusha_prepare_top_up_v4" copies "java_kagemusha_text(";
+            "java_native_kagemusha_artifact_set_install_v4" copies "read_java_byte_array_bounded(";
+            "java_native_kagemusha_candidate_lab_artifact_set_install_v4" copies "read_java_byte_array_bounded(";
+            "java_native_kagemusha_lifecycle_archive_bounded" copies "read_java_byte_array_bounded(";
+            "java_native_kagemusha_append_spend_v4" copies "read_java_byte_array_bounded(";
+            "java_native_kagemusha_candidate_lab_append_v4" copies "read_java_byte_array_bounded(";
+            "java_native_kagemusha_validate_spendable_branch_v4" copies "read_java_byte_array_bounded(";
+            "java_native_kagemusha_candidate_lab_validate_branch_v4" copies "java_kagemusha_decode_archive_bounded::<";
+        }
+        let nested = source
             .split_once("fn try_acquire_or_borrow_kagemusha_heavy_proof_permit_from_v4(")
             .expect("nested C permit helper")
             .1
             .split_once("fn try_acquire_kagemusha_heavy_proof_permit_v4()")
             .expect("end of nested C permit helper")
             .0;
-        assert!(nested_c_acquisition.contains("KAGEMUSHA_HEAVY_PROOF_PREACQUIRED_V4"));
-        assert!(nested_c_acquisition.contains("BorrowedFromJni"));
-        let assert_jni_route = |symbol: &str, helper: &str| {
-            let implementation = source
-                .rsplit_once(&format!("fn {symbol}("))
-                .unwrap_or_else(|| panic!("missing exported Kagemusha JNI boundary {symbol}"))
-                .1
-                .split_once("\n}\n")
-                .unwrap_or_else(|| panic!("missing end of exported JNI boundary {symbol}"))
-                .0;
-            assert!(
-                implementation.contains(helper),
-                "{symbol} must route through guarded helper {helper}"
-            );
-        };
-        for prefix in [
-            "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_",
-            "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_",
-        ] {
-            for (suffix, helper) in [
-                (
-                    "nativeInitSpendV4",
-                    "java_native_kagemusha_lifecycle_archive_v4(",
-                ),
-                (
-                    "nativeAppendSpendV4",
-                    "java_native_kagemusha_append_spend_v4(",
-                ),
-                (
-                    "nativeVerifySpendV4",
-                    "java_native_kagemusha_lifecycle_archive_v4(",
-                ),
-                (
-                    "nativeBuildRedeemV4",
-                    "java_native_kagemusha_lifecycle_archive_v4(",
-                ),
-                (
-                    "nativeValidateSpendableBranchV4",
-                    "java_native_kagemusha_validate_spendable_branch_v4(",
-                ),
-            ] {
-                assert_jni_route(&format!("{prefix}{suffix}"), helper);
-            }
+        assert!(nested.contains("KAGEMUSHA_HEAVY_PROOF_PREACQUIRED_V4"));
+        assert!(nested.contains("BorrowedFromJni"));
+
+        let paired = source
+            .split_once("macro_rules! kagemusha_sdk_android_forwarders")
+            .expect("paired Kagemusha JNI generator")
+            .1;
+        assert!(
+            paired
+                .contains("Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_")
+        );
+        assert!(
+            paired.contains(
+                "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_"
+            )
+        );
+        let production = paired
+            .split_once("kagemusha_sdk_android_forwarders! {")
+            .expect("production Kagemusha JNI inventory")
+            .1
+            .split_once("pub(super) fn ensure_min_array_length")
+            .expect("end of production Kagemusha JNI inventory")
+            .0;
+        let candidate = source
+            .rsplit_once("\nmod kagemusha_candidate_lab_jni {")
+            .expect("candidate-lab JNI module")
+            .1;
+        macro_rules! assert_routes {
+            ($inventory:ident; $($suffix:literal through $helper:literal;)*) => {$({
+                assert!($inventory.contains($suffix), "missing JNI route {}", $suffix);
+                assert!($inventory.contains($helper), "{} must route through {}", $suffix, $helper);
+            })*};
         }
-        let candidate_prefix =
-            "Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_";
-        for (suffix, helper) in [
-            (
-                "nativeInitV4",
-                "java_native_kagemusha_lifecycle_archive_v4(",
-            ),
-            (
-                "nativeAppendV4",
-                "java_native_kagemusha_candidate_lab_append_v4(",
-            ),
-            (
-                "nativeVerifyV4",
-                "java_native_kagemusha_lifecycle_archive_v4(",
-            ),
-            (
-                "nativeRedeemV4",
-                "java_native_kagemusha_lifecycle_archive_v4(",
-            ),
-            (
-                "nativeValidateBranchV4",
-                "java_native_kagemusha_candidate_lab_validate_branch_v4(",
-            ),
-        ] {
-            assert_jni_route(&format!("{candidate_prefix}{suffix}"), helper);
+        assert_routes! {
+            production;
+            "nativeInitSpendV4" through "java_native_kagemusha_unary_lifecycle_v4";
+            "nativeAppendSpendV4" through "java_native_kagemusha_append_spend_v4";
+            "nativeVerifySpendV4" through "java_native_kagemusha_unary_lifecycle_v4";
+            "nativeBuildRedeemV4" through "java_native_kagemusha_unary_lifecycle_v4";
+            "nativeValidateSpendableBranchV4" through "java_native_kagemusha_validate_spendable_branch_v4";
         }
-        let java_byte_readers = source
+        assert_routes! {
+            candidate;
+            "nativeInitV4" through "java_native_kagemusha_unary_lifecycle_v4";
+            "nativeAppendV4" through "java_native_kagemusha_candidate_lab_append_v4";
+            "nativeVerifyV4" through "java_native_kagemusha_unary_lifecycle_v4";
+            "nativeRedeemV4" through "java_native_kagemusha_unary_lifecycle_v4";
+            "nativeValidateBranchV4" through "java_native_kagemusha_candidate_lab_validate_branch_v4";
+        }
+        let readers = source
             .rsplit_once("fn read_java_byte_array(")
             .expect("Java byte-array reader")
             .1
             .split_once("fn java_sorafs_reference_generated_at(")
             .expect("end of Java byte-array readers")
             .0;
-        assert!(java_byte_readers.contains("env.convert_byte_array(array)"));
-        assert!(!java_byte_readers.contains("vec![0i8; len]"));
-        assert!(!java_byte_readers.contains("buf.into_iter().map"));
+        assert!(readers.contains("env.convert_byte_array(array)"));
+        assert!(!readers.contains("vec![0i8; len]"));
+        assert!(!readers.contains("buf.into_iter().map"));
     }
     #[test]
     fn kagemusha_artifact_parsers_take_permit_before_heavy_work() {
@@ -21844,10 +21409,8 @@ mod kagemusha_bridge_tests {
         for symbol in [
             "connect_norito_kagemusha_recursive_spend_topup_provenance_build_v4",
             "connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4",
-            "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildTopUpProvenanceV4",
-            "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeValidateTopUpProvenanceV4",
-            "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildTopUpProvenanceV4",
-            "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeValidateTopUpProvenanceV4",
+            "nativeBuildTopUpProvenanceV4",
+            "nativeValidateTopUpProvenanceV4",
         ] {
             assert!(
                 source.contains(symbol),
@@ -21862,12 +21425,9 @@ mod kagemusha_bridge_tests {
             "connect_norito_kagemusha_output_membership_frontier_build_v4",
             "connect_norito_kagemusha_output_membership_paths_derive_v4",
             "connect_norito_kagemusha_recursive_spend_branch_validate_v4",
-            "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeBuildOutputMembershipFrontierV4",
-            "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeDeriveOutputMembershipPathsV4",
-            "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeValidateSpendableBranchV4",
-            "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeBuildOutputMembershipFrontierV4",
-            "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeDeriveOutputMembershipPathsV4",
-            "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativeValidateSpendableBranchV4",
+            "nativeBuildOutputMembershipFrontierV4",
+            "nativeDeriveOutputMembershipPathsV4",
+            "nativeValidateSpendableBranchV4",
         ] {
             assert!(
                 source.contains(symbol),
@@ -22604,15 +22164,7 @@ mod kagemusha_bridge_tests {
     #[test]
     fn redemption_change_preparation_jni_covers_both_sdk_namespaces() {
         let source = bridge_source();
-        for symbol in [
-            "Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativePrepareRedemptionChangeV4",
-            "Java_org_hyperledger_iroha_android_offline_KagemushaRecursiveSpendProver_nativePrepareRedemptionChangeV4",
-        ] {
-            assert!(
-                source.contains(symbol),
-                "missing redemption-change JNI: {symbol}"
-            );
-        }
+        assert!(source.contains("nativePrepareRedemptionChangeV4"));
         let native = source
             .rsplit_once("fn java_native_kagemusha_prepare_redemption_change_v4(")
             .expect("redemption-change JNI helper")
@@ -22991,7 +22543,6 @@ mod kagemusha_bridge_tests {
         let cargo = include_str!("../Cargo.toml");
         let feature_declaration =
             "kagemusha-candidate-evidence-lab = [\"iroha_core/kagemusha-candidate-evidence-lab\"]";
-        assert!(cargo.contains(feature_declaration));
         let default_feature_prefix = cargo
             .split_once("[features]")
             .expect("bridge features")
@@ -22999,15 +22550,11 @@ mod kagemusha_bridge_tests {
             .split_once(feature_declaration)
             .expect("lab feature declaration")
             .0;
-        assert!(
-            !default_feature_prefix.contains("default ="),
-            "the bridge has no default feature set that can select the lab"
-        );
+        assert!(!default_feature_prefix.contains("default ="));
         let source = bridge_source();
         for export_prefix in [
             "pub unsafe extern \"C\" fn connect_norito_kagemusha_recursive_spend_candidate_lab_",
             "pub extern \"C\" fn connect_norito_kagemusha_recursive_spend_candidate_lab_",
-            "pub unsafe extern \"system\" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_",
         ] {
             let mut offset = 0;
             while let Some(relative) = source[offset..].find(export_prefix) {
@@ -23021,6 +22568,30 @@ mod kagemusha_bridge_tests {
                 offset = export + export_prefix.len();
             }
         }
+        assert!(source.contains(
+            "#[cfg(feature = \"kagemusha-candidate-evidence-lab\")]\n\
+             kagemusha_recursive_spend_lifecycle_exports! {"
+        ));
+        let module = source
+            .rfind("\nmod kagemusha_candidate_lab_jni {")
+            .expect("candidate-lab JNI module");
+        assert!(
+            source[module.saturating_sub(500)..module]
+                .contains("feature = \"kagemusha-candidate-evidence-lab\"")
+        );
+        let lab_jni = source
+            .rsplit_once("\nmod kagemusha_candidate_lab_jni {")
+            .expect("candidate-lab JNI module")
+            .1
+            .split_once("pub use kagemusha_candidate_lab_jni::*")
+            .expect("candidate-lab JNI re-export")
+            .0;
+        assert_eq!(
+            lab_jni
+                .matches("KagemushaCandidateLabNative_native")
+                .count(),
+            24
+        );
         let header = include_str!("../include/connect_norito_bridge.h");
         let declarations = header
             .split_once("#ifdef CONNECT_NORITO_KAGEMUSHA_CANDIDATE_EVIDENCE_LAB")
@@ -29447,33 +29018,205 @@ pub unsafe extern "C" fn connect_norito_blake3_hash(
         target_os = "windows"
     )
 ))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBridgeAbiVersion(
-    _env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-) -> jni::sys::jint {
-    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4 as jni::sys::jint
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProductionCapabilityObservedV4(
-    _env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-) -> jni::sys::jboolean {
-    if iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
-        jni::sys::JNI_TRUE
-    } else {
-        jni::sys::JNI_FALSE
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+mod kagemusha_candidate_lab_jni {
+    use super::*;
+
+    /// Generate a candidate-lab JNI export whose complete body is intentionally bespoke.
+    macro_rules! candidate_lab_jni_export {
+        ($name:ident($($argument:ident: $ty:ty),* $(,)?) -> $return_type:ty $body:block) => {
+            #[unsafe(no_mangle)]
+            pub unsafe extern "system" fn $name(
+                mut env: jni::JNIEnv<'_>,
+                _class: jni::objects::JClass<'_>,
+                $($argument: $ty),*
+            ) -> $return_type {
+                let _ = &mut env;
+                $body
+            }
+        };
+    }
+    /// Generate thin JNI exports that forward typed arguments to the shared bridge implementation.
+    macro_rules! candidate_lab_jni_forwarders {
+        ($(
+            $name:ident($($argument:ident: $ty:ty),* $(,)?) -> $return_type:ty
+                => $delegate:path $(, extra $extra:expr)*;
+        )*) => {$ (
+            #[unsafe(no_mangle)]
+            pub unsafe extern "system" fn $name(
+                mut env: jni::JNIEnv<'_>,
+                _class: jni::objects::JClass<'_>,
+                $($argument: $ty),*
+            ) -> $return_type {
+                $delegate(&mut env, $($argument),* $(, $extra)*)
+            }
+        )*};
+    }
+
+    candidate_lab_jni_export! {
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBridgeAbiVersion()
+            -> jni::sys::jint {
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
+                as jni::sys::jint
+        }
+    }
+    candidate_lab_jni_export! {
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProductionCapabilityObservedV4()
+            -> jni::sys::jboolean {
+            if iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
+                jni::sys::JNI_TRUE
+            } else {
+                jni::sys::JNI_FALSE
+            }
+        }
+    }
+    candidate_lab_jni_forwarders! {
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactBeginV4(
+            candidate: jni::objects::JByteArray<'_>,
+            candidate_sha256: jni::objects::JByteArray<'_>,
+            artifact_sha256: jni::objects::JByteArray<'_>,
+        ) -> jni::sys::jlong
+            => platform_jni::java_native_kagemusha_candidate_lab_artifact_begin_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactWriteV4(
+            handle: jni::sys::jlong,
+            chunk: jni::objects::JByteArray<'_>,
+        ) -> ()
+            => platform_jni::java_native_kagemusha_candidate_lab_artifact_write_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactFinalizeV4(
+            handle: jni::sys::jlong,
+        ) -> ()
+            => platform_jni::java_native_kagemusha_candidate_lab_artifact_finish_v4, extra false;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactCancelV4(
+            handle: jni::sys::jlong,
+        ) -> ()
+            => platform_jni::java_native_kagemusha_candidate_lab_artifact_finish_v4, extra true;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactSetInstallV4(
+            candidate: jni::objects::JByteArray<'_>,
+            candidate_sha256: jni::objects::JByteArray<'_>,
+            handles: jni::objects::JLongArray<'_>,
+        ) -> ()
+            => platform_jni::java_native_kagemusha_candidate_lab_artifact_set_install_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactSetIsInstalledV4(
+            candidate: jni::objects::JByteArray<'_>,
+            candidate_sha256: jni::objects::JByteArray<'_>,
+        ) -> jni::sys::jboolean
+            => platform_jni::java_native_kagemusha_candidate_lab_artifact_set_is_installed_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeAcceptedIdentityV4()
+            -> jni::sys::jobjectArray
+            => platform_jni::java_native_kagemusha_candidate_lab_accepted_identity_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactSetUninstallV4(
+            candidate_sha256: jni::objects::JByteArray<'_>,
+        ) -> ()
+            => platform_jni::java_native_kagemusha_candidate_lab_artifact_set_uninstall_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeValidateBranchV4(
+            bundle: jni::objects::JByteArray<'_>,
+            topup_provenance: jni::objects::JByteArray<'_>,
+            membership_witness: jni::objects::JByteArray<'_>,
+            opening: jni::objects::JByteArray<'_>,
+            block_height: jni::sys::jlong,
+        ) -> jni::sys::jbyteArray
+            => platform_jni::java_native_kagemusha_candidate_lab_validate_branch_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildInitRequestV4(
+            anchor: jni::objects::JByteArray<'_>,
+            finality_proof: jni::objects::JByteArray<'_>,
+            roster_artifact: jni::objects::JByteArray<'_>,
+            opening: jni::objects::JByteArray<'_>,
+            output_membership: jni::objects::JByteArray<'_>,
+        ) -> jni::sys::jbyteArray
+            => platform_jni::java_native_kagemusha_build_init_request_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildAppendRequestV4(
+            bundles: jni::objects::JObjectArray<'_>,
+            topup_provenances: jni::objects::JObjectArray<'_>,
+            openings: jni::objects::JObjectArray<'_>,
+            membership_witnesses: jni::objects::JObjectArray<'_>,
+            change_opening: jni::objects::JByteArray<'_>,
+            output_membership: jni::objects::JByteArray<'_>,
+            verifier_commitment: jni::objects::JByteArray<'_>,
+            operation_id: jni::objects::JByteArray<'_>,
+            block_height: jni::sys::jlong,
+        ) -> jni::sys::jbyteArray
+            => platform_jni::java_native_kagemusha_build_append_request_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildDuplicateInputAppendRequestV4(
+            bundles: jni::objects::JObjectArray<'_>,
+            topup_provenances: jni::objects::JObjectArray<'_>,
+            openings: jni::objects::JObjectArray<'_>,
+            membership_witnesses: jni::objects::JObjectArray<'_>,
+            change_opening: jni::objects::JByteArray<'_>,
+            output_membership: jni::objects::JByteArray<'_>,
+            verifier_commitment: jni::objects::JByteArray<'_>,
+            operation_id: jni::objects::JByteArray<'_>,
+            block_height: jni::sys::jlong,
+        ) -> jni::sys::jbyteArray
+            => platform_jni::java_native_kagemusha_build_append_request_with_policy_v4, extra true;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildVerifyRequestV4(
+            bundle: jni::objects::JByteArray<'_>,
+            recipient_request: jni::objects::JByteArray<'_>,
+            topup_provenance: jni::objects::JByteArray<'_>,
+            maximum_hops: jni::sys::jint,
+            block_height: jni::sys::jlong,
+            verified_at_ms: jni::sys::jlong,
+        ) -> jni::sys::jbyteArray
+            => platform_jni::java_native_kagemusha_build_verify_request_v4,
+                extra JavaKagemushaArtifactRegistryV4::CandidateEvidenceLab;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildRedeemRequestV4(
+            bundle: jni::objects::JByteArray<'_>,
+            topup_provenance: jni::objects::JByteArray<'_>,
+            opening: jni::objects::JByteArray<'_>,
+            membership_witness: jni::objects::JByteArray<'_>,
+            recipient: jni::objects::JByteArray<'_>,
+            chain_discriminant: jni::sys::jint,
+            atomic_units: jni::objects::JByteArray<'_>,
+            scale: jni::sys::jint,
+            change_opening: jni::objects::JByteArray<'_>,
+            change_output_membership: jni::objects::JByteArray<'_>,
+            verifier_commitment: jni::objects::JByteArray<'_>,
+            operation_id: jni::objects::JByteArray<'_>,
+            block_height: jni::sys::jlong,
+        ) -> jni::sys::jbyteArray
+            => platform_jni::java_native_kagemusha_build_redeem_request_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeAppendV4(
+            request: jni::objects::JByteArray<'_>,
+            recipient_request: jni::objects::JByteArray<'_>,
+            verified_at_ms: jni::sys::jlong,
+        ) -> jni::sys::jbyteArray
+            => platform_jni::java_native_kagemusha_candidate_lab_append_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProjectInitResultV4(
+            result: jni::objects::JByteArray<'_>,
+        ) -> jni::sys::jobjectArray
+            => platform_jni::java_native_kagemusha_project_init_result_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProjectSplitResultV4(
+            result: jni::objects::JByteArray<'_>,
+        ) -> jni::sys::jobjectArray
+            => platform_jni::java_native_kagemusha_project_split_result_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProjectVerifyResultV4(
+            result: jni::objects::JByteArray<'_>,
+        ) -> jni::sys::jobjectArray
+            => platform_jni::java_native_kagemusha_project_verify_result_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProjectRedeemResultV4(
+            result: jni::objects::JByteArray<'_>,
+        ) -> jni::sys::jobjectArray
+            => platform_jni::java_native_kagemusha_candidate_lab_project_redeem_result_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeInitV4(
+            request: jni::objects::JByteArray<'_>,
+        ) -> jni::sys::jbyteArray
+            => platform_jni::java_native_kagemusha_unary_lifecycle_v4,
+                extra "candidate-lab V4 init",
+                extra KAGEMUSHA_RECURSIVE_SPEND_INIT_LOCAL_MAX_BYTES_V4,
+                extra connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeVerifyV4(
+            request: jni::objects::JByteArray<'_>,
+        ) -> jni::sys::jbyteArray
+            => platform_jni::java_native_kagemusha_unary_lifecycle_v4,
+                extra "candidate-lab V4 verify",
+                extra KAGEMUSHA_RECURSIVE_SPEND_VERIFY_LOCAL_MAX_BYTES_V4,
+                extra connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4;
+        Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeRedeemV4(
+            request: jni::objects::JByteArray<'_>,
+        ) -> jni::sys::jbyteArray
+            => platform_jni::java_native_kagemusha_unary_lifecycle_v4,
+                extra "candidate-lab V4 redeem",
+                extra KAGEMUSHA_RECURSIVE_SPEND_REDEEM_LOCAL_MAX_BYTES_V4,
+                extra connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4;
     }
 }
 #[cfg(all(
@@ -29485,563 +29228,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate
         target_os = "windows"
     )
 ))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactBeginV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    candidate: jni::objects::JByteArray<'_>,
-    candidate_sha256: jni::objects::JByteArray<'_>,
-    artifact_sha256: jni::objects::JByteArray<'_>,
-) -> jni::sys::jlong {
-    platform_jni::java_native_kagemusha_candidate_lab_artifact_begin_v4(
-        &mut env,
-        candidate,
-        candidate_sha256,
-        artifact_sha256,
-    )
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactWriteV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    handle: jni::sys::jlong,
-    chunk: jni::objects::JByteArray<'_>,
-) {
-    platform_jni::java_native_kagemusha_candidate_lab_artifact_write_v4(&mut env, handle, chunk);
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactFinalizeV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    handle: jni::sys::jlong,
-) {
-    platform_jni::java_native_kagemusha_candidate_lab_artifact_finish_v4(&mut env, handle, false);
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactCancelV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    handle: jni::sys::jlong,
-) {
-    platform_jni::java_native_kagemusha_candidate_lab_artifact_finish_v4(&mut env, handle, true);
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactSetInstallV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    candidate: jni::objects::JByteArray<'_>,
-    candidate_sha256: jni::objects::JByteArray<'_>,
-    handles: jni::objects::JLongArray<'_>,
-) {
-    platform_jni::java_native_kagemusha_candidate_lab_artifact_set_install_v4(
-        &mut env,
-        candidate,
-        candidate_sha256,
-        handles,
-    );
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactSetIsInstalledV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    candidate: jni::objects::JByteArray<'_>,
-    candidate_sha256: jni::objects::JByteArray<'_>,
-) -> jni::sys::jboolean {
-    platform_jni::java_native_kagemusha_candidate_lab_artifact_set_is_installed_v4(
-        &mut env,
-        candidate,
-        candidate_sha256,
-    )
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeAcceptedIdentityV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-) -> jni::sys::jobjectArray {
-    platform_jni::java_native_kagemusha_candidate_lab_accepted_identity_v4(&mut env)
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeArtifactSetUninstallV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    candidate_sha256: jni::objects::JByteArray<'_>,
-) {
-    platform_jni::java_native_kagemusha_candidate_lab_artifact_set_uninstall_v4(
-        &mut env,
-        candidate_sha256,
-    );
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeValidateBranchV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundle: jni::objects::JByteArray<'_>,
-    topup_provenance: jni::objects::JByteArray<'_>,
-    membership_witness: jni::objects::JByteArray<'_>,
-    opening: jni::objects::JByteArray<'_>,
-    block_height: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    platform_jni::java_native_kagemusha_candidate_lab_validate_branch_v4(
-        &mut env,
-        bundle,
-        topup_provenance,
-        membership_witness,
-        opening,
-        block_height,
-    )
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildInitRequestV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    anchor: jni::objects::JByteArray<'_>,
-    finality_proof: jni::objects::JByteArray<'_>,
-    roster_artifact: jni::objects::JByteArray<'_>,
-    opening: jni::objects::JByteArray<'_>,
-    output_membership: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    platform_jni::java_native_kagemusha_build_init_request_v4(
-        &mut env,
-        anchor,
-        finality_proof,
-        roster_artifact,
-        opening,
-        output_membership,
-    )
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildAppendRequestV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundles: jni::objects::JObjectArray<'_>,
-    topup_provenances: jni::objects::JObjectArray<'_>,
-    openings: jni::objects::JObjectArray<'_>,
-    membership_witnesses: jni::objects::JObjectArray<'_>,
-    change_opening: jni::objects::JByteArray<'_>,
-    output_membership: jni::objects::JByteArray<'_>,
-    verifier_commitment: jni::objects::JByteArray<'_>,
-    operation_id: jni::objects::JByteArray<'_>,
-    block_height: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    platform_jni::java_native_kagemusha_build_append_request_v4(
-        &mut env,
-        bundles,
-        topup_provenances,
-        openings,
-        membership_witnesses,
-        change_opening,
-        output_membership,
-        verifier_commitment,
-        operation_id,
-        block_height,
-    )
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildDuplicateInputAppendRequestV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundles: jni::objects::JObjectArray<'_>,
-    topup_provenances: jni::objects::JObjectArray<'_>,
-    openings: jni::objects::JObjectArray<'_>,
-    membership_witnesses: jni::objects::JObjectArray<'_>,
-    change_opening: jni::objects::JByteArray<'_>,
-    output_membership: jni::objects::JByteArray<'_>,
-    verifier_commitment: jni::objects::JByteArray<'_>,
-    operation_id: jni::objects::JByteArray<'_>,
-    block_height: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    platform_jni::java_native_kagemusha_build_append_request_with_policy_v4(
-        &mut env,
-        bundles,
-        topup_provenances,
-        openings,
-        membership_witnesses,
-        change_opening,
-        output_membership,
-        verifier_commitment,
-        operation_id,
-        block_height,
-        true,
-    )
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildVerifyRequestV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundle: jni::objects::JByteArray<'_>,
-    recipient_request: jni::objects::JByteArray<'_>,
-    topup_provenance: jni::objects::JByteArray<'_>,
-    maximum_hops: jni::sys::jint,
-    block_height: jni::sys::jlong,
-    verified_at_ms: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    platform_jni::java_native_kagemusha_build_verify_request_v4(
-        &mut env,
-        bundle,
-        recipient_request,
-        topup_provenance,
-        maximum_hops,
-        block_height,
-        verified_at_ms,
-        JavaKagemushaArtifactRegistryV4::CandidateEvidenceLab,
-    )
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeBuildRedeemRequestV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    bundle: jni::objects::JByteArray<'_>,
-    topup_provenance: jni::objects::JByteArray<'_>,
-    opening: jni::objects::JByteArray<'_>,
-    membership_witness: jni::objects::JByteArray<'_>,
-    recipient: jni::objects::JByteArray<'_>,
-    chain_discriminant: jni::sys::jint,
-    atomic_units: jni::objects::JByteArray<'_>,
-    scale: jni::sys::jint,
-    change_opening: jni::objects::JByteArray<'_>,
-    change_output_membership: jni::objects::JByteArray<'_>,
-    verifier_commitment: jni::objects::JByteArray<'_>,
-    operation_id: jni::objects::JByteArray<'_>,
-    block_height: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    platform_jni::java_native_kagemusha_build_redeem_request_v4(
-        &mut env,
-        bundle,
-        topup_provenance,
-        opening,
-        membership_witness,
-        recipient,
-        chain_discriminant,
-        atomic_units,
-        scale,
-        change_opening,
-        change_output_membership,
-        verifier_commitment,
-        operation_id,
-        block_height,
-    )
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeInitV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_lifecycle_archive_v4(
-        &mut env,
-        request,
-        "candidate-lab V4 init",
-        KAGEMUSHA_RECURSIVE_SPEND_INIT_LOCAL_MAX_BYTES_V4,
-        |request_ptr, request_len, output, output_len| unsafe {
-            connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4(
-                request_ptr,
-                request_len,
-                output,
-                output_len,
-            )
-        },
-    )
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeAppendV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request: jni::objects::JByteArray<'_>,
-    recipient_request: jni::objects::JByteArray<'_>,
-    verified_at_ms: jni::sys::jlong,
-) -> jni::sys::jbyteArray {
-    platform_jni::java_native_kagemusha_candidate_lab_append_v4(
-        &mut env,
-        request,
-        recipient_request,
-        verified_at_ms,
-    )
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeVerifyV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_lifecycle_archive_v4(
-        &mut env,
-        request,
-        "candidate-lab V4 verify",
-        KAGEMUSHA_RECURSIVE_SPEND_VERIFY_LOCAL_MAX_BYTES_V4,
-        |request_ptr, request_len, output, output_len| unsafe {
-            connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4(
-                request_ptr,
-                request_len,
-                output,
-                output_len,
-            )
-        },
-    )
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeRedeemV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    request: jni::objects::JByteArray<'_>,
-) -> jni::sys::jbyteArray {
-    java_native_kagemusha_lifecycle_archive_v4(
-        &mut env,
-        request,
-        "candidate-lab V4 redeem",
-        KAGEMUSHA_RECURSIVE_SPEND_REDEEM_LOCAL_MAX_BYTES_V4,
-        |request_ptr, request_len, output, output_len| unsafe {
-            connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4(
-                request_ptr,
-                request_len,
-                output,
-                output_len,
-            )
-        },
-    )
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProjectInitResultV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    result: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    platform_jni::java_native_kagemusha_project_init_result_v4(&mut env, result)
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProjectSplitResultV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    result: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    platform_jni::java_native_kagemusha_project_split_result_v4(&mut env, result)
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProjectVerifyResultV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    result: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    platform_jni::java_native_kagemusha_project_verify_result_v4(&mut env, result)
-}
-#[cfg(all(
-    feature = "kagemusha-candidate-evidence-lab",
-    any(
-        target_os = "android",
-        target_os = "linux",
-        target_os = "macos",
-        target_os = "windows"
-    )
-))]
-#[allow(clippy::missing_safety_doc)]
-#[unsafe(no_mangle)]
-pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_KagemushaCandidateLabNative_nativeProjectRedeemResultV4(
-    mut env: jni::JNIEnv<'_>,
-    _class: jni::objects::JClass<'_>,
-    result: jni::objects::JByteArray<'_>,
-) -> jni::sys::jobjectArray {
-    platform_jni::java_native_kagemusha_candidate_lab_project_redeem_result_v4(&mut env, result)
-}
+pub use kagemusha_candidate_lab_jni::*;
 #[cfg(test)]
 mod tests {
     use super::*;

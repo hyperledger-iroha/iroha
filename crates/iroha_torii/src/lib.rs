@@ -9719,8 +9719,7 @@ async fn handler_gov_enact(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::NoritoJson<crate::gov::EnactDto>,
 ) -> Result<JsonBody<crate::gov::EnactResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/gov/enact").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/gov/enact").await?;
     crate::gov::handle_gov_enact(app.state.clone(), body).await
 }
 #[cfg(feature = "app_api")]
@@ -9731,11 +9730,10 @@ async fn handler_ministry_agenda_proposal_draft(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: crate::utils::extractors::NoritoJson<crate::gov::MinistryAgendaProposalDraftDto>,
 ) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
     check_access(
         &app,
         &headers,
-        Some(remote_ip),
+        Some(remote.ip()),
         "v1/ministry/agenda/proposals/draft",
     )
     .await?;
@@ -9766,11 +9764,10 @@ async fn handler_ministry_agenda_proposal_get(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     proposal_id: AxPath<String>,
 ) -> Result<JsonBody<crate::gov::MinistryAgendaProposalGetResponse>, Error> {
-    let remote_ip = remote.ip();
     check_access(
         &app,
         &headers,
-        Some(remote_ip),
+        Some(remote.ip()),
         "v1/ministry/agenda/proposals/{proposal_id}",
     )
     .await?;
@@ -9782,8 +9779,7 @@ async fn handler_gov_council_current(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<JsonBody<crate::gov::CouncilCurrentResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/gov/council/current").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/gov/council/current").await?;
     crate::gov::handle_gov_council_current(app.state.clone()).await
 }
 #[cfg(feature = "app_api")]
@@ -9792,8 +9788,7 @@ async fn handler_gov_citizen_count(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<JsonBody<crate::gov::CitizenCountResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/gov/citizens").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/gov/citizens").await?;
     crate::gov::handle_gov_citizen_count(app.state.clone()).await
 }
 #[cfg(feature = "app_api")]
@@ -9839,8 +9834,7 @@ async fn handler_gov_proposal_get(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     id: AxPath<String>,
 ) -> Result<JsonBody<crate::gov::ProposalGetResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/gov/proposals/{id}").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/gov/proposals/{id}").await?;
     crate::gov::handle_gov_get_proposal(app.state.clone(), id).await
 }
 #[cfg(feature = "app_api")]
@@ -9850,8 +9844,7 @@ async fn handler_gov_locks_get(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     rid: AxPath<String>,
 ) -> Result<JsonBody<crate::gov::LocksGetResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/gov/locks/{rid}").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/gov/locks/{rid}").await?;
     crate::gov::handle_gov_get_locks(app.state.clone(), rid).await
 }
 #[cfg(feature = "app_api")]
@@ -9861,8 +9854,7 @@ async fn handler_gov_referendum_get(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     id: AxPath<String>,
 ) -> Result<JsonBody<crate::gov::ReferendumGetResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/gov/referenda/{id}").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/gov/referenda/{id}").await?;
     crate::gov::handle_gov_get_referendum(app.state.clone(), id).await
 }
 // Missing wrappers for governance endpoints that require AppState access/rate limiting
@@ -9909,8 +9901,7 @@ async fn handler_gov_protected_set(
         crate::gov::ProtectedNamespacesDto,
     >,
 ) -> Result<JsonBody<crate::gov::ProtectedNamespacesApplyResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/gov/protected").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/gov/protected").await?;
     crate::gov::handle_gov_protected_set(
         app.state.clone(),
         app.telemetry.clone(),
@@ -9924,8 +9915,7 @@ async fn handler_gov_protected_get(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<JsonBody<crate::gov::ProtectedNamespacesGetResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/gov/protected").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/gov/protected").await?;
     crate::gov::handle_gov_protected_get(app.state.clone()).await
 }
 #[cfg(feature = "app_api")]
@@ -9935,8 +9925,7 @@ async fn handler_gov_tally_get(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     id: AxPath<String>,
 ) -> Result<JsonBody<crate::gov::TallyGetResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/gov/tally/{id}").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/gov/tally/{id}").await?;
     crate::gov::handle_gov_get_tally(app.state.clone(), id).await
 }
 #[cfg(feature = "app_api")]
@@ -9945,8 +9934,7 @@ async fn handler_gov_unlock_stats(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<JsonBody<crate::gov::UnlockStatsResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/gov/unlocks/stats").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/gov/unlocks/stats").await?;
     crate::gov::handle_gov_unlock_stats(app.state.clone()).await
 }
 #[cfg(feature = "app_api")]
@@ -14675,8 +14663,7 @@ async fn handler_runtime_abi_active(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/runtime/abi/active").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/runtime/abi/active").await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -14691,8 +14678,7 @@ async fn handler_runtime_abi_hash(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/runtime/abi/hash").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/runtime/abi/hash").await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -14784,8 +14770,7 @@ async fn handler_get_vpn_profile(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/vpn/profile").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/vpn/profile").await?;
     vpn::handle_get_vpn_profile(app).await
 }
 /// POST /v1/vpn/sessions — create a signed Sora VPN session for the active wallet account.
@@ -14797,8 +14782,7 @@ async fn handler_create_vpn_quote(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/vpn/quotes").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/vpn/quotes").await?;
     vpn::handle_create_vpn_quote(app, &method, &uri, &headers, body.as_ref()).await
 }
 /// POST /v1/vpn/sessions — create a signed Sora VPN session for the active wallet account.
@@ -14810,8 +14794,7 @@ async fn handler_create_vpn_session(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/vpn/sessions").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/vpn/sessions").await?;
     vpn::handle_create_vpn_session(app, &method, &uri, &headers, body.as_ref()).await
 }
 /// DELETE /v1/vpn/sessions/{session_id} — signed session teardown for the wallet account.
@@ -14860,8 +14843,7 @@ async fn handler_list_vpn_receipts(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/vpn/receipts").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/vpn/receipts").await?;
     vpn::handle_list_vpn_receipts(app, &method, &uri, &headers).await
 }
 /// POST /v1/vpn/receipts — settle an active VPN session from relay/client evidence.
@@ -14873,8 +14855,7 @@ async fn handler_submit_vpn_receipt(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/vpn/receipts").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/vpn/receipts").await?;
     vpn::handle_submit_vpn_receipt(app, &method, &uri, &headers, body.as_ref()).await
 }
 /// POST /v1/configuration — wrapper that enforces Torii access policy, then delegates.
@@ -14884,8 +14865,7 @@ async fn handler_post_configuration(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     crate::utils::extractors::JsonOnly(dto): crate::utils::extractors::JsonOnly<ConfigUpdateDTO>,
 ) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/configuration").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/configuration").await?;
     routing::handle_post_configuration(app.kiso.clone(), dto).await
 }
 /// GET /v1/nexus/lifecycle — return the exact current catalog and lifecycle commitment.
@@ -14895,8 +14875,7 @@ async fn handler_get_nexus_lane_lifecycle(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/nexus/lifecycle").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/nexus/lifecycle").await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(format) => format,
         Err(response) => return Ok(response),
@@ -14962,8 +14941,7 @@ async fn handler_time_now(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/time/now").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/time/now").await?;
     Ok(routing::handle_time_now().await.into_response())
 }
 /// GET /v1/time/status — wrapper that enforces Torii access policy, then delegates.
@@ -15026,8 +15004,7 @@ async fn handler_runtime_metrics(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/runtime/metrics").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/runtime/metrics").await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -15042,8 +15019,7 @@ async fn handler_node_capabilities(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/node/capabilities").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/node/capabilities").await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
@@ -15058,8 +15034,7 @@ async fn handler_privacy_capabilities(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
 ) -> Result<Response, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/privacy/capabilities").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/privacy/capabilities").await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(format) => format,
         Err(response) => return Ok(response),
@@ -25243,17 +25218,17 @@ fn validate_queue_plan_admission_publication(
     }
     match disposition {
         PendingQueuePlanAdmissionDisposition::Exact
-        | PendingQueuePlanAdmissionDisposition::EligibleAbsent
-        | PendingQueuePlanAdmissionDisposition::Future => {}
+        | PendingQueuePlanAdmissionDisposition::EligibleAbsent => {}
         PendingQueuePlanAdmissionDisposition::DefinitiveConflict => {
             return Err(
                 "canonical WSV already binds this entrypoint to another QueuePlan admission"
                     .to_owned(),
             );
         }
-        PendingQueuePlanAdmissionDisposition::Stale => {
+        PendingQueuePlanAdmissionDisposition::Stale
+        | PendingQueuePlanAdmissionDisposition::Future => {
             return Err(
-                "QueuePlan admission publication is stale against canonical history, lifecycle, or authority"
+                "QueuePlan admission publication is stale or ahead of canonical authority"
                     .to_owned(),
             );
         }
@@ -35011,8 +34986,7 @@ async fn handler_iso_status(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path(msg_id): axum::extract::Path<String>,
 ) -> Result<(StatusCode, JsonBody<norito::json::native::Value>), Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/iso20022/messages").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/iso20022/messages").await?;
     let runtime = match &app.iso_bridge {
         Some(rt) => rt.clone(),
         None => {
@@ -40154,8 +40128,7 @@ async fn handler_identifier_policies(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/identifier-policies").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/identifier-policies").await?;
     let world = app.state.world_view();
     let items = world
         .identifier_policies_iter()
@@ -40178,8 +40151,7 @@ async fn handler_identifier_resolve(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     NoritoJson(request): NoritoJson<routing::IdentifierResolveRequestDto>,
 ) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/identifiers/resolve").await?;
+    check_access(&app, &headers, Some(remote.ip()), "v1/identifiers/resolve").await?;
     let policy_id =
         iroha_data_model::identifier::IdentifierPolicyId::from_str(request.policy_id.trim())
             .map_err(|err| {

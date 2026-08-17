@@ -55,9 +55,9 @@ completion-observer installation, exact ingress opening, typed status
 publication, and readiness release. The CompleteTip branch consumes its
 retained retired-predecessor authority at that boundary. The guarded source
 mapping also covers joint ingress retirement, exact executor/Kura finality,
-adapter-WAL retirement, durable output handoff, refreshed live Serve census,
-opaque all-row LedgerV1 publication, coordinator/registry consumption, and the
-sole cleanup-ready shutdown permit. These remain mutable-tree
+durable output handoff, post-handoff adapter-WAL retirement, refreshed live
+Serve census, opaque all-row LedgerV1 publication, coordinator/registry
+consumption, and the sole cleanup-ready shutdown permit. These remain mutable-tree
 source-refinement contracts, not current Cargo, formal-engine, or release
 evidence.
 
@@ -922,16 +922,25 @@ argument therefore has explicit premises: a non-crashing honest set
 independently meets both quorum thresholds; authenticated retransmissions and
 serialized service have declared finite representable bounds; the monotonic
 clock and run loop continue; and admitted fsync, signature, reconstruction,
-deterministic validation, and local application work terminate. The immutable view-zero
-deadline grows linearly as `base * (view + 1)`, while retransmission retains its
-fixed base interval. Consequently some post-GST view exceeds the complete
-bounded service rank without assuming in advance that one configured fixed
-deadline is already adequate. Under those premises, failed views form and
+deterministic validation, and local application work terminate. The immutable
+view-zero deadline grows linearly as
+`min(base * (view + 1), 10 * base)`, while retransmission retains its fixed base
+interval. Consequently a post-GST view can exceed the complete bounded service
+rank when that rank fits below the protocol ceiling. Under those premises,
+failed views form and
 install TCs. An undecided execution either decides early or reaches a view in
 which the responsive honest scheduled leader itself is active, and that leader
 state leads to responsive decisions. Each responsive validator's durable
 decision independently leads to certified-body recovery, validation, and
 application, after which its local chain advances.
+
+The TLA+ operator `AsyncProductionTimingInstantiation` binds the symbolic
+maximum timeout to ten base deadlines, and `ProductionAdequateViewTimeoutExists`
+states the corresponding conditional adequate-view result. Model-checking
+configurations may use a larger symbolic maximum so the action-count service
+budget is non-vacuous; that does not certify deployment latency. A rollout must
+separately establish that its post-GST transport and service bound fits below
+the production ceiling.
 
 The scheduler-owned protected rank includes Completion and Progress work plus
 a canonical constructor-shaped Normal proposal/Prepare slice: initial or
@@ -1639,7 +1648,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`d34132eb817e08216180c7db186826f1860b6703608d4f8862d956eda258dfd5`.
+`4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1772,11 +1781,12 @@ Proposal-to-Prepare or Prepare-to-Commit classifier and an affine cold reducer
 replay which must reproduce both children. Both cold branches splice the exact
 pair into the complete census; Proposal recovery reconstructs its chunks from
 the same body-store owner. The unified lifecycle Completion-turn driver
-classifies both recovered Proposal settlement shapes, but the live production
-runner does not yet invoke that driver, so the cold Proposal path remains
-unreachable from the production loop. The deductive model is unchanged; this
-source-fidelity boundary promotes no theorem, proof-ledger row, or evidence
-gate.
+classifies both recovered Proposal settlement shapes. The live lifecycle
+height driver invokes it with the real borrow-bound Completion turn before the
+ordinary completion tail, so the cold Proposal path is reachable without
+adding a second scheduler or publication authority. The deductive model is
+unchanged; this source-fidelity boundary promotes no theorem, proof-ledger row,
+or evidence gate.
 The wrapper also runs exact mocked contracts for active Git operation
 rejection, detached source sealing, the 160-run matrix launcher, the
 source-bound 100,000-height chaos receipt, provisional Taira evidence
