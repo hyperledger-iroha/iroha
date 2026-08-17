@@ -686,10 +686,10 @@ enum RecoveredWalStartupAuthorityV1 {
 
 /// Opaque recovered ownership of one already-attempted local Proposal.
 ///
-/// The WAL-authenticated control Sign is the sole mint. The token exposes only
-/// a fixed comparison against the reducer's current proposal directive, so the
-/// runner can suppress duplicate local assembly without receiving a replayed
-/// effect, tag, round, or subject.
+/// The replay-authenticated current-round [`reducer::WalRecord::ProposalIntent`]
+/// is the sole mint. The token exposes only a fixed comparison against the
+/// reducer's current proposal directive, so the runner can suppress duplicate
+/// local assembly without receiving a replayed effect, tag, round, or subject.
 #[must_use = "recovered local Proposal ownership must initialize runner proposal state"]
 pub(in crate::sumeragi) struct RecoveredLifecycleLocalProposalAttemptV1 {
     tag: reducer::EventTag,
@@ -698,6 +698,36 @@ pub(in crate::sumeragi) struct RecoveredLifecycleLocalProposalAttemptV1 {
 }
 
 impl RecoveredLifecycleLocalProposalAttemptV1 {
+    /// Project one already-attempted current-round Proposal from the exact
+    /// replay-authenticated durable reducer frontier.
+    ///
+    /// A later Prepare/Timeout record or residual phase-vote/control owner must
+    /// not hide the earlier same-view ProposalIntent. Conversely, an intent
+    /// from an older view is only durable non-equivocation history and cannot
+    /// suppress a proposal in the reducer's successor view.
+    fn from_authenticated_durable_current_round(
+        adapter: &SumeragiV2Adapter,
+    ) -> Result<Option<Self>, AdapterError> {
+        let tag = adapter.reducer.current_tag();
+        let round = reducer::Round::new(tag.height(), tag.view());
+        let Some(proposal) = adapter.reducer.durable_state().proposal_intent(round) else {
+            return Ok(None);
+        };
+        let wire_round = adapter.registry.round_to_wire(proposal.round());
+        let subject = adapter.registry.subject(proposal.manifest().subject())?;
+        if wire_round.context_id != adapter.wire_context.id()
+            || wire_round.height != tag.height()
+            || wire_round.view != tag.view()
+        {
+            return Err(AdapterError::RecoveredStartupEffectMismatch);
+        }
+        Ok(Some(Self {
+            tag,
+            round: wire_round,
+            subject,
+        }))
+    }
+
     fn from_control(control: &RecoveredWalControlSign) -> Option<Self> {
         let AdapterEffect::Sign {
             tag,
@@ -722,13 +752,10 @@ impl RecoveredLifecycleLocalProposalAttemptV1 {
             && self.round.height == self.tag.height()
             && self.round.view == self.tag.view()
             && current.decided_subject().is_none()
-            && current
-                .locked_body()
-                .is_none_or(|(locked_round, locked_subject)| {
-                    self.round.context_id == locked_round.context_id
-                        && self.round.height == locked_round.height
-                        && self.subject == locked_subject
-                })
+            && current.locked_body().is_none_or(|(locked_round, _)| {
+                self.round.context_id == locked_round.context_id
+                    && self.round.height == locked_round.height
+            })
     }
 
     /// Build a comparison-only recovery owner for focused boundary tests.
@@ -1723,6 +1750,8 @@ enum ProductionLifecycleOwnerStartupErrorKindV1 {
     RecoveredOwner(#[source] super::v2_lifecycle_coordinator::ProductionLifecycleStartupErrorV1),
     #[error("recovered WAL control Sign startup failed: {0}")]
     RecoveredControl(&'static str),
+    #[error("recovered local Proposal attempt startup failed: {0}")]
+    RecoveredLocalProposal(&'static str),
     #[error("recovered WAL Decision Fetch startup failed: {0}")]
     RecoveredDecisionFetch(&'static str),
     #[error("recovered WAL Decision body preflight failed: {0}")]
@@ -10894,6 +10923,21 @@ impl SumeragiV2Adapter {
             locked_subject,
             decided_subject,
         })
+    }
+    /// Return whether replay-authenticated safety authority closes local
+    /// production for the reducer's exact current round.
+    ///
+    /// This is a defense-in-depth admission fact beneath runner-local attempt
+    /// bookkeeping. A recovered phase vote, timeout, Decision, or empty
+    /// residual effect set must not reopen the active-view producer after the
+    /// safety WAL has fixed or closed that round.
+    pub(crate) fn durable_current_round_local_proposal_is_closed(&self) -> bool {
+        let tag = self.reducer.current_tag();
+        let round = reducer::Round::new(tag.height(), tag.view());
+        let durable = self.reducer.durable_state();
+        durable.proposal_intent(round).is_some()
+            || durable.timeout_intent(round).is_some()
+            || durable.decision().is_some()
     }
     /// Mint the bounded validation-marker frontier authorized by WAL replay.
     ///

@@ -10001,6 +10001,12 @@ pub(crate) trait RuntimeDriver {
     type SignatureFenceIdentity: Clone + Eq;
     /// Current authoritative reducer tag.
     fn current_tag(&self) -> EventTag;
+    /// Whether replay-authenticated safety-WAL state closes local production
+    /// for the exact current reducer round. Synthetic drivers have no durable
+    /// WAL and retain the open default.
+    fn durable_current_round_local_proposal_is_closed(&self) -> bool {
+        false
+    }
     /// Frozen current-height TimeoutVote slot universe. Synthetic drivers have
     /// no network roster and therefore retain the empty default.
     fn timeout_vote_owner_universe(&self) -> BTreeSet<FairV2IngressLeaderWireSlot> {
@@ -10286,6 +10292,9 @@ impl RuntimeDriver for SumeragiV2Adapter {
     type SignatureFenceIdentity = (EventTag, super::v2_core::SignableMessage);
     fn current_tag(&self) -> EventTag {
         SumeragiV2Adapter::current_tag(self)
+    }
+    fn durable_current_round_local_proposal_is_closed(&self) -> bool {
+        SumeragiV2Adapter::durable_current_round_local_proposal_is_closed(self)
     }
     fn timeout_vote_owner_universe(&self) -> BTreeSet<FairV2IngressLeaderWireSlot> {
         self.wire_context()
@@ -11979,11 +11988,18 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if self.fail_closed {
             return Err("Sumeragi v2 runtime is fail-closed".to_owned());
         }
+        if tag != self.round_tag {
+            self.latch_fail_closed("local proposal changed the authoritative reducer tag");
+            return Err("Sumeragi v2 local proposal tag was not authoritative".to_owned());
+        }
+        if self.driver.durable_current_round_local_proposal_is_closed() {
+            return Err(
+                "Sumeragi v2 current round is already closed by durable local safety authority"
+                    .to_owned(),
+            );
+        }
         if let Some(reservation) = self.active_view_producer.as_ref() {
-            if reservation.tag != tag
-                || tag != self.round_tag
-                || !reservation.ownership.validate_exact()
-            {
+            if reservation.tag != tag || !reservation.ownership.validate_exact() {
                 self.latch_fail_closed(
                     "local proposal changed its active-view producer reservation",
                 );
@@ -12077,6 +12093,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 "local proposal admission preflight changed the authoritative tag",
             );
             return Err("Sumeragi v2 local proposal preflight tag was invalid".to_owned());
+        }
+        if self.driver.durable_current_round_local_proposal_is_closed() {
+            return Ok(false);
         }
         let Some(reservation) = self.active_view_producer.as_ref() else {
             return Ok(!self.clocks_armed);

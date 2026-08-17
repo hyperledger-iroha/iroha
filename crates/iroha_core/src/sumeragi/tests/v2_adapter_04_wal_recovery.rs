@@ -968,6 +968,262 @@ fn bls_timeout_intent_control_sign_repairs_and_coalesces_exactly() {
 }
 #[cfg(feature = "bls")]
 #[test]
+fn durable_current_round_proposal_survives_later_prepare_and_timeout_authority() {
+    let directory = TempDir::new().expect("current-round ProposalIntent WAL");
+    let (context, _keys, proofs) = authenticated_context();
+    let local = context.leader(0);
+    let wire::ConsensusMessageV2Payload::Proposal(mut proposal) =
+        proposal(&context, local, subject(0xD1)).payload
+    else {
+        unreachable!("proposal fixture")
+    };
+    proposal.signature.clear();
+    let prepare = wire::Vote {
+        round: proposal.round,
+        proposal_round: proposal.round,
+        phase: wire::GlobalPhase::Prepare,
+        subject: proposal.subject,
+        execution_commitment: execution_commitment(0xD1),
+        signer: local,
+        signature: Vec::new(),
+    };
+    let timeout = wire::TimeoutVote {
+        round: proposal.round,
+        highest_prepare_qc: None,
+        signer: local,
+        signature: Vec::new(),
+    };
+    let startup = write_and_reopen_authenticated_wal_startup(
+        &directory,
+        &context,
+        &proofs,
+        local,
+        [0xD1; 32],
+        vec![
+            WalRecordV2::ProposalIntent(proposal.clone()),
+            WalRecordV2::PrepareIntent(prepare),
+            WalRecordV2::TimeoutIntent(timeout),
+        ],
+    );
+    let current_tag = startup.adapter.current_tag();
+    let attempt =
+        RecoveredLifecycleLocalProposalAttemptV1::from_authenticated_durable_current_round(
+            &startup.adapter,
+        )
+        .expect("project authenticated ProposalIntent")
+        .expect("later phase authority must not hide the ProposalIntent");
+    assert!(
+        attempt.exactly_matches_directive(
+            startup
+                .adapter
+                .local_proposal_directive()
+                .expect("read current proposal directive")
+        )
+    );
+    assert!(
+        startup
+            .adapter
+            .durable_current_round_local_proposal_is_closed()
+    );
+    let manifest = proposal.manifest.clone();
+    let (mut runtime, _) = super::super::v2_runtime::SerializedV2Runtime::new(
+        startup.adapter,
+        startup.effects,
+        Instant::now(),
+        Duration::from_secs(10),
+        super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+    )
+    .expect("wrap current-round durable authority");
+    assert_eq!(
+        runtime.local_proposal_admission_available(current_tag),
+        Ok(false),
+        "runner preflight must suppress before candidate consumption"
+    );
+    assert!(matches!(
+        runtime.mint_local_proposal_effect_ownership(current_tag, &manifest),
+        Err(reason) if reason.contains("durable local safety authority")
+    ));
+}
+#[cfg(feature = "bls")]
+#[test]
+fn install_timeout_reopens_only_the_successor_view_producer() {
+    let directory = TempDir::new().expect("old-view ProposalIntent WAL");
+    let (context, keys, proofs) = authenticated_context();
+    let local = context.leader(0);
+    let wire::ConsensusMessageV2Payload::Proposal(mut proposal) =
+        proposal(&context, local, subject(0xD2)).payload
+    else {
+        unreachable!("proposal fixture")
+    };
+    proposal.signature.clear();
+    let timeout_vote = wire::TimeoutVote {
+        round: proposal.round,
+        highest_prepare_qc: None,
+        signer: local,
+        signature: Vec::new(),
+    };
+    let timeout = authenticated_timeout_certificate(proposal.round, None, vec![0, 1, 2], &keys);
+    let startup = write_and_reopen_authenticated_wal_startup(
+        &directory,
+        &context,
+        &proofs,
+        local,
+        [0xD2; 32],
+        vec![
+            WalRecordV2::ProposalIntent(proposal),
+            WalRecordV2::TimeoutIntent(timeout_vote),
+            WalRecordV2::InstallTimeout(timeout),
+        ],
+    );
+    let current_tag = startup.adapter.current_tag();
+    assert_eq!(current_tag.view(), 1);
+    assert!(
+        RecoveredLifecycleLocalProposalAttemptV1::from_authenticated_durable_current_round(
+            &startup.adapter,
+        )
+        .expect("project successor-view attempt")
+        .is_none(),
+        "old-view ProposalIntent must not suppress the successor view"
+    );
+    assert!(
+        !startup
+            .adapter
+            .durable_current_round_local_proposal_is_closed()
+    );
+    let current_round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: current_tag.view(),
+    };
+    let mut current_subject = subject(0xD3);
+    current_subject.payload_hash = Hash::new(b"successor");
+    let current_manifest = encode_payload(&context, current_round, current_subject, b"successor")
+        .expect("encode successor-view candidate")
+        .manifest()
+        .clone();
+    let (mut runtime, _) = super::super::v2_runtime::SerializedV2Runtime::new(
+        startup.adapter,
+        startup.effects,
+        Instant::now(),
+        Duration::from_secs(10),
+        super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+    )
+    .expect("wrap successor-view adapter");
+    assert_eq!(
+        runtime.local_proposal_admission_available(current_tag),
+        Ok(true)
+    );
+    let _ownership = runtime
+        .mint_local_proposal_effect_ownership(current_tag, &current_manifest)
+        .expect("successor view mints one fresh local Store owner");
+}
+#[cfg(feature = "bls")]
+#[test]
+fn durable_timeout_and_decision_close_direct_local_mint_without_proposal_attempt() {
+    let (context, keys, proofs) = authenticated_context();
+    let local = context.leader(0);
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let mut closed_subject = subject(0xD4);
+    closed_subject.payload_hash = Hash::new(b"closed");
+    let manifest = encode_payload(&context, round, closed_subject, b"closed")
+        .expect("encode closed-round candidate")
+        .manifest()
+        .clone();
+    let timeout_directory = TempDir::new().expect("current timeout WAL");
+    let timeout_startup = write_and_reopen_authenticated_wal_startup(
+        &timeout_directory,
+        &context,
+        &proofs,
+        local,
+        [0xD4; 32],
+        vec![WalRecordV2::TimeoutIntent(wire::TimeoutVote {
+            round,
+            highest_prepare_qc: None,
+            signer: local,
+            signature: Vec::new(),
+        })],
+    );
+    assert!(
+        RecoveredLifecycleLocalProposalAttemptV1::from_authenticated_durable_current_round(
+            &timeout_startup.adapter,
+        )
+        .expect("project timeout-only attempt")
+        .is_none(),
+        "TimeoutIntent is closure authority, never Proposal-attempt authority"
+    );
+    assert!(
+        timeout_startup
+            .adapter
+            .durable_current_round_local_proposal_is_closed()
+    );
+    let timeout_tag = timeout_startup.adapter.current_tag();
+    let (mut timeout_runtime, _) = super::super::v2_runtime::SerializedV2Runtime::new(
+        timeout_startup.adapter,
+        timeout_startup.effects,
+        Instant::now(),
+        Duration::from_secs(10),
+        super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+    )
+    .expect("wrap timeout-only adapter");
+    assert_eq!(
+        timeout_runtime.local_proposal_admission_available(timeout_tag),
+        Ok(false)
+    );
+    assert!(
+        timeout_runtime
+            .mint_local_proposal_effect_ownership(timeout_tag, &manifest)
+            .is_err()
+    );
+
+    let decision_directory = TempDir::new().expect("Decision WAL");
+    let mut decision = wire::QuorumCertificate {
+        round,
+        proposal_round: round,
+        phase: wire::GlobalPhase::Commit,
+        subject: manifest.subject,
+        execution_commitment: execution_commitment(0xD4),
+        signers: vec![0, 1, 2],
+        aggregate_signature: Vec::new(),
+    };
+    authenticate_qc(&mut decision, &keys);
+    let decision_startup = write_and_reopen_authenticated_wal_startup(
+        &decision_directory,
+        &context,
+        &proofs,
+        local,
+        [0xD5; 32],
+        vec![WalRecordV2::Decision(decision)],
+    );
+    assert!(
+        decision_startup
+            .adapter
+            .durable_current_round_local_proposal_is_closed()
+    );
+    let decision_tag = decision_startup.adapter.current_tag();
+    let (mut decision_runtime, _) = super::super::v2_runtime::SerializedV2Runtime::new(
+        decision_startup.adapter,
+        decision_startup.effects,
+        Instant::now(),
+        Duration::from_secs(10),
+        super::super::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+    )
+    .expect("wrap decided adapter");
+    assert_eq!(
+        decision_runtime.local_proposal_admission_available(decision_tag),
+        Ok(false)
+    );
+    assert!(
+        decision_runtime
+            .mint_local_proposal_effect_ownership(decision_tag, &manifest)
+            .is_err()
+    );
+}
+#[cfg(feature = "bls")]
+#[test]
 fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     crate::sumeragi::status::clear_v2_status();

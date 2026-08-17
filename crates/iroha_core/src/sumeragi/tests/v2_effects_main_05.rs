@@ -1155,6 +1155,7 @@ fn decision_body_stage_retry_rejects_same_root_ordinary_binding_without_mutation
             fixture.manifest.clone(),
             Arc::from(fixture.body.clone()),
             StorePurpose::Reducer,
+            LocalProposalBodyOrigin::Fresh,
             None,
             None,
             ordinary_store_retry,
@@ -1833,6 +1834,323 @@ fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
     assert!(executor.pending_applications.is_empty());
     assert!(services.apply_tasks.is_empty());
 }
+fn recovered_preintent_executor(
+    fixture: &Fixture,
+    directory: TempDir,
+    body_store: V2BodyStore,
+    current_tag: EventTag,
+) -> (V2EffectExecutor<FakeRuntime>, FakeServices) {
+    let recovered_bodies = body_store.recovery_catalog().expect("recovery catalog");
+    let recovered_validations = body_store.validated_recovery_catalog();
+    let recovered_rejections = body_store.rejected_recovery_catalog();
+    let retired_recovered_rejections = body_store.retired_rejected_recovery_catalog();
+    let mut executor = V2EffectExecutor::with_runtime(
+        FakeRuntime {
+            round_tag: Some(current_tag),
+            next_lifecycle_ordinal: 1,
+            ..FakeRuntime::default()
+        },
+        recovered_bodies,
+        fixture.context.clone(),
+        PeerId::new(fixture.requester_key.public_key().clone()),
+        Some(0),
+        EffectQueueConfig::default(),
+    )
+    .expect("construct cold pre-intent executor");
+    executor
+        .install_recovered_validation_catalog(
+            recovered_validations,
+            recovered_rejections,
+            retired_recovered_rejections,
+        )
+        .expect("install exact recovered body outcomes");
+    let mut services = fixture.services();
+    services.body_store = Some(body_store);
+    services._body_directory = Some(directory);
+    (executor, services)
+}
+fn reopen_retired_rejection(fixture: &Fixture) -> (TempDir, V2BodyStore, DurableBodyReceipt) {
+    let directory = TempDir::new().expect("rejected pre-intent body-store directory");
+    let mut store = V2BodyStore::open_with_policy(
+        directory.path(),
+        fixture.context.clone(),
+        BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
+    )
+    .expect("open rejected pre-intent body store");
+    let durable = store
+        .store(fixture.manifest.clone(), fixture.body.clone())
+        .expect("persist exact rejected pre-intent body");
+    let task = BodyValidationTask::for_test(77, durable.clone());
+    let rejected = store
+        .execute_validation_task(&task, |_| {
+            Err::<wire::ExecutionCommitment, _>("deterministic recovered rejection".to_owned())
+        })
+        .expect("persist deterministic rejection marker");
+    assert!(rejected.rejection_reason().is_some());
+    drop(store);
+    let mut reopened = V2BodyStore::open_with_policy(
+        directory.path(),
+        fixture.context.clone(),
+        BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
+    )
+    .expect("reopen rejected pre-intent body store");
+    reopened
+        .retain_recovered_markers_for_authority(
+            super::super::v2::RecoveredValidationAuthority::for_test(&fixture.context, []),
+        )
+        .expect("retire marker outside authenticated WAL authority");
+    reopened
+        .ensure_recovered_markers_revalidated()
+        .expect("retired rejection carries no reducer authority");
+    (directory, reopened, durable)
+}
+#[test]
+fn cold_store_only_local_preintent_forces_exact_store_then_validate_replay() {
+    let fixture = Fixture::new();
+    let directory = TempDir::new().expect("store-only pre-intent body-store directory");
+    let mut store = V2BodyStore::open_with_policy(
+        directory.path(),
+        fixture.context.clone(),
+        BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
+    )
+    .expect("open store-only pre-intent body store");
+    let durable = store
+        .store(fixture.manifest.clone(), fixture.body.clone())
+        .expect("persist body before Store completion");
+    drop(store);
+    let reopened = V2BodyStore::open_with_policy(
+        directory.path(),
+        fixture.context.clone(),
+        BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
+    )
+    .expect("reopen store-only pre-intent body store");
+    let (mut executor, mut services) =
+        recovered_preintent_executor(&fixture, directory, reopened, tag(0));
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    assert_eq!(executor.durable_bodies.get(&key), Some(&durable));
+    executor
+        .admit_local_proposal(
+            tag(0),
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            &mut services,
+        )
+        .expect("adopt exact store-only pre-intent body");
+    assert_eq!(services.store_tasks.len(), 1);
+    assert!(services.validation_tasks.is_empty());
+    let store_id = services.store_tasks[0].id();
+    let store_completion = services.execute_store(store_id);
+    assert_eq!(store_completion.receipt(), &durable);
+    assert_eq!(
+        executor
+            .complete_body_store(store_completion, &mut services)
+            .expect("replay exact idempotent Store completion"),
+        CompletionDisposition::Accepted
+    );
+    assert_eq!(services.validation_tasks.len(), 1);
+    let validation_id = services.validation_tasks[0].id();
+    let validation_completion = services.execute_validation(validation_id);
+    executor
+        .complete_body_validation(validation_completion, &mut services)
+        .expect("rebuild exact local ready replay lineage");
+    assert!(matches!(
+        executor.runtime.completions.as_slice(),
+        [RuntimeCompletion::LocalProposal(completion_tag, manifest, ..)]
+            if *completion_tag == tag(0) && manifest == &fixture.manifest
+    ));
+    assert!(executor.local_store_replay.is_empty());
+    assert!(executor.local_validate_replay.is_empty());
+    assert_eq!(executor.local_proposal_ready_replay.len(), 1);
+    assert!(services.closed.is_empty());
+}
+#[test]
+fn cold_retired_validated_preintent_replays_physical_store_and_validation_once() {
+    let fixture = Fixture::new();
+    let directory = TempDir::new().expect("validated pre-intent body-store directory");
+    let mut store = V2BodyStore::open_with_policy(
+        directory.path(),
+        fixture.context.clone(),
+        BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
+    )
+    .expect("open validated pre-intent body store");
+    let durable = store
+        .store(fixture.manifest.clone(), fixture.body.clone())
+        .expect("persist validated pre-intent body");
+    let validated = store
+        .validate(
+            &durable,
+            |_| Ok::<_, String>(fixture_execution_commitment()),
+        )
+        .expect("persist validated pre-intent marker");
+    drop(store);
+    let mut reopened = V2BodyStore::open_with_policy(
+        directory.path(),
+        fixture.context.clone(),
+        BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
+    )
+    .expect("reopen validated pre-intent body store");
+    reopened
+        .retain_recovered_markers_for_authority(
+            super::super::v2::RecoveredValidationAuthority::for_test(&fixture.context, []),
+        )
+        .expect("retire marker outside authenticated WAL authority");
+    reopened
+        .ensure_recovered_markers_revalidated()
+        .expect("retired validation carries no reducer authority");
+    assert!(reopened.validated_recovery_catalog().is_empty());
+    let (mut executor, mut services) =
+        recovered_preintent_executor(&fixture, directory, reopened, tag(0));
+    executor
+        .admit_local_proposal(
+            tag(0),
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            &mut services,
+        )
+        .expect("adopt exact validated pre-intent body");
+    assert_eq!(services.store_tasks.len(), 1);
+    let store_id = services.store_tasks[0].id();
+    let store_completion = services.execute_store(store_id);
+    executor
+        .complete_body_store(store_completion, &mut services)
+        .expect("complete forced physical Store");
+    assert_eq!(services.validation_tasks.len(), 1);
+    let validation_id = services.validation_tasks[0].id();
+    let validation_completion = services.execute_validation(validation_id);
+    assert_eq!(validation_completion.validated_receipt(), Some(&validated));
+    executor
+        .complete_body_validation(validation_completion, &mut services)
+        .expect("complete reproduced validation marker");
+    assert!(matches!(
+        executor.runtime.completions.as_slice(),
+        [RuntimeCompletion::LocalProposal(_, manifest, ..)] if manifest == &fixture.manifest
+    ));
+    assert!(services.closed.is_empty());
+}
+#[test]
+fn cold_retired_rejection_denies_local_adoption_but_not_reducer_validation() {
+    let fixture = Fixture::new();
+    let (directory, reopened, durable) = reopen_retired_rejection(&fixture);
+    assert!(reopened.rejected_recovery_catalog().is_empty());
+    assert_eq!(reopened.retired_rejected_recovery_catalog().len(), 1);
+    let (mut local_executor, mut local_services) =
+        recovered_preintent_executor(&fixture, directory, reopened, tag(0));
+    let local_before = local_executor.body_ownership_projection();
+    assert!(matches!(
+        local_executor.admit_local_proposal(
+            tag(0),
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            &mut local_services,
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("durable deterministic rejection")
+    ));
+    assert_eq!(local_executor.body_ownership_projection(), local_before);
+    assert!(local_executor.output_guard.restart_required());
+    assert_eq!(local_services.closed.len(), 1);
+    drop((local_executor, local_services));
+
+    let (directory, reopened, durable_again) = reopen_retired_rejection(&fixture);
+    assert_eq!(durable_again, durable);
+    let (mut reducer_executor, mut reducer_services) =
+        recovered_preintent_executor(&fixture, directory, reopened, tag(0));
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    assert!(reducer_executor.rejected_bodies.is_empty());
+    assert_eq!(
+        reducer_executor.retired_rejected_bodies.get(&key),
+        Some(&durable)
+    );
+    reducer_executor
+        .bind_body_pipeline_owner(tag(0), &fixture.manifest)
+        .expect("bind reducer validation pipeline");
+    reducer_executor
+        .consume_effects(
+            vec![AdapterEffect::ValidateBody {
+                tag: tag(0),
+                round: fixture.manifest.round,
+                subject: fixture.manifest.subject,
+            }],
+            &mut reducer_services,
+        )
+        .expect("retired marker cannot synthesize reducer ValidationFailed");
+    assert_eq!(reducer_services.validation_tasks.len(), 1);
+    reducer_services.validation_error = Some("deterministic recovered rejection".to_owned());
+    let validation_id = reducer_services.validation_tasks[0].id();
+    let completion = reducer_services.execute_validation(validation_id);
+    reducer_executor
+        .complete_body_validation(completion, &mut reducer_services)
+        .expect("real validation promotes exact retired rejection");
+    assert_eq!(reducer_executor.rejected_bodies.get(&key), Some(&durable));
+    assert!(!reducer_executor.retired_rejected_bodies.contains_key(&key));
+    assert!(matches!(
+        reducer_executor.runtime.completions.as_slice(),
+        [RuntimeCompletion::ValidationFailed(_, round, subject)]
+            if *round == fixture.manifest.round && *subject == fixture.manifest.subject
+    ));
+}
+#[test]
+fn cold_preintent_bytes_and_old_view_mismatches_fail_closed_without_work() {
+    let fixture = Fixture::new();
+    let open_store_only = || {
+        let directory = TempDir::new().expect("mismatch pre-intent body-store directory");
+        let mut store = V2BodyStore::open_with_policy(
+            directory.path(),
+            fixture.context.clone(),
+            BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
+        )
+        .expect("open mismatch pre-intent body store");
+        let _durable = store
+            .store(fixture.manifest.clone(), fixture.body.clone())
+            .expect("persist mismatch pre-intent body");
+        drop(store);
+        let reopened = V2BodyStore::open_with_policy(
+            directory.path(),
+            fixture.context.clone(),
+            BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
+        )
+        .expect("reopen mismatch pre-intent body store");
+        (directory, reopened)
+    };
+    let (directory, reopened) = open_store_only();
+    let (mut bytes_executor, mut bytes_services) =
+        recovered_preintent_executor(&fixture, directory, reopened, tag(0));
+    let bytes_before = bytes_executor.body_ownership_projection();
+    let mut wrong_bytes = fixture.body.clone();
+    wrong_bytes[0] ^= 0x01;
+    assert!(matches!(
+        bytes_executor.admit_local_proposal(
+            tag(0),
+            fixture.manifest.clone(),
+            wrong_bytes,
+            &mut bytes_services,
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("bytes do not match")
+    ));
+    assert_eq!(bytes_executor.body_ownership_projection(), bytes_before);
+    assert!(bytes_executor.output_guard.restart_required());
+    assert!(bytes_services.store_tasks.is_empty());
+
+    let (directory, reopened) = open_store_only();
+    let successor_tag = EventTag::new(tag(0).height(), 1, tag(0).generation());
+    let (mut view_executor, mut view_services) =
+        recovered_preintent_executor(&fixture, directory, reopened, successor_tag);
+    let view_before = view_executor.body_ownership_projection();
+    assert!(matches!(
+        view_executor.admit_local_proposal(
+            tag(0),
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            &mut view_services,
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("exact authoritative round")
+    ));
+    assert_eq!(view_executor.body_ownership_projection(), view_before);
+    assert!(view_executor.output_guard.restart_required());
+    assert!(view_services.store_tasks.is_empty());
+}
 #[test]
 fn recovered_validation_catalog_hydrates_direct_apply_durability() {
     let fixture = Fixture::new();
@@ -1863,6 +2181,8 @@ fn recovered_validation_catalog_hydrates_direct_apply_durability() {
         .expect("semantically replay recovered validation marker");
     let recovered_bodies = reopened.recovery_catalog().expect("recovery catalog");
     let recovered_validations = reopened.validated_recovery_catalog();
+    let recovered_rejections = reopened.rejected_recovery_catalog();
+    let retired_recovered_rejections = reopened.retired_rejected_recovery_catalog();
     let key = (fixture.manifest.round, fixture.manifest.subject);
     let mut executor = V2EffectExecutor::with_runtime(
         FakeRuntime {
@@ -1881,7 +2201,11 @@ fn recovered_validation_catalog_hydrates_direct_apply_durability() {
         .bind_validated_body(&fixture.manifest, &validated)
         .expect("restore runtime validation authority");
     executor
-        .install_recovered_validation_catalog(recovered_validations)
+        .install_recovered_validation_catalog(
+            recovered_validations,
+            recovered_rejections,
+            retired_recovered_rejections,
+        )
         .expect("restore executor validation authority");
     assert_eq!(executor.durable_bodies.get(&key), Some(&durable));
     assert_eq!(executor.validated_bodies.get(&key), Some(&validated));

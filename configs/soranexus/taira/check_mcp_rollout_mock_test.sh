@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_SCRIPT="${SCRIPT_DIR}/check_mcp_rollout.sh"
 SOURCE_CONFIG="${SCRIPT_DIR}/config.toml"
+readonly TEST_OPERATOR_NETWORK_ID="hash:0808080808080808080808080808080808080808080808080808080808080809#9F75"
+readonly STALE_NETWORK_ID="hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"
 
 cleanup_paths=()
 
@@ -38,6 +40,8 @@ make_fake_repo() {
     "${root}/state"
   cp "$SOURCE_SCRIPT" "${root}/configs/soranexus/taira/check_mcp_rollout.real.sh"
   cp "$SOURCE_CONFIG" "${root}/configs/soranexus/taira/config.toml"
+  printf '%s\n' "$TEST_OPERATOR_NETWORK_ID" \
+    >"${root}/state/operator-network-id"
   cat >"${root}/configs/soranexus/taira/check_mcp_rollout.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -59,7 +63,7 @@ exec "${SCRIPT_DIR}/check_mcp_rollout.real.sh" \
   --require-all-validators \
   --expected-git-sha 490dacc287f00d490dacc287f00d490dacc287f0 \
   --expected-dpn-validator-release-commit dddddddddddddddddddddddddddddddddddddddd \
-  --operator-network-id hash:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#0000 \
+  --operator-network-id "$(cat "${SCRIPT_DIR}/../../../state/operator-network-id")" \
   --operator-private-key-file "${SCRIPT_DIR}/../../../state/operator-private-key" \
   ${onboarding_token_args[@]+"${onboarding_token_args[@]}"} \
   "$@"
@@ -111,6 +115,7 @@ import sys
 output_path = None
 onboarding_token_file = None
 chain_id = "fc56984b-2be7-431d-840e-21514d1883f0"
+network_ids = []
 args = sys.argv[1:]
 for index, value in enumerate(args):
     if value == "--output-config" and index + 1 < len(args):
@@ -119,11 +124,16 @@ for index, value in enumerate(args):
         onboarding_token_file = args[index + 1]
     elif value == "--chain-id" and index + 1 < len(args):
         chain_id = args[index + 1]
+    elif value == "--network-id" and index + 1 < len(args):
+        network_ids.append(args[index + 1])
 
 if output_path is None:
     raise SystemExit("missing --output-config")
 if onboarding_token_file is None:
     raise SystemExit("missing --onboarding-token-file")
+if len(network_ids) != 1:
+    raise SystemExit("expected exactly one --network-id")
+network_id = network_ids[0]
 token_path = Path(onboarding_token_file)
 if not token_path.is_absolute() or not token_path.is_file():
     raise SystemExit("invalid --onboarding-token-file")
@@ -134,11 +144,14 @@ if state_dir:
     Path(state_dir, "onboarding_token_seen").write_text(
         str(token_path) + "\n", encoding="utf-8"
     )
+    Path(state_dir, "bootstrap_network_id_seen").write_text(
+        network_id + "\n", encoding="utf-8"
+    )
 
 with open(output_path, "w", encoding="utf-8") as handle:
     handle.write(
         f'chain = "{chain_id}"\n'
-        'network_id = "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94"\n'
+        f'network_id = "{network_id}"\n'
         '\n'
         '[account]\n'
         'domain = "universal"\n'
@@ -962,13 +975,16 @@ run_invalid_canary_identity_case() {
   config_path="${root}/canary.toml"
   "${root}/scripts/taira_bootstrap_canary.py" \
     --onboarding-token-file "${root}/state/onboarding-token" \
+    --network-id "$TEST_OPERATOR_NETWORK_ID" \
     --output-config "$config_path"
-  python3 - "$config_path" "$mutation" <<'PY'
+  python3 - "$config_path" "$mutation" "$TEST_OPERATOR_NETWORK_ID" "$STALE_NETWORK_ID" <<'PY'
 import pathlib
 import sys
 
 path = pathlib.Path(sys.argv[1])
 mutation = sys.argv[2]
+expected_network_id = sys.argv[3]
+stale_network_id = sys.argv[4]
 text = path.read_text(encoding="utf-8")
 if mutation == "archived-chain":
     text = text.replace(
@@ -978,6 +994,8 @@ if mutation == "archived-chain":
     )
 elif mutation == "wrong-discriminant":
     text = text.replace("chain_discriminant = 369", "chain_discriminant = 753", 1)
+elif mutation == "wrong-network":
+    text = text.replace(expected_network_id, stale_network_id, 1)
 else:
     raise SystemExit(f"unknown mutation: {mutation}")
 path.write_text(text, encoding="utf-8")
@@ -1122,6 +1140,9 @@ run_invalid_canary_identity_case \
 run_invalid_canary_identity_case \
   wrong-discriminant \
   'write canary config must use Taira chain discriminant 369'
+run_invalid_canary_identity_case \
+  wrong-network \
+  'write canary config `network_id` must match the exact operator NetworkId'
 run_invalid_topology_config_case governance 1
 run_invalid_topology_config_case zk 2
 
@@ -1155,6 +1176,7 @@ archived_chain_id="809574f5-fee7-5e69-bfcf-52451e42d50f"
 "${root}/scripts/taira_bootstrap_canary.py" \
   --onboarding-token-file "${root}/state/onboarding-token" \
   --chain-id "$archived_chain_id" \
+  --network-id "$TEST_OPERATOR_NETWORK_ID" \
   --output-config "${root}/archived-canary.toml"
 if ! PATH="${root}/mockbin:${PATH}" \
     MOCK_SCENARIO="failed_asset_then_success" \
@@ -1322,6 +1344,7 @@ cleanup_paths+=("$root")
 make_fake_repo "$root"
 "${root}/scripts/taira_bootstrap_canary.py" \
   --onboarding-token-file "${root}/state/onboarding-token" \
+  --network-id "$TEST_OPERATOR_NETWORK_ID" \
   --output-config "${root}/explicit-canary.toml"
 before_hash="$(shasum -a 256 "${root}/explicit-canary.toml" | awk '{print $1}')"
 if ! PATH="${root}/mockbin:${PATH}" \
@@ -1348,6 +1371,7 @@ cleanup_paths+=("$root")
 make_fake_repo "$root"
 "${root}/scripts/taira_bootstrap_canary.py" \
   --onboarding-token-file "${root}/state/onboarding-token" \
+  --network-id "$TEST_OPERATOR_NETWORK_ID" \
   --output-config "${root}/asset-retry-canary.toml"
 if ! PATH="${root}/mockbin:${PATH}" \
     MOCK_SCENARIO="failed_asset_then_success" \
@@ -1577,5 +1601,7 @@ grep -q 'Taira MCP rollout checks passed.' "${root}/cargo-output.log"
 test -f "${root}/state/cargo_seen"
 test -f "${root}/tmp/taira-canary-client.toml"
 test -f "${root}/state/onboarding_token_seen"
+grep -Fqx "$TEST_OPERATOR_NETWORK_ID" \
+  "${root}/state/bootstrap_network_id_seen"
 
 echo "check_mcp_rollout mock tests passed."
