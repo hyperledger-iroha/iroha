@@ -745,7 +745,11 @@ pub mod network {
         /// Core profile constant-rate neighbor budget.
         pub const CORE_CONSTANT_NEIGHBORS: usize = 48;
         /// Core profile soft cap for total connections.
-        pub const CORE_MAX_TOTAL_CONNECTIONS: usize = 120;
+        ///
+        /// Ninety-nine is the largest bound whose production lifecycle owner
+        /// geometry fits the canonical height-local ledger with the default
+        /// body queue and the maximum legal validator roster.
+        pub const CORE_MAX_TOTAL_CONNECTIONS: usize = 99;
         /// Core profile soft cap for inbound connections.
         pub const CORE_MAX_INCOMING: usize = 48;
         /// Home profile scheduler tick (milliseconds) for shaping calculations.
@@ -3886,6 +3890,10 @@ pub mod sumeragi {
     /// This is shared with the executable refinement gate so configuration
     /// validation reserves the exact same producer batch used by production.
     pub const V2_MAX_EFFECTS_PER_STEP: usize = 8;
+    /// Number of separately reserved certified Serve/Producer phase families.
+    pub const V2_CERTIFIED_SERVE_PHASE_FAMILIES: usize = 2;
+    /// Maximum height-local lifecycle records addressable by the canonical slot index.
+    pub const V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize = u16::MAX as usize + 1;
     /// Number of independently reserved exact-output progress classes.
     ///
     /// Safety, lane-progress, and bulk-progress each require one ownership

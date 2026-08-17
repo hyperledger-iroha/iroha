@@ -3006,6 +3006,7 @@ From `../iroha2-block-explorer-web`:
    - confirm those peer configs also retain the Taira `[sumeragi.block]`
      `max_transactions = 96`, `max_payload_bytes = 16777216`, and
      `proposal_queue_scan_multiplier = 4` bounds, plus the
+     `[network] max_total_connections = 32` reply-source bound and
      `[sumeragi.queues]` canonical outer-ingress wire-byte baseline
      `authenticated_non_validator_sources = 2`, `body_bytes = 242221056`, and
      `body_source_bytes = 34603008`, before running public write canaries or
@@ -3014,6 +3015,9 @@ From `../iroha2-block-explorer-web`:
      `render_taira_validator_bundle.py` raises `body_bytes` to at least
      `(validator_count + authenticated_non_validator_sources + 1) *
      body_source_bytes` for larger legal rosters.
+     With the default 1,024-command and 163-body capacities, the 32-source
+     bound keeps the four-validator lifecycle ledger at 21,152 records, below
+     its canonical 65,536-record limit.
      The revision-4 protocol caps the complete canonical body at 16 MiB. This
      admits one maximum 10 MiB transaction carrying one 9 MiB privacy action
      while retaining 6 MiB for canonical block framing and context attachments;

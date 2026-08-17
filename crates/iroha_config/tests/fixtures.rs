@@ -1757,6 +1757,14 @@ fn taira_config_enables_untrusted_cid_hosting() {
             "Taira profile must not retain retired generic confidential route {retired}"
         );
     }
+    assert_eq!(
+        doc.get("network")
+            .and_then(TomlValue::as_table)
+            .and_then(|network| network.get("max_total_connections"))
+            .and_then(TomlValue::as_integer),
+        Some(32),
+        "Taira must pin reply-source geometry below the lifecycle ledger bound"
+    );
     let block = doc
         .get("sumeragi")
         .and_then(TomlValue::as_table)

@@ -456,6 +456,76 @@ mod tests {
         );
     }
     #[test]
+    fn sumeragi_v2_lifecycle_geometry_rejects_taira_default_core_capacity() {
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(4, 256, 163, 120),
+            Err(SumeragiV2LifecycleCapacityGeometryError::TotalTooLarge {
+                consensus: 16,
+                effect: 256,
+                serve: 39_128,
+                producer: 39_128,
+                total: 78_528,
+                maximum: 65_536,
+            }),
+        );
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(4, 256, 163, 32),
+            Ok(SumeragiV2LifecycleCapacityGeometry {
+                consensus: 16,
+                effect: 256,
+                serve: 10_440,
+                producer: 10_440,
+                total: 21_152,
+            }),
+        );
+    }
+    #[test]
+    fn sumeragi_v2_lifecycle_geometry_checks_connection_and_arithmetic_boundaries() {
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(31, 256, 163, 99)
+                .expect("default core capacity must fit the maximum legal roster")
+                .total,
+            64_944,
+        );
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(4, 256, 163, 100)
+                .expect("four-validator boundary must fit")
+                .total,
+            65_488,
+        );
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(4, 256, 163, 101),
+            Err(SumeragiV2LifecycleCapacityGeometryError::TotalTooLarge {
+                consensus: 16,
+                effect: 256,
+                serve: 32_934,
+                producer: 32_934,
+                total: 66_140,
+                maximum: 65_536,
+            }),
+        );
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(1, 65_537, 1, 1),
+            Err(SumeragiV2LifecycleCapacityGeometryError::ClassTooLarge {
+                class: "effect",
+                actual: 65_537,
+                maximum: 65_536,
+            }),
+        );
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(4, 8, 1, 32_768),
+            Err(SumeragiV2LifecycleCapacityGeometryError::ClassTooLarge {
+                class: "serve",
+                actual: 65_544,
+                maximum: 65_536,
+            }),
+        );
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(1, 1, usize::MAX, usize::MAX),
+            Err(SumeragiV2LifecycleCapacityGeometryError::Overflow),
+        );
+    }
+    #[test]
     fn sumeragi_v2_shared_config_defaults_are_finite_and_deterministic() {
         let config = default_v2_sumeragi();
         let shared = config

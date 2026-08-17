@@ -6,7 +6,8 @@ use super::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 pub(super) const MAX_PHYSICAL_SLOTS_PER_RECORD: usize = 64;
-pub(super) const MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize = u16::MAX as usize + 1;
+pub(super) const MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize =
+    iroha_config::parameters::defaults::sumeragi::V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT;
 pub(super) fn has_lifecycle_record_capacity(current: usize, additional: usize) -> bool {
     current
         .checked_add(additional)

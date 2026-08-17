@@ -7057,6 +7057,126 @@ pub fn validate_sumeragi_v2_exact_output_geometry(
     }
     Ok(())
 }
+/// Complete production lifecycle capacity geometry for one height.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SumeragiV2LifecycleCapacityGeometry {
+    /// Consensus lifecycle records.
+    pub consensus: usize,
+    /// Reducer-effect lifecycle records.
+    pub effect: usize,
+    /// Certified Serve lifecycle records.
+    pub serve: usize,
+    /// Certified Producer lifecycle records.
+    pub producer: usize,
+    /// Sum of every lifecycle capacity class.
+    pub total: usize,
+}
+/// Invalid production lifecycle capacity geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum SumeragiV2LifecycleCapacityGeometryError {
+    /// One capacity derivation overflowed the platform size representation.
+    #[error("Sumeragi v2 production lifecycle capacity geometry overflowed")]
+    Overflow,
+    /// One physical-slot class exceeded the canonical slot-index space.
+    #[error(
+        "Sumeragi v2 production lifecycle {class} capacity {actual} exceeds the canonical per-class maximum {maximum}"
+    )]
+    ClassTooLarge {
+        /// Capacity-class label.
+        class: &'static str,
+        /// Derived class capacity.
+        actual: usize,
+        /// Canonical per-class maximum.
+        maximum: usize,
+    },
+    /// The complete height-local ledger exceeded its canonical record bound.
+    #[error(
+        "Sumeragi v2 production lifecycle capacity geometry requires {total} records (consensus {consensus}, effect {effect}, serve {serve}, producer {producer}), above the canonical height-local maximum {maximum}"
+    )]
+    TotalTooLarge {
+        /// Consensus lifecycle records.
+        consensus: usize,
+        /// Reducer-effect lifecycle records.
+        effect: usize,
+        /// Certified Serve lifecycle records.
+        serve: usize,
+        /// Certified Producer lifecycle records.
+        producer: usize,
+        /// Sum of every capacity class.
+        total: usize,
+        /// Canonical height-local maximum.
+        maximum: usize,
+    },
+}
+/// Derive and admit the exact production lifecycle capacity geometry.
+///
+/// Certified Serve and Producer each reserve two phase families containing
+/// every validator plus one body-queue bound for every reply-route source.
+/// Every class and their sum must fit the canonical `u16` physical-slot space.
+///
+/// # Errors
+///
+/// Returns an exact geometry error on arithmetic overflow or when a class or
+/// the complete height-local ledger exceeds its canonical bound.
+pub fn sumeragi_v2_lifecycle_capacity_geometry(
+    validator_roster_len: usize,
+    effect_work_capacity: usize,
+    certified_request_capacity: usize,
+    reply_route_source_capacity: usize,
+) -> core::result::Result<
+    SumeragiV2LifecycleCapacityGeometry,
+    SumeragiV2LifecycleCapacityGeometryError,
+> {
+    let consensus = defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP
+        .checked_mul(2)
+        .ok_or(SumeragiV2LifecycleCapacityGeometryError::Overflow)?;
+    let serve = reply_route_source_capacity
+        .max(1)
+        .checked_mul(certified_request_capacity)
+        .and_then(|observer| validator_roster_len.checked_add(observer))
+        .and_then(|owners| {
+            owners.checked_mul(defaults::sumeragi::V2_CERTIFIED_SERVE_PHASE_FAMILIES)
+        })
+        .ok_or(SumeragiV2LifecycleCapacityGeometryError::Overflow)?;
+    let producer = serve;
+    let total = consensus
+        .checked_add(effect_work_capacity)
+        .and_then(|sum| sum.checked_add(serve))
+        .and_then(|sum| sum.checked_add(producer))
+        .ok_or(SumeragiV2LifecycleCapacityGeometryError::Overflow)?;
+    let maximum = defaults::sumeragi::V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT;
+    for (class, actual) in [
+        ("consensus", consensus),
+        ("effect", effect_work_capacity),
+        ("serve", serve),
+        ("producer", producer),
+    ] {
+        if actual > maximum {
+            return Err(SumeragiV2LifecycleCapacityGeometryError::ClassTooLarge {
+                class,
+                actual,
+                maximum,
+            });
+        }
+    }
+    if total > maximum {
+        return Err(SumeragiV2LifecycleCapacityGeometryError::TotalTooLarge {
+            consensus,
+            effect: effect_work_capacity,
+            serve,
+            producer,
+            total,
+            maximum,
+        });
+    }
+    Ok(SumeragiV2LifecycleCapacityGeometry {
+        consensus,
+        effect: effect_work_capacity,
+        serve,
+        producer,
+        total,
+    })
+}
 /// Invalid or non-canonical Sumeragi v2 runtime configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SumeragiV2ConfigError {
@@ -7275,6 +7395,15 @@ impl TrustedPeers {
     /// Tells whether a trusted peers list has some other peers except for the peer itself
     pub fn contains_other_trusted_peers(&self) -> bool {
         !self.others.is_empty()
+    }
+    /// Return the validator roster size resolved by the bootstrap PoP policy.
+    #[must_use]
+    pub fn validator_roster_len(&self) -> usize {
+        if self.pops.is_empty() {
+            self.others.len().saturating_add(1)
+        } else {
+            self.pops.len()
+        }
     }
 }
 /// Live query store configuration.

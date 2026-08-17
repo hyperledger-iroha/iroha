@@ -289,6 +289,7 @@ def test_taira_runtime_paths_and_deploy_rate_are_release_pinned() -> None:
     assert config["sumeragi"]["block"]["max_payload_bytes"] == 16 * MODULE.MIB
     assert config["sumeragi"]["queues"]["body_source_bytes"] == 33 * MODULE.MIB
     assert config["sumeragi"]["queues"]["body_bytes"] == 7 * 33 * MODULE.MIB
+    assert config["network"]["max_total_connections"] == 32
     assert (
         config["network"]["max_frame_bytes_block_sync"]
         == MODULE.TAIRA_BLOCK_SYNC_PLAINTEXT_FRAME_BYTES

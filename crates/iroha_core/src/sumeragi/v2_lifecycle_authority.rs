@@ -1,17 +1,14 @@
 //! Verified height authority for lifecycle scheduler episodes and rollover.
 use super::schema;
+use crate::sumeragi::v2::VerifiedHeightContext;
 #[cfg(test)]
 use crate::sumeragi::v2_certified_serve_payload_store::DurableCertifiedServeNegativeReceipt;
-use crate::sumeragi::{
-    v2::VerifiedHeightContext, v2_core::MAX_EFFECTS_PER_STEP,
-    v2_worker::certified_serve_family_capacity,
-};
-use iroha_config::parameters::actual::SumeragiV2Config;
+use iroha_config::parameters::actual::{SumeragiV2Config, sumeragi_v2_lifecycle_capacity_geometry};
 use iroha_crypto::Hash;
 use norito::codec::Encode;
 use schema::{
     CapacityClass, CapacityGeometry, LifecycleContext, LifecycleDigest, LifecycleKey,
-    MAX_LIFECYCLE_RECORDS_PER_HEIGHT, PhysicalSlotId, SchedulerEpisodeUniverse,
+    PhysicalSlotId, SchedulerEpisodeUniverse,
 };
 use std::collections::BTreeSet;
 #[cfg(test)]
@@ -139,33 +136,23 @@ fn capacity_geometry_from_limits(
     certified_request_capacity: usize,
     reply_route_source_capacity: usize,
 ) -> Option<CapacityGeometry> {
-    let consensus = MAX_EFFECTS_PER_STEP.checked_mul(2)?;
-    let serve = certified_serve_family_capacity(
+    let shared = sumeragi_v2_lifecycle_capacity_geometry(
         roster_len,
-        reply_route_source_capacity.max(1),
+        effect_work_capacity,
         certified_request_capacity,
+        reply_route_source_capacity,
     )
     .ok()?;
-    if effect_work_capacity == 0 || certified_request_capacity == 0 || consensus == 0 || serve == 0
-    {
+    if effect_work_capacity == 0 || certified_request_capacity == 0 {
         return None;
     }
     let geometry = CapacityGeometry::new([
-        (CapacityClass::Consensus, consensus),
-        (CapacityClass::Effect, effect_work_capacity),
-        (CapacityClass::Serve, serve),
-        (CapacityClass::Producer, serve),
+        (CapacityClass::Consensus, shared.consensus),
+        (CapacityClass::Effect, shared.effect),
+        (CapacityClass::Serve, shared.serve),
+        (CapacityClass::Producer, shared.producer),
     ]);
-    let finite_classes = CapacityClass::ALL
-        .iter()
-        .all(|class| geometry.limit(*class) <= usize::from(u16::MAX) + 1);
-    let bounded_live_records = CapacityClass::ALL
-        .iter()
-        .try_fold(0_usize, |sum, class| {
-            sum.checked_add(geometry.limit(*class))
-        })
-        .is_some_and(|sum| sum <= MAX_LIFECYCLE_RECORDS_PER_HEIGHT);
-    (finite_classes && bounded_live_records).then_some(geometry)
+    Some(geometry)
 }
 fn production_capacity_geometry(
     verified: &VerifiedHeightContext,
@@ -256,5 +243,13 @@ mod tests {
         assert_eq!(geometry.limit(CapacityClass::Producer), 20);
         assert!(capacity_geometry_from_limits(4, 0, 3, 2).is_none());
         assert!(capacity_geometry_from_limits(4, 8, 1, 32_768).is_none());
+        assert!(
+            capacity_geometry_from_limits(4, 256, 163, 120).is_none(),
+            "former Taira defaults exceed the aggregate lifecycle ledger bound"
+        );
+        let taira = capacity_geometry_from_limits(4, 256, 163, 32)
+            .expect("bounded Taira geometry must fit production authority");
+        assert_eq!(taira.limit(CapacityClass::Serve), 10_440);
+        assert_eq!(taira.limit(CapacityClass::Producer), 10_440);
     }
 }

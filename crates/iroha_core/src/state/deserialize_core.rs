@@ -15,7 +15,7 @@ impl<'a> SnapshotJsonField<'a> {
         let decoded: Result<T, json::Error> = match self {
             #[cfg(test)]
             Self::Owned(value) => json::value::from_value(value),
-            Self::Borrowed(raw) => {
+            Self::Borrowed(raw) => (|| {
                 let value = json::from_str::<T>(raw)?;
                 // TODO: Teach Norito JSON serialization to target a comparison sink so
                 // canonical verification does not need one field-sized temporary String.
@@ -27,7 +27,7 @@ impl<'a> SnapshotJsonField<'a> {
                     });
                 }
                 Ok(value)
-            }
+            })(),
         };
         decoded.map_err(|error| json::Error::InvalidField {
             field: field.to_owned(),

@@ -799,7 +799,6 @@ struct V2RetireCommand {
     chunk_root: PathBuf,
 }
 const LOCAL_IO_CONTROL_RESERVE: usize = 1;
-const CERTIFIED_SERVE_PHASE_FAMILIES: usize = 2;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V2IoAdmissionClass {
     Auxiliary,
@@ -2452,27 +2451,6 @@ fn v2_io_command_channel(
     admission: Arc<V2IoAdmission>,
 ) -> (V2IoCommandSender, V2IoCommandReceiver) {
     build_v2_io_command_channel(capacity, admission)
-}
-pub(super) fn certified_serve_family_capacity(
-    roster_serve_capacity: usize,
-    observer_source_capacity: usize,
-    observer_per_source_capacity: usize,
-) -> Result<usize, String> {
-    assert!(
-        roster_serve_capacity != 0
-            || (observer_source_capacity != 0 && observer_per_source_capacity != 0),
-        "Sumeragi v2 Serve owner capacity must be non-zero"
-    );
-    roster_serve_capacity
-        .checked_add(
-            observer_source_capacity
-                .checked_mul(observer_per_source_capacity)
-                .ok_or_else(|| {
-                    "bounded observer Serve owner capacity must not overflow".to_owned()
-                })?,
-        )
-        .and_then(|owners| owners.checked_mul(CERTIFIED_SERVE_PHASE_FAMILIES))
-        .ok_or_else(|| "bounded Serve phase-family capacity must not overflow".to_owned())
 }
 fn build_v2_io_command_channel(
     capacity: usize,

@@ -1299,6 +1299,20 @@ impl Root {
             let effect_work_capacity = (sumeragi.queues.commands.get()
                 / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
                 .max(1);
+            let validator_roster_len = trusted_peers.value().validator_roster_len();
+            if let Err(error) = actual::sumeragi_v2_lifecycle_capacity_geometry(
+                validator_roster_len,
+                effect_work_capacity,
+                sumeragi.queues.bodies.get(),
+                reply_source_capacity,
+            ) {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                        "{error}; configured validator roster is {validator_roster_len}, network reply-source capacity is {reply_source_capacity}, and certified-request capacity is {}",
+                        sumeragi.queues.bodies,
+                    )),
+                );
+            }
             let geometry = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
                 effect_work_capacity,
                 sumeragi.queues.bodies.get(),
@@ -33595,20 +33609,20 @@ publish_delay_seconds = 17
         );
     }
     #[test]
-    fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
+    fn sumeragi_v2_lifecycle_geometry_accepts_default_body_connection_boundary() {
         let mut table = base_table();
         let network = table
             .get_mut("network")
             .and_then(Value::as_table_mut)
             .expect("network table");
-        network.insert("max_total_connections".into(), Value::Integer(131));
+        network.insert("max_total_connections".into(), Value::Integer(100));
         let actual = load_root(table);
         assert_eq!(
             actual
                 .network
                 .max_total_connections
                 .map(std::num::NonZeroUsize::get),
-            Some(131),
+            Some(100),
         );
     }
     #[test]
@@ -33618,7 +33632,7 @@ publish_delay_seconds = 17
             .get_mut("network")
             .and_then(Value::as_table_mut)
             .expect("network table");
-        network.insert("max_total_connections".into(), Value::Integer(132));
+        network.insert("max_total_connections".into(), Value::Integer(100));
         let sumeragi = table
             .entry("sumeragi")
             .or_insert_with(|| Value::Table(Table::new()))
@@ -33629,7 +33643,7 @@ publish_delay_seconds = 17
             .or_insert_with(|| Value::Table(Table::new()))
             .as_table_mut()
             .expect("sumeragi.queues table");
-        queues.insert("bodies".into(), Value::Integer(132));
+        queues.insert("bodies".into(), Value::Integer(36));
         let actual = load_root(table);
         let shared_capacity = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
             (actual.sumeragi.queues.commands.get()
@@ -33655,7 +33669,7 @@ publish_delay_seconds = 17
             .get_mut("network")
             .and_then(Value::as_table_mut)
             .expect("network table");
-        network.insert("max_total_connections".into(), Value::Integer(132));
+        network.insert("max_total_connections".into(), Value::Integer(100));
         let sumeragi = table
             .entry("sumeragi")
             .or_insert_with(|| Value::Table(Table::new()))
@@ -33666,13 +33680,31 @@ publish_delay_seconds = 17
             .or_insert_with(|| Value::Table(Table::new()))
             .as_table_mut()
             .expect("sumeragi.queues table");
-        queues.insert("bodies".into(), Value::Integer(130));
+        queues.insert("bodies".into(), Value::Integer(35));
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("one maximum reply-source fanout must fit exact output");
         let report = format!("{error:?}");
         assert!(
             report.contains(
-                "Sumeragi v2 outbound shared ownership capacity 394 is below one maximum fanout 396; configured network reply-source capacity is 132"
+                "Sumeragi v2 outbound shared ownership capacity 299 is below one maximum fanout 300; configured network reply-source capacity is 100"
+            ),
+            "{report}",
+        );
+    }
+    #[test]
+    fn sumeragi_v2_lifecycle_geometry_rejects_former_core_default() {
+        let mut table = base_table();
+        let network = table
+            .get_mut("network")
+            .and_then(Value::as_table_mut)
+            .expect("network table");
+        network.insert("max_total_connections".into(), Value::Integer(120));
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("height-local lifecycle capacity must fit its physical-slot space");
+        let report = format!("{error:?}");
+        assert!(
+            report.contains(
+                "Sumeragi v2 production lifecycle capacity geometry requires 78516 records (consensus 16, effect 256, serve 39122, producer 39122), above the canonical height-local maximum 65536"
             ),
             "{report}",
         );
