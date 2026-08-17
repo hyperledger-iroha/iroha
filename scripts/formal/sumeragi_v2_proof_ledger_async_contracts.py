@@ -175,7 +175,7 @@ ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
 # bodies are independently pinned by ``_acyclic_liveness_debt_topology_errors``
 # before this reviewed global mechanical-body seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "51b47a637adee8933d5980cd9c2335d4dbe56e5c7ff6753d7f6b7b77d47fbb54"
+    "3c42e84e93b38245cf1c6a24892086fccdac787b3c3a514aad8b2897cc92f9fc"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
@@ -207,7 +207,7 @@ CHAIN_EPOCH_REFINEMENT_SHARDS = tuple(
     for index in range(1, 17)
 )
 CHAIN_EPOCH_REFINEMENT_PRE_SPLIT_BODY_SHA256 = (
-    "21fc67850f2b37ef58bd4afe3b5a41385aaacb29e2a907dedb2a88a2d7d88fe5"
+    "52e132e02c780b7876a99cd9f1a56339ff1090ee3bcc82119bcd11e0876b1545"
 )
 CHAIN_EPOCH_REFINEMENT_SHARD_MAX_THEOREMS = 16
 ASYNC_NETWORK_RELEASE_THEOREMS = (
@@ -1267,7 +1267,7 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
 )
 SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "ebcf85d154b1f3d02559a29cfd6d354e9ab60207e0a82ec0caebe6de34bfdeb5"
+        "37ef65e05560d7950c21ea0b3cad721b2195d29dc865dca5c7030ff575611ead"
     ),
     "SumeragiV2AsyncRankAndInitProofs.tla": (
         "c6f6eade349f107e0572cb381690ad054b61493ef274a9127eed247f4f7b75ca"
@@ -1365,10 +1365,10 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
 )
 COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "ebcf85d154b1f3d02559a29cfd6d354e9ab60207e0a82ec0caebe6de34bfdeb5"
+        "37ef65e05560d7950c21ea0b3cad721b2195d29dc865dca5c7030ff575611ead"
     ),
     "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
-        "31fa16d2e9df281f6eab223a84e5ace13e836d9417df00cad379996078c61019"
+        "fac37875375b831db6ed1bd1f64e194fd5e7eebde51019c345a85c4083664752"
     ),
 }
 

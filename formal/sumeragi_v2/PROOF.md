@@ -582,7 +582,7 @@ type state: fail-stop admission precedes clock arming, status projection,
 observer installation, exact ingress/status publication, and readiness release;
 CompleteTip publication consumes its retained predecessor retirement. This is
 paired with a source-sealed consuming finalization chain which closes readiness
-and both ingress gates, joins exact Kura finality to adapter closure, retains
+and durable leader-wire ingress, joins exact Kura finality to adapter closure, retains
 the safety WAL through the existing durable output handoff, retires it only
 after that handoff, then refreshes Serve state and publishes
 all-row LedgerV1 retirement through opaque coordinator-owning tokens before
@@ -1286,14 +1286,16 @@ preventing one serviced owner from hiding another. Equal-count replacement
 and count-increasing replenishment remain explicit non-progress cases and
 require a prior finite or coalesced producer argument.
 
-The production queue closes the matching final-retirement race with a one-shot
-local handoff. The last owner in a frozen Serve batch arms
-`producer_episode_due` under the same mutex that retires it; fresh Serve
-admission is `Busy` while the handoff is due or while
-`producer_episode_active` owns its bounded outer turn. The runner atomically
-consumes due into active, and the local lease clears active before admission
-reopens. Rejected replenishment cannot mint either scheduler or logical
-lifecycle ordinals. Digest-refreshed mutations bind both Busy boundaries, the
+The production lifecycle closes the matching final-retirement race through one
+coordinator-owned transaction. A current-height Serve remains in fair ingress
+until the lifecycle selector authenticates its exact carrier, and capacity
+backpressure returns `CapacityPending` without removing that occurrence. A
+successful transaction attests the complete Ready census, claims the durable
+ledger row, reserves the exact worker target, and only then commits dequeue.
+The serialized proposal runner separately claims and settles `ProducerTurn`;
+there is no queue-local Serve gate, barrier, reservation, or producer episode.
+Rejected replenishment cannot mint either scheduler or logical lifecycle
+ordinals. Digest-refreshed mutations bind the coordinator transaction, the
 high-water marks, timeout-owner ordering, strict predecessor service, and the
 real timeout-certificate/EnterView suffix. This source refinement does not
 count replenishment as progress, add fairness, or promote a ledger row.

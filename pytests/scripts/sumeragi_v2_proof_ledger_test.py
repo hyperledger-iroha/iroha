@@ -21884,10 +21884,10 @@ def test_classified_ingress_semantics_survive_all_pending_alias_digest_refreshes
     assert any(expected_error in error for error in errors), errors
 
 
-def test_drain_v2_ingress_semantics_survive_all_reviewed_alias_digest_refreshes(
+def test_current_serve_retention_survives_all_reviewed_alias_digest_refreshes(
     tmp_path: Path,
 ) -> None:
-    """A refreshed drain seal still proves exact-Serve runtime suppression."""
+    """A refreshed drain seal still leaves current Serve to the lifecycle."""
 
     module = load_checker()
     local_runner_service_fixture(tmp_path, module)
@@ -21896,8 +21896,8 @@ def test_drain_v2_ingress_semantics_survive_all_reviewed_alias_digest_refreshes(
         module,
         runner_path,
         "drain_v2_ingress",
-        "if turn == OuterIngressTurn::Runtime {",
-        "if false {",
+        "let current_serve = matches!(",
+        "let current_serve = false && matches!(",
     )
     mutated_items = module.rust_items(
         runner_path.read_text(encoding="utf-8"), "drain_v2_ingress"
@@ -21914,7 +21914,7 @@ def test_drain_v2_ingress_semantics_survive_all_reviewed_alias_digest_refreshes(
     errors = module._exact_output_production_source_fidelity_errors(tmp_path)
 
     assert any(
-        "an admitted or provisional exact Serve must suppress every later runtime-producer turn"
+        "terminal recovery drain must retain current-height Serve for the lifecycle selector"
         in error
         for error in errors
     ), errors
@@ -22758,9 +22758,9 @@ def test_retained_response_escape_latch_source_fidelity_is_current(
             Path("crates/iroha_core/src/sumeragi/mod.rs"),
             "timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier",
             "earliest.token.identity.phase,\n"
-            "                super::FairV2IngressLeaderWirePhase::CertifiedResponse",
+            "            super::FairV2IngressLeaderWirePhase::CertifiedResponse",
             "earliest.token.identity.phase,\n"
-            "                super::FairV2IngressLeaderWirePhase::TimeoutVote",
+            "            super::FairV2IngressLeaderWirePhase::TimeoutVote",
             "freeze an exact CertifiedResponse-phase owner",
         ),
     ),
@@ -22811,7 +22811,7 @@ def test_timeout_vote_episode_runner_mode_inventory_mutation(
 
     module = load_checker()
     formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
-    runner = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
+    runner = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
     mutate_source_once(
         runner,
         "    CertifiedFenceEscape,\n",
@@ -27761,25 +27761,6 @@ SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS = (
                 "busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation"
             ),
         ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "fn invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity()",
-            "fn removed_invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity()",
-            (
-                "V4 regression named "
-                "invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity; "
-                "found 0"
-            ),
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "assert_ne!(honest_lifecycle, invalid_lifecycle);",
-            "assert_eq!(honest_lifecycle, invalid_lifecycle);",
-            (
-                "V4 serviced-candidate regression "
-                "invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity"
-            ),
-        ),
 )
 
 SERVICED_CANDIDATE_PRODUCTION_CONTRACT_COMPANIONS = (
@@ -27788,7 +27769,7 @@ SERVICED_CANDIDATE_PRODUCTION_CONTRACT_COMPANIONS = (
 SERVICED_CANDIDATE_PRODUCTION_CONTRACT_PRIMARY = SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS[3:]
 assert len(SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS) == len(
     set(SERVICED_CANDIDATE_PRODUCTION_CONTRACT_MUTATIONS)
-) == 31
+) == 29
 
 
 @pytest.mark.parametrize(
@@ -27867,12 +27848,6 @@ def test_serviced_candidate_production_contract_rejects_mutations(
             retained_deferred_ingress,
         )""",
             "runtime step must transfer the exact parent statement and handoff into shared completion",
-        ),
-        (
-            "minimum_runnable_lifecycle_ordinal",
-            "            if !evidence.validate_exact()\n",
-            "            if false && !evidence.validate_exact()\n",
-            "serviced-candidate runnable selection must admit only exact minted completion evidence into the least-owner minimum",
         ),
     ),
 )

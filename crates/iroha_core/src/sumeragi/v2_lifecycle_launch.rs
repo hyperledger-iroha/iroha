@@ -492,7 +492,7 @@ impl Drop for ProductionLifecycleServeRetirementAuthenticationPermitSealV1 {
     fn drop(&mut self) {}
 }
 
-/// Private proof that runner readiness and both durable ingress gates retired.
+/// Private proof that runner readiness and durable leader-wire ingress retired.
 struct ProductionLifecycleRetiredIngressPermitV1 {
     _seal: ProductionLifecycleRetiredIngressPermitSealV1,
 }
@@ -1720,7 +1720,7 @@ impl LaunchedProductionLifecycleV1 {
     /// Consume an unpublished height during an orderly operator shutdown.
     ///
     /// This does not claim finality or retire durable lifecycle rows. It closes
-    /// runner admission, jointly detaches both ingress gates, and permits the
+    /// runner admission, detaches durable leader-wire ingress, and permits the
     /// worker to stop normally; any parked affine recovery owner may still
     /// require cold replay when this stack subsequently drops.
     #[allow(dead_code, clippy::result_large_err)]
@@ -1844,7 +1844,7 @@ impl ActivatedProductionLifecycleV1 {
     ///
     /// Durable WAL, body, and lifecycle rows remain untouched for cold replay.
     /// Runner readiness closes first, followed by the retained local Proposal
-    /// state and both durable ingress gates. This path never mints finality or
+    /// state and durable leader-wire ingress. This path never mints finality or
     /// finalized-output rollover authority.
     #[allow(dead_code, clippy::result_large_err)]
     pub(in crate::sumeragi) fn into_clean_shutdown(
@@ -1866,7 +1866,7 @@ impl ActivatedProductionLifecycleV1 {
 
     /// Consume the activated height after executor and lifecycle work quiesce.
     ///
-    /// Readiness closes before both ingress gates retire jointly. Only then is
+    /// Readiness closes before durable leader-wire ingress retires. Only then is
     /// the executor consumed and the adapter closed under one fail-stop output
     /// operation. Its exact WAL remains owned by the finalized rollover until
     /// lane/output durability completes. Every error consumes the height and

@@ -48063,7 +48063,7 @@ _ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_ORDER_SHA256 = (
     "b0ea3758c78e58f8df6d6c2809295ac06d27d92f4055c37b1d0841bb16cdafdb"
 )
 
-_ASYNC_NETWORK_MIGRATION_OPERATOR_SHA256 = dict(( ("AsyncCandidateServiceStateAfterTerminalRetirement", "0dfe3284b17c61679e5b1e685ca184208392ae5a74172432e6bdebca438d08bc"), ("AsyncCandidateTerminalServiceReservationNeededIn", "ca211d0441e8beff9a1e98d11c93e2e21c6a3dfcf561c6de8373a52e99b95327"), ("AsyncCandidateTerminalServiceReservationAvailableIn", "a226e8d0324aa2470ad6cd3ef3ff013db562b986c3ee8d3a2cfe6b84856c5e49"), ("AsyncCandidateLifecycleNewAdmissions", "d89695b92f31750fc8d43b446eefb79412bcd9c77d7d6d16d684437c4a5ec0b2"), ("AsyncPacketOwnsClockDeadline", "0e0b38fd486161f49b27466948e3cdd075f51ba16d3202ad48c517ae84ef5508"), ("AsyncIoExceptServeReservationsVars", "e78974b75e308507a0f4005d54b080d7fd2e3a4e38e85ec17b09ff94aa6e5644"), ("CoalesceSupersededExactServeRequest", "aac2e9436071ea9d57ec08d0f2672401ba65451f5d70d02f965fc1d693fe644b"), ("RejectConflictingExactServeRequest", "ad6cfec94caa040f9286c9994a8cd63728e1ee764b4160992958393f26ffacb4"), ("AsyncServeTransportAdmissionGateAllowsVia", "80a38b8f5f35bb6f3855db50a72a2c649ba1575c97c3df7e89b59c6b1ada1ea7"), ("CanAdmitIngressItemVia", "9118a92fcbc3db95916e8b792d9b72945bc33891c22a48f21daed4edd4601fd2"), ("ReserveExactServeCapacityVia", "1fa06c5ee085cb8d813f01b229f6d2a2fe3d3138d3e9879ebe858c2df7014b63"), ("AdvanceExactServeCapacityVia", "92db06d5743b5126d054a1a89265e9ff4a00e1b50d0926e56b3728d8fdfd534a"), ("CoalesceExactServeIngressCapacityVia", "311270c9b45fe2f1edf36e4344d0f165db250e1c40fa53e634bb65e92fc38218"), ("ResumeExactServeCapacityVia", "a382d8541641ce0853cc9fcc5a5914e74130864eda5d0f64b640e4b60b8f1519"), ("CoalesceExactServeCapacityVia", "0a5b041b6af636d4ada2a7d27e69032410bc32b5933a6a9f0121d115aa86df9b"), ("ReserveExactServeCapacity", "562a00dca984b3675b16b2e83a49db786ac1c0c7b934e0da8619e5af9077e64a"), ("AdvanceExactServeCapacity", "4603b3d73e0aac7904231b5822d08c1016305d1fcbe7c65e0d2479a90da383b9"), ("CoalesceExactServeIngressCapacity", "779d594f73bda5d9c55f7c0bd3d1348a999dd7f749782df1306c998c4dda4191"), ("ResumeExactServeCapacity", "7d59f5fa5f137f4caf36b2ae3a41559e7f90f4b44976dc24b1eee5e68212d684"), ("CoalesceExactServeCapacity", "afaf0ac42cf8dbd94790f09d383b7812c32ca3eda471f3f339dbec8c97248f2f"), ("AcceptOrCoalesceExactServeRequest", "fed3347022f8d7fbea304d02ee16eca6771b97f8260d90831146b35b65398cf5"), ("AcceptOrReserveExactServeIngress", "86e66d56d20713576459ba5ded98aaab53703564ff0635550e25b1cfb3208649"), ("AsyncTimeoutRecoveryVoteBarrierException", "d8522b9b23b8314bdbbe6b6a81d601dfab6d3fbaa389e51e76029b33db0f5b5e"), ("AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier", "085073b59232d8c3e930b7fead0151ac8d6a37602452c556ad4174a98b734988"), ("AsyncFairIngressCoreStateTransition", "79efdc6f3f3d887fd6b96297173c5490b5f9e8d705918bfcf1856542de2f8896"), ("TimeoutDue", "b8dd4238614670c8223fbc82fe21093d95d5c53379c971b3960d0c0ce389dae6"),
+_ASYNC_NETWORK_MIGRATION_OPERATOR_SHA256 = dict(( ("AsyncCandidateServiceStateAfterTerminalRetirement", "0dfe3284b17c61679e5b1e685ca184208392ae5a74172432e6bdebca438d08bc"), ("AsyncCandidateTerminalServiceReservationNeededIn", "ca211d0441e8beff9a1e98d11c93e2e21c6a3dfcf561c6de8373a52e99b95327"), ("AsyncCandidateTerminalServiceReservationAvailableIn", "a226e8d0324aa2470ad6cd3ef3ff013db562b986c3ee8d3a2cfe6b84856c5e49"), ("AsyncCandidateLifecycleNewAdmissions", "d89695b92f31750fc8d43b446eefb79412bcd9c77d7d6d16d684437c4a5ec0b2"), ("AsyncPacketOwnsClockDeadline", "0e0b38fd486161f49b27466948e3cdd075f51ba16d3202ad48c517ae84ef5508"), ("AsyncIoExceptServeReservationsVars", "e78974b75e308507a0f4005d54b080d7fd2e3a4e38e85ec17b09ff94aa6e5644"), ("CoalesceSupersededExactServeRequest", "aac2e9436071ea9d57ec08d0f2672401ba65451f5d70d02f965fc1d693fe644b"), ("RejectConflictingExactServeRequest", "ad6cfec94caa040f9286c9994a8cd63728e1ee764b4160992958393f26ffacb4"), ("AsyncServeTransportAdmissionGateAllowsVia", "80a38b8f5f35bb6f3855db50a72a2c649ba1575c97c3df7e89b59c6b1ada1ea7"), ("CanAdmitIngressItemVia", "9118a92fcbc3db95916e8b792d9b72945bc33891c22a48f21daed4edd4601fd2"), ("ReserveExactServeCapacityVia", "eb3da2c2be428151e76bd2245fdb2bea293f8fcf45e80cdf06616584bf930fbe"), ("AdvanceExactServeCapacityVia", "5bf08a66c5ffd8e00d451c44e456e8b2542d61427f44b65d60a990d8ee7fa067"), ("CoalesceExactServeIngressCapacityVia", "311270c9b45fe2f1edf36e4344d0f165db250e1c40fa53e634bb65e92fc38218"), ("ResumeExactServeCapacityVia", "a382d8541641ce0853cc9fcc5a5914e74130864eda5d0f64b640e4b60b8f1519"), ("CoalesceExactServeCapacityVia", "0a5b041b6af636d4ada2a7d27e69032410bc32b5933a6a9f0121d115aa86df9b"), ("ReserveExactServeCapacity", "562a00dca984b3675b16b2e83a49db786ac1c0c7b934e0da8619e5af9077e64a"), ("AdvanceExactServeCapacity", "4603b3d73e0aac7904231b5822d08c1016305d1fcbe7c65e0d2479a90da383b9"), ("CoalesceExactServeIngressCapacity", "779d594f73bda5d9c55f7c0bd3d1348a999dd7f749782df1306c998c4dda4191"), ("ResumeExactServeCapacity", "7d59f5fa5f137f4caf36b2ae3a41559e7f90f4b44976dc24b1eee5e68212d684"), ("CoalesceExactServeCapacity", "afaf0ac42cf8dbd94790f09d383b7812c32ca3eda471f3f339dbec8c97248f2f"), ("AcceptOrCoalesceExactServeRequest", "fed3347022f8d7fbea304d02ee16eca6771b97f8260d90831146b35b65398cf5"), ("AcceptOrReserveExactServeIngress", "86e66d56d20713576459ba5ded98aaab53703564ff0635550e25b1cfb3208649"), ("AsyncTimeoutRecoveryVoteBarrierException", "d8522b9b23b8314bdbbe6b6a81d601dfab6d3fbaa389e51e76029b33db0f5b5e"), ("AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier", "085073b59232d8c3e930b7fead0151ac8d6a37602452c556ad4174a98b734988"), ("AsyncFairIngressCoreStateTransition", "79efdc6f3f3d887fd6b96297173c5490b5f9e8d705918bfcf1856542de2f8896"), ("TimeoutDue", "b8dd4238614670c8223fbc82fe21093d95d5c53379c971b3960d0c0ce389dae6"),
     ("AdmitHiddenPacket", "4ac6bdc2837d18f5a90a6eb761dcd6ce5e578616b516826f921175a00db1aeba"),
 ))
 
@@ -48211,13 +48211,13 @@ asyncServeProducerTurnReady' =
                 f"semantics {expected!r}; found {normalized!r}"
             )
 
-    producer_episode_admission_blockers = (
+    producer_turn_admission_blockers = (
         "ReserveExactServeCapacityVia",
         "AdvanceExactServeCapacityVia",
         "ExactServeTransportAdmissionCanAdvanceVia",
     )
     due_blocker = "/\\ ~asyncServeProducerTurnReady[node]"
-    for symbol in producer_episode_admission_blockers:
+    for symbol in producer_turn_admission_blockers:
         extracted = _top_level_operator_body(
             source,
             symbol,
@@ -51870,7 +51870,7 @@ asyncServeProducerTurnReady' =
             "e4da2ec3793940990dbc327e27fe4057d67d7ea777b242475ac3e8308422ac1f"
         ),
         "AsyncCoreOuterFrame": (
-            "cfb5d79a048fb6a7aa87aea4de2bf5a8ce601a7b7443464582f742b823639459"
+            "36dcf31d8f36bde7006032dfcdb9f08b8349afe60939181f4d58aa15ff746f05"
         ),
         "AsyncEnterIndexedServiceActivation": (
             "281f60cabb65f0c65089fde352c1350335c5d817fd9edf14e8df87a5937e33b4"
@@ -55056,11 +55056,9 @@ if self.retained_effect_batch.is_some() || self.parked_effect_batch.is_some() {
                 )
 
         for item_name, runtime_call in (
+            ("step_pacemaker_once", "self.runtime.step_pacemaker_effects(now)"),
             ("step", "self.runtime.step_effects(now)"),
-            (
-                "step_pending_tip_recovery",
-                "self.runtime.step_recovery_effects(now)",
-            ),
+            ("step_pending_tip_recovery", "self.runtime.step_recovery_effects(now)"),
         ):
             item = executor_items[item_name]
             if item is None:
@@ -55072,6 +55070,7 @@ if self.retained_effect_batch.is_some() || self.parked_effect_batch.is_some() {
                     runtime_call,
                     "self.runtime.take_scheduler_ownership()",
                     "wal_step.complete()",
+                    "self.finish_runtime_step_reconciliation(services)",
                 )
             )
             positions: list[int] = []
@@ -55083,11 +55082,11 @@ if self.retained_effect_batch.is_some() || self.parked_effect_batch.is_some() {
                 ]
                 if len(observed) == 1:
                     positions.append(observed[0])
-            if len(positions) != 3 or positions != sorted(positions):
+            if len(positions) != 4 or positions != sorted(positions):
                 errors.append(
                     f"{effects_path}:{item.line}: {item_name} must consume the "
                     "exact scheduler owner immediately after the runtime step "
-                    "and before releasing the WAL permit"
+                    "and reconcile the current leader-wire cut after releasing the WAL permit"
                 )
 
     regular = _top_level_operator_body(
@@ -58870,8 +58869,8 @@ executor.can_admit_network_message_with_ingress_ownership(message, ingress_owner
         errors,
     )
 
-    # The two lane branches, exact Serve retry, and reply-target fanout plan are
-    # the reviewed production consumers of the public observed-history
+    # The two lane branches and the exact reply-target fanout plan are the
+    # reviewed production consumers of the public observed-history
     # reconciliation kernel. Each consumes the operation-owned receipt before
     # committing its paired ownership state.
     _require_rust_source_token_sequence(
@@ -58886,9 +58885,9 @@ executor.can_admit_network_message_with_ingress_ownership(message, ingress_owner
         worker_path,
         worker_source,
         ".merge_observed_with_receipt(",
-        "the exact Serve retry and reply-target plan must be the worker-side observed-history reconciliation seams",
+        "the exact reply-target plan must be the sole worker-side observed-history reconciliation seam",
         errors,
-        count=2,
+        count=1,
     )
     for path, source in (
         (merge_path, merge_source),
@@ -58898,7 +58897,7 @@ executor.can_admit_network_message_with_ingress_ownership(message, ingress_owner
             path,
             source,
             ".merge_observed_with_receipt(",
-            "observed-history reconciliation must remain confined to the reviewed lane and exact Serve retry bridges",
+            "observed-history reconciliation must remain confined to the reviewed lane and exact reply-target bridges",
             errors,
             count=0,
         )
@@ -68224,7 +68223,6 @@ Ok(())
                 )
     expected_ordinary_ingress_items = {
         "prepare_current_certified_serve_pre_admission",
-        "authorize_current_certified_serve_pre_dequeue",
         "consume_prepared_dequeued_v2_ingress",
     }
     observed_ordinary_ingress_items = set(
@@ -68268,20 +68266,18 @@ Ok(())
         "consume_prepared_dequeued_v2_ingress"
     )
     current_serve_pre_admission = ordinary_ingress_items.get("prepare_current_certified_serve_pre_admission")
-    current_serve_authorization = ordinary_ingress_items.get("authorize_current_certified_serve_pre_dequeue")
     _require_rust_token_sequence(
         lifecycle_runner_path,
         lifecycle_runner_items["ordinary_finalize"],
         """
 let finalized = activated.into_finalized_rollover(active_runner)?;
-drop(producer_episode);
 let (next_context, prepared_successor) = {
     let (receipt, artifact) = finalized.finality();
     prepare_successor(receipt, artifact, &mut lane_work)?
 };
 let (post_output, retained_merge_sidecars) = finalized.rollover_outputs(
 """,
-        "ordinary lifecycle finality must close ingress through the activated transition before releasing the producer episode and rolling exact output",
+        "ordinary lifecycle finality must close through the activated transition, authenticate its successor, and then roll exact output",
         errors,
     )
     _require_rust_token_sequence(
@@ -68289,11 +68285,26 @@ let (post_output, retained_merge_sidecars) = finalized.rollover_outputs(
         lifecycle_runner_items["pending_active"],
         """
 let (finalized, lane_work) = activated.into_finalized_rollover(&mut active_runner)?;
-drop(certified_serve_producer_episode);
 let prepared_successor = {
     let (receipt, artifact) = finalized.finality();
 """,
-        "pending-Kura lifecycle finality must close ingress before releasing the producer episode and borrowing finality",
+        "pending-Kura lifecycle finality must close through the activated transition before authenticating the successor from exact finality",
+        errors,
+    )
+    _require_rust_token_sequence(
+        pending_runner_path,
+        lifecycle_runner_items["pending_active"],
+        """
+let (next_context, prepared_successor) = prepared_successor;
+let (post_output, retained_merge_sidecars) = finalized.rollover_outputs(
+    &mut active_runner,
+    lane_work,
+    &next_context,
+    control_queue_capacity,
+)?;
+let cleanup_ready = post_output.retire_lifecycle_stores()?;
+""",
+        "pending-Kura lifecycle finality must roll every exact output before retiring lifecycle stores",
         errors,
     )
     _require_rust_token_sequence(
@@ -68392,98 +68403,36 @@ let cleanup = cleanup_ready.finish_cleanup(Duration::ZERO, cleanup_supervisor);
         runner_path,
         runner_items.get("drain_v2_ingress"),
         """
-if turn == OuterIngressTurn::Runtime {
-    if services
-        .certified_serve_barrier()
-        .map_err(V2RunnerError::Service)?
-        .is_some()
-    {
-        continue;
-    }
-""",
-        "an admitted or provisional exact Serve must suppress every later runtime-producer turn",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("drain_v2_ingress"),
-        """
-let mut prepared_serve = None;
-let barrier_bypass = match mode {
-    V2IngressDrainMode::TimeoutVoteEpisode => {
-        FairV2IngressBarrierBypass::TimeoutVoteEpisode
-    }
-    V2IngressDrainMode::Ordinary | V2IngressDrainMode::CertifiedFenceEscape => {
-        FairV2IngressBarrierBypass::None
-    }
-};
-let Some((inbound, dequeue_disposition)) = receiver
-    .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
-        barrier_bypass,
-        |inbound| {
-        if mode != V2IngressDrainMode::Ordinary {
-            let BlockMessage::V2(message) = inbound.message() else {
-                return false;
-            };
-            if message.validate_version().is_err() {
-                return false;
-            }
-            let selected_mode_matches = match mode {
-                V2IngressDrainMode::Ordinary => true,
-                V2IngressDrainMode::CertifiedFenceEscape => {
-                    network_ingress_is_certified_fence_escape(&message.payload)
-                }
-                V2IngressDrainMode::TimeoutVoteEpisode => {
-                    inbound.ingress_ownership().is_some_and(|ownership| {
-                        executor.can_admit_timeout_vote_recovery_episode(
-                            message,
-                            ownership
-                        )
-                    })
-                }
-            };
-            if !selected_mode_matches {
-                return false;
-            }
-        }
-        if !v2_ingress_head_can_drain(inbound, executor, terminal_subject) {
-            return false;
-        }
-""",
-        "ingress drain must use the gate-bound checked selector, keep the TimeoutVote bypass explicit, and revalidate runtime capacity before physical removal",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("drain_v2_ingress"),
-        """
-let prepared = ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
-    inbound,
-    executor.context().height,
-    terminal_subject,
-    |request, sender| {
-        executor
-            .authenticate_certified_body_request(request, sender)
-            .map_err(|error| error.to_string())
-    },
-);
-match ordinary_ingress_consumer::authorize_current_certified_serve_pre_dequeue(
-    prepared,
-    services,
-) {
-    ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Prepared(
-        prepared,
-    ) => {
-        prepared_serve = Some(prepared);
-        true
-    }
-    ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Retain => {
-        false
-    }
+if mode == V2IngressDrainMode::Ordinary && executor.has_retained_certified_body_response() {
+    return Ok(());
 }
 """,
-        "exact Serve ingress must delegate authentication and durable preparation before the selected head drains",
+        "an exact retained Certified-Serve response must keep exclusive completion progress across ordinary drain batches",
         errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("drain_v2_ingress"),
+        """
+let current_serve = matches!(
+    &message.payload,
+    wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request)
+        if request.round.height == executor.context().height
+);
+if current_serve {
+    return false;
+}
+""",
+        "terminal recovery drain must retain current-height Serve for the lifecycle selector instead of minting ordinary dequeue authority",
+        errors,
+    )
+    _require_rust_token_sequence(
+        runner_path,
+        runner_items.get("drain_v2_ingress"),
+        "ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(",
+        "terminal recovery drain must not duplicate lifecycle-owned current-height Serve authentication",
+        errors,
+        count=0,
     )
     _require_rust_token_sequence(
         ordinary_ingress_consumer_path,
@@ -68502,49 +68451,17 @@ if reply_routes.semantic_target() != sender
 let authenticated = match authenticate(request.clone(), sender) {
     Ok(authenticated) => authenticated,
     Err(reason) => {
-        return CurrentCertifiedServePreAdmissionV1::Negative {
-            request_hash: HashOf::new(request),
-            outcome: CertifiedServeNegativeOutcome::InvalidCertificate,
-            reason,
-        };
+        return CurrentCertifiedServePreAdmissionV1::Negative { reason };
     }
 };
 if certified_body_request_is_superseded_after_decision(request, terminal_subject, active_height)
 {
-    let decided = terminal_subject
-        .expect("Decision supersession requires the durable exact terminal subject");
-    return CurrentCertifiedServePreAdmissionV1::Negative {
-        request_hash: authenticated.request_hash(),
-        outcome: CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
-        reason: "certified body request was superseded by durable Decision".to_owned(),
+    return CurrentCertifiedServePreAdmissionV1::AuthenticatedNegative {
+        request: authenticated,
     };
 }
 """,
-        "shared current Serve classification must bind transport ownership, invalid certificates, and Decision supersession",
-        errors,
-    )
-    _require_rust_token_sequence(
-        ordinary_ingress_consumer_path,
-        current_serve_authorization,
-        """
-CurrentCertifiedServePreAdmissionV1::Negative {
-    request_hash,
-    outcome,
-    reason,
-} => match authorizer.stage_negative(request_hash, outcome) {
-    Ok(()) => ProductionPreparedCertifiedServeV1::Rejected(reason),
-    Err(reason) => ProductionPreparedCertifiedServeV1::Service(reason),
-},
-CurrentCertifiedServePreAdmissionV1::Authenticated {
-    authenticated_via,
-    request,
-} => match authorizer.prepare_exact(&authenticated_via, request) {
-    Ok(admission) => ProductionPreparedCertifiedServeV1::Admitted(admission),
-    Err(CertifiedServePrepareError::Backpressure) => {
-        return ProductionCurrentCertifiedServePreparationV1::Retain;
-    }
-""",
-        "shared current Serve authorization must stage a negative or reserve/coalesce before dequeue and retain on capacity backpressure",
+        "shared current Serve classification must bind transport ownership, retire unauthenticated input locally, and retain authenticated Decision supersession for durable negative settlement",
         errors,
     )
     _require_rust_token_sequence(
@@ -68871,9 +68788,21 @@ def _local_runner_service_contract_source_fidelity_errors(
     pending = _require_rust_item(
         paths["pending"], sources["pending"], "run_pending_active_height", errors
     )
-    for path, item, description in (
-        (paths["ordinary"], ordinary, "ordinary lifecycle height"),
-        (paths["pending"], pending, "pending-Kura lifecycle height"),
+    for path, item, description, poll_count, producer_turn_claim in (
+        (
+            paths["ordinary"],
+            ordinary,
+            "ordinary lifecycle height",
+            2,
+            "activated.claim_producer_turn_for_local_proposal(&mut active_runner)",
+        ),
+        (
+            paths["pending"],
+            pending,
+            "pending-Kura lifecycle height",
+            1,
+            "activated.claim_producer_turn_for_no_clock_recovery(&mut active_runner)",
+        ),
     ):
         _require_rust_token_sequence(
             path,
@@ -68881,11 +68810,12 @@ def _local_runner_service_contract_source_fidelity_errors(
             "wake_rx.recv_timeout(IDLE_POLL)",
             f"{description} must wait only for the finite local poll bound",
             errors,
+            count=poll_count,
         )
         _require_rust_token_sequence(
             path,
             item,
-            "claim_producer_turn",
+            producer_turn_claim,
             f"{description} must claim lifecycle-owned ProducerTurn work",
             errors,
         )

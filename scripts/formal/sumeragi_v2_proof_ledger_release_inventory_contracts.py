@@ -1894,6 +1894,7 @@ def _production_liveness_release_inventory_errors(
                 ),
                 "write_sumeragi_v2_release_receipt_publication.py": (
                     "_validate_framework_python_input_records",
+                    "_validate_framework_python_macho_closure",
                     "_validate_framework_python_relocation_evidence",
                     "_require_pruned_build_roots",
                     "build_receipt",
@@ -2001,6 +2002,7 @@ def _production_liveness_release_inventory_errors(
     expected_bootstrap_component_symbols = {
         "bootstrap_sumeragi_v2_release_receipt_replay.py": (
             "_framework_python_input_records",
+            "_validate_framework_python_macho_closure",
             "_framework_python_marker_record",
             "_validate_terminal_release_evidence",
             "_retained_release_layout",

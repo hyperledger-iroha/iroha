@@ -6,7 +6,7 @@
 # and comments or test-only lookalikes cannot satisfy this contract.
 _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
     "fair_v2_ingress_leader_wire_selector_projection": (
-        "34eebea6c6b1a3aefeb68010a2ea367970cc3f16a7d5adf592e184bcc799201e"
+        "08ce0575f38ec671cff556b343d981536dd24fb5bc6c49874b76508cd9cd8104"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
         "d4bd27c607b63e39c37499f79cf9fbf3a678f52c392985bb1ffd8bf71a13e675"
@@ -564,7 +564,7 @@ _PRODUCTION_FAIR_V2_INGRESS_CLASS_ITEM_SHA256 = {
 }
 _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
     "new_with_source_geometry_and_transport_frame_caps": (
-        "a2139d515f4c30889d862f462d52d4aded7e96aadc80b23624f63b721c37ad68"
+        "cba2c2eeb60d74bfb010d1bd58bc0836d4f7b3a72ab9f51ffe32895b72856c2b"
     ),
     "configure_roster_for_context": (
         "19c00b3b692c6dba9ada1003dff9483ea7a90a47263a506dd6c764f1d24fc68c"
@@ -573,10 +573,10 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "dd118c20b0f64df0f6c0ff317320c4704bc8376d68c085b493ac763621b59cf9"
     ),
     "open": (
-        "0a55b773a082a1d72592558a4941355d16d9c2231f9b08d25b778d25749ebcc1"
+        "5009fc5c34fbcd3f75897ef7f37e7c331e948ac00e555b749ca1a4bff85cadf7"
     ),
     "try_push_at": (
-        "18a355d5296d31f40fc58dd00cd08eb8c79fbec307ee6532bac4a684ab0f60da"
+        "25626a4ac381ecbb009da41b2cef05892683135f26af5d7a50a90eec37045917"
     ),
     "try_recv_if_at_checked": (
         "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
@@ -585,7 +585,7 @@ _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256 = {
         "8867eda9f132eefd0510e3aa1cc70fad7ed02b27df25deec9c7f35046a339f32"
     ),
     "dequeue_selected_locked": (
-        "4c94e8f957bbf35bdc21167602d93646070dbb35806761a8068db8832be7fc31"
+        "2916aa1e30fb8e0894728d7e241b87b26fbc6ecfc54ccf23d010b1b5b943ddd0"
     ),
 }
 _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256 = {

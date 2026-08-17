@@ -433,6 +433,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'queue/queue_metadata_and_admission_tests.rs',
         'queue/instruction_and_state_routing_tests.rs',
         'queue/routing_batch_admission_tests.rs',
+        'queue/config_factory_test_support.rs',
         'queue/teu_limit_and_backlog_tests.rs',
         'queue/routing_projection_resilience_tests.rs',
         'queue/capacity_and_concurrency_tests.rs',
@@ -2089,7 +2090,7 @@ _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
     "4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "97d125f9196963710fd6eb72e98e0b86f6503489f1b1ee492b4cfc628e320d82"
+    "83f3882be5bfa84240715deb95806d12a7838fe42eb52a6de0711d8fcf71b9fe"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2824,11 +2825,11 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
         "275bb4749f89c76810b7154c1eca151f2c85e970c162fb3f737034870520578b"
     ),
     "step_pacemaker_once": (
-        "09140d1b32a493a591303e376d5ed642ea1479cb2fddae358d8d4d9b5b2a7df5"
+        "d90bde4c655d3762e26e4fc3b8093188f70d2ab5adf2d55f39c09fe09342a320"
     ),
-    "step": "c56df5c78384e0685390837f6442bf17f81f37134a840445cb2522326a226bcb",
+    "step": "228b118113f804899bd2d0ca54254014ebb9ee0f671e6d1e900470c7e9a17c9c",
     "step_pending_tip_recovery": (
-        "2fea51da5e34af31e90c8a42ed6915cb8d6e64dc18a7df89ef0a0545b81b6f94"
+        "839907e02db4e0fdda25a94c9d17b3b98b8884e0037eb5038d45899d98c4c05e"
     ),
 }
 
@@ -3290,8 +3291,8 @@ _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "dispatch_lane_work_effect_from_snapshot": "20b07ac620f07eca9a61e14f198473a5beb9fdf77bf5222d34f0d7338791ec47",
 }
 
-_PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {"ordinary_loop": "e8f3f96412246ef16424373e71d01d4d80615655e6aaf591ecabba2ed22c6ef5", "pending_loop": "949496954f41d44439d51b95e09ac1898df7ec139326dfe884611d045198ee57", "ordinary_finalize": "6912b9343625468b23c8fab85f498aadf721dec6402573ee3136a6a1f6b379c7", "pending_active": "0deb2b7672620c8cd217f6350e3cc83d59efe046262c63eb83c662e8107cb276"}
-_PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "82bd8ab2d7e1c5a3f0517e28c0698c6db0e4fcb4d243c324b0d9d530225cd969"
+_PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {"ordinary_loop": "cf1175fb9703fb722dea4460957dd63847e4a6ec98b5394c66823f8aed0576cf", "pending_loop": "04cec89b8a40983a59dc0eaf425257a9bd9ff1a60f8ea6a2c870cb25c7601b05", "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041", "pending_active": "29f0362cb294a442e22ee77fa002ad75d89e7af6c244debfc5b26968b3300c95"}
+_PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "e3156115c7608e58491724d41dc852b11db86a92617e2d9454049a6dc898a08d"
 
 # `asyncNodeServiceDeadlines` is a proof-only projection of this one explicit
 # trusted runtime contract. These complete-item seals bind the structural
@@ -3317,6 +3318,7 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "scheduler:CertifiedServeSchedulerObservationV1::from_live_cuts": "886ef927aff3c6f8ae8577bb1bcb729f4058b48f20df6c5fbf1c3773c43b3d4f",
     "scheduler:claim_certified_serve_turn_v1": "93578174a9077b0cda5510e9f763b416731fd5bcae84fcc3c124949c8a3535d1",
     "turn:prepare_and_dispatch_current_certified_serve": "3860ef97a19c524a74b7ae6aaaa0af2d8e0696571e8e5644986595f47f66d085",
+    "turn:LaunchedProductionLifecycleV1::drive_completion_turn": "26d2ec8d584372896275230c113558e7b6143de582d241b904bdfc87b3acc503",
     "worker:LifecycleCertifiedServeTaskV1::from_dequeued_parts": "0c9f86b230960b4db64254028b54894adcc3ee29d7a09aff10df489f82830aa1",
     "worker:LifecycleIoCapacityReservation<'_>::preflight_lifecycle_certified_serve": "698cf37eefa08f22e3fc49a3bba6e04fce8c4e031e94ba6922cde786ce78556c",
     "worker:LifecycleIoCapacityReservation<'_>::commit_lifecycle_certified_serve": "f1edcfbd0f5c22919a05212cf7de00e5f914d551ca86f6b5b6156dc254e3d3f9",
@@ -3534,9 +3536,9 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "b6379336a656f578037f65bb7b297529092f3f64c06bf38ef5f590a4a3aa81c6"
     ),
     "ProductionV2Services::start": (
-        "e5f95d2ddf2cecf9ec9126f98b7a8deda43be6e8b254118658c11acea27e93b6"
+        "80da0d69fc6dcdb2d8c4b0eddf28b0b7069d56e9125981889d3d99c7174a961a"
     ),
-    "ProductionV2Services::start_inner": "3d1647a9ffbc521eabde68bc7a4cd9714145a7ac7649c80c9d28d925d7941545",
+    "ProductionV2Services::start_inner": "e62189ff4aa78a631db1a60e1b773f0c5cd87fb2a613831134e75bca801f9174",
     "ProductionV2Services::exact_target_geometry": (
         "978520459f9dd3c5459478e222418ffed2924445c40a79722c307f97e6d28871"
     ),
@@ -3697,7 +3699,7 @@ _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     # drain_v2_ingress was approved separately after its three-mode drain
     # mutations passed.
     "drain_v2_ingress": _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256,
-    "authorize_decided_lane_recovery_drain": "8fb8fd574de3803b19b638916495d5ea9db53e90e1042e77a745fe4c1ac5c5ef",
+    "authorize_decided_lane_recovery_drain": "f62eb9f1b38234b28765dafe591bd22098ae66267c90060a812ef37910cbf2eb",
     # Bound after the exact-output handoff mutation survived refreshing this
     # helper's own token digest.
     "rollover_finalized_height_outputs": (
@@ -3715,13 +3717,10 @@ _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
 # rather than retaining stale duplicate route/terminal assertions in callers.
 _PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256 = {
     "prepare_current_certified_serve_pre_admission": (
-        "c2fd5a45d61d100dc2811dc7fb62065d0286f4f5d22aa1c42535890581cdc637"
-    ),
-    "authorize_current_certified_serve_pre_dequeue": (
-        "4332716121a9974a144388b6b5274b5f01a535792841ba0d471dbb76dd6fdbd0"
+        "2916d22c3e395f974f472d106ade75d700b75662f2985911e8ce09c130da7106"
     ),
     "consume_prepared_dequeued_v2_ingress": (
-        "82bd8ab2d7e1c5a3f0517e28c0698c6db0e4fcb4d243c324b0d9d530225cd969"
+        "e3156115c7608e58491724d41dc852b11db86a92617e2d9454049a6dc898a08d"
     ),
 }
 

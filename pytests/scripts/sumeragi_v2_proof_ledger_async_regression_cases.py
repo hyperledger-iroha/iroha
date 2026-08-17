@@ -765,8 +765,8 @@ def test_strong_type_producer_timeout_bridge_dependencies_fail_closed(
         ),
         (
             "AsyncServeProducerTurnTransition",
-            "               ELSE asyncServeProducerTurnReady[node]",
-            "               ELSE FALSE",
+            "            ELSE asyncServeProducerTurnReady[node]",
+            "            ELSE FALSE",
         ),
         (
             "AsyncServeProducerTurnAttemptThisStep",
@@ -827,11 +827,11 @@ def test_serve_producer_turn_transition_mutations_are_rejected(
         "ExactServeTransportAdmissionCanAdvanceVia",
     ),
 )
-def test_fresh_serve_admission_cannot_bypass_producer_episode_debt(
+def test_fresh_serve_admission_cannot_bypass_producer_turn_readiness(
     tmp_path: Path,
     symbol: str,
 ) -> None:
-    """Every fresh logical/transport admission observes the due boundary."""
+    """Every fresh logical/transport admission observes the Ready boundary."""
 
     module = load_checker()
     formal_dir = copy_async_source_fidelity_fixture(
@@ -880,13 +880,13 @@ def test_fresh_serve_admission_cannot_bypass_producer_episode_debt(
         ),
     ),
 )
-def test_producer_episode_state_surfaces_cannot_omit_debt(
+def test_producer_turn_state_surfaces_cannot_omit_readiness(
     tmp_path: Path,
     symbol: str,
     old: str,
     new: str,
 ) -> None:
-    """Typing and activation frames retain every producer-debt coordinate."""
+    """Typing and activation frames retain the adjacent ProducerTurn state."""
 
     module = load_checker()
     formal_dir = copy_async_source_fidelity_fixture(
@@ -1733,6 +1733,39 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
         for error in errors
     ), errors
     runner_path.write_text(canonical_runner, encoding="utf-8")
+
+
+def test_runtime_step_reconciliation_survives_effect_item_reseal(
+    tmp_path: Path,
+) -> None:
+    """Every runtime turn publishes its current leader-wire cut after the WAL."""
+
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path, module, "SumeragiV2AsyncNetwork.tla"
+    )
+    effects_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    source = effects_path.read_text(encoding="utf-8")
+    item, = module.rust_items(source, "step")
+    mutated = item.source.replace(
+        "self.finish_runtime_step_reconciliation(services)",
+        "self.publish_status(services)",
+        1,
+    )
+    assert mutated != item.source
+    effects_path.write_text(source.replace(item.source, mutated, 1), encoding="utf-8")
+    mutated_item, = module.rust_items(effects_path.read_text(encoding="utf-8"), "step")
+    module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256["step"] = (
+        module._rust_item_token_sha256(mutated_item)
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "reconcile the current leader-wire cut after releasing the WAL permit"
+        in error
+        for error in errors
+    ), errors
 
 
 def test_rust_item_scanner_masks_noncode_and_records_fail_closed_context() -> None:

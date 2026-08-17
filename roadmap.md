@@ -257,9 +257,10 @@ provenance. The outstanding revision-4 work includes:
   ingress capacity waits internally; takes at most one physical Completion
   head; classifies the complete Ready census; and returns the unchanged cursor
   only when no fair ingress winner exists. Its queue-owned ordinary ingress
-  prerequisite now freezes that exact fair winner, prepares current-height
-  Certified-Serve state under the legacy lock/transaction discipline, and
-  physically removes the same occurrence into an opaque fail-stop token.
+  prerequisite now freezes that exact fair winner. Current-height
+  Certified-Serve enters the coordinator-owned selector/admission transaction,
+  and the typed capacity/dequeue cut physically removes the same occurrence
+  only when its registry-attested scheduler claim is ready.
   Backpressure retains the carrier plus off-queue debt, while recovered
   Decision-Fetch retains its queue witness through Phase A. Mixed
   Apply/Sign/Fetch Ready rows now freeze one composite worker/output-capacity
@@ -309,10 +310,11 @@ provenance. The outstanding revision-4 work includes:
   The same seal now retains the Kura-derived safety-WAL and
   chunk paths; the factory binds the adapter's held WAL before store side effects, and launch
   internally restores one ordinal source, folds producer and leader-wire
-  high-watermarks, opens the gate from the owner-held body store, then joins it
-  with the exact service-owned Certified-Serve gate on the same still-closed
-  ingress. The non-PendingKura production runner consumes this path, and one
-  RAII owner retires both gates atomically. Raw paths,
+  high-watermarks and opens the leader-wire binding from the owner-held body
+  store on the same still-closed ingress. Certified-Serve no longer has a
+  parallel service gate; it joins only through the lifecycle coordinator after
+  selection. The non-PendingKura production runner consumes this path, and one
+  RAII owner retires the leader-wire binding atomically. Raw paths,
   ordinals, receipts, Queue/archives/cadence/events, and genesis authority are
   no longer launch inputs. Launch consumes the retained Apply service through
   a parent-sealed move-only worker permit. The authenticated adapter
@@ -434,7 +436,7 @@ provenance. The outstanding revision-4 work includes:
   exact ingress open, and H+1 status publication. The parallel ordinary
   activation returns an opaque owner borrowable only through a private runner
   key. The consuming finalization chain is now present: readiness and exact
-  ingress close first, both gates retire jointly, executor/Kura finality and
+  ingress close first, leader-wire ownership retires, executor/Kura finality and
   adapter WAL retirement complete under fail-stop ownership, and the existing
   lane/service output transaction seals its durable handoff while services and
   the lifecycle owner remain joined. A fresh post-handoff Certified-Serve
@@ -443,7 +445,7 @@ provenance. The outstanding revision-4 work includes:
   publication token consumes the concrete registry. Only the cleanup-ready
   state permits normal finalized-height teardown. Explicit consuming shutdown
   transitions now close runner readiness and the exact queue, release prepared
-  local-Proposal state, jointly detach both ingress gates, and permit normal
+  local-Proposal state, detach leader-wire ingress ownership, and permit normal
   worker stop for unpublished or active heights without claiming finality;
   CompleteTip keeps its retired predecessor joined through the same boundary.
   The consumed activation authority also lends one borrow-scoped preactivation

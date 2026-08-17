@@ -200,7 +200,9 @@ def rebind_timeout_vote_episode_rust_item_seal(
     """Rebind only the deliberately mutated timeout-episode Rust item."""
 
     relative = Path(relative)
-    path = repo_root / relative
+    path = reviewed_rust_item_provider(
+        module, repo_root, relative, item_name
+    )
     items = module.rust_items(path.read_text(encoding="utf-8"), item_name)
     assert len(items) == 1, (relative, item_name)
     digest = module._rust_item_token_sha256(items[0])

@@ -494,8 +494,8 @@ for dependency_pass in [false, true] {
         "shared TimeoutVote selector must preserve strict-before-dependency, Blocked exclusion, downstream predicate, and exact disposition",
         errors,
     )
-    if selector is not None:
-        selector_tokens = rust_code_tokens(selector.body)
+    if queue_gate is not None:
+        queue_gate_tokens = rust_code_tokens(queue_gate.body)
         forbidden_predequeue_claims = [
             token
             for token in (
@@ -504,13 +504,13 @@ for dependency_pass in [false, true] {
                 "claim_certified_body_response",
             )
             if _token_sequence_count(
-                selector_tokens,
+                queue_gate_tokens,
                 rust_code_tokens(token),
             )
         ]
         if forbidden_predequeue_claims:
             errors.append(
-                f"{ingress_path}:{selector.line}: the pre-dequeue "
+                f"{ingress_path}:{queue_gate.line}: the pre-dequeue "
                 "CertifiedResponse barrier exception may not require a response "
                 "claim acquired only after fair-ingress removal; found "
                 f"{forbidden_predequeue_claims!r}"

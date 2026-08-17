@@ -331,8 +331,9 @@ service parts. The ingress planner rejects unless the running owner and service
 retain matching store and output-guard seals; a cursor snapshot alone cannot
 authorize production planning. The activated owner now enters one consuming
 finalization chain. It proves executor and recovered-work quiescence before
-clearing readiness, closing the exact ingress, and jointly detaching the
-Certified-Serve and leader-wire gates. It then consumes the executor's Kura
+clearing readiness, closing the exact ingress, and detaching durable leader-wire
+ownership. Certified-Serve remains coordinator-owned through that same closed
+ingress. It then consumes the executor's Kura
 receipt/artifact and closes the serialized adapter under fail-stop ownership.
 The resulting type state keeps its safety WAL, services, lifecycle stores, and
 finality evidence joined while the existing lane/service rollover seals the
@@ -345,7 +346,7 @@ coordinator instance, and its final token consumes the concrete registry
 before a cleanup-ready state can permit normal finalized-height worker
 teardown. Operator shutdown is a separate consuming boundary for unpublished
 or active lifecycle owners: it closes runner readiness and the exact queue,
-releases prepared local-Proposal state, jointly detaches both ingress gates,
+releases prepared local-Proposal state, detaches leader-wire ingress ownership,
 then permits normal worker stop without minting finality or retiring durable
 rows needed by cold replay. The CompleteTip wrapper consumes retired H and H+1
 together on that unpublished path. Canonical-body startup recovery borrows the
@@ -1874,10 +1875,10 @@ authenticated cut, adapter startup,
 coordinator projection, and complete concrete registry; it exposes none of
 those parts. Cut validation rescans the bounded canonical directory before the
 join, so a later valid payload written by another store owner is rejected even
-when the original in-memory index is unchanged. The sealed launch also joins
-its leader-wire and service-owned Certified-Serve gates under one
-closed-ingress RAII owner, so teardown cannot detach either durable carrier
-family independently. This bound owner is not itself status-publication
+when the original in-memory index is unchanged. The sealed launch joins
+leader-wire ownership under one closed-ingress RAII owner; Certified-Serve
+enters only through the co-owned lifecycle coordinator, registry, and worker
+transaction. This bound owner is not itself status-publication
 authority. Its consuming launch retains retired H beside launched H+1, and the
 dedicated activation consumes both only while the runner-owned permit opens the
 exact ingress and publishes through the CompleteTip bridge. The lifecycle

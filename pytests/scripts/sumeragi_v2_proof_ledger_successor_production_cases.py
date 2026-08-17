@@ -401,6 +401,13 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
         "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        "services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));",
+        "let _ = services;",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
         "super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeQueued,",
         "super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CapacityPending,",
         "production lifecycle finalization behavior must preserve exact production order",
@@ -735,41 +742,51 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "exact queue-owned physical dequeue",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-        "fn prepare_and_dequeue_current_certified_serve<'cursor>(",
-        "ProductionCurrentCertifiedServePreparationV1::Retain => {\n"
-        "            operation.complete();",
-        "ProductionCurrentCertifiedServePreparationV1::Retain => {\n"
-        "            drop(operation);",
-        "stateful selected Serve fail-stop transaction",
+        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+        "fn prepare_current_certified_serve_pre_admission(",
+        "CurrentCertifiedServePreAdmissionV1::AuthenticatedNegative {",
+        "CurrentCertifiedServePreAdmissionV1::Negative {",
+        "shared current Serve transport/authentication classifier",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
         "fn prepare_decided_lane_recovery_ingress(",
-        "Some(decided_subject),",
-        "None,",
-        "terminal recovery must bind both invalid-version and current-height Serve classifiers",
+        "if request.round.height == active_height {\n"
+        "        return DecidedLaneRecoveryIngressPreparation::CurrentServeRetain;\n"
+        "    }",
+        "if request.round.height == active_height {\n"
+        "        return DecidedLaneRecoveryIngressPreparation::LeaderWireRetire;\n"
+        "    }",
+        "terminal recovery classifies current Serve as retained",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
+        "fn authorize_decided_lane_recovery_drain(",
+        "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain => {\n"
+        "            DecidedLaneRecoveryDrainDecision::Retain\n"
+        "        }",
+        "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain => {\n"
+        "            DecidedLaneRecoveryDrainDecision::Authorized(\n"
+        "                DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,\n"
+        "            )\n"
+        "        }",
+        "terminal recovery denies current-Serve dequeue authority",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
         "fn drain_decided_lane_recovery_ingress(",
-        ".authenticate_certified_body_request(request, sender)",
-        ".authenticate_certified_body_request_unchecked(request, sender)",
-        "live terminal drain authenticates before checked authorization",
+        "DecidedLaneRecoveryDrainDecision::Retain => false,",
+        "DecidedLaneRecoveryDrainDecision::Retain => true,",
+        "live terminal drain retains current Serve before checked dequeue",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-        "fn authorize_decided_lane_recovery_drain<",
-        "ordinary_ingress_consumer::authorize_current_certified_serve_pre_dequeue(",
-        "ordinary_ingress_consumer::authorize_current_certified_serve_pre_dequeue_unchecked(",
-        "terminal recovery translates only the shared durable preparation",
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
-        "impl CurrentCertifiedServePreDequeueAuthorizer for ProductionV2Services",
-        "self.stage_certified_serve_rejection(request_hash, outcome)",
-        "Ok(())",
-        "production current Serve authorizer omits",
+        "fn authorize_decided_lane_recovery_drain(",
+        ") -> DecidedLaneRecoveryDrainDecision {\n    match preparation {",
+        ") -> DecidedLaneRecoveryDrainDecision {\n"
+        "    let _legacy = CertifiedServeAdmission;\n"
+        "    match preparation {",
+        "terminal recovery cannot mint coordinator-owned Serve authority",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -2511,7 +2528,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 333
+) == 334
 
 
 @pytest.mark.parametrize(

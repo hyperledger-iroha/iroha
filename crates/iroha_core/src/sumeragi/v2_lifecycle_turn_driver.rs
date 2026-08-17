@@ -822,8 +822,6 @@ impl LaunchedProductionLifecycleV1 {
                             %reason,
                             "lifecycle Certified-Serve completion failed closed"
                         );
-                        #[cfg(test)]
-                        eprintln!("lifecycle Certified-Serve completion failed: {reason}");
                         self.close_output_for_restart();
                         ProductionLifecycleCompletionSelectionV1::RestartRequired
                     }

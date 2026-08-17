@@ -1527,6 +1527,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 .with_runner_setup(&mut setup_runner, |executor, services| {
                     assert_eq!(executor.context(), &recovered_context);
                     assert!(services.matches_lifecycle_executor_output_guard(executor));
+                    services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
                     Ok::<_, super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1>(
                         executor.current_tag(),
                     )

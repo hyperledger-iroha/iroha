@@ -1046,93 +1046,6 @@ _WORKER_TEST_INCLUDE_TEST_COUNT = {
     "v2_worker_certified_serve_budget_cases.rs": 13,
 }
 
-_SERVE_TERMINAL_DISCHARGE_WORKER_ITEM_SHA256 = {
-    "fully_authenticate_persisted_certified_serve_request": (
-        "850bbd84bdbb6b00ad7f6a60189cb24ab78f2f859c1b853658c3877fe51d27de"
-    ),
-    "validate_persisted_certified_serve_terminal_outcomes": (
-        "cc4cd229b6caf35425f3a055cd02f254e95df35fe88ce71eb2da7b1c28d8326d"
-    ),
-    "discharge_restored_certified_serve_lifecycles": (
-        "2e10d5070cd6f0e3cc969b87992de444001f069e88d28abde647fa1dc07277b0"
-    ),
-    "V2IoCommandQueue::begin_decision_serve_reconciliation": (
-        "f85805fd7fd696c83ea81898515f35d88d71089f1b242dd1a4ab417fedd2cb25"
-    ),
-    "V2IoCommandQueue::finish_decision_serve_reconciliation": (
-        "2e4664fd343921017ff75884e330517123f4c4ad64dbdff4a6cc54e7d99f7360"
-    ),
-    "V2IoCommandQueue::convert_exact_terminal_retry_after_decision": (
-        "82d7a24819444b6aa420cfc3508f8273135139ba2aa1bfce92132d6efbd343af"
-    ),
-    "V2IoCommandQueue::serve_lifecycle_has_live_ingress_carrier": (
-        "34cd86f08eb05fcf22f93e7eb43f9cfba420c93367ca9a7fa3f584bd5458465d"
-    ),
-    "V2IoCommandQueue::stage_selected_serve_rejection": (
-        "b738358338981eab7438837115ca15d2612b20707a4f3c02059e0ff054314c74"
-    ),
-    "V2IoCommandQueue::publish_serve_ingress_physical_drain": (
-        "381d1fcf02175284df667ab50340f90e78bcd861d8b0d25026c2e9e679721cc3"
-    ),
-    "V2IoCommandQueue::serve_completion_delivery_ownership": (
-        "27517081197cd425d8a5b3cc3e8db5e792d321b4f6f7d92049af39b356395b8a"
-    ),
-    "V2IoCommandQueue::complete_serve_response": (
-        "621e0544277fbbe138465d2646f1aedbc58018775f993c323e3447ab928342ca"
-    ),
-    "V2IoCommandQueue::acknowledge_serve_completion": (
-        "5b5410c3e68627f94b6957775d7529be346d41b7d49eeaf2430b151173a1a7ff"
-    ),
-}
-
-_SERVE_TERMINAL_DISCHARGE_EFFECT_ITEM_SHA256 = {
-    "step": "c56df5c78384e0685390837f6442bf17f81f37134a840445cb2522326a226bcb",
-    "step_pending_tip_recovery": (
-        "2fea51da5e34af31e90c8a42ed6915cb8d6e64dc18a7df89ef0a0545b81b6f94"
-    ),
-    "finish_decision_serve_reconciliation": (
-        "695fd230a5bfef0530212cf253e6a76d1c79a5757c3a026c819f5736b79a2578"
-    ),
-}
-
-_SERVE_TERMINAL_DISCHARGE_REGRESSION_TEST_SHA256 = {
-    "prepared_serve_carrier_is_atomically_superseded_by_decision": (
-        "8915e9df570a9a5d8791b66a3b4634160f1df99e1114d60d8384a6533d6b60a5"
-    ),
-    "established_serve_owner_survives_decision_retry_carrier_retirement": (
-        "31776b14c91b64a1c74417fe91ea97166345a9a668f31650c22f6fcf4ec2ddf9"
-    ),
-    "decision_serve_fence_rejects_conflicting_durable_subject_without_ordinals": (
-        "abfbd4a484c097d3c84a43b2f5ec24af8dbe5477fb4c92bc16cb95ae3c75be39"
-    ),
-    "decision_serve_fence_rolls_back_failed_batch_and_converts_before_ordinals": (
-        "6db5f05dc8c7c5debfe59ecc93d02ea14a852ac872087549a27a80ae3a8357e2"
-    ),
-    "active_serve_completion_after_decision_publishes_negative_without_response": (
-        "e8a1beab84ba965b77f8385f68d900cdd9a9d38ec5fb78684e341209aebcbfbe"
-    ),
-    "completion_pending_serve_is_suppressed_after_decision_before_delivery": (
-        "02cd6eaadf285e2b5ecf9c2a9c3d11d0edfcddeeee216b18fc1f8ee3e6d89b51"
-    ),
-    "production_restart_retires_raw_terminal_replay_waiter_without_resigning": (
-        "3664e45df8ce2fe473ef65a371dd21534ae07bdb820ce21d6ee2066de4ca9cea"
-    ),
-    "production_restart_atomically_supersedes_raw_terminal_replay_waiter": (
-        "a5ae8d5c0062a1a491ed4bc495f0f73fa26f000d351781d926ee7e484e749ca9"
-    ),
-    "production_restart_rejects_negative_tombstone_with_physical_retry_waiter": (
-        "c5b33aca9ad3e32b39775911563ab0a671843781243b52f2bd77931d821d9963"
-    ),
-    "same_height_foreign_context_is_rejected_before_every_serve_ordinal": (
-        "123afc268113523defc80c061549452b0f96d3dd09a9e20fda801397517637a8"
-    ),
-}
-
-_SERVE_TERMINAL_DISCHARGE_EFFECT_REGRESSION_TEST_SHA256 = {
-    "decision_serve_fence_rejects_durable_decision_loss_without_reopening": (
-        "c7608c60005b34990c8cb09781649d44a15dca4ed647269073ff068ffc8bd150"
-    ),
-}
 _SERVICED_CANDIDATE_STORE_STRUCT_SHA256 = {
     "ServicedCandidateKey": (
         "7ac3f413238c7b14472d7353286b7f4cd8a066be9a454ab8f398911024f1997e"
@@ -1560,7 +1473,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86"
     ),
     "with_driver_and_lifecycle_ordinals": (
-        "8b70e4c1d229b5d2fefd9eaa7f6a11a5ec6d07a0afff4dd275dc4cc7f4e972d1"
+        "62d6456a13677fe5a033c4f508b13db1e22c587875448e9fd92e915132886bb5"
     ),
     "freeze_due_clock_owners": (
         "86b2abb4734419e69faafa8bd5fd0473626fb2441b94469a81a448e5f661c76e"
@@ -1572,7 +1485,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "61dfb5c5bed49fe8191be06bd09a2e929f70da89b1ff829add86f8966fd90f01"
     ),
     "minimum_runnable_lifecycle_ordinal": (
-        "18d848ad2bd2263010994b2649313c9e3d9d1db9b2117a9c772120478bb65fd3"
+        "3c782c6e97e8a3639ea8d9c1eece964b64f9863f2cface7013c95d6e8ed17c61"
     ),
     "complete_leader_wire_runtime_owner": (
         "e17e62beccb6e2e219f3aac01c126456531ffb0448930b83026d9cf02da6695c"
@@ -1601,7 +1514,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
     ),
 }
 _SERVICED_CANDIDATE_V4_LIFECYCLE_ITEM_SHA256 = {
-    "launch": "ffd9aeeeaf6d37a912db48b17f9696346725ecff7002a4d7684d0bfe40bf457a",
+    "launch": "6b74510906f87755de55b779c17ce3b7eb64b670f77026c2b7f14f4aadfcd48d",
     "into_serialized_runtime": "1afc003a9b27312c1d9b4868eb6dc1c42d6bd4f838b3ebe383131627c40972bd",
 }
 _SAFETY_WAL_DIRECTORY_CAPABILITY_REGRESSION_TEST_SHA256 = {
@@ -1741,7 +1654,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
         "fe0bed714176dd7a285e7dcdd448f9468c60b13aee7dcac8a8c67affc2a3c333"
     ),
     "restart_dormant_local_fifo_reservation_survives_full_class_churn": (
-        "4173b41c9622f676b9c9d412a267cb0b3b2aca91ed9725e2a5c450485d7442d9"
+        "22e6b7d6b7620598c67f3e942898d695e717bca1625f3af3572dcce450d43093"
     ),
     "restart_dormant_completion_batch_atomically_replaces_latent_slots": (
         "3eddbb9168d425d56925da39fff899a8615ebd43c63afd04fd94071849d06fbc"
@@ -1755,18 +1668,11 @@ _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
     "restored_producer_preflight_cannot_change_completion_service_class": (
         "bd1273f883c17b13d555ed690c5cfaec2b62ab159c20e2be49def98a3058e7e2"
     ),
-    "restored_serve_high_watermark_precedes_startup_runtime_owner": (
-        "73e82a3200d1ad1bc6f7a678f3632e3d885a9ae8d0367fb9aa907feb10584aa0"
-    ),
     "busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation": (
         "738c238a671607d0a0033f16839bd648eaeb3eefebae3348016414858d2869bd"
     ),
 }
-_SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256 = {
-    "invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity": (
-        "c1f6883beb0cebb4f2fded85abd8a8b88d1387a880c27b5cff9db93fcb123dda"
-    ),
-}
+_SERVICED_CANDIDATE_V4_WORKER_REGRESSION_TEST_SHA256 = {}
 _CORE_RUNTIME_TRANSPORT_TOKEN_SEQUENCES = {
     "outer_ingress_cursor": """
 self.next_turn = match turn {

@@ -2510,6 +2510,49 @@ def test_lifecycle_certified_serve_semantics_survive_item_reseal(
     assert any(diagnostic in error for error in errors), errors
 
 
+def test_lifecycle_certified_serve_completion_failure_survives_item_reseal(
+    tmp_path: Path,
+) -> None:
+    """A reseal cannot suppress the exact transport failure before restart."""
+
+    module = load_checker()
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs"
+    )
+    context = (("impl", "LaunchedProductionLifecycleV1"),)
+    mutate_rust_item_source_in_context(
+        module,
+        path,
+        "drive_completion_turn",
+        context,
+        "iroha_logger::error!(\n                            %reason,\n                            \"lifecycle Certified-Serve completion failed closed\"\n                        );",
+        "let _ = reason;",
+    )
+    (mutated,) = [
+        item
+        for item in module.rust_items(
+            path.read_text(encoding="utf-8"), "drive_completion_turn"
+        )
+        if item.brace_context == context
+    ]
+    key = "turn:LaunchedProductionLifecycleV1::drive_completion_turn"
+    module._LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256[key] = (
+        module._rust_item_token_sha256(mutated)
+    )
+
+    errors = module._lifecycle_certified_serve_production_source_fidelity_errors(
+        tmp_path
+    )
+
+    assert any(
+        "Certified-Serve completion transport and fail-stop publication must retain ordered marker"
+        in error
+        for error in errors
+    ), errors
+
+
 def test_lifecycle_certified_serve_rejects_legacy_owner_reintroduction(
     tmp_path: Path,
 ) -> None:
@@ -2722,7 +2765,12 @@ def test_leader_wire_physical_ingress_regressions_cannot_be_deleted(
 ) -> None:
     module = load_checker()
     local_runner_service_fixture(tmp_path, module)
-    path = tmp_path / "crates/iroha_core/src/sumeragi/mod.rs"
+    path = reviewed_rust_item_provider(
+        module,
+        tmp_path,
+        Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        name,
+    )
     source = path.read_text(encoding="utf-8")
     declaration = f"fn {name}("
     assert source.count(declaration) == 1

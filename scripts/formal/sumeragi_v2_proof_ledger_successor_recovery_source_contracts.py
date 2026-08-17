@@ -40,15 +40,9 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
             )
 
     def require_token_count(
-        path: Path,
-        label: str,
-        body: str,
-        token: str,
-        expected: int,
+        path: Path, label: str, body: str, token: str, expected: int,
     ) -> None:
-        observed = _token_sequence_count(
-            rust_code_tokens(body), rust_code_tokens(token)
-        )
+        observed = _token_sequence_count(rust_code_tokens(body), rust_code_tokens(token))
         if observed != expected:
             errors.append(
                 f"{path}: {label} must contain {token!r} exactly {expected} "
@@ -709,16 +703,15 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "let mut launched = owner.launch(launch_inputs)",
                         "let mut setup_runner = ProductionLifecyclePreActivationRunnerBorrowV1::for_test()",
                         ".with_runner_setup(&mut setup_runner",
+                        "services.set_exact_output_admission_hook(|_post, _ticket| Ok(()))",
                         "launched.drive_completion_turn(runner, &mut lane_work)",
                         "ProductionRecoveredCompletionDispatchV1::ApplyQueued",
                         "launched.drive_completion_turn(runner, &mut lane_work)",
                         "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
                         ".initialize_recovered_local_proposal(setup_runner)",
                         "let mut activated = launched .activate(Instant::now(), activation, local_proposal_state)",
-                        "drop(auxiliary_hold)",
-                        "ProductionLifecycleIngressSelectionV1::CertifiedServeQueued",
-                        "assert_eq!(leader_wire_ingress.len(), 0)",
-                        "ProductionLifecycleCompletionSelectionV1::CertifiedServeCompleted",
+                        "drop(auxiliary_hold)", "ProductionLifecycleIngressSelectionV1::CertifiedServeQueued",
+                        "assert_eq!(leader_wire_ingress.len(), 0)", "ProductionLifecycleCompletionSelectionV1::CertifiedServeCompleted",
                         "!selected.restart_required()",
                         "let claimed_producer = activated .claim_producer_turn_for_local_proposal(&mut serve_runner)",
                         "let attempted_producer = claimed_producer .into_attempted(producer_turn_attempt_permit_for_test(&mut serve_runner))",
@@ -736,19 +729,14 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     ),
                 )
                 admitted_serve_dispatch = region(
-                    adapter_path,
-                    finalization_behavior.source,
+                    adapter_path, finalization_behavior.source,
                     "direct lifecycle Certified-Serve dispatch",
-                    "drop(auxiliary_hold);",
-                    "let claimed_producer = activated",
+                    "drop(auxiliary_hold);", "let claimed_producer = activated",
                 )
                 reject_tokens(
-                    adapter_path,
-                    "direct lifecycle Certified-Serve dispatch",
-                    admitted_serve_dispatch,
-                    (
-                        "consume_prepared_ordinary_ingress_turn(",
-                        "has_prepared_serve_for_test()",
+                    adapter_path, "direct lifecycle Certified-Serve dispatch",
+                    admitted_serve_dispatch, (
+                        "consume_prepared_ordinary_ingress_turn(", "has_prepared_serve_for_test()",
                     ),
                 )
             for literal in (
@@ -1773,22 +1761,15 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 ),
             )
             require_tokens(
-                launch_path,
-                "single restored lifecycle ordinal source",
-                lifecycle_launch,
+                launch_path, "single restored lifecycle ordinal source", lifecycle_launch,
                 (
-                    "inputs.network.reply_route_source_capacity().max(1)",
-                    "inputs.auxiliary_io_capacity",
-                    "lifecycle_ordinals.clone()",
-                    "lifecycle_ordinals .advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())",
+                    "inputs.network.reply_route_source_capacity().max(1)", "inputs.auxiliary_io_capacity",
+                    "lifecycle_ordinals.clone()", "lifecycle_ordinals .advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())",
                 ),
             )
             require_token_count(
-                launch_path,
-                "single restored lifecycle ordinal source",
-                lifecycle_launch,
-                "lifecycle_ordinals.clone()",
-                2,
+                launch_path, "single restored lifecycle ordinal source",
+                lifecycle_launch, "lifecycle_ordinals.clone()", 2,
             )
             require_token_count(
                 launch_path,

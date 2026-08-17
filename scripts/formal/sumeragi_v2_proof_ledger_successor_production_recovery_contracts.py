@@ -785,6 +785,7 @@ def _successor_production_recovery_source_fidelity_errors(
                         "let mut lane_work = super::super::v2_lane_work::V2LaneWorkAdapter::lifecycle_finalization_fixture_for_test(",
                         "let mut launched = owner.launch(launch_inputs)",
                         "let mut setup_runner = ProductionLifecyclePreActivationRunnerBorrowV1::for_test()",
+                        "services.set_exact_output_admission_hook(|_post, _ticket| Ok(()))",
                         "let (queued, after_apply_selection) = with_lifecycle_current_runner_turn_for_test(",
                         "launched.drive_completion_turn(runner, &mut lane_work)",
                         "ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(result)",

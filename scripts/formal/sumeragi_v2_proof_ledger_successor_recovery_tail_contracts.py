@@ -1487,15 +1487,15 @@ self.leader_wire_recovery_authority = next_recovery_authority;
         errors,
     )
 
-    finish_decision = require_context_item(
+    finish_runtime_step = require_context_item(
         "worker",
-        "finish_decision_serve_reconciliation",
+        "finish_runtime_step_reconciliation",
         worker_services_context,
         "production durable-Decision recovery cut",
     )
     _require_rust_token_sequence(
         paths["worker"],
-        finish_decision,
+        finish_runtime_step,
         """
 if decided_subject.is_some() {
     let next = self.leader_wire_recovery_authority.with_durable_decision();
@@ -1504,7 +1504,7 @@ if decided_subject.is_some() {
     self.leader_wire_recovery_authority = next;
 }
 """,
-        "durable Decision must publish the all-wire gate cut before service reconciliation",
+        "durable Decision must publish the all-wire gate cut during runtime-step reconciliation",
         errors,
     )
 

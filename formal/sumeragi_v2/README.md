@@ -1055,17 +1055,20 @@ semantic rank, so servicing one owner cannot hide another. Equal-count
 replacement and count-increasing replenishment remain explicit non-progress
 cases and require a prior finite or coalesced producer argument.
 
-The production queue closes the corresponding final-retirement race with a
-one-shot local handoff. Removing the last owner in a frozen Serve batch arms
-`producer_episode_due` under the same mutex; fresh Serve admission returns
-`Busy` while that bit is due or while `producer_episode_active` owns its bounded
-outer turn. The runner atomically consumes due into active, and the local lease
-clears active on drop before Serve admission reopens. Rejected replenishment
-does not allocate either an actor-global scheduler ordinal or a logical Serve
-lifecycle. Digest-refreshed checker mutations cover both Busy boundaries, the
-ordinal high-water marks, exact timeout-owner ordering, the strict predecessor
-prefix, and the real timeout-certificate/EnterView suffix. This is a source
-refinement boundary, not proof promotion or an additional fairness premise.
+The production lifecycle closes the corresponding final-retirement race
+through one coordinator-owned transaction. A current-height Serve remains in
+fair ingress until the lifecycle selector authenticates its exact carrier, and
+capacity backpressure returns `CapacityPending` without removing that
+occurrence. A successful transaction attests the complete Ready census, claims
+the durable ledger row, reserves the exact worker target, and only then commits
+dequeue. The serialized proposal runner separately claims and settles
+`ProducerTurn`; there is no queue-local Serve gate, barrier, reservation, or
+producer episode. Rejected replenishment does not allocate either an
+actor-global scheduler ordinal or a logical Serve lifecycle. Digest-refreshed
+checker mutations cover the coordinator transaction, ordinal high-water marks,
+exact timeout-owner ordering, the strict predecessor prefix, and the real
+timeout-certificate/EnterView suffix. This is a source refinement boundary,
+not proof promotion or an additional fairness premise.
 
 The exact-Decision producer audit narrows causal replenishment to reachable
 local debt setters; Serve-capacity growth to ordinary or historical request
