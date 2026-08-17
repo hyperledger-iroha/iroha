@@ -676,6 +676,31 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) struct PublishedFinalizationRe
     coordinator: LifecycleCoordinator,
     current: LifecycleLedgerV1,
     retired: LifecycleLedgerV1,
+    retained_floor: PublishedFinalizedLifecycleRetainedFloorV1,
+}
+
+/// Exact durable ordinal floor published by one finalized lifecycle owner.
+///
+/// The token retains the physically present retired frame and its opened store.
+/// It is minted only after fsync/readback and can initialize only the sealed
+/// canonical successor target derived by the same live Kura lineage.
+#[must_use = "the finalized lifecycle floor must bind its canonical successor"]
+pub(in crate::sumeragi) struct PublishedFinalizedLifecycleRetainedFloorV1 {
+    store: LifecycleLedgerStoreV1,
+    ledger: LifecycleLedgerV1,
+    present: AuthenticatedPresentLifecycleFrameV1,
+}
+
+/// Exact successor frame initialized from one finalized predecessor floor.
+///
+/// This capability stays inside recovered lifecycle storage authority until
+/// the production owner opens the same coordinator frame. It exposes neither
+/// the floor nor either filesystem target.
+#[must_use = "the authenticated successor floor must join the opened lifecycle owner"]
+pub(in crate::sumeragi) struct AuthenticatedRecoveredLifecycleSuccessorFloorV1 {
+    store: LifecycleLedgerStoreV1,
+    ledger: LifecycleLedgerV1,
+    retained_high_water: u128,
 }
 
 impl PublishedFinalizationRetirementV1 {
@@ -688,7 +713,7 @@ impl PublishedFinalizationRetirementV1 {
     pub(in crate::sumeragi::v2_lifecycle_coordinator) fn consume_owners(
         self,
         mut registry: LifecycleWorkRegistryHolder,
-    ) {
+    ) -> PublishedFinalizedLifecycleRetainedFloorV1 {
         assert!(self.authenticates_source());
         assert!(
             registry
@@ -706,8 +731,76 @@ impl PublishedFinalizationRetirementV1 {
                 .iter()
                 .all(|record| record.terminal().is_some_and(|terminal| terminal.is_some()))
         );
+        let retained_floor = self.retained_floor;
         drop(registry);
         drop(self.coordinator);
+        retained_floor
+    }
+}
+
+impl PublishedFinalizedLifecycleRetainedFloorV1 {
+    /// Consume this finalized frame into the exact sealed H+1 storage target.
+    pub(in crate::sumeragi) fn initialize_successor(
+        self,
+        target: crate::sumeragi::v2::RecoveredLifecycleSuccessorFloorTargetV1,
+    ) -> Result<AuthenticatedRecoveredLifecycleSuccessorFloorV1, LifecycleLedgerError> {
+        let predecessor_root = self.store.path.parent().ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "finalized lifecycle floor has no canonical predecessor root".to_owned(),
+            )
+        })?;
+        if !self.present.exactly_matches(&self.store, &self.ledger)
+            || !target.authorizes_predecessor(predecessor_root, self.ledger.context())
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "finalized lifecycle floor does not bind the sealed successor".to_owned(),
+            ));
+        }
+        let retained_high_water = self.ledger.high_water();
+        let (successor_root, successor_context) = target.into_successor_target();
+        let (store, ledger) = open_initialized_or_descendant_lifecycle_successor(
+            &successor_root,
+            successor_context,
+            retained_high_water,
+        )?;
+        Ok(AuthenticatedRecoveredLifecycleSuccessorFloorV1 {
+            store,
+            ledger,
+            retained_high_water,
+        })
+    }
+}
+
+impl ProductionLifecycleOwnerV1 {
+    /// Join the live-rollover floor with the exact coordinator opened at H+1.
+    pub(in crate::sumeragi) fn authenticate_recovered_successor_floor(
+        self,
+        floor: AuthenticatedRecoveredLifecycleSuccessorFloorV1,
+    ) -> Result<Self, LifecycleLedgerError> {
+        let opened = LifecycleLedgerV1::from_coordinator(&self.coordinator)?;
+        let Some(owner_store) = self.coordinator.ledger_store.as_ref() else {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered successor floor opened without an attached ledger store".to_owned(),
+            ));
+        };
+        if self.verified.context().height != opened.context().height()
+            || self.verified.context().id().0.as_ref() != opened.context().id().as_bytes()
+            || !owner_store.same_publication_target(&floor.store)
+            || opened != floor.ledger
+            || floor.store.load()? != floor.ledger
+            || (floor.ledger.records().is_empty()
+                && floor.ledger.high_water() != floor.retained_high_water)
+            || floor.ledger.high_water() < floor.retained_high_water
+            || floor.ledger.records().iter().any(|record| {
+                record.ordinal() <= floor.retained_high_water
+                    || record.owner().first_admission_ordinal() <= floor.retained_high_water
+            })
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "opened lifecycle owner changed its authenticated successor floor".to_owned(),
+            ));
+        }
+        Ok(self)
     }
 }
 
@@ -1286,18 +1379,55 @@ pub(in crate::sumeragi) struct LifecycleLedgerV1 {
 /// store handle, and the byte-equivalent frame. The store target is compared
 /// with the lifecycle root retained when the same `Kura` instance authenticated
 /// CompleteTip, so a copied frame at a caller-selected root cannot enter this
-/// cut. It proves either the terminal recovered-Decision body chain or the
-/// exact empty height-one ledger owned by authenticated signed genesis. It does
-/// not publish the successor or claim that unrelated live rows, Serve payloads,
-/// leases, waits, debts, or capacity have been retired. The outer canonical
-/// predecessor-storage transaction supplies and discharges those remaining
-/// durable owners before it can mint successor activation.
+/// cut. It proves the terminal recovered-Decision body chain, the exact empty
+/// height-one ledger owned by authenticated signed genesis, or an exact
+/// physically present empty non-genesis frame already retired by live
+/// finality. It does not publish the successor or claim that unrelated live
+/// rows, Serve payloads, leases, waits, debts, or capacity have been retired.
+/// The outer canonical predecessor-storage transaction supplies and discharges
+/// those remaining durable owners before it can mint successor activation.
 #[must_use = "the CompleteTip predecessor store join must enter retirement or be dropped"]
 struct AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
     complete_tip: crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
     ledger_store: LifecycleLedgerStoreV1,
     ledger: LifecycleLedgerV1,
-    apply_ordinal: Option<u128>,
+    predecessor_evidence: CompleteTipPredecessorLifecycleEvidenceV1,
+}
+/// Closed durable lineage accepted for one CompleteTip predecessor.
+///
+/// Non-genesis empty retirement is intentionally distinct from the genesis
+/// exception and retains the store-minted proof that the canonical frame was
+/// physically present. No raw boolean or caller-built empty ledger can enter
+/// this enum.
+#[allow(variant_size_differences)]
+enum CompleteTipPredecessorLifecycleEvidenceV1 {
+    TerminalApply(u128),
+    EmptyGenesis,
+    EmptyRetired(AuthenticatedPresentLifecycleFrameV1),
+}
+impl CompleteTipPredecessorLifecycleEvidenceV1 {
+    fn exactly_matches(
+        &self,
+        store: &LifecycleLedgerStoreV1,
+        ledger: &LifecycleLedgerV1,
+        complete_tip: &crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
+    ) -> bool {
+        match self {
+            Self::TerminalApply(apply_ordinal) => ledger
+                .authenticate_complete_tip_terminal_apply(complete_tip)
+                .is_ok_and(|ordinal| ordinal == *apply_ordinal),
+            Self::EmptyGenesis => {
+                ledger.high_water() == 0
+                    && ledger.records().is_empty()
+                    && ledger.producer_debts.is_empty()
+                    && complete_tip.authorizes_empty_genesis_lifecycle(ledger.context())
+            }
+            Self::EmptyRetired(present) => {
+                present.authorizes_empty_retired_predecessor(ledger, complete_tip)
+                    && present.exactly_matches(store, ledger)
+            }
+        }
+    }
 }
 /// Opaque failure while authenticating all canonical CompleteTip predecessor stores.
 #[derive(Debug, Error)]
@@ -1341,12 +1471,13 @@ complete_tip_predecessor_storage_error_from!(
 );
 /// Complete authenticated disk owners needed by CompleteTip retirement.
 ///
-/// The cut retains the exact terminal predecessor ledger, the co-located Serve
-/// payload-store instance, and the complete retirement-authenticated Serve
-/// census. Completed response signatures remain bound to their manifest body
-/// hashes without reopening body bytes which normal finality may already have
-/// deleted. It exposes no path, raw frame, request, or activation parts and
-/// performs no retirement publication by itself.
+/// The cut retains the exact terminal or authenticated empty-retired
+/// predecessor ledger, the co-located Serve payload-store instance, and the
+/// complete retirement-authenticated Serve census. Completed response
+/// signatures remain bound to their manifest body hashes without reopening
+/// body bytes which normal finality may already have deleted. It exposes no
+/// path, raw frame, request, or activation parts and performs no retirement
+/// publication by itself.
 #[must_use = "the authenticated CompleteTip predecessor stores must enter retirement"]
 pub(in crate::sumeragi) struct AuthenticatedCompleteTipPredecessorStorageV1 {
     terminal: AuthenticatedCompleteTipTerminalApplyStoreJoinV1,
@@ -1758,44 +1889,54 @@ impl CanonicalCompleteTipSuccessorLedgerTargetV1 {
         &self,
         retained_high_water: u128,
     ) -> Result<(LifecycleLedgerStoreV1, LifecycleLedgerV1), LifecycleLedgerError> {
-        let (store, current) = LifecycleLedgerStoreV1::open(&self.root, self.context)?;
-        let successor = if current.records.is_empty() {
-            if !current.producer_debts.is_empty()
-                || (current.high_water != 0 && current.high_water != retained_high_water)
-            {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "empty CompleteTip successor has a foreign ordinal high-water".to_owned(),
-                ));
-            }
-            let initialized = LifecycleLedgerV1::new(
-                self.context,
-                retained_high_water,
-                Vec::new(),
-                BTreeMap::new(),
-            )?;
-            store.persist_exact_successor(&current, &initialized)?;
-            initialized
-        } else {
-            if current.high_water < retained_high_water
-                || current.records.iter().any(|record| {
-                    record.ordinal() <= retained_high_water
-                        || record.owner().first_admission_ordinal() <= retained_high_water
-                })
-            {
-                return Err(LifecycleLedgerError::InvalidLedger(
-                    "nonempty CompleteTip successor does not descend above the retained ordinal floor"
-                        .to_owned(),
-                ));
-            }
-            current
-        };
-        if store.load()? != successor {
+        open_initialized_or_descendant_lifecycle_successor(
+            &self.root,
+            self.context,
+            retained_high_water,
+        )
+    }
+}
+
+/// Initialize a canonical successor at the predecessor floor or authenticate
+/// an already-live descendant whose complete ordinal lineage begins above it.
+fn open_initialized_or_descendant_lifecycle_successor(
+    root: &Path,
+    context: LifecycleContext,
+    retained_high_water: u128,
+) -> Result<(LifecycleLedgerStoreV1, LifecycleLedgerV1), LifecycleLedgerError> {
+    let (store, current) = LifecycleLedgerStoreV1::open(root, context)?;
+    let successor = if current.records.is_empty() {
+        if !current.producer_debts.is_empty()
+            || (current.high_water != 0 && current.high_water != retained_high_water)
+        {
             return Err(LifecycleLedgerError::InvalidLedger(
-                "CompleteTip successor changed during canonical authentication".to_owned(),
+                "empty lifecycle successor has a foreign ordinal high-water".to_owned(),
             ));
         }
-        Ok((store, successor))
+        let initialized =
+            LifecycleLedgerV1::new(context, retained_high_water, Vec::new(), BTreeMap::new())?;
+        store.persist_exact_successor(&current, &initialized)?;
+        initialized
+    } else {
+        if current.high_water < retained_high_water
+            || current.records.iter().any(|record| {
+                record.ordinal() <= retained_high_water
+                    || record.owner().first_admission_ordinal() <= retained_high_water
+            })
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "nonempty lifecycle successor does not descend above the retained ordinal floor"
+                    .to_owned(),
+            ));
+        }
+        current
+    };
+    if store.load()? != successor {
+        return Err(LifecycleLedgerError::InvalidLedger(
+            "lifecycle successor changed during canonical authentication".to_owned(),
+        ));
     }
+    Ok((store, successor))
 }
 impl AuthenticatedCompleteTipPredecessorStorageV1 {
     fn is_exact(&self) -> Result<bool, CompleteTipPredecessorStorageErrorV1> {
@@ -1857,19 +1998,11 @@ impl AuthenticatedCompleteTipPredecessorStorageV1 {
             retired,
         } = staged;
         debug_assert_eq!(staged_current, terminal.ledger);
-        let retained_predecessor_is_exact = match terminal.apply_ordinal {
-            Some(apply_ordinal) => retired
-                .authenticate_complete_tip_terminal_apply(&terminal.complete_tip)
-                .is_ok_and(|ordinal| ordinal == apply_ordinal),
-            None => {
-                retired.high_water() == 0
-                    && retired.records().is_empty()
-                    && retired.producer_debts.is_empty()
-                    && terminal
-                        .complete_tip
-                        .authorizes_empty_genesis_lifecycle(retired.context())
-            }
-        };
+        let retained_predecessor_is_exact = terminal.predecessor_evidence.exactly_matches(
+            &terminal.ledger_store,
+            &retired,
+            &terminal.complete_tip,
+        );
         if !retained_predecessor_is_exact {
             return Err(LifecycleLedgerError::InvalidLedger(
                 "CompleteTip all-row retirement changed its predecessor authority".to_owned(),
@@ -1927,8 +2060,9 @@ pub(in crate::sumeragi) fn open_complete_tip_predecessor_storage(
     }
     let context = projection::lifecycle_context(verified_predecessor.context());
     let (ledger_store, opened_ledger) = LifecycleLedgerStoreV1::open(predecessor_root, context)?;
-    let (ledger, repaired_live_apply) =
-        opened_ledger.stage_complete_tip_terminal_apply_recovery(&complete_tip)?;
+    let present_frame = ledger_store.authenticate_present_frame(&opened_ledger)?;
+    let (ledger, repaired_live_apply, predecessor_evidence) =
+        opened_ledger.stage_complete_tip_terminal_apply_recovery(&complete_tip, present_frame)?;
     if repaired_live_apply {
         ledger_store.persist_exact_successor(&opened_ledger, &ledger)?;
         if ledger_store.load()? != ledger {
@@ -1938,8 +2072,11 @@ pub(in crate::sumeragi) fn open_complete_tip_predecessor_storage(
             .into());
         }
     }
-    let terminal =
-        ledger.into_complete_tip_terminal_apply_store_join(ledger_store, complete_tip)?;
+    let terminal = ledger.into_complete_tip_terminal_apply_store_join(
+        ledger_store,
+        complete_tip,
+        predecessor_evidence,
+    )?;
     let (payload_store, recovered) =
         CertifiedServePayloadStoreV1::open(predecessor_root, verified_predecessor.context())?;
     let serve_payloads =
@@ -1970,20 +2107,11 @@ impl AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
             return Ok(false);
         }
         let opened = self.ledger_store.load()?;
-        let predecessor_is_exact = match self.apply_ordinal {
-            Some(apply_ordinal) => self
-                .ledger
-                .authenticate_complete_tip_terminal_apply(&self.complete_tip)
-                .is_ok_and(|ordinal| ordinal == apply_ordinal),
-            None => {
-                self.ledger.high_water() == 0
-                    && self.ledger.records().is_empty()
-                    && self.ledger.producer_debts.is_empty()
-                    && self
-                        .complete_tip
-                        .authorizes_empty_genesis_lifecycle(self.ledger.context())
-            }
-        };
+        let predecessor_is_exact = self.predecessor_evidence.exactly_matches(
+            &self.ledger_store,
+            &self.ledger,
+            &self.complete_tip,
+        );
         Ok(opened == self.ledger && predecessor_is_exact)
     }
 }

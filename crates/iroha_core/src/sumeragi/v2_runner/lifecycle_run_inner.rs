@@ -1130,6 +1130,24 @@ fn run_lifecycle_active_height(
                     ))
                 },
             )?;
+            let PreparedLifecycleSuccessorV1 {
+                verified_context,
+                lifecycle_storage_authority,
+                pending_activation,
+                receipt_height,
+                receipt_context_id,
+                receipt_block_hash,
+            } = prepared_successor;
+            let (cleanup, lifecycle_storage_authority) =
+                cleanup.bind_successor_storage(lifecycle_storage_authority)?;
+            let prepared_successor = PreparedLifecycleSuccessorV1 {
+                verified_context,
+                lifecycle_storage_authority,
+                pending_activation,
+                receipt_height,
+                receipt_context_id,
+                receipt_block_hash,
+            };
             if let Some(warning) = cleanup.wal_retirement_warning() {
                 iroha_logger::warn!(
                     height = prepared_successor.receipt_height,

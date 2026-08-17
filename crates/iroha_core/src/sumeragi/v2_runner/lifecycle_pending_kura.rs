@@ -635,6 +635,24 @@ fn run_pending_active_height(
         )?;
         let cleanup_ready = post_output.retire_lifecycle_stores()?;
         let cleanup = cleanup_ready.finish_cleanup(Duration::ZERO, cleanup_supervisor);
+        let PreparedPendingKuraSuccessorV1 {
+            verified_context,
+            lifecycle_storage_authority,
+            pending_activation,
+            receipt_height,
+            receipt_context_id,
+            receipt_block_hash,
+        } = prepared_successor;
+        let (cleanup, lifecycle_storage_authority) =
+            cleanup.bind_successor_storage(lifecycle_storage_authority)?;
+        let prepared_successor = PreparedPendingKuraSuccessorV1 {
+            verified_context,
+            lifecycle_storage_authority,
+            pending_activation,
+            receipt_height,
+            receipt_context_id,
+            receipt_block_hash,
+        };
         if let Some(warning) = cleanup.wal_retirement_warning() {
             iroha_logger::warn!(
                 height = prepared_successor.receipt_height,

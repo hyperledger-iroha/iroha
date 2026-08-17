@@ -1510,6 +1510,9 @@ pub(in crate::sumeragi) enum ProductionLifecycleFinalizationErrorV1 {
     /// The post-handoff registry or Certified-Serve census changed.
     #[error("finalized lifecycle retirement census failed: {0}")]
     RetirementCensus(String),
+    /// The retired ordinal floor could not initialize its exact successor.
+    #[error("finalized lifecycle successor ordinal floor failed: {0}")]
+    SuccessorFloor(#[source] super::ledger::LifecycleLedgerError),
 }
 
 /// Activated height after ingress retirement and reducer finalization.
@@ -1551,14 +1554,20 @@ pub(in crate::sumeragi) struct ProductionLifecycleCleanupReadyV1 {
     services: ProductionV2Services,
     receipt: KuraV2CommitReceipt,
     wal_retirement_warning: Option<String>,
+    retained_floor: super::super::v2::FinalizedLifecycleRetainedFloorV1,
 }
 
-/// Final local-cleanup diagnostics after every consensus owner was retired.
-#[derive(Clone, Debug)]
+/// Final cleanup diagnostics plus the still-sealed successor ordinal floor.
+///
+/// Production consumes the floor into H+1 storage before inspecting the
+/// diagnostics. Focused finalization tests may inspect and then drop this
+/// unpublished capability without opening successor work.
 #[must_use = "post-finality cleanup diagnostics must be observed"]
 pub(in crate::sumeragi) struct ProductionLifecycleFinalizationOutcomeV1 {
     cleanup: PostFinalityCleanupOutcome,
     wal_retirement_warning: Option<String>,
+    retained_floor: Option<super::super::v2::FinalizedLifecycleRetainedFloorV1>,
+    output_guard: Arc<ConsensusOutputGuard>,
 }
 
 impl ProductionLifecycleFinalizationOutcomeV1 {
@@ -1570,6 +1579,31 @@ impl ProductionLifecycleFinalizationOutcomeV1 {
     /// Borrow the ordered service/body/chunk cleanup diagnostics.
     pub(in crate::sumeragi) const fn cleanup(&self) -> &PostFinalityCleanupOutcome {
         &self.cleanup
+    }
+
+    /// Consume the live finalized floor into the already-derived H+1 storage seal.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn bind_successor_storage(
+        mut self,
+        storage: super::super::v2::RecoveredLifecycleStorageAuthorityV1,
+    ) -> Result<
+        (Self, super::super::v2::RecoveredLifecycleStorageAuthorityV1),
+        ProductionLifecycleFinalizationErrorV1,
+    > {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or(ProductionLifecycleFinalizationErrorV1::OutputClosed)?;
+        let floor = self.retained_floor.take().ok_or_else(|| {
+            ProductionLifecycleFinalizationErrorV1::RetirementCensus(
+                "finalized lifecycle outcome lost its retained ordinal floor".to_owned(),
+            )
+        })?;
+        let storage = storage
+            .bind_finalized_predecessor_floor(floor)
+            .map_err(ProductionLifecycleFinalizationErrorV1::SuccessorFloor)?;
+        operation.complete();
+        Ok((self, storage))
     }
 }
 
@@ -2177,6 +2211,11 @@ impl ProductionLifecyclePostOutputHandoffV1 {
             apply_service,
             adapter_startup,
         } = owner;
+        let kura_binding = kura_binding.ok_or_else(|| {
+            ProductionLifecycleFinalizationErrorV1::RetirementCensus(
+                "finalized lifecycle owner lost its recovered Kura binding".to_owned(),
+            )
+        })?;
         let current =
             super::ledger::LifecycleLedgerV1::from_coordinator(&coordinator).map_err(|error| {
                 ProductionLifecycleFinalizationErrorV1::RetirementCensus(error.to_string())
@@ -2201,13 +2240,13 @@ impl ProductionLifecyclePostOutputHandoffV1 {
                 ProductionLifecycleFinalizationErrorV1::RetirementCensus(error.to_string())
             })?;
 
-        publication.consume_owners(registry);
+        let published_floor = publication.consume_owners(registry);
+        let retained_floor = kura_binding.bind_finalized_lifecycle_floor(published_floor);
         drop(retired_ingress);
         drop(verified);
         drop(payload_store);
         drop(body_store);
         drop(body_store_identity);
-        drop(kura_binding);
         drop(apply_service);
         drop(adapter_startup);
         operation.complete();
@@ -2215,6 +2254,7 @@ impl ProductionLifecyclePostOutputHandoffV1 {
             services,
             receipt,
             wal_retirement_warning,
+            retained_floor,
         })
     }
 }
@@ -2226,6 +2266,7 @@ impl ProductionLifecycleCleanupReadyV1 {
         cleanup_timeout: Duration,
         supervisor: &mut V2CleanupSupervisor,
     ) -> ProductionLifecycleFinalizationOutcomeV1 {
+        let output_guard = self.services.lifecycle_output_guard();
         self.services.allow_clean_shutdown();
         let cleanup = self
             .services
@@ -2233,6 +2274,8 @@ impl ProductionLifecycleCleanupReadyV1 {
         ProductionLifecycleFinalizationOutcomeV1 {
             cleanup,
             wal_retirement_warning: self.wal_retirement_warning,
+            retained_floor: Some(self.retained_floor),
+            output_guard,
         }
     }
 }

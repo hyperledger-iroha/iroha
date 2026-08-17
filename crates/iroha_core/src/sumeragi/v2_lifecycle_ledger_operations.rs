@@ -2009,8 +2009,7 @@ impl LifecycleLedgerV1 {
         }
         Ok(apply_ordinal)
     }
-    /// Stage the one crash-recovery successor between durable Kura finality
-    /// and publication of the matching terminal Apply ledger row.
+    /// Classify or stage the exact predecessor behind durable Kura finality.
     ///
     /// The Apply worker can durably commit State/Kura before its completion is
     /// observed by the serialized lifecycle owner. A process failure in that
@@ -2019,23 +2018,41 @@ impl LifecycleLedgerV1 {
     /// CompleteTip is sufficient to terminalize only that exact tail: its full
     /// finality artifact reauthenticates the retained replay envelope, and the
     /// ordinary terminal-chain oracle below rechecks every immutable owner,
-    /// payload, continuation, and predecessor after staging.
+    /// payload, continuation, and predecessor after staging. A canonical-sync
+    /// height can instead be already retired with no rows; that no-mutation
+    /// classification requires the separate store-minted proof that its exact
+    /// empty frame physically existed.
     fn stage_complete_tip_terminal_apply_recovery(
         &self,
         complete_tip: &crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
-    ) -> Result<(Self, bool), LifecycleLedgerError> {
+        present_frame: Option<AuthenticatedPresentLifecycleFrameV1>,
+    ) -> Result<(Self, bool, CompleteTipPredecessorLifecycleEvidenceV1), LifecycleLedgerError> {
         if self.high_water() == 0
             && self.records.is_empty()
             && self.producer_debts.is_empty()
             && complete_tip.authorizes_empty_genesis_lifecycle(self.context())
         {
-            return Ok((self.clone(), false));
+            return Ok((
+                self.clone(),
+                false,
+                CompleteTipPredecessorLifecycleEvidenceV1::EmptyGenesis,
+            ));
         }
-        if self
-            .authenticate_complete_tip_terminal_apply(complete_tip)
-            .is_ok()
+        if let Some(present_frame) = present_frame
+            && present_frame.authorizes_empty_retired_predecessor(self, complete_tip)
         {
-            return Ok((self.clone(), false));
+            return Ok((
+                self.clone(),
+                false,
+                CompleteTipPredecessorLifecycleEvidenceV1::EmptyRetired(present_frame),
+            ));
+        }
+        if let Ok(apply_ordinal) = self.authenticate_complete_tip_terminal_apply(complete_tip) {
+            return Ok((
+                self.clone(),
+                false,
+                CompleteTipPredecessorLifecycleEvidenceV1::TerminalApply(apply_ordinal),
+            ));
         }
         self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
         if self.context().height() != complete_tip.predecessor().height() {
@@ -2043,17 +2060,21 @@ impl LifecycleLedgerV1 {
                 "live CompleteTip recovery belongs to another height".to_owned(),
             ));
         }
-        let mut candidates = self.records.iter().enumerate().filter_map(|(index, record)| {
-            (record.work_class() == Some(LifecycleWorkClass::Apply)
-                && record.stage().is_some_and(|stage| {
-                    stage.kind() == LifecycleStageKind::ApplyDecision
-                        && stage.predecessor_scope() == PredecessorScope::Independent
-                })
-                && record.terminal() == Some(None)
-                && record.continuation() == Some(DurableContinuation::None)
-                && complete_tip.authorizes_terminal_apply_replay(&record.replay_authority))
-            .then_some(index)
-        });
+        let mut candidates = self
+            .records
+            .iter()
+            .enumerate()
+            .filter_map(|(index, record)| {
+                (record.work_class() == Some(LifecycleWorkClass::Apply)
+                    && record.stage().is_some_and(|stage| {
+                        stage.kind() == LifecycleStageKind::ApplyDecision
+                            && stage.predecessor_scope() == PredecessorScope::Independent
+                    })
+                    && record.terminal() == Some(None)
+                    && record.continuation() == Some(DurableContinuation::None)
+                    && complete_tip.authorizes_terminal_apply_replay(&record.replay_authority))
+                .then_some(index)
+            });
         let apply_index = candidates.next().ok_or_else(|| {
             LifecycleLedgerError::InvalidLedger(
                 "CompleteTip finality has neither an exact terminal nor live Decision Apply row"
@@ -2066,12 +2087,15 @@ impl LifecycleLedgerV1 {
             ));
         }
         let mut staged = self.clone();
-        staged.records[apply_index].terminal = Some(PersistedTerminalV1::from_schema(
-            TerminalOutcome::Advanced,
-        ));
+        staged.records[apply_index].terminal =
+            Some(PersistedTerminalV1::from_schema(TerminalOutcome::Advanced));
         staged.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        staged.authenticate_complete_tip_terminal_apply(complete_tip)?;
-        Ok((staged, true))
+        let apply_ordinal = staged.authenticate_complete_tip_terminal_apply(complete_tip)?;
+        Ok((
+            staged,
+            true,
+            CompleteTipPredecessorLifecycleEvidenceV1::TerminalApply(apply_ordinal),
+        ))
     }
     /// Consume the exact opened predecessor store, frame, and CompleteTip proof
     /// into one non-decomposable authentication cut.
@@ -2084,30 +2108,23 @@ impl LifecycleLedgerV1 {
         self,
         ledger_store: LifecycleLedgerStoreV1,
         complete_tip: crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
+        predecessor_evidence: CompleteTipPredecessorLifecycleEvidenceV1,
     ) -> Result<AuthenticatedCompleteTipTerminalApplyStoreJoinV1, LifecycleLedgerError> {
         if !ledger_store.is_authorized_complete_tip_predecessor_target(&complete_tip)
             || ledger_store.context != self.context()
             || ledger_store.load()? != self
+            || !predecessor_evidence.exactly_matches(&ledger_store, &self, &complete_tip)
         {
             return Err(LifecycleLedgerError::InvalidLedger(
                 "CompleteTip predecessor store target or frame changed before authentication"
                     .to_owned(),
             ));
         }
-        let apply_ordinal = if self.high_water() == 0
-            && self.records.is_empty()
-            && self.producer_debts.is_empty()
-            && complete_tip.authorizes_empty_genesis_lifecycle(self.context())
-        {
-            None
-        } else {
-            Some(self.authenticate_complete_tip_terminal_apply(&complete_tip)?)
-        };
         let cut = AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
             complete_tip,
             ledger_store,
             ledger: self,
-            apply_ordinal,
+            predecessor_evidence,
         };
         if !cut.is_exact()? {
             return Err(LifecycleLedgerError::InvalidLedger(

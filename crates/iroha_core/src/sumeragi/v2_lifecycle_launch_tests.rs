@@ -345,6 +345,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
     let runner_source = include_str!("v2_runner.rs");
     let lifecycle_run_inner_source = include_str!("v2_runner/lifecycle_run_inner.rs");
+    let pending_kura_lifecycle_source = include_str!("v2_runner/lifecycle_pending_kura.rs");
     let runner_authority_source = concat!(
         include_str!("v2_runner/lifecycle_runner_authority.rs"),
         include_str!("v2_runner.rs")
@@ -700,7 +701,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         leader_wire_drop,
         &[
             "self.ingress.close()",
-            "self.ingress.unbind_leader_wire_lifecycle_gate(gate)?",
+            "self.ingress.unbind_leader_wire_lifecycle_gate(&gate)",
         ],
     );
     assert!(source.contains("impl Drop for ProductionV2CompletionObserverActivationPermitSealV1"));
@@ -1213,6 +1214,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             ".stage_finalized_height_all_row_retirement(reconciliation)",
             ".persist_exact_finalization_successor(staged)",
             "publication.consume_owners(registry)",
+            "kura_binding.bind_finalized_lifecycle_floor(published_floor)",
             "operation.complete()",
         ],
     );
@@ -1224,15 +1226,43 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert_source_tokens_in_order(
         cleanup,
         &[
+            "let output_guard = self.services.lifecycle_output_guard()",
             "self.services.allow_clean_shutdown()",
             ".finish_height(self.receipt, cleanup_timeout, supervisor)",
+            "retained_floor: Some(self.retained_floor)",
+            "output_guard,\n        }",
         ],
     );
+    let floor_binding = source_region(
+        &source,
+        "fn bind_successor_storage(",
+        "/// Move-only runner state joined to one exact launched reducer directive",
+    );
+    assert_source_tokens_in_order(
+        floor_binding,
+        &[
+            "begin_fail_stop_operation()",
+            "self.retained_floor.take()",
+            ".bind_finalized_predecessor_floor(floor)",
+            "operation.complete()",
+        ],
+    );
+    for production_successor in [lifecycle_run_inner_source, pending_kura_lifecycle_source] {
+        assert_source_tokens_in_order(
+            production_successor,
+            &[
+                "cleanup.bind_successor_storage(lifecycle_storage_authority)?",
+                "cleanup.wal_retirement_warning()",
+                "cleanup.cleanup().warnings()",
+            ],
+        );
+    }
 
     for state in [
         "FinalizedProductionLifecycleRolloverV1",
         "ProductionLifecyclePostOutputHandoffV1",
         "ProductionLifecycleCleanupReadyV1",
+        "ProductionLifecycleFinalizationOutcomeV1",
         "StagedFinalizationRetirementV1",
         "PublishedFinalizationRetirementV1",
         "ProductionLifecycleOutputRolloverPermitV1",

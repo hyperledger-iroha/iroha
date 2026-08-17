@@ -166,6 +166,7 @@ impl AuthenticatedRecoveredAdapterStartup {
             wal_path,
             chunk_root,
             lifecycle_root,
+            successor_floor,
             ..
         } = storage;
         let owner = self.open_production_lifecycle_owner_v1_at_authenticated_roots(
@@ -176,6 +177,16 @@ impl AuthenticatedRecoveredAdapterStartup {
             body_store,
             &local_signer,
         )?;
+        let owner = match successor_floor {
+            Some(floor) => owner
+                .authenticate_recovered_successor_floor(floor)
+                .map_err(|error| {
+                    ProductionLifecycleOwnerStartupErrorV1::new(
+                        ProductionLifecycleOwnerStartupErrorKindV1::SuccessorFloor(error),
+                    )
+                })?,
+            None => owner,
+        };
         let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 {
             kura_identity,
             wal_path,

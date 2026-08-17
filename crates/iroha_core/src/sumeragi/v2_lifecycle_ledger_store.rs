@@ -69,6 +69,59 @@ impl DurableWalVoteLedgerRepairReceipt {
                 })
     }
 }
+/// Move-only proof that one canonical lifecycle frame physically existed.
+///
+/// A missing ledger path loads as the logical empty ledger for ordinary fresh
+/// startup. CompleteTip recovery must distinguish that fallback from an exact
+/// empty frame which an earlier lifecycle owner actually fsynced. Construction
+/// therefore stays private to [`LifecycleLedgerStoreV1`] and binds the complete
+/// publication target plus the canonical framed bytes observed on disk.
+#[must_use = "a physically present lifecycle frame must enter its exact recovery join"]
+struct AuthenticatedPresentLifecycleFrameV1 {
+    store_path: PathBuf,
+    context: LifecycleContext,
+    max_records: usize,
+    max_frame_bytes: u64,
+    ledger_frame_hash: LifecycleDigest,
+}
+impl AuthenticatedPresentLifecycleFrameV1 {
+    fn binds_ledger(&self, ledger: &LifecycleLedgerV1) -> bool {
+        ledger.context() == self.context
+            && encode_frame(ledger, self.max_frame_bytes)
+                .ok()
+                .is_some_and(|frame| {
+                    LifecycleDigest::new(Hash::new(frame).into()) == self.ledger_frame_hash
+                })
+    }
+
+    fn authorizes_empty_retired_predecessor(
+        &self,
+        ledger: &LifecycleLedgerV1,
+        complete_tip: &crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
+    ) -> bool {
+        self.store_path.parent().is_some_and(|root| {
+            complete_tip.authorizes_predecessor_lifecycle_root(root)
+                && self.store_path == root.join(LEDGER_FILE)
+        }) && ledger.records().is_empty()
+            && ledger.producer_debts.is_empty()
+            && self.binds_ledger(ledger)
+            && complete_tip.authorizes_empty_retired_lifecycle(ledger.context())
+    }
+
+    fn exactly_matches(&self, store: &LifecycleLedgerStoreV1, ledger: &LifecycleLedgerV1) -> bool {
+        if self.store_path != store.path
+            || self.context != store.context
+            || self.max_records != store.max_records
+            || self.max_frame_bytes != store.max_frame_bytes
+            || !self.binds_ledger(ledger)
+        {
+            return false;
+        }
+        store
+            .load_with_frame_presence()
+            .is_ok_and(|(opened, present)| present && opened == *ledger)
+    }
+}
 /// Crash-safe, bounded store for one height-local LifecycleLedgerV1.
 #[derive(Clone, Debug)]
 pub(in crate::sumeragi) struct LifecycleLedgerStoreV1 {
@@ -155,6 +208,32 @@ impl LifecycleLedgerStoreV1 {
         }
         ledger.validate(self.max_records)?;
         Ok((ledger, true))
+    }
+    /// Authenticate one exact physically present canonical frame.
+    ///
+    /// Returning `None` for the ordinary missing-path empty fallback is the
+    /// security boundary used by non-genesis CompleteTip recovery.
+    fn authenticate_present_frame(
+        &self,
+        expected: &LifecycleLedgerV1,
+    ) -> Result<Option<AuthenticatedPresentLifecycleFrameV1>, LifecycleLedgerError> {
+        let (opened, present) = self.load_with_frame_presence()?;
+        if opened != *expected {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "lifecycle frame changed before physical-presence authentication".to_owned(),
+            ));
+        }
+        if !present {
+            return Ok(None);
+        }
+        let frame = encode_frame(&opened, self.max_frame_bytes)?;
+        Ok(Some(AuthenticatedPresentLifecycleFrameV1 {
+            store_path: self.path.clone(),
+            context: self.context,
+            max_records: self.max_records,
+            max_frame_bytes: self.max_frame_bytes,
+            ledger_frame_hash: LifecycleDigest::new(Hash::new(frame).into()),
+        }))
     }
     /// Persist one exact staged successor only while the attached frame still
     /// equals the coordinator state from which it was derived.
@@ -639,7 +718,7 @@ impl LifecycleCoordinator {
         staged: StagedFinalizationRetirementV1,
     ) -> Result<PublishedFinalizationRetirementV1, LifecycleLedgerError> {
         let StagedFinalizationRetirementV1 { current, retired } = staged;
-        let store = self.ledger_store.as_ref().ok_or_else(|| {
+        let store = self.ledger_store.clone().ok_or_else(|| {
             LifecycleLedgerError::InvalidLedger(
                 "finalized lifecycle retirement requires an attached LedgerV1 store".to_owned(),
             )
@@ -663,9 +742,19 @@ impl LifecycleCoordinator {
                 "published finalization successor changed before owner commit".to_owned(),
             ));
         }
+        let present = store.authenticate_present_frame(&retired)?.ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "published finalization successor lost its physical frame".to_owned(),
+            )
+        })?;
         Ok(PublishedFinalizationRetirementV1 {
             coordinator: self,
             current,
+            retained_floor: PublishedFinalizedLifecycleRetainedFloorV1 {
+                store,
+                ledger: retired.clone(),
+                present,
+            },
             retired,
         })
     }

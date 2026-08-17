@@ -1300,6 +1300,31 @@ impl RecoveredCompleteTipActivationAuthority {
             && context.height() == 1
             && context.id().as_bytes() == self.artifact.context_id().0.as_ref()
     }
+    /// Return whether an exact physically present empty non-genesis frame may
+    /// be treated as an already-retired CompleteTip predecessor.
+    ///
+    /// Live height retirement can legitimately leave no lifecycle rows when a
+    /// canonical-sync node performed no local work. Unlike signed genesis, this
+    /// path requires rotating-leader finality and is useful only together with
+    /// the store-minted physical-frame capability retained by the lifecycle
+    /// ledger. A missing path therefore cannot borrow this Kura authority.
+    pub(in crate::sumeragi) fn authorizes_empty_retired_lifecycle(
+        &self,
+        context: LifecycleContext,
+    ) -> bool {
+        let verified = self.verified_predecessor.context();
+        self.artifact.height > 1
+            && self.artifact.height_context == *verified
+            && verified.height == self.artifact.height
+            && matches!(
+                &self.predecessor_signature_policy,
+                BlockSignaturePolicy::RotatingLeader
+            )
+            && DurableV2PredecessorIdentity::authenticate(&self.artifact, &self.receipt)
+                .is_ok_and(|predecessor| predecessor == self.activation.predecessor())
+            && context.height() == self.artifact.height
+            && context.id().as_bytes() == self.artifact.context_id().0.as_ref()
+    }
     /// Compare one opened lifecycle-ledger root with the exact Kura-bound
     /// predecessor target retained at CompleteTip authentication.
     pub(in crate::sumeragi) fn authorizes_predecessor_lifecycle_root(&self, root: &Path) -> bool {

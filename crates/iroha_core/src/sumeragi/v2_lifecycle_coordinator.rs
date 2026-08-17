@@ -114,8 +114,9 @@ pub(crate) use ledger::ProductionLifecycleStartupErrorV1;
 #[allow(unused_imports)]
 pub(crate) use ledger::WalVoteLedgerRepairTestSummary;
 pub(in crate::sumeragi) use ledger::{
-    AuthenticatedCompleteTipPredecessorStorageV1, CompleteTipPredecessorStorageErrorV1,
-    LaunchedRecoveredCompleteTipSuccessorLifecycleV1, LifecycleLedgerV1,
+    AuthenticatedCompleteTipPredecessorStorageV1, AuthenticatedRecoveredLifecycleSuccessorFloorV1,
+    CompleteTipPredecessorStorageErrorV1, LaunchedRecoveredCompleteTipSuccessorLifecycleV1,
+    LifecycleLedgerError, LifecycleLedgerV1, PublishedFinalizedLifecycleRetainedFloorV1,
     RetiredRecoveredCompleteTipActivationAuthorityV1, open_complete_tip_predecessor_storage,
 };
 use replay_authority::recovered_decision_body_continuation_is_exact;

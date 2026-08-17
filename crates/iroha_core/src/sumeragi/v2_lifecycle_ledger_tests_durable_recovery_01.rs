@@ -1180,6 +1180,69 @@ fn complete_tip_successor_fixture(
     )
 }
 
+fn successor_recovery_fixture(fixture: &RecoveryFixture) -> RecoveryFixture {
+    let (_, projection) = terminal_decision_chain_fixture(fixture);
+    RecoveryFixture {
+        verified: complete_tip_successor_fixture(fixture, &projection),
+        keys: fixture.keys.clone(),
+    }
+}
+
+fn height_three_recovery_fixture(network: &str, first_seed: u8) -> RecoveryFixture {
+    let height_one = RecoveryFixture::new(network, first_seed);
+    let height_two = successor_recovery_fixture(&height_one);
+    let height_three = successor_recovery_fixture(&height_two);
+    assert_eq!(height_three.verified.context().height, 3);
+    height_three
+}
+
+fn finalize_empty_lifecycle_floor_for_test(
+    kura: &Kura,
+    fixture: &RecoveryFixture,
+    retained_high_water: u128,
+) -> crate::sumeragi::v2::FinalizedLifecycleRetainedFloorV1 {
+    let root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let (store, opened) = LifecycleLedgerStoreV1::open(&root, fixture.lifecycle_context())
+        .expect("open finalized-floor lifecycle store");
+    let current = LifecycleLedgerV1::new(
+        fixture.lifecycle_context(),
+        retained_high_water,
+        Vec::new(),
+        BTreeMap::new(),
+    )
+    .expect("construct empty finalized-floor ledger");
+    store
+        .persist_exact_successor(&opened, &current)
+        .expect("materialize finalized-floor ledger");
+    let authority = authority::lifecycle_storage_owner_test_authority(&fixture.verified, 0, 0)
+        .expect("construct finalized-floor lifecycle authority");
+    let mut coordinator = LifecycleCoordinator::new_with_authority(authority, retained_high_water);
+    coordinator.ledger_store = Some(store);
+    let (_payload_store, recovered_payloads) =
+        CertifiedServePayloadStoreV1::open_lifecycle_fixture_for_test(
+            &root,
+            fixture.verified.context(),
+        )
+        .expect("open empty finalized-floor Serve payload owner");
+    let reconciliation = super::super::super::open::reconcile_complete_tip_serve_retirement(
+        &current,
+        recovered_payloads,
+    )
+    .expect("seal empty finalized-floor Serve census");
+    let staged = current
+        .stage_finalized_height_all_row_retirement(reconciliation)
+        .expect("stage empty finalized-floor retirement");
+    let publication = coordinator
+        .persist_exact_finalization_successor(staged)
+        .expect("publish empty finalized-floor retirement");
+    let published = publication.consume_owners(LifecycleWorkRegistryHolder::empty());
+    RecoveredLifecycleOwnerKuraBindingV1::for_test(kura, None)
+        .bind_finalized_lifecycle_floor(published)
+}
+
 /// Build one genuinely retired CompleteTip/H+1 pair for the runner's
 /// restart-activation boundary test.
 pub(crate) fn complete_tip_restart_activation_fixture() -> (
@@ -1459,6 +1522,355 @@ fn empty_genesis_complete_tip_retires_without_a_synthetic_decision_chain() {
 }
 
 #[test]
+fn present_empty_height_three_complete_tip_restart_initializes_then_stutters_successor() {
+    let fixture = height_three_recovery_fixture("empty-height-three-complete-tip", 0x96);
+    let (_, projection) = terminal_decision_chain_fixture(&fixture);
+    let kura = Kura::blank_kura_for_testing();
+    let predecessor_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let (predecessor_store, empty_predecessor) =
+        LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+            .expect("open canonical height-three lifecycle store");
+    predecessor_store
+        .persist_exact_successor(&empty_predecessor, &empty_predecessor)
+        .expect("materialize the live height-three empty frame");
+    let predecessor_bytes =
+        fs::read(predecessor_root.join(LEDGER_FILE)).expect("read materialized H3 frame");
+
+    let verified_successor = complete_tip_successor_fixture(&fixture, &projection);
+    let successor_context = projection::lifecycle_context(verified_successor.context());
+    let successor_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(verified_successor.context().id().0.as_ref()));
+    assert!(
+        !successor_root.join(LEDGER_FILE).exists(),
+        "the first restart models a crash after H3 retirement but before H4 initialization"
+    );
+
+    let retired = complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+        .into_canonical_predecessor_storage(&fixture.keys[0])
+        .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+        .expect("cold restart authenticates empty H3 and initializes H4");
+    let empty_successor = retired.successor_ledger.clone();
+    assert_eq!(empty_successor.context(), successor_context);
+    let successor_bytes =
+        fs::read(successor_root.join(LEDGER_FILE)).expect("read initialized H4 frame");
+    assert_eq!(
+        retired.retained_high_water(),
+        empty_predecessor.high_water()
+    );
+    assert!(retired.authorizes_retained_successor());
+    assert_eq!(
+        predecessor_store
+            .load()
+            .expect("reload exact empty H3 predecessor"),
+        empty_predecessor
+    );
+    assert_eq!(retired.successor_ledger, empty_successor);
+
+    let repeated = complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+        .into_canonical_predecessor_storage(&fixture.keys[0])
+        .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+        .expect("repeated cold restart stutters exact empty H3/H4 frames");
+    assert_eq!(
+        repeated.predecessor_frame_identity,
+        retired.predecessor_frame_identity
+    );
+    assert_eq!(
+        repeated.successor_frame_identity,
+        retired.successor_frame_identity
+    );
+    assert_eq!(
+        fs::read(predecessor_root.join(LEDGER_FILE)).expect("reread exact H3 frame"),
+        predecessor_bytes,
+        "cold retirement must not rewrite the physically present empty predecessor"
+    );
+    assert_eq!(
+        fs::read(successor_root.join(LEDGER_FILE)).expect("reread exact H4 frame"),
+        successor_bytes,
+        "repeated cold retirement must preserve the already-initialized exact successor"
+    );
+}
+
+#[test]
+fn live_floor_two_initializes_height_three_and_first_admission_uses_ordinal_three() {
+    let height_one = RecoveryFixture::new("live-floor-two-height-three", 0xB0);
+    let height_two = successor_recovery_fixture(&height_one);
+    let height_three = successor_recovery_fixture(&height_two);
+    let (_, height_two_projection) = terminal_decision_chain_fixture(&height_two);
+    let kura = Kura::blank_kura_for_testing();
+    let floor = finalize_empty_lifecycle_floor_for_test(kura.as_ref(), &height_two, 2);
+    let _storage = crate::sumeragi::v2::RecoveredLifecycleStorageAuthorityV1::for_test(
+        kura.as_ref(),
+        &height_three.verified,
+        BlockSignaturePolicy::RotatingLeader,
+        iroha_data_model::account::AccountId::new(height_three.keys[0].public_key().clone()),
+    )
+    .bind_finalized_predecessor_floor(floor)
+    .expect("live H2 floor initializes exact H3 storage");
+
+    let height_three_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(height_three.verified.context().id().0.as_ref()));
+    let (height_three_store, initialized) =
+        LifecycleLedgerStoreV1::open(&height_three_root, height_three.lifecycle_context())
+            .expect("open initialized H3 ledger");
+    assert_eq!(initialized.high_water(), 2);
+    assert!(initialized.records().is_empty());
+
+    let authority = authority::lifecycle_storage_owner_test_authority(&height_three.verified, 1, 0)
+        .expect("construct H3 first-admission authority");
+    let mut coordinator = LifecycleCoordinator::new_with_authority(authority, 2);
+    coordinator.ledger_store = Some(height_three_store);
+    let replay = super::super::super::replay_authority::exact_record_fixture(
+        height_three.lifecycle_context(),
+        LifecycleStageKind::SignPrepareVote,
+        0xB1,
+    );
+    let causal_root = CausalRoot::new(LifecycleDigest::new(
+        *Hash::new(b"first H3 admission above inherited floor").as_ref(),
+    ));
+    let candidate = CandidateAdmission::new(
+        replay.key,
+        causal_root,
+        replay.work_class,
+        replay.stage,
+        InitialLifecycleState::Ready,
+        causal_root.digest(),
+        replay.payload,
+        replay.authority,
+        super::super::super::PhysicalGeometry::new([], []),
+        None,
+    );
+    let super::super::super::AdmissionDecision::Admitted {
+        ordinal,
+        producer_turn_ordinal: None,
+        ..
+    } = coordinator.admit(super::super::super::AdmissionRequest::Candidate(candidate))
+    else {
+        panic!("first H3 work must admit above the inherited floor")
+    };
+    assert_eq!(ordinal, 3);
+    let (_, persisted_height_three) =
+        LifecycleLedgerStoreV1::open(&height_three_root, height_three.lifecycle_context())
+            .expect("reopen H3 after first admission");
+    assert_eq!(persisted_height_three.high_water(), 3);
+    assert_eq!(persisted_height_three.records()[0].ordinal(), 3);
+
+    let restarted = complete_tip_for_terminal_decision_on_kura(
+        &height_two,
+        &height_two_projection,
+        kura.as_ref(),
+    )
+    .into_canonical_predecessor_storage(&height_two.keys[0])
+    .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+    .expect("cold restart accepts H3 descendant above retained floor two");
+    assert_eq!(restarted.retained_high_water(), 2);
+    assert_eq!(restarted.successor_ledger.high_water(), 3);
+    assert_eq!(restarted.successor_ledger.records()[0].ordinal(), 3);
+}
+
+#[test]
+fn idle_rollover_retains_floor_two_across_preopen_crash_and_height_four() {
+    let height_one = RecoveryFixture::new("idle-floor-two-rollover", 0xB4);
+    let height_two = successor_recovery_fixture(&height_one);
+    let height_three = successor_recovery_fixture(&height_two);
+    let height_four = successor_recovery_fixture(&height_three);
+    let (_, height_two_projection) = terminal_decision_chain_fixture(&height_two);
+    let kura = Kura::blank_kura_for_testing();
+
+    let _crash_cut = finalize_empty_lifecycle_floor_for_test(kura.as_ref(), &height_two, 2);
+    let cold_h3 = complete_tip_for_terminal_decision_on_kura(
+        &height_two,
+        &height_two_projection,
+        kura.as_ref(),
+    )
+    .into_canonical_predecessor_storage(&height_two.keys[0])
+    .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+    .expect("restart after H2 retirement initializes missing H3 at floor two");
+    assert_eq!(cold_h3.retained_high_water(), 2);
+    assert_eq!(cold_h3.successor_ledger.high_water(), 2);
+    assert!(cold_h3.successor_ledger.records().is_empty());
+
+    let height_three_floor =
+        finalize_empty_lifecycle_floor_for_test(kura.as_ref(), &height_three, 2);
+    let _height_four_storage = crate::sumeragi::v2::RecoveredLifecycleStorageAuthorityV1::for_test(
+        kura.as_ref(),
+        &height_four.verified,
+        BlockSignaturePolicy::RotatingLeader,
+        iroha_data_model::account::AccountId::new(height_four.keys[0].public_key().clone()),
+    )
+    .bind_finalized_predecessor_floor(height_three_floor)
+    .expect("idle H3 retirement carries inherited floor two into H4");
+    let height_four_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(height_four.verified.context().id().0.as_ref()));
+    let (_, initialized_height_four) =
+        LifecycleLedgerStoreV1::open(&height_four_root, height_four.lifecycle_context())
+            .expect("open initialized idle H4 ledger");
+    assert_eq!(initialized_height_four.high_water(), 2);
+    assert!(initialized_height_four.records().is_empty());
+}
+
+#[test]
+fn live_retained_floor_rejects_lower_and_foreign_successor_storage() {
+    let height_one = RecoveryFixture::new("live-floor-negative", 0xB8);
+    let height_two = successor_recovery_fixture(&height_one);
+    let height_three = successor_recovery_fixture(&height_two);
+    let lower_kura = Kura::blank_kura_for_testing();
+    let lower_floor = finalize_empty_lifecycle_floor_for_test(lower_kura.as_ref(), &height_two, 2);
+    let lower_root = lower_kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(height_three.verified.context().id().0.as_ref()));
+    let (lower_store, empty) =
+        LifecycleLedgerStoreV1::open(&lower_root, height_three.lifecycle_context())
+            .expect("open lower-floor H3 store");
+    let lower_owner = OwnerId::new(CausalRoot::new(LifecycleDigest::new([0xB9; 32])), 1);
+    let lower = LifecycleLedgerV1::new(
+        height_three.lifecycle_context(),
+        1,
+        vec![unrelated_live_record(
+            height_three.lifecycle_context(),
+            lower_owner,
+            1,
+            0xBA,
+        )],
+        BTreeMap::new(),
+    )
+    .expect("construct lower-floor H3 descendant");
+    lower_store
+        .persist_exact_successor(&empty, &lower)
+        .expect("persist lower-floor H3 descendant");
+    let lower_before = fs::read(lower_root.join(LEDGER_FILE)).expect("read lower-floor H3 frame");
+    assert!(
+        crate::sumeragi::v2::RecoveredLifecycleStorageAuthorityV1::for_test(
+            lower_kura.as_ref(),
+            &height_three.verified,
+            BlockSignaturePolicy::RotatingLeader,
+            iroha_data_model::account::AccountId::new(height_three.keys[0].public_key().clone(),),
+        )
+        .bind_finalized_predecessor_floor(lower_floor)
+        .is_err(),
+        "a nonempty H3 lineage at or below the retained floor must fail closed"
+    );
+    assert_eq!(
+        fs::read(lower_root.join(LEDGER_FILE)).expect("reread lower-floor H3 frame"),
+        lower_before,
+        "lower-floor rejection must not rewrite the foreign successor"
+    );
+
+    let context_kura = Kura::blank_kura_for_testing();
+    let context_floor =
+        finalize_empty_lifecycle_floor_for_test(context_kura.as_ref(), &height_two, 2);
+    let foreign_height_one = RecoveryFixture::new("live-floor-foreign-context", 0xBC);
+    let foreign_height_two = successor_recovery_fixture(&foreign_height_one);
+    let foreign_height_three = successor_recovery_fixture(&foreign_height_two);
+    let foreign_context_root = context_kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(
+            foreign_height_three.verified.context().id().0.as_ref(),
+        ));
+    assert!(
+        crate::sumeragi::v2::RecoveredLifecycleStorageAuthorityV1::for_test(
+            context_kura.as_ref(),
+            &foreign_height_three.verified,
+            BlockSignaturePolicy::RotatingLeader,
+            iroha_data_model::account::AccountId::new(
+                foreign_height_three.keys[0].public_key().clone(),
+            ),
+        )
+        .bind_finalized_predecessor_floor(context_floor)
+        .is_err(),
+        "a same-Kura H+1 seal for another predecessor context cannot consume the floor"
+    );
+    assert!(
+        !foreign_context_root.join(LEDGER_FILE).exists(),
+        "foreign-context rejection must occur before successor materialization"
+    );
+
+    let canonical_kura = Kura::blank_kura_for_testing();
+    let foreign_kura = Kura::blank_kura_for_testing();
+    let foreign_floor =
+        finalize_empty_lifecycle_floor_for_test(canonical_kura.as_ref(), &height_two, 2);
+    let foreign_root = foreign_kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(height_three.verified.context().id().0.as_ref()));
+    assert!(
+        crate::sumeragi::v2::RecoveredLifecycleStorageAuthorityV1::for_test(
+            foreign_kura.as_ref(),
+            &height_three.verified,
+            BlockSignaturePolicy::RotatingLeader,
+            iroha_data_model::account::AccountId::new(height_three.keys[0].public_key().clone(),),
+        )
+        .bind_finalized_predecessor_floor(foreign_floor)
+        .is_err(),
+        "a finalized floor from another live Kura cannot initialize H3"
+    );
+    assert!(
+        !foreign_root.join(LEDGER_FILE).exists(),
+        "foreign-Kura rejection must occur before successor materialization"
+    );
+
+    let policy_kura = Kura::blank_kura_for_testing();
+    let policy_floor =
+        finalize_empty_lifecycle_floor_for_test(policy_kura.as_ref(), &height_two, 2);
+    let policy_root = policy_kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(height_three.verified.context().id().0.as_ref()));
+    assert!(
+        crate::sumeragi::v2::RecoveredLifecycleStorageAuthorityV1::for_test(
+            policy_kura.as_ref(),
+            &height_three.verified,
+            BlockSignaturePolicy::GenesisAuthority(height_three.keys[0].public_key().clone(),),
+            iroha_data_model::account::AccountId::new(height_three.keys[0].public_key().clone(),),
+        )
+        .bind_finalized_predecessor_floor(policy_floor)
+        .is_err(),
+        "post-genesis floor inheritance requires rotating-leader storage policy"
+    );
+    assert!(
+        !policy_root.join(LEDGER_FILE).exists(),
+        "wrong-policy rejection must occur before successor materialization"
+    );
+}
+
+#[test]
+fn non_genesis_complete_tip_rejects_a_missing_logical_empty_frame() {
+    let fixture = height_three_recovery_fixture("missing-empty-height-three", 0x9A);
+    let (_, projection) = terminal_decision_chain_fixture(&fixture);
+    let kura = Kura::blank_kura_for_testing();
+    let predecessor_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let (_store, logical_empty) =
+        LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+            .expect("open missing logical-empty predecessor");
+    assert!(logical_empty.records().is_empty());
+    assert!(!predecessor_root.join(LEDGER_FILE).exists());
+
+    assert!(
+        complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+            .into_canonical_predecessor_storage(&fixture.keys[0])
+            .is_err(),
+        "Kura CompleteTip must not turn a missing frame into empty-retired authority"
+    );
+    assert!(
+        !predecessor_root.join(LEDGER_FILE).exists(),
+        "failed authentication must not materialize the missing predecessor"
+    );
+}
+
+#[test]
 fn empty_complete_tip_exception_rejects_wrong_policy_context_and_nonempty_ledger() {
     let fixture = RecoveryFixture::new("empty-genesis-complete-tip-negative", 0x99);
     let (_, projection) = terminal_decision_chain_fixture(&fixture);
@@ -1476,14 +1888,18 @@ fn empty_complete_tip_exception_rejects_wrong_policy_context_and_nonempty_ledger
             fixture.keys[0].public_key().clone(),
         ),
     );
-    assert!(!genesis.authorizes_empty_genesis_lifecycle(LifecycleContext::new(
-        fixture.lifecycle_context().id(),
-        2,
-    )));
-    assert!(!genesis.authorizes_empty_genesis_lifecycle(LifecycleContext::new(
-        LifecycleDigest::new([0xFF; 32]),
-        1,
-    )));
+    assert!(
+        !genesis.authorizes_empty_genesis_lifecycle(LifecycleContext::new(
+            fixture.lifecycle_context().id(),
+            2,
+        ))
+    );
+    assert!(
+        !genesis.authorizes_empty_genesis_lifecycle(LifecycleContext::new(
+            LifecycleDigest::new([0xFF; 32]),
+            1,
+        ))
+    );
 
     let predecessor_root = genesis_kura
         .sumeragi_v2_storage_root()
@@ -1512,6 +1928,213 @@ fn empty_complete_tip_exception_rejects_wrong_policy_context_and_nonempty_ledger
             .into_canonical_predecessor_storage(&fixture.keys[0])
             .is_err(),
         "empty-genesis authority must not retire any nonempty malformed ledger"
+    );
+}
+
+#[test]
+fn empty_retired_frame_authority_rejects_foreign_path_context_and_digest_drift() {
+    let fixture = height_three_recovery_fixture("empty-retired-frame-negative", 0x9E);
+    let (_, projection) = terminal_decision_chain_fixture(&fixture);
+    let kura = Kura::blank_kura_for_testing();
+    let complete_tip =
+        complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref());
+    let wrong_policy_kura = Kura::blank_kura_for_testing();
+    let wrong_policy = complete_tip_for_terminal_decision_on_kura_with_policy(
+        &fixture,
+        &projection,
+        wrong_policy_kura.as_ref(),
+        crate::sumeragi::v2_body_store::BlockSignaturePolicy::GenesisAuthority(
+            fixture.keys[0].public_key().clone(),
+        ),
+    );
+    assert!(
+        !wrong_policy.authorizes_empty_retired_lifecycle(fixture.lifecycle_context()),
+        "non-genesis empty retirement requires rotating-leader finality policy"
+    );
+
+    let foreign_directory = TempDir::new().expect("foreign empty-retired frame directory");
+    let (foreign_store, foreign_empty) =
+        LifecycleLedgerStoreV1::open(foreign_directory.path(), fixture.lifecycle_context())
+            .expect("open foreign empty-retired store");
+    foreign_store
+        .persist_exact_successor(&foreign_empty, &foreign_empty)
+        .expect("materialize foreign empty-retired frame");
+    let foreign_presence = foreign_store
+        .authenticate_present_frame(&foreign_empty)
+        .expect("inspect foreign frame presence")
+        .expect("foreign frame is physically present");
+    assert!(
+        foreign_empty
+            .stage_complete_tip_terminal_apply_recovery(&complete_tip, Some(foreign_presence),)
+            .is_err(),
+        "a byte-identical empty frame at a foreign root must not enter recovery"
+    );
+
+    let canonical_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let wrong_context = LifecycleContext::new(
+        LifecycleDigest::new([0xCE; 32]),
+        fixture.lifecycle_context().height(),
+    );
+    let (wrong_context_store, wrong_context_empty) =
+        LifecycleLedgerStoreV1::open(&canonical_root, wrong_context)
+            .expect("open canonical path with a foreign context");
+    wrong_context_store
+        .persist_exact_successor(&wrong_context_empty, &wrong_context_empty)
+        .expect("materialize wrong-context empty frame");
+    let wrong_context_presence = wrong_context_store
+        .authenticate_present_frame(&wrong_context_empty)
+        .expect("inspect wrong-context frame presence")
+        .expect("wrong-context frame is physically present");
+    assert!(
+        wrong_context_empty
+            .stage_complete_tip_terminal_apply_recovery(
+                &complete_tip,
+                Some(wrong_context_presence),
+            )
+            .is_err(),
+        "the canonical path cannot substitute a foreign lifecycle context"
+    );
+
+    let drift_fixture = height_three_recovery_fixture("empty-retired-frame-digest-drift", 0xA2);
+    let (_, drift_projection) = terminal_decision_chain_fixture(&drift_fixture);
+    let drift_kura = Kura::blank_kura_for_testing();
+    let drift_complete_tip = complete_tip_for_terminal_decision_on_kura(
+        &drift_fixture,
+        &drift_projection,
+        drift_kura.as_ref(),
+    );
+    let drift_root = drift_kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(
+            drift_fixture.verified.context().id().0.as_ref(),
+        ));
+    let (drift_store, drift_empty) =
+        LifecycleLedgerStoreV1::open(&drift_root, drift_fixture.lifecycle_context())
+            .expect("open digest-drift predecessor store");
+    drift_store
+        .persist_exact_successor(&drift_empty, &drift_empty)
+        .expect("materialize digest-drift predecessor");
+    let drift_presence = drift_store
+        .authenticate_present_frame(&drift_empty)
+        .expect("inspect digest-drift frame presence")
+        .expect("digest-drift frame is physically present");
+    let (staged, changed, evidence) = drift_empty
+        .stage_complete_tip_terminal_apply_recovery(&drift_complete_tip, Some(drift_presence))
+        .expect("seal exact empty-retired evidence before drift");
+    assert!(!changed);
+    let drifted = LifecycleLedgerV1::new(
+        drift_fixture.lifecycle_context(),
+        1,
+        Vec::new(),
+        BTreeMap::new(),
+    )
+    .expect("construct valid changed empty frame");
+    drift_store
+        .persist(&drifted)
+        .expect("replace the frame after presence authentication");
+    assert!(
+        staged
+            .into_complete_tip_terminal_apply_store_join(drift_store, drift_complete_tip, evidence,)
+            .is_err(),
+        "the move-only presence proof must fail after same-store frame drift"
+    );
+}
+
+#[test]
+fn empty_retired_complete_tip_rejects_nonempty_predecessor_without_apply() {
+    let fixture = height_three_recovery_fixture("empty-retired-nonempty-negative", 0xA6);
+    let (_, projection) = terminal_decision_chain_fixture(&fixture);
+    let kura = Kura::blank_kura_for_testing();
+    let predecessor_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let (store, empty) =
+        LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+            .expect("open nonempty predecessor-negative store");
+    let unrelated_owner = OwnerId::new(CausalRoot::new(LifecycleDigest::new([0xA7; 32])), 1);
+    let unrelated = LifecycleLedgerV1::new(
+        fixture.lifecycle_context(),
+        1,
+        vec![unrelated_live_record(
+            fixture.lifecycle_context(),
+            unrelated_owner,
+            1,
+            0xA8,
+        )],
+        BTreeMap::new(),
+    )
+    .expect("construct nonempty predecessor without Decision Apply");
+    store
+        .persist_exact_successor(&empty, &unrelated)
+        .expect("persist nonempty predecessor negative fixture");
+    let before = fs::read(predecessor_root.join(LEDGER_FILE)).expect("read nonempty predecessor");
+    assert!(
+        complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+            .into_canonical_predecessor_storage(&fixture.keys[0])
+            .is_err(),
+        "physical presence cannot authorize a nonempty ledger without exact Apply lineage"
+    );
+    assert_eq!(
+        fs::read(predecessor_root.join(LEDGER_FILE)).expect("reread nonempty predecessor"),
+        before,
+        "failed nonempty authentication must not rewrite storage"
+    );
+}
+
+#[test]
+fn empty_retired_complete_tip_rejects_a_foreign_successor_floor() {
+    let fixture = height_three_recovery_fixture("empty-retired-successor-floor", 0xAA);
+    let (_, projection) = terminal_decision_chain_fixture(&fixture);
+    let kura = Kura::blank_kura_for_testing();
+    let predecessor_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+    let (predecessor_store, empty_predecessor) =
+        LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+            .expect("open successor-floor predecessor");
+    predecessor_store
+        .persist_exact_successor(&empty_predecessor, &empty_predecessor)
+        .expect("materialize successor-floor predecessor");
+    let predecessor_before =
+        fs::read(predecessor_root.join(LEDGER_FILE)).expect("read successor-floor predecessor");
+
+    let verified_successor = complete_tip_successor_fixture(&fixture, &projection);
+    let successor_context = projection::lifecycle_context(verified_successor.context());
+    let successor_root = kura
+        .sumeragi_v2_storage_root()
+        .join("lifecycle-v1")
+        .join(hex::encode(verified_successor.context().id().0.as_ref()));
+    let (successor_store, logical_successor) =
+        LifecycleLedgerStoreV1::open(&successor_root, successor_context)
+            .expect("open foreign-floor successor");
+    let foreign_floor = LifecycleLedgerV1::new(
+        successor_context,
+        empty_predecessor.high_water() + 1,
+        Vec::new(),
+        BTreeMap::new(),
+    )
+    .expect("construct empty successor at a foreign ordinal floor");
+    successor_store
+        .persist_exact_successor(&logical_successor, &foreign_floor)
+        .expect("persist foreign successor floor");
+
+    assert!(
+        complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+            .into_canonical_predecessor_storage(&fixture.keys[0])
+            .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+            .is_err(),
+        "empty-retired predecessor cannot bless a mismatched successor floor"
+    );
+    assert_eq!(
+        fs::read(predecessor_root.join(LEDGER_FILE)).expect("reread successor-floor predecessor"),
+        predecessor_before,
+        "successor rejection must preserve the exact predecessor frame"
     );
 }
 
@@ -1578,7 +2201,7 @@ fn complete_tip_live_apply_recovery_rejects_foreign_and_multiple_candidates() {
     let foreign_complete_tip =
         complete_tip_for_terminal_decision(&foreign_fixture, &foreign_projection);
     assert!(
-        live.stage_complete_tip_terminal_apply_recovery(&foreign_complete_tip)
+        live.stage_complete_tip_terminal_apply_recovery(&foreign_complete_tip, None)
             .is_err(),
         "foreign finality must not terminalize a live Apply"
     );
@@ -1591,7 +2214,7 @@ fn complete_tip_live_apply_recovery_rejects_foreign_and_multiple_candidates() {
     multiple.high_water = 5;
     assert!(
         multiple
-            .stage_complete_tip_terminal_apply_recovery(&complete_tip)
+            .stage_complete_tip_terminal_apply_recovery(&complete_tip, None)
             .is_err(),
         "multiple matching live Apply rows must fail closed"
     );
@@ -2147,8 +2770,15 @@ fn complete_tip_terminal_apply_store_join_detects_later_same_store_drift() {
         .persist(&ledger)
         .expect("persist terminal CompleteTip predecessor");
     let same_store_writer = store.clone();
+    let apply_ordinal = ledger
+        .authenticate_complete_tip_terminal_apply(&complete_tip)
+        .expect("authenticate exact terminal Apply evidence");
     let cut = ledger
-        .into_complete_tip_terminal_apply_store_join(store, complete_tip)
+        .into_complete_tip_terminal_apply_store_join(
+            store,
+            complete_tip,
+            CompleteTipPredecessorLifecycleEvidenceV1::TerminalApply(apply_ordinal),
+        )
         .expect("authenticate exact predecessor before drift");
     same_store_writer
         .persist(&empty)
@@ -2184,10 +2814,17 @@ fn complete_tip_terminal_apply_store_join_is_not_an_all_row_retirement() {
     store
         .persist(&chain_local)
         .expect("persist chain-local predecessor");
+    let apply_ordinal = chain_local
+        .authenticate_complete_tip_terminal_apply(&complete_tip)
+        .expect("authenticate chain-local terminal Apply evidence");
 
     assert!(
         chain_local
-            .into_complete_tip_terminal_apply_store_join(store, complete_tip)
+            .into_complete_tip_terminal_apply_store_join(
+                store,
+                complete_tip,
+                CompleteTipPredecessorLifecycleEvidenceV1::TerminalApply(apply_ordinal),
+            )
             .is_ok(),
         "this prerequisite must not masquerade as exhaustive retirement"
     );
