@@ -1,9 +1,6 @@
 impl V2EffectServices for ProductionV2Services {
     type Error = String;
-    fn begin_decision_serve_reconciliation(&mut self) -> Result<(), Self::Error> {
-        self.io()?.begin_decision_serve_reconciliation()
-    }
-    fn finish_decision_serve_reconciliation(
+    fn finish_runtime_step_reconciliation(
         &mut self,
         decided_subject: Option<wire::BlockSubject>,
     ) -> Result<(), Self::Error> {
@@ -13,8 +10,7 @@ impl V2EffectServices for ProductionV2Services {
                 .advance_leader_wire_recovery_cut(next)?;
             self.leader_wire_recovery_authority = next;
         }
-        self.io()?
-            .finish_decision_serve_reconciliation(decided_subject)
+        Ok(())
     }
     fn complete_leader_wire_runtime_terminal(
         &mut self,

@@ -1237,7 +1237,7 @@ pub(super) enum RegistryError {
 /// This registry is deliberately not a scheduler. It owns no readiness,
 /// ordinal allocation, rank, retry, wait, generation, capacity, or lease state.
 #[derive(Debug)]
-pub(super) struct ConcreteLifecycleWorkRegistry {
+pub(in crate::sumeragi) struct ConcreteLifecycleWorkRegistry {
     identity: std::sync::Arc<ConcreteLifecycleWorkRegistryInstanceIdentityMarker>,
     entries: BTreeMap<ConcreteWorkAddress, ConcreteLifecycleWork>,
 }

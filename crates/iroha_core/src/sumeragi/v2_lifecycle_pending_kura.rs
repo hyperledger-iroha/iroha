@@ -3,7 +3,13 @@
 use thiserror::Error;
 
 use super::*;
-use crate::sumeragi::Queue;
+use crate::sumeragi::{
+    Queue,
+    v2_lifecycle_coordinator::{
+        AttemptedProducerTurnV1, ClaimedProducerTurnV1, ProducerTurnSchedulerClaimErrorV1,
+        ProducerTurnTerminalSettlementErrorV1,
+    },
+};
 
 /// Result of one bounded closed-ingress interrupted-tip recovery turn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -436,6 +442,48 @@ impl PendingKuraActivatedProductionLifecycleV1 {
         )
     }
 
+    /// Settle at most one lifecycle-owned Certified-Serve completion without
+    /// exposing or consuming any non-Serve completion head.
+    pub(in crate::sumeragi) fn settle_certified_serve_completion_for_no_clock_recovery(
+        &mut self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    ) -> Result<bool, String> {
+        let completion = self
+            .launched
+            .services
+            .drain_lifecycle_certified_serve_completion()?
+            .into_completion();
+        let Some(completion) = completion else {
+            return Ok(false);
+        };
+        completion
+            .settle_deliver_and_acknowledge(&mut self.launched.owner, &self.launched.services)
+            .map_err(|_| "pending Kura Certified-Serve settlement requires restart".to_owned())?;
+        Ok(true)
+    }
+
+    /// Claim the oldest lifecycle-owned ProducerTurn at this no-clock
+    /// recovery loop's single bounded service point.
+    pub(in crate::sumeragi) fn claim_producer_turn_for_no_clock_recovery(
+        &mut self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    ) -> Result<Option<ClaimedProducerTurnV1>, ProducerTurnSchedulerClaimErrorV1> {
+        let mode = self.launched.executor.lifecycle_mode_rank_snapshot();
+        self.launched
+            .owner
+            .claim_producer_turn_at_bounded_producer_point(&mode)
+    }
+
+    /// Durably terminalize one no-clock ProducerTurn after the bounded
+    /// recovery service pass completed successfully.
+    pub(in crate::sumeragi) fn settle_producer_turn_after_no_clock_recovery(
+        &mut self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+        attempted: AttemptedProducerTurnV1,
+    ) -> Result<(), ProducerTurnTerminalSettlementErrorV1> {
+        self.launched.owner.settle_producer_turn_advanced(attempted)
+    }
+
     /// Consume a live interrupted-tip height during orderly operator shutdown.
     #[allow(dead_code, clippy::result_large_err)]
     pub(in crate::sumeragi) fn into_clean_shutdown(
@@ -488,6 +536,7 @@ impl PendingKuraActivatedProductionLifecycleV1 {
             || self.launched.recovered_decision_apply_deferred.is_some()
             || self.launched.recovered_lifecycle_sign_completion.is_some()
             || self.launched.recovered_ingress_capacity_wait.is_some()
+            || self.launched.certified_serve_capacity_wait.is_some()
             || self.launched.completion_observer_activation.is_some()
             || !self
                 .launched
@@ -535,6 +584,7 @@ impl PendingKuraActivatedProductionLifecycleV1 {
             recovered_decision_fetch_body_completion,
             recovered_lifecycle_sign_completion,
             recovered_ingress_capacity_wait,
+            certified_serve_capacity_wait,
             completion_observer_activation,
             leader_wire_ingress_binding,
         } = launched;
@@ -544,6 +594,7 @@ impl PendingKuraActivatedProductionLifecycleV1 {
         debug_assert!(recovered_decision_fetch_body_completion.is_none());
         debug_assert!(recovered_lifecycle_sign_completion.is_none());
         debug_assert!(recovered_ingress_capacity_wait.is_none());
+        debug_assert!(certified_serve_capacity_wait.is_none());
         debug_assert!(completion_observer_activation.is_none());
         drop(pending_kura_apply_replay);
         drop(recovered_local_proposal_attempt);
@@ -551,6 +602,7 @@ impl PendingKuraActivatedProductionLifecycleV1 {
         drop(recovered_decision_fetch_body_completion);
         drop(recovered_lifecycle_sign_completion);
         drop(recovered_ingress_capacity_wait);
+        drop(certified_serve_capacity_wait);
         drop(completion_observer_activation);
         drop(leader_wire_ingress_binding);
 

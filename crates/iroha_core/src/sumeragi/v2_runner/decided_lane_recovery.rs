@@ -1,39 +1,26 @@
-type DecidedLaneRecoveryCurrentServe =
-    ordinary_ingress_consumer::CurrentCertifiedServePreAdmissionV1;
-
 enum DecidedLaneRecoveryIngressPreparation {
     LaneLocal,
     KuraReplicaAdvert,
-    CurrentServe(DecidedLaneRecoveryCurrentServe),
+    CurrentServeRetain,
     HistoricalServe,
     LeaderWireRetire,
 }
 
-enum DecidedLaneRecoveryCurrentDrain<Admission> {
-    Admitted(Admission),
-    Rejected(String),
-}
-
-enum DecidedLaneRecoveryDrainAuthorization<Admission> {
+enum DecidedLaneRecoveryDrainAuthorization {
     LaneLocal,
     KuraReplicaAdvert,
-    CurrentServe(DecidedLaneRecoveryCurrentDrain<Admission>),
     HistoricalServe,
     LeaderWireRetire,
 }
 
-enum DecidedLaneRecoveryDrainDecision<Admission> {
+enum DecidedLaneRecoveryDrainDecision {
     Retain,
-    Authorized(DecidedLaneRecoveryDrainAuthorization<Admission>),
-    FailClosed(String),
+    Authorized(DecidedLaneRecoveryDrainAuthorization),
 }
 
-fn authorize_decided_lane_recovery_drain<
-    A: ordinary_ingress_consumer::CurrentCertifiedServePreDequeueAuthorizer,
->(
+fn authorize_decided_lane_recovery_drain(
     preparation: DecidedLaneRecoveryIngressPreparation,
-    authorizer: &mut A,
-) -> DecidedLaneRecoveryDrainDecision<A::Admission> {
+) -> DecidedLaneRecoveryDrainDecision {
     match preparation {
         DecidedLaneRecoveryIngressPreparation::LaneLocal => {
             DecidedLaneRecoveryDrainDecision::Authorized(
@@ -55,35 +42,8 @@ fn authorize_decided_lane_recovery_drain<
                 DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,
             )
         }
-        DecidedLaneRecoveryIngressPreparation::CurrentServe(prepared) => {
-            match ordinary_ingress_consumer::authorize_current_certified_serve_pre_dequeue(
-                prepared, authorizer,
-            ) {
-                ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Retain => {
-                    DecidedLaneRecoveryDrainDecision::Retain
-                }
-                ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Prepared(
-                    ordinary_ingress_consumer::ProductionPreparedCertifiedServeV1::Admitted(
-                        admission,
-                    ),
-                ) => DecidedLaneRecoveryDrainDecision::Authorized(
-                    DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                        DecidedLaneRecoveryCurrentDrain::Admitted(admission),
-                    ),
-                ),
-                ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Prepared(
-                    ordinary_ingress_consumer::ProductionPreparedCertifiedServeV1::Rejected(
-                        reason,
-                    ),
-                ) => DecidedLaneRecoveryDrainDecision::Authorized(
-                DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                    DecidedLaneRecoveryCurrentDrain::Rejected(reason),
-                ),
-                ),
-                ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Prepared(
-                    ordinary_ingress_consumer::ProductionPreparedCertifiedServeV1::Service(reason),
-                ) => DecidedLaneRecoveryDrainDecision::FailClosed(reason),
-            }
+        DecidedLaneRecoveryIngressPreparation::CurrentServeRetain => {
+            DecidedLaneRecoveryDrainDecision::Retain
         }
     }
 }
@@ -91,11 +51,6 @@ fn authorize_decided_lane_recovery_drain<
 fn prepare_decided_lane_recovery_ingress(
     inbound: &InboundBlockMessage,
     active_height: wire::Height,
-    decided_subject: wire::BlockSubject,
-    authenticate: impl FnOnce(
-        wire::CertifiedBodyRequest,
-        &PeerId,
-    ) -> Result<AuthenticatedCertifiedBodyRequest, String>,
 ) -> DecidedLaneRecoveryIngressPreparation {
     if matches!(inbound.message(), BlockMessage::KuraReplicaAdvert(_)) {
         return DecidedLaneRecoveryIngressPreparation::KuraReplicaAdvert;
@@ -109,30 +64,13 @@ fn prepare_decided_lane_recovery_ingress(
     let wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) = &message.payload else {
         return DecidedLaneRecoveryIngressPreparation::LeaderWireRetire;
     };
-    if message.validate_version().is_err() {
-        return DecidedLaneRecoveryIngressPreparation::CurrentServe(
-            ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
-                inbound,
-                active_height,
-                Some(decided_subject),
-                authenticate,
-            ),
-        );
-    }
     if request.round.height < active_height {
         return DecidedLaneRecoveryIngressPreparation::HistoricalServe;
     }
-    if request.round.height > active_height {
-        return DecidedLaneRecoveryIngressPreparation::LeaderWireRetire;
+    if request.round.height == active_height {
+        return DecidedLaneRecoveryIngressPreparation::CurrentServeRetain;
     }
-    DecidedLaneRecoveryIngressPreparation::CurrentServe(
-        ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
-            inbound,
-            active_height,
-            Some(decided_subject),
-            authenticate,
-        ),
-    )
+    DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
 }
 
 #[derive(Debug)]
@@ -274,15 +212,6 @@ fn drain_v2_ingress(
             continue;
         }
         if turn == OuterIngressTurn::Completion {
-            if services
-                .certified_serve_barrier_request_hash()
-                .map_err(V2RunnerError::Service)?
-                .is_some()
-            {
-                // A provisional or prepared exact target owns this turn. The
-                // outer runner services it before any queued completion.
-                continue;
-            }
             // I/O completion is a separate producer from the serialized
             // reducer. Service it before every ingress occurrence so a
             // completed durable store cannot remain hidden for the duration
@@ -291,15 +220,6 @@ fn drain_v2_ingress(
             continue;
         }
         if turn == OuterIngressTurn::Runtime {
-            if services
-                .certified_serve_barrier()
-                .map_err(V2RunnerError::Service)?
-                .is_some()
-            {
-                // A provisional or prepared exact target owns this turn. The
-                // outer runner services it before any queued runtime producer.
-                continue;
-            }
             // A whole authenticated ingress batch can be expensive. Give the
             // serialized runtime one service turn after completions and before
             // every outer occurrence so trusted timers and reducer work cannot
@@ -323,7 +243,7 @@ fn drain_v2_ingress(
             continue;
         }
         let terminal_subject = executor.local_proposal_directive()?.decided_subject();
-        let mut prepared_serve = None;
+        let prepared_serve = None;
         let barrier_bypass = match mode {
             V2IngressDrainMode::TimeoutVoteEpisode => {
                 FairV2IngressBarrierBypass::TimeoutVoteEpisode
@@ -367,37 +287,13 @@ fn drain_v2_ingress(
                     wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request)
                         if request.round.height == executor.context().height
                 );
-                if message.validate_version().is_ok() && !current_serve {
-                    return true;
+                if current_serve {
+                    // Current-height Serve is owned exclusively by the
+                    // lifecycle selector/registry scheduler. Terminal lane
+                    // recovery must leave its physical carrier in fair ingress.
+                    return false;
                 }
-                let prepared = ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
-                    inbound,
-                    executor.context().height,
-                    terminal_subject,
-                    |request, sender| {
-                        executor
-                            .authenticate_certified_body_request(request, sender)
-                            .map_err(|error| error.to_string())
-                    },
-                );
-                match ordinary_ingress_consumer::authorize_current_certified_serve_pre_dequeue(
-                    prepared,
-                    services,
-                ) {
-                    ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Prepared(
-                        prepared,
-                    ) => {
-                        prepared_serve = Some(prepared);
-                        true
-                    }
-                    ordinary_ingress_consumer::ProductionCurrentCertifiedServePreparationV1::Retain => {
-                        // `prepare_certified_request` installs the off-queue debt
-                        // before returning capacity backpressure. The fair
-                        // selector's immutable physical cutoff keeps every later
-                        // ingress occurrence behind this retained target.
-                        false
-                    }
-                }
+                true
             })
             .map_err(V2RunnerError::Service)?
         else {
@@ -435,22 +331,14 @@ fn drain_v2_ingress(
 enum DecidedLaneRecoveryDrainCommitOutcome {
     LaneLocal,
     KuraReplicaAdvert,
-    CurrentServe,
     HistoricalServe,
     LeaderWireVolatile,
 }
 
 trait DecidedLaneRecoveryDrainCommitter {
-    type Admission;
-
     fn commit_lane_local(&mut self) -> Result<(), V2RunnerError>;
 
     fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError>;
-
-    fn commit_current_serve(
-        &mut self,
-        current: DecidedLaneRecoveryCurrentDrain<Self::Admission>,
-    ) -> Result<(), V2RunnerError>;
 
     fn bind_leader_wire(&mut self) -> Result<(), V2RunnerError>;
 
@@ -460,7 +348,7 @@ trait DecidedLaneRecoveryDrainCommitter {
 }
 
 fn commit_decided_lane_recovery_drain<C: DecidedLaneRecoveryDrainCommitter>(
-    authorization: DecidedLaneRecoveryDrainAuthorization<C::Admission>,
+    authorization: DecidedLaneRecoveryDrainAuthorization,
     committer: &mut C,
 ) -> Result<DecidedLaneRecoveryDrainCommitOutcome, V2RunnerError> {
     match authorization {
@@ -471,10 +359,6 @@ fn commit_decided_lane_recovery_drain<C: DecidedLaneRecoveryDrainCommitter>(
         DecidedLaneRecoveryDrainAuthorization::KuraReplicaAdvert => {
             committer.commit_kura_replica_advert()?;
             Ok(DecidedLaneRecoveryDrainCommitOutcome::KuraReplicaAdvert)
-        }
-        DecidedLaneRecoveryDrainAuthorization::CurrentServe(current) => {
-            committer.commit_current_serve(current)?;
-            Ok(DecidedLaneRecoveryDrainCommitOutcome::CurrentServe)
         }
         DecidedLaneRecoveryDrainAuthorization::HistoricalServe => {
             committer.bind_leader_wire()?;
@@ -523,8 +407,6 @@ impl ProductionDecidedLaneRecoveryDrainCommitter<'_> {
 }
 
 impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCommitter<'_> {
-    type Admission = CertifiedServeAdmission;
-
     fn commit_lane_local(&mut self) -> Result<(), V2RunnerError> {
         let inbound = self.take_inbound()?;
         let _ = self
@@ -537,42 +419,6 @@ impl DecidedLaneRecoveryDrainCommitter for ProductionDecidedLaneRecoveryDrainCom
     fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError> {
         let inbound = self.take_inbound()?;
         admit_kura_replica_advert_ingress(self.receiver, self.kura, inbound)
-    }
-
-    fn commit_current_serve(
-        &mut self,
-        current: DecidedLaneRecoveryCurrentDrain<Self::Admission>,
-    ) -> Result<(), V2RunnerError> {
-        let mut inbound = self.take_inbound()?;
-        match current {
-            DecidedLaneRecoveryCurrentDrain::Admitted(admission) => {
-                let ingress_ownership = inbound.take_ingress_ownership().ok_or_else(|| {
-                    V2RunnerError::Service(
-                        "terminal recovery Serve admission lost its fair ownership".to_owned(),
-                    )
-                })?;
-                let (_, _, reply_routes) = inbound.into_message_sender_and_reply_routes();
-                self.services
-                    .serve_certified_request_on_routes(
-                        admission,
-                        reply_routes.ok_or_else(|| {
-                            V2RunnerError::Service(
-                                "terminal recovery Serve admission lost its reply routes"
-                                    .to_owned(),
-                            )
-                        })?,
-                        ingress_ownership,
-                    )
-                    .map_err(V2RunnerError::Service)
-            }
-            DecidedLaneRecoveryCurrentDrain::Rejected(reason) => {
-                iroha_logger::debug!(
-                    %reason,
-                    "retired terminal-recovery certified body request"
-                );
-                Ok(())
-            }
-        }
     }
 
     fn bind_leader_wire(&mut self) -> Result<(), V2RunnerError> {
@@ -697,7 +543,7 @@ fn drain_decided_lane_recovery_ingress(
     local_key: &KeyPair,
     block_sync_server: &mut V2BlockSyncServer,
 ) -> Result<(), V2RunnerError> {
-    let decided_subject = executor
+    let _decided_subject = executor
         .local_proposal_directive()?
         .decided_subject()
         .ok_or_else(|| {
@@ -712,17 +558,9 @@ fn drain_decided_lane_recovery_ingress(
             if authorization_error.is_some() {
                 return false;
             }
-            let preparation = prepare_decided_lane_recovery_ingress(
-                inbound,
-                executor.context().height,
-                decided_subject,
-                |request, sender| {
-                    executor
-                        .authenticate_certified_body_request(request, sender)
-                        .map_err(|error| error.to_string())
-                },
-            );
-            match authorize_decided_lane_recovery_drain(preparation, services) {
+            let preparation =
+                prepare_decided_lane_recovery_ingress(inbound, executor.context().height);
+            match authorize_decided_lane_recovery_drain(preparation) {
                 DecidedLaneRecoveryDrainDecision::Retain => false,
                 DecidedLaneRecoveryDrainDecision::Authorized(candidate) => {
                     if authorization.replace(candidate).is_some() {
@@ -734,10 +572,6 @@ fn drain_decided_lane_recovery_ingress(
                     } else {
                         true
                     }
-                }
-                DecidedLaneRecoveryDrainDecision::FailClosed(reason) => {
-                    authorization_error = Some(reason);
-                    false
                 }
             }
         })
@@ -769,9 +603,8 @@ fn drain_decided_lane_recovery_ingress(
     let _ = commit_decided_lane_recovery_drain(authorization, &mut committer)?;
     // Non-Serve global traffic for this replayed terminal height is
     // intentionally dropped. The durable Decision and finality tuple are the
-    // only global reducer authority. Current-height Serve traffic is instead
-    // fully authenticated above and atomically terminalized before the carrier
-    // can leave fair ingress. One occurrence per outer loop keeps pending
-    // Apply/completion work dominant.
+    // only global reducer authority. Current-height Serve traffic remains in
+    // fair ingress for the single lifecycle selector/coordinator path. One
+    // occurrence per outer loop keeps pending Apply/completion work dominant.
     Ok(())
 }

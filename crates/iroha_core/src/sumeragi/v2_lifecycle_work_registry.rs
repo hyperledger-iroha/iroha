@@ -146,6 +146,272 @@ impl DurableCertifiedServeWork {
             && lease.output_reservation.is_none()
     }
 }
+/// Opaque proof that one exact LedgerV1-backed Ready Serve row owns its
+/// authenticated request and installed durable carrier.
+///
+/// The ready record, physical address, and ledger frame remain private. A
+/// scheduler can only compare this proof with a complete Ready census and then
+/// consume it after the coordinator creates the matching lease.
+#[must_use = "the Ready Certified-Serve attestation has not entered scheduling"]
+pub(in crate::sumeragi) struct ReadyCertifiedServeAttestationV1 {
+    ledger_frame: LifecycleDigest,
+    ready_record: super::LifecycleRecord,
+    address: ConcreteWorkAddress,
+    authenticated: AuthenticatedCertifiedBodyRequest,
+    _linearity: ReadyCertifiedServeAttestationLinearityV1,
+}
+struct ReadyCertifiedServeAttestationLinearityV1;
+impl Drop for ReadyCertifiedServeAttestationLinearityV1 {
+    fn drop(&mut self) {}
+}
+impl fmt::Debug for ReadyCertifiedServeAttestationV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReadyCertifiedServeAttestationV1")
+            .finish_non_exhaustive()
+    }
+}
+impl ReadyCertifiedServeAttestationV1 {
+    /// Compare this seal with one exact Ready row in the retained LedgerV1 frame.
+    pub(super) fn matches_ready_record(
+        &self,
+        record: &super::LifecycleRecord,
+        ledger: &super::ledger::LifecycleLedgerV1,
+    ) -> bool {
+        self.ledger_frame == ledger.frame_identity()
+            && record == &self.ready_record
+            && record.state == super::LifecycleState::Ready
+            && HashOf::new(self.authenticated.request()) == self.authenticated.request_hash()
+    }
+    fn matches_claimed_record(
+        &self,
+        record: &super::LifecycleRecord,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        lease: &TurnLease,
+    ) -> bool {
+        let mut expected = self.ready_record.clone();
+        expected.state = super::LifecycleState::Claimed(lease.id());
+        self.ledger_frame == ledger.frame_identity()
+            && record == &expected
+            && lease.ordinal() == record.ordinal
+            && lease.owner() == record.owner
+            && lease.key() == record.key
+            && lease.work_class() == record.work_class
+            && lease.stage() == record.stage
+            && lease.physical_slots() == &record.physical_slots
+            && lease.output_reservation().is_none()
+            && HashOf::new(self.authenticated.request()) == self.authenticated.request_hash()
+    }
+}
+/// Closed failure while minting a Ready Certified-Serve carrier attestation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ReadyCertifiedServeAttestationErrorV1 {
+    /// The logical owner is faulted or still owns a prior lease.
+    CoordinatorUnavailable,
+    /// The supplied durable frame is not the exact current coordinator frame.
+    LedgerMismatch,
+    /// No Ready Serve row owns the authenticated request.
+    RequestNotReady,
+    /// More than one Ready Serve row claims the authenticated request.
+    AmbiguousRequest,
+    /// Logical indexes, durable metadata, or installed work are not exact.
+    InvalidCarrier,
+}
+/// Opaque claimed Serve carrier ready to cross the worker-dispatch boundary.
+///
+/// The exact lease and authenticated request remain co-owned until the worker
+/// consumes both together. No ordinal or physical digest is accepted at this
+/// boundary.
+#[must_use = "the claimed Certified-Serve dispatch has not entered its worker"]
+pub(in crate::sumeragi) struct ClaimedCertifiedServeDispatchV1 {
+    lease: TurnLease,
+    authenticated: AuthenticatedCertifiedBodyRequest,
+    _linearity: ClaimedCertifiedServeDispatchLinearityV1,
+}
+struct ClaimedCertifiedServeDispatchLinearityV1;
+impl Drop for ClaimedCertifiedServeDispatchLinearityV1 {
+    fn drop(&mut self) {}
+}
+impl fmt::Debug for ClaimedCertifiedServeDispatchV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClaimedCertifiedServeDispatchV1")
+            .finish_non_exhaustive()
+    }
+}
+impl ClaimedCertifiedServeDispatchV1 {
+    /// Borrow the exact claimed lifecycle lease.
+    pub(in crate::sumeragi) const fn lease(&self) -> &TurnLease {
+        &self.lease
+    }
+    /// Borrow the exact authenticated request owned by the claimed Serve.
+    pub(in crate::sumeragi) const fn authenticated_request(
+        &self,
+    ) -> &AuthenticatedCertifiedBodyRequest {
+        &self.authenticated
+    }
+    /// Move the exact lease and request together into the dedicated worker.
+    pub(in crate::sumeragi) fn into_worker_parts(
+        self,
+    ) -> (TurnLease, AuthenticatedCertifiedBodyRequest) {
+        (self.lease, self.authenticated)
+    }
+}
+/// Closed failure while projecting an already-claimed Serve into its worker carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ClaimedCertifiedServeDispatchErrorV1 {
+    /// The supplied durable frame is not the exact current coordinator frame.
+    LedgerMismatch,
+    /// The coordinator claim does not match the sealed Ready row.
+    InvalidLease,
+    /// Durable metadata or installed concrete work changed before projection.
+    InvalidCarrier,
+}
+impl ConcreteLifecycleWorkRegistry {
+    /// Seal one exact Ready Serve, current LedgerV1 frame, installed durable
+    /// carrier, and authenticated request without accepting raw coordinates.
+    pub(super) fn attest_ready_certified_serve_request(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+    ) -> Result<ReadyCertifiedServeAttestationV1, ReadyCertifiedServeAttestationErrorV1> {
+        if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
+            return Err(ReadyCertifiedServeAttestationErrorV1::CoordinatorUnavailable);
+        }
+        if !super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+            .is_ok_and(|current| &current == ledger)
+        {
+            return Err(ReadyCertifiedServeAttestationErrorV1::LedgerMismatch);
+        }
+        let mut matches = coordinator.records.values().filter(|record| {
+            record.work_class == LifecycleWorkClass::CertifiedServe
+                && record.state == super::LifecycleState::Ready
+                && coordinator
+                    .durable_records
+                    .get(&record.ordinal)
+                    .is_some_and(|metadata| {
+                        metadata
+                            .replay_authority
+                            .exactly_matches_certified_serve_request(authenticated)
+                    })
+        });
+        let record = matches
+            .next()
+            .ok_or(ReadyCertifiedServeAttestationErrorV1::RequestNotReady)?;
+        if matches.next().is_some() {
+            return Err(ReadyCertifiedServeAttestationErrorV1::AmbiguousRequest);
+        }
+        let metadata = coordinator
+            .durable_records
+            .get(&record.ordinal)
+            .ok_or(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier)?;
+        let (slot, digest) =
+            exact_single_record_slot(record, LifecycleWorkClass::CertifiedServe.capacity_class())
+                .ok_or(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier)?;
+        let address = ConcreteWorkAddress::new(record.owner, record.ordinal, slot)
+            .ok_or(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier)?;
+        let work = self
+            .entries
+            .get(&address)
+            .ok_or(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier)?;
+        let ConcreteLifecycleWorkKind::DurableCertifiedServe(serve) = &work.kind else {
+            return Err(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier);
+        };
+        if coordinator.active_context.id() != record.key.context()
+            || coordinator.active_context.height() != record.key.round().height()
+            || record.stage.kind() != LifecycleStageKind::CertifiedServe
+            || record.stage.predecessor_scope() != PredecessorScope::ReadyOrdinalPrefix
+            || coordinator.key_index.get(&record.key) != Some(&record.ordinal)
+            || coordinator.owner_index.get(&record.owner.causal_root()) != Some(&record.owner)
+            || !coordinator.ready_index.contains(&record.ordinal)
+            || coordinator
+                .episode_authority
+                .universe_for(record.key)
+                .as_ref()
+                != Some(&record.episode.universe)
+            || !coordinator.episode_authority.admits_slots(
+                LifecycleWorkClass::CertifiedServe.capacity_class(),
+                &record.episode.slot_universe,
+            )
+            || !super::schema::frozen_predecessors(
+                &coordinator.records,
+                record.stage.predecessor_scope(),
+                record.ordinal,
+            )
+            .is_subset(&record.episode.frozen_predecessors)
+            || record
+                .episode
+                .frozen_predecessors
+                .iter()
+                .any(|predecessor| {
+                    *predecessor >= record.ordinal || !coordinator.records.contains_key(predecessor)
+                })
+            || metadata.continuation != super::schema::DurableContinuation::None
+            || work.digest != digest
+            || !serve.matches_record(record, metadata, digest)
+        {
+            return Err(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier);
+        }
+        Ok(ReadyCertifiedServeAttestationV1 {
+            ledger_frame: ledger.frame_identity(),
+            ready_record: record.clone(),
+            address,
+            authenticated: authenticated.clone(),
+            _linearity: ReadyCertifiedServeAttestationLinearityV1,
+        })
+    }
+
+    /// Consume a sealed Ready attestation and exact active lease into the
+    /// worker-owned Serve dispatch carrier.
+    pub(super) fn project_claimed_certified_serve_dispatch(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        lease: TurnLease,
+        attestation: ReadyCertifiedServeAttestationV1,
+    ) -> Result<ClaimedCertifiedServeDispatchV1, ClaimedCertifiedServeDispatchErrorV1> {
+        if !super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+            .is_ok_and(|current| &current == ledger)
+        {
+            return Err(ClaimedCertifiedServeDispatchErrorV1::LedgerMismatch);
+        }
+        let record = coordinator
+            .records
+            .get(&lease.ordinal())
+            .ok_or(ClaimedCertifiedServeDispatchErrorV1::InvalidLease)?;
+        if coordinator.fault.is_some()
+            || coordinator.active_lease.as_ref() != Some(&lease)
+            || !attestation.matches_claimed_record(record, ledger, &lease)
+            || coordinator.ready_index.contains(&record.ordinal)
+        {
+            return Err(ClaimedCertifiedServeDispatchErrorV1::InvalidLease);
+        }
+        let metadata = coordinator
+            .durable_records
+            .get(&record.ordinal)
+            .ok_or(ClaimedCertifiedServeDispatchErrorV1::InvalidCarrier)?;
+        let work = self
+            .entries
+            .get(&attestation.address)
+            .ok_or(ClaimedCertifiedServeDispatchErrorV1::InvalidCarrier)?;
+        let ConcreteLifecycleWorkKind::DurableCertifiedServe(serve) = &work.kind else {
+            return Err(ClaimedCertifiedServeDispatchErrorV1::InvalidCarrier);
+        };
+        if !metadata
+            .replay_authority
+            .exactly_matches_certified_serve_request(&attestation.authenticated)
+            || !serve.matches_claimed_record(record, metadata, work.digest, &lease)
+        {
+            return Err(ClaimedCertifiedServeDispatchErrorV1::InvalidCarrier);
+        }
+        Ok(ClaimedCertifiedServeDispatchV1 {
+            lease,
+            authenticated: attestation.authenticated,
+            _linearity: ClaimedCertifiedServeDispatchLinearityV1,
+        })
+    }
+}
 /// Exact process-local carrier for one nonterminal durable ProducerTurn row.
 ///
 /// This is the adjacent owner of the same opaque replay allocation as its Serve
@@ -213,7 +479,258 @@ impl DurableProducerTurnWork {
             && metadata.payload == DurablePayloadReference::None
             && metadata.replay_authority == self.replay_authority
     }
+    fn matches_claimed_record(
+        &self,
+        record: &super::LifecycleRecord,
+        metadata: &super::schema::DurableRecordMetadata,
+        installed_digest: LifecycleDigest,
+        lease: &TurnLease,
+    ) -> bool {
+        self.validates(installed_digest)
+            && record.work_class == LifecycleWorkClass::ProducerTurn
+            && record.state == super::LifecycleState::Claimed(lease.id)
+            && record.key == self.key
+            && record.owner == self.address.owner
+            && record.ordinal == self.address.ordinal
+            && record.stage == self.stage
+            && record.physical_slots == BTreeMap::from([(self.address.slot, installed_digest)])
+            && record.episode.consumed_slots
+                == std::collections::BTreeSet::from([self.address.slot])
+            && record.episode.slot_universe == std::collections::BTreeSet::from([self.address.slot])
+            && metadata.reconstruction_source == self.reconstruction_source
+            && metadata.payload == DurablePayloadReference::None
+            && metadata.replay_authority == self.replay_authority
+            && lease.ordinal == record.ordinal
+            && lease.owner == record.owner
+            && lease.key == record.key
+            && lease.work_class == record.work_class
+            && lease.stage == record.stage
+            && lease.physical_slots == record.physical_slots
+            && lease.output_reservation.is_none()
+    }
 }
+
+/// Registry-authenticated proof of the complete Ready census whose oldest row
+/// is one executable ProducerTurn.
+///
+/// The census and physical address remain private. Scheduling can only bind
+/// live debts to the exact retained records and consume this proof with the
+/// matching coordinator claim.
+#[must_use = "the Ready ProducerTurn census has not entered scheduling"]
+pub(in crate::sumeragi) struct ReadyProducerTurnCensusAttestationV1 {
+    ledger_frame: LifecycleDigest,
+    ready_records: BTreeMap<u128, super::LifecycleRecord>,
+    producer_address: ConcreteWorkAddress,
+    producer_digest: LifecycleDigest,
+    _linearity: ReadyProducerTurnCensusAttestationLinearityV1,
+}
+struct ReadyProducerTurnCensusAttestationLinearityV1;
+impl Drop for ReadyProducerTurnCensusAttestationLinearityV1 {
+    fn drop(&mut self) {}
+}
+impl fmt::Debug for ReadyProducerTurnCensusAttestationV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReadyProducerTurnCensusAttestationV1")
+            .finish_non_exhaustive()
+    }
+}
+impl ReadyProducerTurnCensusAttestationV1 {
+    pub(super) fn target_ordinal(&self) -> u128 {
+        self.producer_address.ordinal
+    }
+
+    /// Seal one later Ready row which is statically ineligible while this
+    /// attested ProducerHandoffBarrier remains selectable.
+    pub(super) fn blocked_ready_seal(
+        &self,
+        record: &super::LifecycleRecord,
+    ) -> Option<ProducerHandoffBlockedReadySealV1> {
+        let producer = self.ready_records.get(&self.producer_address.ordinal)?;
+        (producer.stage.predecessor_scope() == PredecessorScope::ProducerHandoffBarrier
+            && producer.ordinal < record.ordinal
+            && self.ready_records.get(&record.ordinal) == Some(record))
+        .then_some(ProducerHandoffBlockedReadySealV1 {
+            producer_ordinal: producer.ordinal,
+            ordinal: record.ordinal,
+            owner: record.owner,
+            key: record.key,
+            _linearity: ProducerHandoffBlockedReadySealLinearityV1,
+        })
+    }
+
+    pub(super) fn matches_ready_census(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ledger: &super::ledger::LifecycleLedgerV1,
+    ) -> bool {
+        let ready_records = coordinator
+            .records
+            .iter()
+            .filter_map(|(&ordinal, record)| {
+                (record.state == super::LifecycleState::Ready).then_some((ordinal, record.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        self.ledger_frame == ledger.frame_identity()
+            && super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+                .is_ok_and(|current| &current == ledger)
+            && coordinator.active_lease.is_none()
+            && coordinator.ready_index
+                == self
+                    .ready_records
+                    .keys()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>()
+            && ready_records == self.ready_records
+            && self
+                .ready_records
+                .first_key_value()
+                .is_some_and(|(&ordinal, record)| {
+                    ordinal == self.producer_address.ordinal
+                        && record.work_class == LifecycleWorkClass::ProducerTurn
+                        && record.stage.kind() == LifecycleStageKind::ProducerTurn
+                        && record.stage.predecessor_scope()
+                            == PredecessorScope::ProducerHandoffBarrier
+                })
+    }
+
+    fn matches_claimed_census(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        lease: &TurnLease,
+    ) -> bool {
+        if self.ledger_frame != ledger.frame_identity()
+            || !super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+                .is_ok_and(|current| &current == ledger)
+            || coordinator.active_lease.as_ref() != Some(lease)
+            || lease.ordinal != self.producer_address.ordinal
+            || lease.work_class != LifecycleWorkClass::ProducerTurn
+            || lease.output_reservation.is_some()
+        {
+            return false;
+        }
+        let mut expected_ready = self.ready_records.clone();
+        let Some(mut producer) = expected_ready.remove(&lease.ordinal) else {
+            return false;
+        };
+        producer.state = super::LifecycleState::Claimed(lease.id);
+        coordinator.records.get(&lease.ordinal) == Some(&producer)
+            && coordinator.ready_index
+                == expected_ready
+                    .keys()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>()
+            && expected_ready
+                .iter()
+                .all(|(ordinal, record)| coordinator.records.get(ordinal) == Some(record))
+    }
+}
+
+/// Registry-authenticated identity of a later Ready row blocked by the oldest
+/// selectable ProducerHandoffBarrier.
+#[must_use = "the blocked Ready seal has not entered the complete scheduler census"]
+pub(super) struct ProducerHandoffBlockedReadySealV1 {
+    producer_ordinal: u128,
+    ordinal: u128,
+    owner: OwnerId,
+    key: LifecycleKey,
+    _linearity: ProducerHandoffBlockedReadySealLinearityV1,
+}
+struct ProducerHandoffBlockedReadySealLinearityV1;
+impl Drop for ProducerHandoffBlockedReadySealLinearityV1 {
+    fn drop(&mut self) {}
+}
+impl ProducerHandoffBlockedReadySealV1 {
+    pub(super) fn matches_record(&self, record: &super::LifecycleRecord) -> bool {
+        self.producer_ordinal < self.ordinal
+            && record.ordinal == self.ordinal
+            && record.owner == self.owner
+            && record.key == self.key
+            && record.state == super::LifecycleState::Ready
+    }
+}
+
+/// Closed failure while sealing a complete Ready census for ProducerTurn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ReadyProducerTurnCensusAttestationErrorV1 {
+    /// The lifecycle owner is faulted or still owns a prior lease.
+    CoordinatorUnavailable,
+    /// The retained durable frame is not the exact coordinator frame.
+    LedgerMismatch,
+    /// Ready records and their reverse index are not bijective.
+    InvalidReadyCensus,
+    /// The complete concrete registry does not exactly cover all live work.
+    InvalidRegistry,
+    /// The oldest Ready ProducerTurn lost its adjacent Serve/debt authority.
+    InvalidProducer,
+}
+
+/// Opaque ownership of one claimed ProducerTurn and its exact durable carrier.
+#[must_use = "the claimed ProducerTurn must be attempted and settled"]
+pub(in crate::sumeragi) struct ClaimedProducerTurnV1 {
+    lease: TurnLease,
+    address: ConcreteWorkAddress,
+    digest: LifecycleDigest,
+    ledger_frame: LifecycleDigest,
+    _linearity: ClaimedProducerTurnLinearityV1,
+}
+struct ClaimedProducerTurnLinearityV1;
+impl Drop for ClaimedProducerTurnLinearityV1 {
+    fn drop(&mut self) {}
+}
+impl fmt::Debug for ClaimedProducerTurnV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClaimedProducerTurnV1")
+            .finish_non_exhaustive()
+    }
+}
+impl ClaimedProducerTurnV1 {
+    pub(super) const fn lease(&self) -> &TurnLease {
+        &self.lease
+    }
+
+    /// Join the claimed carrier to the serialized runner's proof that its one
+    /// bounded producer service pass returned successfully.
+    pub(in crate::sumeragi) fn into_attempted(
+        self,
+        _attempt: crate::sumeragi::v2_runner::ProducerTurnAttemptPermitV1,
+    ) -> AttemptedProducerTurnV1 {
+        AttemptedProducerTurnV1 { claimed: self }
+    }
+}
+
+/// Opaque ProducerTurn terminal authority available only after one successful
+/// bounded producer service pass.
+#[must_use = "the attempted ProducerTurn must enter durable terminal settlement"]
+pub(in crate::sumeragi) struct AttemptedProducerTurnV1 {
+    claimed: ClaimedProducerTurnV1,
+}
+impl fmt::Debug for AttemptedProducerTurnV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AttemptedProducerTurnV1")
+            .finish_non_exhaustive()
+    }
+}
+impl AttemptedProducerTurnV1 {
+    pub(super) const fn claimed(&self) -> &ClaimedProducerTurnV1 {
+        &self.claimed
+    }
+}
+
+/// Closed failure while projecting a ProducerTurn claim onto its carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ClaimedProducerTurnErrorV1 {
+    /// The retained durable frame changed across the volatile claim.
+    LedgerMismatch,
+    /// The lease is not the exact claim authorized by the sealed census.
+    InvalidLease,
+    /// The complete concrete census or exact Producer carrier changed.
+    InvalidCarrier,
+}
+
 #[cfg(test)]
 use crate::sumeragi::v2_runtime::bind_adapter_effect_batch_ownership;
 use crate::sumeragi::{
@@ -3983,6 +4500,33 @@ pub(super) enum CertifiedServeTerminalRegistryPublicationError<E> {
     /// LedgerV1 publication failed and the exact incumbent Producer carrier
     /// was restored before returning.
     Publication(E, PreparedCertifiedServeTerminalRegistryTransitionV1),
+}
+/// Exact carrier removal prepared from one registry-authenticated active
+/// ProducerTurn claim.
+#[must_use = "the ProducerTurn terminal carrier transition has not been published"]
+pub(super) struct PreparedProducerTurnTerminalRegistryTransitionV1 {
+    address: ConcreteWorkAddress,
+    digest: LifecycleDigest,
+    ledger_frame: LifecycleDigest,
+    _linearity: PreparedProducerTurnTerminalRegistryTransitionLinearityV1,
+}
+struct PreparedProducerTurnTerminalRegistryTransitionLinearityV1;
+impl Drop for PreparedProducerTurnTerminalRegistryTransitionLinearityV1 {
+    fn drop(&mut self) {}
+}
+impl fmt::Debug for PreparedProducerTurnTerminalRegistryTransitionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedProducerTurnTerminalRegistryTransitionV1")
+            .finish_non_exhaustive()
+    }
+}
+/// Failure from the ProducerTurn carrier-before-LedgerV1 publication boundary.
+pub(super) enum ProducerTurnTerminalRegistryPublicationError<E> {
+    /// Current or staged whole-census validation failed before mutation.
+    Preflight(PreparedProducerTurnTerminalRegistryTransitionV1),
+    /// LedgerV1 publication failed while the exact incumbent remained installed.
+    Publication(E, PreparedProducerTurnTerminalRegistryTransitionV1),
 }
 struct StagedCertifiedServeRegistryBatch<'registry> {
     entries: &'registry mut BTreeMap<ConcreteWorkAddress, ConcreteLifecycleWork>,

@@ -37,6 +37,10 @@ impl LifecycleWorkRegistryHolder {
             registry: ConcreteLifecycleWorkRegistry::default(),
         }
     }
+    /// Borrow the exact concrete census for a coordinator-owned scheduler cut.
+    pub(super) const fn registry(&self) -> &ConcreteLifecycleWorkRegistry {
+        &self.registry
+    }
     /// Borrow the concrete map only for one coordinator-owned composite transaction.
     pub(super) fn registry_mut(&mut self) -> &mut ConcreteLifecycleWorkRegistry {
         &mut self.registry

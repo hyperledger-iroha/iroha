@@ -1329,6 +1329,40 @@ impl V2BodyStoreInstanceIdentity {
         Arc::ptr_eq(&self.0, &other.0)
     }
 }
+/// Move-only authority for one exact Certified-Serve body read from its live
+/// body-store instance.
+///
+/// Construction remains inside [`V2BodyStore`]. The owned receipt and bytes
+/// have therefore crossed the store's exact receipt, frame checksum, manifest,
+/// and canonical body validation before a worker can return them to the
+/// lifecycle owner. The comparison-only instance seal prevents an otherwise
+/// valid readback from a different open store from settling this owner's work.
+#[derive(Debug)]
+#[must_use = "a Certified-Serve body readback must remain attached to worker completion"]
+pub(in crate::sumeragi) struct DurableCertifiedServeBodyReadbackV1 {
+    durable_body: DurableBodyReceipt,
+    canonical_wire: Vec<u8>,
+    store_identity: V2BodyStoreInstanceIdentity,
+}
+impl DurableCertifiedServeBodyReadbackV1 {
+    /// Borrow the exact durable receipt revalidated by the worker-owned store.
+    pub(in crate::sumeragi) const fn durable_body(&self) -> &DurableBodyReceipt {
+        &self.durable_body
+    }
+
+    /// Borrow the exact canonical `SignedBlockWire` bytes loaded from the frame.
+    pub(in crate::sumeragi) fn canonical_wire(&self) -> &[u8] {
+        &self.canonical_wire
+    }
+
+    /// Compare this readback with the lifecycle owner's retained store seal.
+    pub(in crate::sumeragi) fn matches_store_instance(
+        &self,
+        expected: &V2BodyStoreInstanceIdentity,
+    ) -> bool {
+        self.store_identity.same_instance(expected)
+    }
+}
 /// Body-store-private one-shot permit for binding a cold adapter body lookup.
 ///
 /// Construction stays in this module so another recovery path cannot bind a
@@ -2350,6 +2384,23 @@ impl V2BodyStore {
         receipt: &DurableBodyReceipt,
     ) -> Result<Vec<u8>, V2BodyStoreError> {
         Ok(self.load_envelope(receipt)?.canonical_wire)
+    }
+    /// Read one exact Certified-Serve body and bind it to this live store.
+    ///
+    /// The returned move-only authority is minted only after the ordinary
+    /// receipt and frame revalidation succeeds. It lets the lifecycle owner
+    /// settle worker completion after launch has moved this store out of the
+    /// owner, without weakening the existing exact body-store boundary.
+    pub(in crate::sumeragi) fn read_durable_body_for_certified_serve(
+        &self,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<DurableCertifiedServeBodyReadbackV1, V2BodyStoreError> {
+        let canonical_wire = self.load_canonical_wire(receipt)?;
+        Ok(DurableCertifiedServeBodyReadbackV1 {
+            durable_body: receipt.clone(),
+            canonical_wire,
+            store_identity: self.instance_identity(),
+        })
     }
     /// Find the newest durable proposal round retaining one exact subject.
     ///

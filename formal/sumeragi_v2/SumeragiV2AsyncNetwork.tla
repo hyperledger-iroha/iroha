@@ -2449,7 +2449,7 @@ VARIABLES
   asyncProducerKnownObligations,
   asyncProducerConsumedEpisodes,
   asyncProducerOriginHistory,
-  asyncServeProducerEpisodeDue
+  asyncServeProducerTurnReady
 
 AsyncSchedulerVars ==
   <<asyncNow, asyncCommandQueues, asyncNextCommandClass,
@@ -2630,14 +2630,14 @@ AsyncProducerVars ==
 
 AsyncAllVars ==
   <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars,
-    asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>
+    asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>
 
-AsyncServeProducerEpisodeDebt ==
-  asyncServeProducerEpisodeDue
+AsyncServeProducerTurnDebt ==
+  asyncServeProducerTurnReady
 
 AsyncServiceActivationFrameVars ==
   <<gst, vars, AsyncSchedulerExceptServiceActivation, AsyncRecoveryVars,
-    AsyncProducerVars, asyncServeProducerEpisodeDue>>
+    AsyncProducerVars, asyncServeProducerTurnReady>>
 
 (***************************************************************************
 The control service table is one bounded per-height structure.  Its
@@ -4638,7 +4638,7 @@ ReserveExactServeCapacityVia(node, candidate, authenticatedSource) ==
      /\ authenticatedSource \in AsyncAuthenticatedDeliverySources
      /\ AsyncServeSourceAttemptRecords(node, identity) = {}
      /\ ~AsyncServeIngressAdmissionOwned(node, identity)
-     /\ ~asyncServeProducerEpisodeDue[node]
+     /\ ~asyncServeProducerTurnReady[node]
      /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
      /\ AsyncServeOffQueueReservations(node) = {}
      /\ ~AsyncServeLifecycleFamilyOwned(node, family)
@@ -4690,7 +4690,7 @@ AdvanceExactServeCapacityVia(node, candidate, authenticatedSource) ==
      /\ authenticatedSource \in AsyncAuthenticatedDeliverySources
      /\ AsyncServeSourceAttemptRecords(node, identity) = {}
      /\ ~AsyncServeIngressAdmissionOwned(node, identity)
-     /\ ~asyncServeProducerEpisodeDue[node]
+     /\ ~asyncServeProducerTurnReady[node]
      /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
      /\ AsyncServeOffQueueReservations(node) = {}
      /\ ~AsyncServeLifecycleOwned(node, identity)
@@ -11502,7 +11502,7 @@ ExactServeTransportAdmissionCanAdvanceVia(
           THEN TRUE
      ELSE IF AsyncServeLifecycleConflict(node, request)
           THEN TRUE
-          ELSE /\ ~asyncServeProducerEpisodeDue[node]
+          ELSE /\ ~asyncServeProducerTurnReady[node]
                /\ IF ~AsyncServeLifecycleFamilyOwned(node, family)
                   THEN /\ AsyncServeIngressLifecycleOwnerIdentities(
                              node) = {}
@@ -16890,57 +16890,49 @@ BY Isa
        AsyncServeIngressAdmissionRecords
 
 (***************************************************************************
-The concrete queue lock publishes one one-shot producer debt when the last
-selected Serve ingress occurrence retires without promoting another waiter.
-Fresh Serve admission is already blocked above while this bit is set.  The
-next ordinary runner turn atomically consumes the bit; TLA actions have no
-intermediate call frame, so `ActiveThisStep` is deliberately action-local
-rather than another persistent state or a new fairness assumption.
+The lifecycle ledger publishes one adjacent ProducerTurn only when a Serve
+worker completion durably closes with the canonical response.  The Ready bit
+is therefore a projection of coordinator state, not a queue-local episode or
+ingress-retirement side effect.  It survives same-height restart and is
+consumed only by the next bounded runner proposal attempt.
 
-Restart and receiver teardown clear the volatile bit.  They are classified by
-their inner state transformers instead of the enclosing pre-GST wrappers, so
-the dependency graph remains acyclic.  Normal final drains arm the bit only
-when both the logical ingress-owner set and every off-queue reservation are
-empty afterwards.  A materialized Serve I/O job may remain, matching the Rust
-separation between physical ingress retirement and logical Serve completion.
+Fresh Serve admission remains blocked while this projection is Ready.  That
+models the coordinator's ProducerHandoffBarrier: later physical ingress may
+wait, but no second Serve lifecycle can overtake the Ready ProducerTurn.  TLA
+actions have no intermediate call frame, so `AttemptThisStep` denotes the
+serialized bounded runner pass rather than another persistent state or
+fairness assumption.
 ***************************************************************************)
-AsyncServeProducerEpisodeRestartStep(node) ==
+AsyncServeProducerTurnRestartStep(node) ==
   \/ ResetNodeSchedulerForRestart(node, <<>>)
   \/ ResetNodeSchedulerForRestart(
        node, FreshRestartCandidateSequence(RestartReplay(node)))
 
-AsyncServeProducerEpisodeReceiverCloseStep(node) ==
-  \E reservation \in asyncServeReservations:
-    /\ reservation.node = node
-    /\ PreGstServeReceiverCloseRollback(
-         node, reservation.identity)
+AsyncServeProducerTurnCompletionStep(node) ==
+  /\ AsyncIoQueueDepth(node) > 0
+  /\ LET job == Head(asyncIoQueues[node])
+     IN /\ job.class = "Serve"
+        /\ AsyncServeReconstructedTerminalOutcome(
+             node, job.candidate.item) = AsyncServeResponseOutcome
+        /\ ServiceIoWorkerWork(node)
+        /\ AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
+        /\ AsyncServeOffQueueReservations(node)' = {}
 
-AsyncServeProducerEpisodeFinalRetirementStep(node) ==
-  /\ AsyncServeIngressLifecycleOwnerIdentities(node) # {}
-  /\ AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
-  /\ AsyncServeOffQueueReservations(node)' = {}
-  /\ \/ DrainFairIngressSelected(node)
-     \/ DrainHistoricalIngressSelected(node)
-     \/ DrainInterruptedTipRecoveryIngressSelected(node)
-
-AsyncServeProducerEpisodeActiveThisStep(node) ==
-  /\ asyncServeProducerEpisodeDue[node]
+AsyncServeProducerTurnAttemptThisStep(node) ==
+  /\ asyncServeProducerTurnReady[node]
   /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
   /\ AsyncServeOffQueueReservations(node) = {}
   /\ \/ RunNodeWork(node)
      \/ RunHistoricalServer(node)
 
-AsyncServeProducerEpisodeTransition ==
-  asyncServeProducerEpisodeDue' =
+AsyncServeProducerTurnTransition ==
+  asyncServeProducerTurnReady' =
     [node \in ValidatorIds |->
-       IF AsyncServeProducerEpisodeRestartStep(node)
-            \/ AsyncServeProducerEpisodeReceiverCloseStep(node)
-       THEN FALSE
-       ELSE IF AsyncServeProducerEpisodeFinalRetirementStep(node)
-            THEN TRUE
-            ELSE IF AsyncServeProducerEpisodeActiveThisStep(node)
-                 THEN FALSE
-                 ELSE asyncServeProducerEpisodeDue[node]]
+       IF AsyncServeProducerTurnCompletionStep(node)
+       THEN TRUE
+       ELSE IF AsyncServeProducerTurnAttemptThisStep(node)
+            THEN FALSE
+            ELSE asyncServeProducerTurnReady[node]]
 
 \* Every action named by weak fairness is the exact fully framed AsyncNext arm,
 \* not only its inner scheduler or reducer component.  These suffixes bind
@@ -16956,7 +16948,7 @@ AsyncCoreOuterFrame ==
   /\ UNCHANGED <<height, context>>
   /\ AsyncFixedCorridorDeadlineTransition
   /\ AsyncProducerProjectionStep
-  /\ AsyncServeProducerEpisodeTransition
+  /\ AsyncServeProducerTurnTransition
 
 AsyncNonCrashOuterFrame ==
   /\ UNCHANGED up
@@ -17689,21 +17681,21 @@ AsyncNonCrashStep ==
   \/ /\ RearmResponsiveRecovery
      /\ UNCHANGED up
 
-AsyncServeProducerEpisodeMeasure(node) ==
-  IF asyncServeProducerEpisodeDue[node] THEN 1 ELSE 0
+AsyncServeProducerTurnMeasure(node) ==
+  IF asyncServeProducerTurnReady[node] THEN 1 ELSE 0
 
-THEOREM AsyncServeProducerEpisodeMeasureIsFinite ==
-  asyncServeProducerEpisodeDue \in [ValidatorIds -> BOOLEAN]
+THEOREM AsyncServeProducerTurnMeasureIsFinite ==
+  asyncServeProducerTurnReady \in [ValidatorIds -> BOOLEAN]
     => \A node \in ValidatorIds:
-         /\ AsyncServeProducerEpisodeMeasure(node) \in Nat
-         /\ AsyncServeProducerEpisodeMeasure(node) <= 1
-BY Isa DEF AsyncServeProducerEpisodeMeasure
+         /\ AsyncServeProducerTurnMeasure(node) \in Nat
+         /\ AsyncServeProducerTurnMeasure(node) <= 1
+BY Isa DEF AsyncServeProducerTurnMeasure
 
-THEOREM AsyncServeProducerEpisodeBlocksFreshServeAdmission ==
+THEOREM AsyncServeProducerTurnBlocksFreshServeAdmission ==
   \A node \in ValidatorIds,
      candidate \in AsyncCandidateSet,
      authenticatedSource \in AsyncAuthenticatedDeliverySources:
-    asyncServeProducerEpisodeDue[node]
+    asyncServeProducerTurnReady[node]
       => /\ ~ReserveExactServeCapacityVia(
                   node, candidate, authenticatedSource)
          /\ ~AdvanceExactServeCapacityVia(
@@ -17711,30 +17703,36 @@ THEOREM AsyncServeProducerEpisodeBlocksFreshServeAdmission ==
 BY DEF ReserveExactServeCapacityVia,
        AdvanceExactServeCapacityVia
 
-THEOREM AsyncServeProducerEpisodeFinalRetirementArmsOneShotDebt ==
+THEOREM AsyncServeCompletionArmsOneShotProducerTurn ==
   \A node \in ValidatorIds:
-    /\ AsyncServeProducerEpisodeTransition
-    /\ AsyncServeProducerEpisodeFinalRetirementStep(node)
-    /\ ~AsyncServeProducerEpisodeRestartStep(node)
-    /\ ~AsyncServeProducerEpisodeReceiverCloseStep(node)
-      => /\ asyncServeProducerEpisodeDue'[node]
-         /\ AsyncServeProducerEpisodeMeasure(node)' = 1
-BY Isa DEF AsyncServeProducerEpisodeTransition,
-           AsyncServeProducerEpisodeMeasure
+    /\ AsyncServeProducerTurnTransition
+    /\ AsyncServeProducerTurnCompletionStep(node)
+      => /\ asyncServeProducerTurnReady'[node]
+         /\ AsyncServeProducerTurnMeasure(node)' = 1
+BY Isa DEF AsyncServeProducerTurnTransition,
+           AsyncServeProducerTurnMeasure
 
-THEOREM AsyncServeProducerEpisodeRunnerTurnStrictlyConsumesDebt ==
+THEOREM AsyncServeProducerTurnRunnerAttemptStrictlyConsumesDebt ==
   \A node \in ValidatorIds:
-    /\ AsyncServeProducerEpisodeTransition
-    /\ AsyncServeProducerEpisodeActiveThisStep(node)
-    /\ ~AsyncServeProducerEpisodeRestartStep(node)
-    /\ ~AsyncServeProducerEpisodeReceiverCloseStep(node)
-    /\ ~AsyncServeProducerEpisodeFinalRetirementStep(node)
-      => /\ ~asyncServeProducerEpisodeDue'[node]
-         /\ AsyncServeProducerEpisodeMeasure(node)' + 1
-              = AsyncServeProducerEpisodeMeasure(node)
-BY Isa DEF AsyncServeProducerEpisodeTransition,
-           AsyncServeProducerEpisodeActiveThisStep,
-           AsyncServeProducerEpisodeMeasure
+    /\ AsyncServeProducerTurnTransition
+    /\ AsyncServeProducerTurnAttemptThisStep(node)
+    /\ ~AsyncServeProducerTurnCompletionStep(node)
+      => /\ ~asyncServeProducerTurnReady'[node]
+         /\ AsyncServeProducerTurnMeasure(node)' + 1
+              = AsyncServeProducerTurnMeasure(node)
+BY Isa DEF AsyncServeProducerTurnTransition,
+           AsyncServeProducerTurnAttemptThisStep,
+           AsyncServeProducerTurnMeasure
+
+THEOREM AsyncServeProducerTurnRestartPreservesDebt ==
+  \A node \in ValidatorIds:
+    /\ AsyncServeProducerTurnTransition
+    /\ AsyncServeProducerTurnRestartStep(node)
+    /\ ~AsyncServeProducerTurnCompletionStep(node)
+    /\ ~AsyncServeProducerTurnAttemptThisStep(node)
+      => asyncServeProducerTurnReady'[node]
+           = asyncServeProducerTurnReady[node]
+BY Isa DEF AsyncServeProducerTurnTransition
 
 (***************************************************************************
 One global frame owns the bounded control-slot table, the recipient-local
@@ -24421,7 +24419,7 @@ AsyncNext ==
   /\ AsyncIngressPhysicalOrdinalTransition
   /\ AsyncServiceActivationTransition
   /\ AsyncProducerProjectionStep
-  /\ AsyncServeProducerEpisodeTransition
+  /\ AsyncServeProducerTurnTransition
   /\ UNCHANGED <<height, context>>
   /\ [Next]_vars
 
@@ -25846,7 +25844,7 @@ BY SameHeightRestartPreservesServeHighWatermarks,
 \* those redundant copies as well.
 AsyncOriginalAllVars ==
   <<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars,
-    asyncServeProducerEpisodeDue>>
+    asyncServeProducerTurnReady>>
 
 AsyncNextBeforeFixedCorridorDeadlineReceipt ==
   \E nextOriginal:
@@ -27117,8 +27115,8 @@ AsyncProducerInit ==
   /\ asyncProducerConsumedEpisodes = {}
   /\ asyncProducerOriginHistory = {}
 
-AsyncServeProducerEpisodeInit ==
-  asyncServeProducerEpisodeDue =
+AsyncServeProducerTurnInit ==
+  asyncServeProducerTurnReady =
     [node \in ValidatorIds |-> FALSE]
 
 AsyncBaseInitAt(initialContext) ==
@@ -27131,7 +27129,7 @@ AsyncBaseInitAt(initialContext) ==
   /\ AsyncIngressInit
   /\ AsyncRecoveryInit
   /\ AsyncProducerInit
-  /\ AsyncServeProducerEpisodeInit
+  /\ AsyncServeProducerTurnInit
 
 AsyncBaseInit == AsyncBaseInitAt(ContextRecord(0, <<>>))
 
@@ -29544,12 +29542,12 @@ AsyncProducerTypeInvariant ==
     asyncProducerKnownObligations,
     asyncProducerConsumedEpisodes,
     asyncProducerOriginHistory)
-AsyncServeProducerEpisodeTypeInvariant ==
-  asyncServeProducerEpisodeDue \in [ValidatorIds -> BOOLEAN]
+AsyncServeProducerTurnTypeInvariant ==
+  asyncServeProducerTurnReady \in [ValidatorIds -> BOOLEAN]
 
-AsyncServeProducerEpisodeOwnershipInvariant ==
+AsyncServeProducerTurnOwnershipInvariant ==
   \A node \in ValidatorIds:
-    asyncServeProducerEpisodeDue[node]
+    asyncServeProducerTurnReady[node]
       => /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
          /\ AsyncServeOffQueueReservations(node) = {}
 
@@ -29565,7 +29563,7 @@ AsyncTypeInvariant ==
   /\ TypeInvariant
   /\ AsyncSchedulerTypeInvariant
   /\ AsyncProducerTypeInvariant
-  /\ AsyncServeProducerEpisodeTypeInvariant
+  /\ AsyncServeProducerTurnTypeInvariant
   /\ AsyncServiceActivationPairInvariant
   /\ ReceivedTimeoutVotePoolInvariant
 
@@ -29606,8 +29604,8 @@ AsyncStrongTypeInvariant ==
   /\ StrongInductiveInvariant
   /\ AsyncSchedulerTypeInvariant
   /\ AsyncProducerTypeInvariant
-  /\ AsyncServeProducerEpisodeTypeInvariant
-  /\ AsyncServeProducerEpisodeOwnershipInvariant
+  /\ AsyncServeProducerTurnTypeInvariant
+  /\ AsyncServeProducerTurnOwnershipInvariant
   /\ AsyncServiceActivationPairInvariant
   /\ AsyncControlServiceStateTypeInvariant
   /\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant

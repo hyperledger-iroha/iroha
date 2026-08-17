@@ -1067,8 +1067,7 @@ struct FakeServices {
     operation_calls: BTreeMap<&'static str, usize>,
     validation_error: Option<String>,
     leader_wire_terminals: Vec<LeaderWireRuntimeTerminal>,
-    decision_serve_reconciliation_pending: bool,
-    durable_serve_decision: Option<wire::BlockSubject>,
+    durable_runtime_decision: Option<wire::BlockSubject>,
 }
 impl FakeServices {
     fn check(&mut self, operation: &'static str) -> Result<(), String> {
@@ -1122,36 +1121,21 @@ impl FakeServices {
 }
 impl V2EffectServices for FakeServices {
     type Error = String;
-    fn begin_decision_serve_reconciliation(&mut self) -> Result<(), Self::Error> {
-        self.check("begin-decision-serve-reconciliation")?;
-        if self.decision_serve_reconciliation_pending {
-            return Err("Decision/Serve reconciliation fence is already active".to_owned());
-        }
-        self.decision_serve_reconciliation_pending = true;
-        Ok(())
-    }
-    fn finish_decision_serve_reconciliation(
+    fn finish_runtime_step_reconciliation(
         &mut self,
         decided_subject: Option<wire::BlockSubject>,
     ) -> Result<(), Self::Error> {
-        self.check("finish-decision-serve-reconciliation")?;
-        if !self.decision_serve_reconciliation_pending {
-            return Err("Decision/Serve reconciliation fence is not active".to_owned());
-        }
-        match (self.durable_serve_decision, decided_subject) {
+        self.check("finish-runtime-step-reconciliation")?;
+        match (self.durable_runtime_decision, decided_subject) {
             (Some(retained), Some(observed)) if retained != observed => {
-                return Err("one height published two durable Serve Decision subjects".to_owned());
+                return Err("one height published two durable Decision subjects".to_owned());
             }
             (Some(_), None) => {
-                return Err(
-                    "runtime lost its durable Decision while clearing the Serve admission fence"
-                        .to_owned(),
-                );
+                return Err("runtime lost its durable Decision after a WAL step".to_owned());
             }
-            (None, Some(observed)) => self.durable_serve_decision = Some(observed),
+            (None, Some(observed)) => self.durable_runtime_decision = Some(observed),
             (Some(_), Some(_)) | (None, None) => {}
         }
-        self.decision_serve_reconciliation_pending = false;
         Ok(())
     }
     fn complete_leader_wire_runtime_terminal(

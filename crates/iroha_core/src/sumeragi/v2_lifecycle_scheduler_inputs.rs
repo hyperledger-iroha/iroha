@@ -3,25 +3,30 @@ use super::{
     CapacityClass, LifecycleCoordinator, LifecycleState, LifecycleWorkClass,
     LifecycleWorkRegistryHolder, PreparedLifecycleIngressSelector, ProductionLifecycleOwnerV1,
     schema::{AttestedReadyValidateDemand, SchedulerInputs, SchedulerReadyInputs},
-    work_registry::ReadyRecoveredDecisionApplyDemand,
+    selector::PreparedCertifiedServeExactDequeueV1,
+    work_registry::{
+        ClaimedCertifiedServeDispatchErrorV1, ClaimedCertifiedServeDispatchV1,
+        ClaimedProducerTurnErrorV1, ClaimedProducerTurnV1, ConcreteLifecycleWorkRegistry,
+        ReadyCertifiedServeAttestationV1, ReadyProducerTurnCensusAttestationErrorV1,
+        ReadyRecoveredDecisionApplyDemand,
+    },
 };
-#[cfg(not(test))]
-use crate::sumeragi::v2_runner::LifecycleCurrentRunnerTurn;
 #[cfg(test)]
 use crate::sumeragi::v2_runner::LifecycleRunnerRankSnapshot;
 use crate::sumeragi::{
+    v2::VerifiedHeightContext,
     v2_effects::{
         LifecycleModeRankSnapshot, RecoveredDecisionFetchRequestRegistrationErrorV1,
         RecoveredDecisionFetchResponseClaimErrorV1, V2EffectExecutor,
     },
-    v2_runner::LifecycleRunnerRankTarget,
+    v2_runner::{LifecycleCurrentRunnerTurn, LifecycleRunnerRankTarget},
     v2_runtime::SerializedV2Runtime,
     v2_worker::{
         AuthenticatedLifecycleIoCapacity, LifecycleIoCapacityCaptureFailure,
-        LifecycleIoCapacityWait, LifecycleIoCapacityWaitStatus, ProductionV2Services,
-        RecoveredCompletionCapacityProbeV1, RecoveredDecisionApplyCapacityCaptureErrorV1,
-        RecoveredDecisionApplyCapacityCaptureV1, RecoveredDecisionFetchExactOutputCaptureV1,
-        RecoveredLifecycleSignBroadcastOutputCaptureV1,
+        LifecycleIoCapacityReservation, LifecycleIoCapacityWait, LifecycleIoCapacityWaitStatus,
+        ProductionV2Services, RecoveredCompletionCapacityProbeV1,
+        RecoveredDecisionApplyCapacityCaptureErrorV1, RecoveredDecisionApplyCapacityCaptureV1,
+        RecoveredDecisionFetchExactOutputCaptureV1, RecoveredLifecycleSignBroadcastOutputCaptureV1,
         RecoveredLifecycleSignCapacityCaptureErrorV1, RecoveredLifecycleSignCapacityCaptureV1,
     },
 };
@@ -89,6 +94,35 @@ fn authenticated_waiting_fetch_ready_row(
 ) -> Option<SchedulerReadyInputs> {
     SchedulerReadyInputs::from_authenticated_waiting_fetch(factory, record, fetch, live_debts)
 }
+fn authenticated_certified_serve_ready_row(
+    factory: &AuthenticatedSchedulerInputsFactory,
+    record: &super::LifecycleRecord,
+    ledger: &super::ledger::LifecycleLedgerV1,
+    observation: &CertifiedServeSchedulerObservationV1,
+) -> Option<SchedulerReadyInputs> {
+    observation
+        .attestation
+        .matches_ready_record(record, ledger)
+        .then(|| {
+            authenticated_ready_row(
+                factory,
+                record,
+                None,
+                None,
+                None,
+                None,
+                observation.live_debts(),
+            )
+        })
+        .flatten()
+}
+fn authenticated_producer_handoff_blocked_ready_row(
+    factory: &AuthenticatedSchedulerInputsFactory,
+    record: &super::LifecycleRecord,
+    seal: super::work_registry::ProducerHandoffBlockedReadySealV1,
+) -> Option<SchedulerReadyInputs> {
+    SchedulerReadyInputs::from_authenticated_producer_handoff_blocked(factory, record, seal)
+}
 #[allow(clippy::too_many_arguments)]
 fn authenticated_ready_row_with_physical_capacity(
     factory: &AuthenticatedSchedulerInputsFactory,
@@ -130,6 +164,319 @@ impl AuthenticatedLiveRankDebts {
             Self::DirectRegistryCompletion => [0; 6],
         }
     }
+}
+/// Sealed Ready Serve carrier plus its frozen physical scheduler debts.
+///
+/// The attestation hides logical and physical coordinates. The scheduler
+/// derives them only by matching this observation against the complete Ready
+/// census from the same LedgerV1 frame.
+#[must_use = "the Certified-Serve observation has not entered scheduling"]
+pub(in crate::sumeragi) struct CertifiedServeSchedulerObservationV1 {
+    attestation: ReadyCertifiedServeAttestationV1,
+    predecessor_debt: u64,
+    selector_debt: u64,
+    runner_debt: u64,
+}
+impl CertifiedServeSchedulerObservationV1 {
+    /// Derive one Serve observation only from the service-frozen capacity,
+    /// exact-dequeue, and current-runner authorities.
+    pub(super) fn from_live_cuts(
+        attestation: ReadyCertifiedServeAttestationV1,
+        capacity: &LifecycleIoCapacityReservation<'_>,
+        dequeue: &PreparedCertifiedServeExactDequeueV1<'_>,
+        runner: &LifecycleCurrentRunnerTurn<'_>,
+    ) -> Self {
+        let factory = AuthenticatedSchedulerInputsFactory::new();
+        Self {
+            attestation,
+            predecessor_debt: capacity.authenticated_predecessor_debt(&factory),
+            selector_debt: dequeue.selector_debt(),
+            runner_debt: runner.debt(),
+        }
+    }
+    /// Bind fixture-owned scalar debts without creating production authority.
+    #[cfg(test)]
+    fn new(
+        attestation: ReadyCertifiedServeAttestationV1,
+        predecessor_debt: u64,
+        selector_debt: u64,
+        runner_debt: u64,
+    ) -> Self {
+        Self {
+            attestation,
+            predecessor_debt,
+            selector_debt,
+            runner_debt,
+        }
+    }
+    const fn live_debts(&self) -> [u64; 6] {
+        [
+            0,
+            self.predecessor_debt,
+            self.selector_debt,
+            0,
+            0,
+            self.runner_debt,
+        ]
+    }
+}
+/// Closed failure while authenticating and claiming one full Serve Ready census.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum CertifiedServeSchedulerClaimErrorV1 {
+    /// The logical owner already latched a fail-closed condition.
+    CoordinatorFaulted(super::CoordinatorFault),
+    /// A prior scheduler turn still owns the sole active lease.
+    UnsettledLease(super::LeaseId),
+    /// The supplied LedgerV1 frame is not the exact current durable authority.
+    LedgerMismatch,
+    /// Ready records and the reverse Ready index are not one complete Serve census.
+    InvalidReadyCensus,
+    /// Observations do not bijectively attest every exact Ready record.
+    InvalidAttestation,
+    /// Exact authenticated inputs did not yield one Serve execution lease.
+    UnexpectedPlan,
+    /// The claimed logical row no longer owns its sealed durable carrier.
+    InvalidClaimedCarrier(ClaimedCertifiedServeDispatchErrorV1),
+}
+/// Authenticate the full current Ready census, deterministically claim one
+/// Serve, and consume its sealed attestation into the worker dispatch carrier.
+///
+/// No caller supplies logical or physical lifecycle coordinates. The immutable
+/// LedgerV1 frame is the durable authority and the coordinator contributes only
+/// its exact volatile Ready/lease state.
+pub(in crate::sumeragi) fn claim_certified_serve_turn_v1(
+    coordinator: &mut LifecycleCoordinator,
+    registry: &ConcreteLifecycleWorkRegistry,
+    ledger: &super::ledger::LifecycleLedgerV1,
+    observations: Vec<CertifiedServeSchedulerObservationV1>,
+) -> Result<ClaimedCertifiedServeDispatchV1, CertifiedServeSchedulerClaimErrorV1> {
+    if let Some(fault) = coordinator.fault {
+        return Err(CertifiedServeSchedulerClaimErrorV1::CoordinatorFaulted(
+            fault,
+        ));
+    }
+    if let Some(lease) = coordinator.active_lease.as_ref() {
+        return Err(CertifiedServeSchedulerClaimErrorV1::UnsettledLease(
+            lease.id(),
+        ));
+    }
+    if !super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+        .is_ok_and(|current| &current == ledger)
+    {
+        return Err(CertifiedServeSchedulerClaimErrorV1::LedgerMismatch);
+    }
+    let exact_ready = coordinator
+        .records
+        .iter()
+        .filter_map(|(ordinal, record)| (record.state == LifecycleState::Ready).then_some(*ordinal))
+        .collect::<BTreeSet<_>>();
+    if exact_ready.is_empty()
+        || exact_ready != coordinator.ready_index
+        || exact_ready.len() != observations.len()
+        || exact_ready.iter().any(|ordinal| {
+            coordinator
+                .records
+                .get(ordinal)
+                .is_none_or(|record| record.work_class != LifecycleWorkClass::CertifiedServe)
+        })
+    {
+        return Err(CertifiedServeSchedulerClaimErrorV1::InvalidReadyCensus);
+    }
+
+    let factory = AuthenticatedSchedulerInputsFactory::new();
+    let mut unmatched = observations.into_iter().map(Some).collect::<Vec<_>>();
+    let mut matched = BTreeMap::new();
+    let mut ready = BTreeMap::new();
+    for ordinal in &exact_ready {
+        let record = &coordinator.records[ordinal];
+        let candidates = unmatched
+            .iter()
+            .enumerate()
+            .filter_map(|(index, observation)| {
+                observation.as_ref().and_then(|observation| {
+                    observation
+                        .attestation
+                        .matches_ready_record(record, ledger)
+                        .then_some(index)
+                })
+            })
+            .collect::<Vec<_>>();
+        let [index] = candidates.as_slice() else {
+            return Err(CertifiedServeSchedulerClaimErrorV1::InvalidAttestation);
+        };
+        let observation = unmatched[*index]
+            .take()
+            .expect("matched Certified-Serve observation remains present");
+        let row = authenticated_certified_serve_ready_row(&factory, record, ledger, &observation)
+            .ok_or(CertifiedServeSchedulerClaimErrorV1::InvalidAttestation)?;
+        ready.insert(*ordinal, row);
+        matched.insert(*ordinal, observation);
+    }
+    if unmatched.iter().any(Option::is_some) {
+        return Err(CertifiedServeSchedulerClaimErrorV1::InvalidAttestation);
+    }
+    let inputs = authenticated_scheduler_inputs(factory, BTreeMap::new(), ready);
+    let lease = match coordinator.plan_turn(inputs) {
+        super::TurnPlan::Execute(lease)
+            if lease.work_class() == LifecycleWorkClass::CertifiedServe =>
+        {
+            lease
+        }
+        super::TurnPlan::Execute(lease) => {
+            let _ = coordinator.rollback_unpublished_turn(&lease);
+            return Err(CertifiedServeSchedulerClaimErrorV1::UnexpectedPlan);
+        }
+        super::TurnPlan::FailClosed(fault) => {
+            return Err(CertifiedServeSchedulerClaimErrorV1::CoordinatorFaulted(
+                fault,
+            ));
+        }
+        super::TurnPlan::Idle | super::TurnPlan::Waiting(_) => {
+            return Err(CertifiedServeSchedulerClaimErrorV1::UnexpectedPlan);
+        }
+    };
+    let Some(observation) = matched.remove(&lease.ordinal()) else {
+        let _ = coordinator.rollback_unpublished_turn(&lease);
+        return Err(CertifiedServeSchedulerClaimErrorV1::UnexpectedPlan);
+    };
+    let rollback = lease.clone();
+    registry
+        .project_claimed_certified_serve_dispatch(
+            coordinator,
+            ledger,
+            lease,
+            observation.attestation,
+        )
+        .map_err(|error| {
+            let restored = coordinator.rollback_unpublished_turn(&rollback);
+            debug_assert!(
+                restored,
+                "failed Serve dispatch must restore its unpublished lease"
+            );
+            CertifiedServeSchedulerClaimErrorV1::InvalidClaimedCarrier(error)
+        })
+}
+
+/// Closed failure while authenticating and claiming the oldest Ready
+/// ProducerTurn from one complete lifecycle census.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ProducerTurnSchedulerClaimErrorV1 {
+    /// The logical owner already latched a fail-closed condition.
+    CoordinatorFaulted(super::CoordinatorFault),
+    /// A prior scheduler turn still owns the sole active lease.
+    UnsettledLease(super::LeaseId),
+    /// The executor mode observation belongs to another height context.
+    ForeignModeObservation,
+    /// The supplied LedgerV1 frame is not the exact durable authority.
+    LedgerMismatch,
+    /// The registry could not seal the complete Ready census.
+    Attestation(ReadyProducerTurnCensusAttestationErrorV1),
+    /// The sealed complete census changed before planning.
+    InvalidReadyCensus,
+    /// Planning did not claim the exact oldest ProducerTurn.
+    UnexpectedPlan,
+    /// The claimed logical row no longer owns its exact durable carrier.
+    InvalidClaimedCarrier(ClaimedProducerTurnErrorV1),
+}
+
+/// Claim the oldest Ready ProducerTurn from one registry-authenticated whole
+/// census. Later Ready rows receive only the opaque proof that the older
+/// ProducerHandoffBarrier makes them statically ineligible; no old worker gate
+/// or barrier scalar enters this API.
+pub(in crate::sumeragi) fn claim_producer_turn_v1(
+    coordinator: &mut LifecycleCoordinator,
+    registry: &ConcreteLifecycleWorkRegistry,
+    verified: &VerifiedHeightContext,
+    ledger: &super::ledger::LifecycleLedgerV1,
+    mode: &LifecycleModeRankSnapshot,
+    runner_debt: u64,
+) -> Result<Option<ClaimedProducerTurnV1>, ProducerTurnSchedulerClaimErrorV1> {
+    if let Some(fault) = coordinator.fault {
+        return Err(ProducerTurnSchedulerClaimErrorV1::CoordinatorFaulted(fault));
+    }
+    if let Some(lease) = coordinator.active_lease.as_ref() {
+        return Err(ProducerTurnSchedulerClaimErrorV1::UnsettledLease(
+            lease.id(),
+        ));
+    }
+    let context = verified.context();
+    if mode.context_id() != context.id() || mode.height() != context.height {
+        return Err(ProducerTurnSchedulerClaimErrorV1::ForeignModeObservation);
+    }
+    if !super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+        .is_ok_and(|current| &current == ledger)
+    {
+        return Err(ProducerTurnSchedulerClaimErrorV1::LedgerMismatch);
+    }
+    let Some(attestation) = registry
+        .attest_ready_producer_turn_census(verified, coordinator, ledger)
+        .map_err(ProducerTurnSchedulerClaimErrorV1::Attestation)?
+    else {
+        return Ok(None);
+    };
+    if !attestation.matches_ready_census(coordinator, ledger) {
+        return Err(ProducerTurnSchedulerClaimErrorV1::InvalidReadyCensus);
+    }
+    let target = attestation.target_ordinal();
+    let factory = AuthenticatedSchedulerInputsFactory::new();
+    let mut ready = BTreeMap::new();
+    for ordinal in &coordinator.ready_index {
+        let record = coordinator
+            .records
+            .get(ordinal)
+            .ok_or(ProducerTurnSchedulerClaimErrorV1::InvalidReadyCensus)?;
+        let row = if *ordinal == target {
+            authenticated_ready_row(
+                &factory,
+                record,
+                None,
+                None,
+                None,
+                None,
+                [mode.debt(), 0, 0, 0, 0, runner_debt],
+            )
+        } else {
+            let seal = attestation
+                .blocked_ready_seal(record)
+                .ok_or(ProducerTurnSchedulerClaimErrorV1::InvalidReadyCensus)?;
+            authenticated_producer_handoff_blocked_ready_row(&factory, record, seal)
+        }
+        .ok_or(ProducerTurnSchedulerClaimErrorV1::InvalidReadyCensus)?;
+        if ready.insert(*ordinal, row).is_some() {
+            return Err(ProducerTurnSchedulerClaimErrorV1::InvalidReadyCensus);
+        }
+    }
+    let inputs = authenticated_scheduler_inputs(factory, BTreeMap::new(), ready);
+    let lease = match coordinator.plan_turn(inputs) {
+        super::TurnPlan::Execute(lease)
+            if lease.ordinal() == target
+                && lease.work_class() == LifecycleWorkClass::ProducerTurn =>
+        {
+            lease
+        }
+        super::TurnPlan::Execute(lease) => {
+            let _ = coordinator.rollback_unpublished_turn(&lease);
+            return Err(ProducerTurnSchedulerClaimErrorV1::UnexpectedPlan);
+        }
+        super::TurnPlan::FailClosed(fault) => {
+            return Err(ProducerTurnSchedulerClaimErrorV1::CoordinatorFaulted(fault));
+        }
+        super::TurnPlan::Idle | super::TurnPlan::Waiting(_) => {
+            return Err(ProducerTurnSchedulerClaimErrorV1::UnexpectedPlan);
+        }
+    };
+    let rollback = lease.clone();
+    registry
+        .project_claimed_producer_turn(verified, coordinator, ledger, lease, attestation)
+        .map(Some)
+        .map_err(|error| {
+            let restored = coordinator.rollback_unpublished_turn(&rollback);
+            debug_assert!(
+                restored,
+                "failed ProducerTurn projection must restore its unpublished lease"
+            );
+            ProducerTurnSchedulerClaimErrorV1::InvalidClaimedCarrier(error)
+        })
 }
 /// Failure while the production owner authenticates one complete direct-work
 /// Ready census.
@@ -762,6 +1109,25 @@ fn direct_registry_scheduler_inputs(
     ))
 }
 impl ProductionLifecycleOwnerV1 {
+    /// Claim the oldest ProducerTurn at an activated runner's bounded producer
+    /// point. This owner derives the durable frame and fixes runner reach debt
+    /// to zero because the call site already owns that exact point.
+    pub(in crate::sumeragi) fn claim_producer_turn_at_bounded_producer_point(
+        &mut self,
+        mode: &LifecycleModeRankSnapshot,
+    ) -> Result<Option<ClaimedProducerTurnV1>, ProducerTurnSchedulerClaimErrorV1> {
+        let ledger = super::ledger::LifecycleLedgerV1::from_coordinator(&self.coordinator)
+            .map_err(|_| ProducerTurnSchedulerClaimErrorV1::LedgerMismatch)?;
+        claim_producer_turn_v1(
+            &mut self.coordinator,
+            self.registry.registry(),
+            &self.verified,
+            &ledger,
+            mode,
+            0,
+        )
+    }
+
     /// Classify Ready work without claiming a lease or reserving capacity.
     ///
     /// Broadcast refanout and recovered Apply/Sign/Fetch each authenticate their
@@ -3360,4 +3726,9 @@ mod unified_completion_classifier_tests {
             ProductionCompletionReadyWorkV1::None
         );
     }
+}
+
+#[cfg(test)]
+mod certified_serve_scheduler_tests {
+    include!("tests/v2_lifecycle_scheduler_certified_serve_cases.rs");
 }

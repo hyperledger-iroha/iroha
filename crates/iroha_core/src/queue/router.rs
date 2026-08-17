@@ -2117,13 +2117,11 @@ fn merge_top_level_instruction_dataspace_target(
     )?;
     let requires_universal_coordinator = match same_transaction_approve_target {
         Some(proposal) => proposal.requires_universal_coordinator,
-        None => {
-            instruction_transaction_target_requires_universal_coordinator(
-                instruction,
-                dataspace_catalog,
-                state_view,
-            )?
-        }
+        None => instruction_transaction_target_requires_universal_coordinator(
+            instruction,
+            dataspace_catalog,
+            state_view,
+        )?,
     };
     if requires_universal_coordinator {
         target.coordinator_route = true;
@@ -2145,14 +2143,12 @@ fn merge_top_level_instruction_dataspace_target_with_world<W: WorldReadOnly>(
     );
     let instruction_target = match same_transaction_approve_target {
         Some(proposal) => proposal.dataspace_id,
-        None => {
-            instruction_transaction_dataspace_target_with_world(
-                instruction,
-                dataspace_catalog,
-                world,
-                ledger_time_ms,
-            )?
-        }
+        None => instruction_transaction_dataspace_target_with_world(
+            instruction,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )?,
     };
     let concrete_dataspaces = match same_transaction_approve_target {
         Some(proposal) => Some(proposal.concrete_dataspaces.clone()),
@@ -2171,14 +2167,12 @@ fn merge_top_level_instruction_dataspace_target_with_world<W: WorldReadOnly>(
     )?;
     let requires_universal_coordinator = match same_transaction_approve_target {
         Some(proposal) => proposal.requires_universal_coordinator,
-        None => {
-            instruction_transaction_target_requires_universal_coordinator_with_world(
-                instruction,
-                dataspace_catalog,
-                world,
-                ledger_time_ms,
-            )?
-        }
+        None => instruction_transaction_target_requires_universal_coordinator_with_world(
+            instruction,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )?,
     };
     if requires_universal_coordinator {
         target.coordinator_route = true;
@@ -2271,12 +2265,13 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
     let mut target = TransactionDataspaceTarget::default();
     let reject_cross_dataspace = amx_policy_rejects_cross_dataspace(tx);
     let instruction_refs = executable_instruction_refs(executable);
-    let same_transaction_multisig_proposals = same_transaction_multisig_proposal_targets_with_world(
-        &instruction_refs,
-        dataspace_catalog,
-        world,
-        ledger_time_ms,
-    )?;
+    let same_transaction_multisig_proposals =
+        same_transaction_multisig_proposal_targets_with_world(
+            &instruction_refs,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )?;
     match executable {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
@@ -2363,12 +2358,13 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
         return Ok(Vec::new());
     };
     let instruction_refs = executable_instruction_refs(executable);
-    let same_transaction_multisig_proposals = same_transaction_multisig_proposal_targets_with_world(
-        &instruction_refs,
-        Some(dataspace_catalog),
-        world,
-        ledger_time_ms,
-    )?;
+    let same_transaction_multisig_proposals =
+        same_transaction_multisig_proposal_targets_with_world(
+            &instruction_refs,
+            Some(dataspace_catalog),
+            world,
+            ledger_time_ms,
+        )?;
     match executable {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
@@ -2832,7 +2828,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
             Some(dataspace_catalog),
             world,
             ledger_time_ms,
-        ),
+        )?,
     );
     Ok(())
 }
@@ -3773,21 +3769,15 @@ fn extend_instruction_concrete_dataspace_targets(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<(), RoutingResolveError> {
-    if let Some(nested_targets) = deferred_instruction_concrete_dataspace_targets(
-        instruction,
-        dataspace_catalog,
-        state_view,
-    )?
+    if let Some(nested_targets) =
+        deferred_instruction_concrete_dataspace_targets(instruction, dataspace_catalog, state_view)?
         && !nested_targets.is_empty()
     {
         targets.extend(nested_targets);
         return Ok(());
     }
-    if let Some(target) = instruction_transaction_dataspace_target(
-        instruction,
-        dataspace_catalog,
-        state_view,
-    )?
+    if let Some(target) =
+        instruction_transaction_dataspace_target(instruction, dataspace_catalog, state_view)?
     {
         targets.insert(target);
     }
@@ -3911,9 +3901,9 @@ fn deferred_instruction_concrete_dataspace_targets(
     if let Some(primary) =
         any.downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
     {
-        return Ok(Some(compare_and_set_primary_account_alias_dataspace_targets(
-            primary,
-        )));
+        return Ok(Some(
+            compare_and_set_primary_account_alias_dataspace_targets(primary),
+        ));
     }
     if let Some(multisig) = multisig_instruction(instruction) {
         return match &multisig {
@@ -4112,9 +4102,9 @@ fn deferred_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
     if let Some(primary) =
         any.downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
     {
-        return Ok(Some(compare_and_set_primary_account_alias_dataspace_targets(
-            primary,
-        )));
+        return Ok(Some(
+            compare_and_set_primary_account_alias_dataspace_targets(primary),
+        ));
     }
     if let Some(multisig) = multisig_instruction(instruction) {
         let instructions = match &multisig {
@@ -4171,16 +4161,12 @@ fn same_transaction_multisig_proposal_targets(
 ) -> Result<Vec<SameTransactionMultisigProposalTarget>, RoutingResolveError> {
     let mut proposals = Vec::new();
     for instruction in instructions.iter().copied() {
-        let Some(MultisigInstructionBox::Propose(propose)) =
-            multisig_instruction(&**instruction)
+        let Some(MultisigInstructionBox::Propose(propose)) = multisig_instruction(&**instruction)
         else {
             continue;
         };
-        let dataspace_id = multisig_propose_transaction_dataspace_target(
-            &propose,
-            dataspace_catalog,
-            state_view,
-        )?;
+        let dataspace_id =
+            multisig_propose_transaction_dataspace_target(&propose, dataspace_catalog, state_view)?;
         let mut concrete_dataspaces = BTreeSet::new();
         let mut requires_universal_coordinator = false;
         for nested in &propose.instructions {
@@ -4215,8 +4201,7 @@ fn same_transaction_multisig_proposal_targets_with_world<W: WorldReadOnly>(
 ) -> Result<Vec<SameTransactionMultisigProposalTarget>, RoutingResolveError> {
     let mut proposals = Vec::new();
     for instruction in instructions.iter().copied() {
-        let Some(MultisigInstructionBox::Propose(propose)) =
-            multisig_instruction(&**instruction)
+        let Some(MultisigInstructionBox::Propose(propose)) = multisig_instruction(&**instruction)
         else {
             continue;
         };
@@ -4275,10 +4260,11 @@ fn multisig_propose_transaction_dataspace_target(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
-    let instruction_target =
-        merge_instruction_dataspace_target_results(propose.instructions.iter().map(|instruction| {
-        instruction_transaction_dataspace_target(&**instruction, dataspace_catalog, state_view)
-    }))?;
+    let instruction_target = merge_instruction_dataspace_target_results(
+        propose.instructions.iter().map(|instruction| {
+            instruction_transaction_dataspace_target(&**instruction, dataspace_catalog, state_view)
+        }),
+    )?;
     Ok(instruction_target.or_else(|| {
         account_dataspace_target(
             state_view.map(StateView::world),
@@ -4295,29 +4281,26 @@ fn multisig_approve_transaction_dataspace_target(
     let Some(world) = state_view.map(StateView::world) else {
         return Ok(None);
     };
-    let proposal_target = match multisig_proposal_state(
-        world,
-        &approve.account,
-        &approve.instructions_hash,
-    ) {
-        Some(proposal_state) => merge_instruction_dataspace_target_results(
-            proposal_state.instructions.iter().map(|instruction| {
-                instruction_transaction_dataspace_target(
-                    &**instruction,
-                    dataspace_catalog,
-                    state_view,
-                )
-            }),
-        )?,
-        None => None,
-    };
+    let proposal_target =
+        match multisig_proposal_state(world, &approve.account, &approve.instructions_hash) {
+            Some(proposal_state) => merge_instruction_dataspace_target_results(
+                proposal_state.instructions.iter().map(|instruction| {
+                    instruction_transaction_dataspace_target(
+                        &**instruction,
+                        dataspace_catalog,
+                        state_view,
+                    )
+                }),
+            )?,
+            None => None,
+        };
     Ok(proposal_target.or_else(|| {
-            account_dataspace_target(
-                Some(world),
-                &approve.account,
-                state_view.map(state_view_ledger_time_ms),
-            )
-        }))
+        account_dataspace_target(
+            Some(world),
+            &approve.account,
+            state_view.map(state_view_ledger_time_ms),
+        )
+    }))
 }
 fn multisig_approve_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     approve: &MultisigApprove,
@@ -4325,23 +4308,20 @@ fn multisig_approve_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     world: &W,
     ledger_time_ms: Option<u64>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
-    let proposal_target = match multisig_proposal_state(
-        world,
-        &approve.account,
-        &approve.instructions_hash,
-    ) {
-        Some(proposal_state) => merge_instruction_dataspace_target_results(
-            proposal_state.instructions.iter().map(|instruction| {
-                instruction_transaction_dataspace_target_with_world(
-                    &**instruction,
-                    dataspace_catalog,
-                    world,
-                    ledger_time_ms,
-                )
-            }),
-        )?,
-        None => None,
-    };
+    let proposal_target =
+        match multisig_proposal_state(world, &approve.account, &approve.instructions_hash) {
+            Some(proposal_state) => merge_instruction_dataspace_target_results(
+                proposal_state.instructions.iter().map(|instruction| {
+                    instruction_transaction_dataspace_target_with_world(
+                        &**instruction,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                }),
+            )?,
+            None => None,
+        };
     Ok(proposal_target
         .or_else(|| account_dataspace_target(Some(world), &approve.account, ledger_time_ms)))
 }
@@ -4353,13 +4333,13 @@ fn multisig_propose_transaction_dataspace_target_with_world<W: WorldReadOnly>(
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let instruction_target = merge_instruction_dataspace_target_results(
         propose.instructions.iter().map(|instruction| {
-        instruction_transaction_dataspace_target_with_world(
-            &**instruction,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        )
-    }),
+            instruction_transaction_dataspace_target_with_world(
+                &**instruction,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            )
+        }),
     )?;
     Ok(instruction_target
         .or_else(|| account_dataspace_target(Some(world), &propose.account, ledger_time_ms)))
@@ -4377,54 +4357,89 @@ fn trigger_executable_requires_universal_coordinator(
     executable: &Executable,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
-) -> bool {
+) -> Result<bool, RoutingResolveError> {
     match executable {
         Executable::ContractCall(call) => {
-            contract_address_dataspace_target(&call.contract_address)
-                == Some(DataSpaceId::UNIVERSAL)
+            Ok(contract_address_dataspace_target(&call.contract_address)
+                == Some(DataSpaceId::UNIVERSAL))
         }
         Executable::Instructions(instructions) => {
-            trigger_executable_concrete_dataspace_targets(executable, dataspace_catalog, state_view)
-                .len()
+            if trigger_executable_concrete_dataspace_targets(
+                executable,
+                dataspace_catalog,
+                state_view,
+            )?
+            .len()
                 > 1
-                || instructions.iter().any(|instruction| {
-                    instruction_transaction_target_requires_universal_coordinator(
-                        &**instruction,
-                        dataspace_catalog,
-                        state_view,
-                    )
-                })
+            {
+                return Ok(true);
+            }
+            for instruction in instructions {
+                if instruction_transaction_target_requires_universal_coordinator(
+                    &**instruction,
+                    dataspace_catalog,
+                    state_view,
+                )? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
         Executable::Batch(items) => {
-            trigger_executable_concrete_dataspace_targets(executable, dataspace_catalog, state_view)
-                .len()
+            if trigger_executable_concrete_dataspace_targets(
+                executable,
+                dataspace_catalog,
+                state_view,
+            )?
+            .len()
                 > 1
-                || items.iter().any(|item| match item {
+            {
+                return Ok(true);
+            }
+            for item in items {
+                match item {
                     ExecutableBatchItem::Instruction(instruction) => {
-                        instruction_transaction_target_requires_universal_coordinator(
+                        if instruction_transaction_target_requires_universal_coordinator(
                             &**instruction,
                             dataspace_catalog,
                             state_view,
-                        )
+                        )? {
+                            return Ok(true);
+                        }
                     }
-                    ExecutableBatchItem::ContractCall(call) => {
-                        contract_address_dataspace_target(&call.contract_address)
-                            == Some(DataSpaceId::UNIVERSAL)
+                    ExecutableBatchItem::ContractCall(call)
+                        if contract_address_dataspace_target(&call.contract_address)
+                            == Some(DataSpaceId::UNIVERSAL) =>
+                    {
+                        return Ok(true);
                     }
-                })
+                    ExecutableBatchItem::ContractCall(_) => {}
+                }
+            }
+            Ok(false)
         }
-        Executable::Ivm(_) => false,
+        Executable::Ivm(_) => Ok(false),
         Executable::IvmProved(proved) => {
-            trigger_executable_concrete_dataspace_targets(executable, dataspace_catalog, state_view)
-                .len()
+            if trigger_executable_concrete_dataspace_targets(
+                executable,
+                dataspace_catalog,
+                state_view,
+            )?
+            .len()
                 > 1
-                || proved.overlay.iter().any(|instruction| {
-                    instruction_transaction_target_requires_universal_coordinator(
-                        &**instruction,
-                        dataspace_catalog,
-                        state_view,
-                    )
-                })
+            {
+                return Ok(true);
+            }
+            for instruction in &proved.overlay {
+                if instruction_transaction_target_requires_universal_coordinator(
+                    &**instruction,
+                    dataspace_catalog,
+                    state_view,
+                )? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
     }
 }
@@ -4433,72 +4448,95 @@ fn trigger_executable_requires_universal_coordinator_with_world<W: WorldReadOnly
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
-) -> bool {
+) -> Result<bool, RoutingResolveError> {
     match executable {
         Executable::ContractCall(call) => {
-            contract_address_dataspace_target(&call.contract_address)
-                == Some(DataSpaceId::UNIVERSAL)
+            Ok(contract_address_dataspace_target(&call.contract_address)
+                == Some(DataSpaceId::UNIVERSAL))
         }
         Executable::Instructions(instructions) => {
-            trigger_executable_concrete_dataspace_targets_with_world(
+            if trigger_executable_concrete_dataspace_targets_with_world(
                 executable,
                 dataspace_catalog,
                 world,
                 ledger_time_ms,
-            )
+            )?
             .len()
                 > 1
-                || instructions.iter().any(|instruction| {
-                    instruction_transaction_target_requires_universal_coordinator_with_world(
-                        &**instruction,
-                        dataspace_catalog,
-                        world,
-                        ledger_time_ms,
-                    )
-                })
+            {
+                return Ok(true);
+            }
+            for instruction in instructions {
+                if instruction_transaction_target_requires_universal_coordinator_with_world(
+                    &**instruction,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                )? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
         Executable::Batch(items) => {
-            trigger_executable_concrete_dataspace_targets_with_world(
+            if trigger_executable_concrete_dataspace_targets_with_world(
                 executable,
                 dataspace_catalog,
                 world,
                 ledger_time_ms,
-            )
+            )?
             .len()
                 > 1
-                || items.iter().any(|item| match item {
+            {
+                return Ok(true);
+            }
+            for item in items {
+                match item {
                     ExecutableBatchItem::Instruction(instruction) => {
-                        instruction_transaction_target_requires_universal_coordinator_with_world(
+                        if instruction_transaction_target_requires_universal_coordinator_with_world(
                             &**instruction,
                             dataspace_catalog,
                             world,
                             ledger_time_ms,
-                        )
+                        )? {
+                            return Ok(true);
+                        }
                     }
-                    ExecutableBatchItem::ContractCall(call) => {
-                        contract_address_dataspace_target(&call.contract_address)
-                            == Some(DataSpaceId::UNIVERSAL)
+                    ExecutableBatchItem::ContractCall(call)
+                        if contract_address_dataspace_target(&call.contract_address)
+                            == Some(DataSpaceId::UNIVERSAL) =>
+                    {
+                        return Ok(true);
                     }
-                })
+                    ExecutableBatchItem::ContractCall(_) => {}
+                }
+            }
+            Ok(false)
         }
-        Executable::Ivm(_) => false,
+        Executable::Ivm(_) => Ok(false),
         Executable::IvmProved(proved) => {
-            trigger_executable_concrete_dataspace_targets_with_world(
+            if trigger_executable_concrete_dataspace_targets_with_world(
                 executable,
                 dataspace_catalog,
                 world,
                 ledger_time_ms,
-            )
+            )?
             .len()
                 > 1
-                || proved.overlay.iter().any(|instruction| {
-                    instruction_transaction_target_requires_universal_coordinator_with_world(
-                        &**instruction,
-                        dataspace_catalog,
-                        world,
-                        ledger_time_ms,
-                    )
-                })
+            {
+                return Ok(true);
+            }
+            for instruction in &proved.overlay {
+                if instruction_transaction_target_requires_universal_coordinator_with_world(
+                    &**instruction,
+                    dataspace_catalog,
+                    world,
+                    ledger_time_ms,
+                )? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
     }
 }
@@ -4506,10 +4544,10 @@ fn instruction_transaction_target_requires_universal_coordinator(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
-) -> bool {
+) -> Result<bool, RoutingResolveError> {
     let any = instruction.as_any();
     if musubi_instruction_requires_universal_coordinator(any) {
-        return true;
+        return Ok(true);
     }
     if let Some(multisig) = multisig_instruction(instruction) {
         let instructions = match multisig {
@@ -4528,7 +4566,7 @@ fn instruction_transaction_target_requires_universal_coordinator(
             | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
         let Some(instructions) = instructions else {
-            return false;
+            return Ok(false);
         };
         let mut concrete_dataspaces = BTreeSet::new();
         for nested in &instructions {
@@ -4537,16 +4575,21 @@ fn instruction_transaction_target_requires_universal_coordinator(
                 &**nested,
                 dataspace_catalog,
                 state_view,
-            );
+            )?;
         }
-        return concrete_dataspaces.len() > 1
-            || instructions.iter().any(|nested| {
-                instruction_transaction_target_requires_universal_coordinator(
-                    &**nested,
-                    dataspace_catalog,
-                    state_view,
-                )
-            });
+        if concrete_dataspaces.len() > 1 {
+            return Ok(true);
+        }
+        for nested in &instructions {
+            if instruction_transaction_target_requires_universal_coordinator(
+                &**nested,
+                dataspace_catalog,
+                state_view,
+            )? {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
     }
     if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
         return trigger_executable_requires_universal_coordinator(
@@ -4561,56 +4604,59 @@ fn instruction_transaction_target_requires_universal_coordinator(
             Some(SettlementInstructionBox::SetFxCorridorPolicy(_))
         )
     {
-        return true;
+        return Ok(true);
     }
     if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
-        return fx_corridor_policy_with_state(state_view, &fx.policy_id)
-            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+        let policy = fx_corridor_policy_with_state(state_view, &fx.policy_id)?;
+        return Ok(policy.source_dataspace != policy.destination_dataspace);
     }
     if let Some(SettlementInstructionBox::SettleFxCorridor(fx)) =
         any.downcast_ref::<SettlementInstructionBox>()
     {
-        return fx_corridor_policy_with_state(state_view, &fx.policy_id)
-            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+        let policy = fx_corridor_policy_with_state(state_view, &fx.policy_id)?;
+        return Ok(policy.source_dataspace != policy.destination_dataspace);
     }
     if let Some(transfer) = any.downcast_ref::<TransferBox>()
         && let TransferBox::Asset(transfer) = transfer
     {
-        return asset_id_explicit_dataspace_target(&transfer.source)
-            == Some(DataSpaceId::UNIVERSAL)
-            || asset_balance_definition_route_target(
-                &transfer.source.definition,
-                dataspace_catalog,
-                state_view,
-            )
-            .balance_scope_policy
-                == Some(AssetBalancePolicy::Global);
+        if asset_id_explicit_dataspace_target(&transfer.source) == Some(DataSpaceId::UNIVERSAL) {
+            return Ok(true);
+        }
+        return Ok(asset_balance_definition_route_target(
+            &transfer.source.definition,
+            dataspace_catalog,
+            state_view,
+        )?
+        .balance_scope_policy
+            == Some(AssetBalancePolicy::Global));
     }
     if let Some(mint) = any.downcast_ref::<MintBox>()
         && let MintBox::Asset(mint) = mint
     {
-        return asset_id_explicit_dataspace_target(&mint.destination)
-            == Some(DataSpaceId::UNIVERSAL)
-            || asset_balance_definition_route_target(
-                &mint.destination.definition,
-                dataspace_catalog,
-                state_view,
-            )
-            .balance_scope_policy
-                == Some(AssetBalancePolicy::Global);
+        if asset_id_explicit_dataspace_target(&mint.destination) == Some(DataSpaceId::UNIVERSAL) {
+            return Ok(true);
+        }
+        return Ok(asset_balance_definition_route_target(
+            &mint.destination.definition,
+            dataspace_catalog,
+            state_view,
+        )?
+        .balance_scope_policy
+            == Some(AssetBalancePolicy::Global));
     }
     if let Some(burn) = any.downcast_ref::<BurnBox>()
         && let BurnBox::Asset(burn) = burn
     {
-        return asset_id_explicit_dataspace_target(&burn.destination)
-            == Some(DataSpaceId::UNIVERSAL)
-            || asset_balance_definition_route_target(
-                &burn.destination.definition,
-                dataspace_catalog,
-                state_view,
-            )
-            .balance_scope_policy
-                == Some(AssetBalancePolicy::Global);
+        if asset_id_explicit_dataspace_target(&burn.destination) == Some(DataSpaceId::UNIVERSAL) {
+            return Ok(true);
+        }
+        return Ok(asset_balance_definition_route_target(
+            &burn.destination.definition,
+            dataspace_catalog,
+            state_view,
+        )?
+        .balance_scope_policy
+            == Some(AssetBalancePolicy::Global));
     }
     if let Some(register_zk_asset) = any.downcast_ref::<RegisterZkAsset>() {
         return asset_definition_requires_universal_coordinator(
@@ -4633,17 +4679,17 @@ fn instruction_transaction_target_requires_universal_coordinator(
             state_view,
         );
     }
-    false
+    Ok(false)
 }
 fn instruction_transaction_target_requires_universal_coordinator_with_world<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     world: &W,
     ledger_time_ms: Option<u64>,
-) -> bool {
+) -> Result<bool, RoutingResolveError> {
     let any = instruction.as_any();
     if musubi_instruction_requires_universal_coordinator(any) {
-        return true;
+        return Ok(true);
     }
     if let Some(multisig) = multisig_instruction(instruction) {
         let instructions = match multisig {
@@ -4657,7 +4703,7 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
             | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
         let Some(instructions) = instructions else {
-            return false;
+            return Ok(false);
         };
         let mut concrete_dataspaces = BTreeSet::new();
         for nested in &instructions {
@@ -4667,17 +4713,22 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
                 dataspace_catalog,
                 world,
                 ledger_time_ms,
-            );
+            )?;
         }
-        return concrete_dataspaces.len() > 1
-            || instructions.iter().any(|nested| {
-                instruction_transaction_target_requires_universal_coordinator_with_world(
-                    &**nested,
-                    dataspace_catalog,
-                    world,
-                    ledger_time_ms,
-                )
-            });
+        if concrete_dataspaces.len() > 1 {
+            return Ok(true);
+        }
+        for nested in &instructions {
+            if instruction_transaction_target_requires_universal_coordinator_with_world(
+                &**nested,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            )? {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
     }
     if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
         return trigger_executable_requires_universal_coordinator_with_world(
@@ -4693,59 +4744,62 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
             Some(SettlementInstructionBox::SetFxCorridorPolicy(_))
         )
     {
-        return true;
+        return Ok(true);
     }
     if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
-        return fx_corridor_policy_with_world(world, &fx.policy_id)
-            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+        let policy = fx_corridor_policy_with_world(world, &fx.policy_id)?;
+        return Ok(policy.source_dataspace != policy.destination_dataspace);
     }
     if let Some(SettlementInstructionBox::SettleFxCorridor(fx)) =
         any.downcast_ref::<SettlementInstructionBox>()
     {
-        return fx_corridor_policy_with_world(world, &fx.policy_id)
-            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
+        let policy = fx_corridor_policy_with_world(world, &fx.policy_id)?;
+        return Ok(policy.source_dataspace != policy.destination_dataspace);
     }
     if let Some(transfer) = any.downcast_ref::<TransferBox>()
         && let TransferBox::Asset(transfer) = transfer
     {
-        return asset_id_explicit_dataspace_target(&transfer.source)
-            == Some(DataSpaceId::UNIVERSAL)
-            || asset_balance_definition_route_target_with_world(
-                &transfer.source.definition,
-                dataspace_catalog,
-                world,
-                ledger_time_ms,
-            )
-            .balance_scope_policy
-                == Some(AssetBalancePolicy::Global);
+        if asset_id_explicit_dataspace_target(&transfer.source) == Some(DataSpaceId::UNIVERSAL) {
+            return Ok(true);
+        }
+        return Ok(asset_balance_definition_route_target_with_world(
+            &transfer.source.definition,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )?
+        .balance_scope_policy
+            == Some(AssetBalancePolicy::Global));
     }
     if let Some(mint) = any.downcast_ref::<MintBox>()
         && let MintBox::Asset(mint) = mint
     {
-        return asset_id_explicit_dataspace_target(&mint.destination)
-            == Some(DataSpaceId::UNIVERSAL)
-            || asset_balance_definition_route_target_with_world(
-                &mint.destination.definition,
-                dataspace_catalog,
-                world,
-                ledger_time_ms,
-            )
-            .balance_scope_policy
-                == Some(AssetBalancePolicy::Global);
+        if asset_id_explicit_dataspace_target(&mint.destination) == Some(DataSpaceId::UNIVERSAL) {
+            return Ok(true);
+        }
+        return Ok(asset_balance_definition_route_target_with_world(
+            &mint.destination.definition,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )?
+        .balance_scope_policy
+            == Some(AssetBalancePolicy::Global));
     }
     if let Some(burn) = any.downcast_ref::<BurnBox>()
         && let BurnBox::Asset(burn) = burn
     {
-        return asset_id_explicit_dataspace_target(&burn.destination)
-            == Some(DataSpaceId::UNIVERSAL)
-            || asset_balance_definition_route_target_with_world(
-                &burn.destination.definition,
-                dataspace_catalog,
-                world,
-                ledger_time_ms,
-            )
-            .balance_scope_policy
-                == Some(AssetBalancePolicy::Global);
+        if asset_id_explicit_dataspace_target(&burn.destination) == Some(DataSpaceId::UNIVERSAL) {
+            return Ok(true);
+        }
+        return Ok(asset_balance_definition_route_target_with_world(
+            &burn.destination.definition,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        )?
+        .balance_scope_policy
+            == Some(AssetBalancePolicy::Global));
     }
     if let Some(register_zk_asset) = any.downcast_ref::<RegisterZkAsset>() {
         return asset_definition_requires_universal_coordinator_with_world(
@@ -4771,7 +4825,7 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
             ledger_time_ms,
         );
     }
-    false
+    Ok(false)
 }
 fn account_dataspace_target<W: WorldReadOnly>(
     world: Option<&W>,

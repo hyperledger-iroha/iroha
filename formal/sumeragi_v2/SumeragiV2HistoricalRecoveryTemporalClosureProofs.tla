@@ -124,8 +124,8 @@ IndexedDecisionWitness(initialContext) ==
        asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
          IndexedFixedCorridorDeadlines(initialContext),
-       asyncServeProducerEpisodeDue <-
-         IndexedServeProducerEpisodeDue(initialContext)
+       asyncServeProducerTurnReady <-
+         IndexedServeProducerTurnDue(initialContext)
 
 (***************************************************************************
 Exact Decision-source safety over one indexed Async instance.
@@ -247,8 +247,8 @@ IndexedDecisionServiceWitness(initialContext) ==
        asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
          IndexedFixedCorridorDeadlines(initialContext),
-       asyncServeProducerEpisodeDue <-
-         IndexedServeProducerEpisodeDue(initialContext)
+       asyncServeProducerTurnReady <-
+         IndexedServeProducerTurnDue(initialContext)
 
 (***************************************************************************
 Generic local adequate-leader witness over the same indexed state.
@@ -368,8 +368,8 @@ IndexedAdequateLeaderWitness(initialContext) ==
        asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
          IndexedFixedCorridorDeadlines(initialContext),
-       asyncServeProducerEpisodeDue <-
-         IndexedServeProducerEpisodeDue(initialContext)
+       asyncServeProducerTurnReady <-
+         IndexedServeProducerTurnDue(initialContext)
 
 (***************************************************************************
 Exact indexed producer ownership.
@@ -429,7 +429,7 @@ BY Isa
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
        IndexedRecovery, IndexedProducer,
        IndexedFixedCorridorDeadlines,
-       IndexedServeProducerEpisodeDue
+       IndexedServeProducerTurnDue
 
 THEOREM IndexedAdequateLeaderWitnessVariablesAreExact ==
   IndexedAsyncStateShape
@@ -446,7 +446,7 @@ BY Isa
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
        IndexedRecovery, IndexedProducer,
        IndexedFixedCorridorDeadlines,
-       IndexedServeProducerEpisodeDue
+       IndexedServeProducerTurnDue
 
 THEOREM IndexedAsyncLiveSpecProjectsAdequateLeaderWitnessLiveSpec ==
   \A initialContext \in AdmissibleContextRecords:
@@ -460,7 +460,7 @@ BY Isa
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
        IndexedRecovery, IndexedProducer,
        IndexedFixedCorridorDeadlines,
-       IndexedServeProducerEpisodeDue
+       IndexedServeProducerTurnDue
 
 THEOREM IndexedDecisionServiceWitnessVariablesAreExact ==
   IndexedAsyncStateShape
@@ -477,7 +477,7 @@ BY Isa
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
        IndexedRecovery, IndexedProducer,
        IndexedFixedCorridorDeadlines,
-       IndexedServeProducerEpisodeDue
+       IndexedServeProducerTurnDue
 
 THEOREM IndexedInitProjectsEveryDecisionWitnessInit ==
   \A initialContext \in AdmissibleContextRecords:
@@ -537,7 +537,7 @@ PROOF
                IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
                IndexedRecovery, IndexedProducer,
                IndexedFixedCorridorDeadlines,
-               IndexedServeProducerEpisodeDue
+               IndexedServeProducerTurnDue
       <3> QED BY <3>2
     <2> QED BY <1>1, <2>1, <2>2
   <1> QED BY <1>1
@@ -578,7 +578,7 @@ PROOF
                IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
                IndexedRecovery, IndexedProducer,
                IndexedFixedCorridorDeadlines,
-               IndexedServeProducerEpisodeDue
+               IndexedServeProducerTurnDue
       <3> QED BY <3>2
     <2> QED BY <1>1, <2>1, <2>2
   <1> QED BY <1>1
@@ -604,7 +604,7 @@ BY IndexedBracketStepProjectsEveryDecisionWitnessStep, Isa
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
        IndexedRecovery, IndexedProducer,
        IndexedFixedCorridorDeadlines,
-       IndexedServeProducerEpisodeDue
+       IndexedServeProducerTurnDue
 
 THEOREM IndexedChainInitEstablishesDecisionWitnessSupport ==
   IndexedChainInit => IndexedDecisionWitnessSupport

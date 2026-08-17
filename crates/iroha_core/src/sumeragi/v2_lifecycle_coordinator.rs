@@ -166,11 +166,18 @@ pub(crate) use open::{AuthenticatedLifecycleRecoveryCut, LifecycleOpenError};
     reason = "reviewed certified-serve admission test seam"
 )]
 pub(crate) use projection::CertifiedServeAdmissionBoundaryError;
+pub(in crate::sumeragi) use projection::CertifiedServeTerminalReplayAuthorizationV1;
+#[allow(
+    unused_imports,
+    reason = "typed terminal replay failure is part of the owner boundary"
+)]
+pub(in crate::sumeragi) use projection::CertifiedServeTerminalReplayFailureV1;
 pub(in crate::sumeragi) use projection::lifecycle_context;
 #[allow(unused_imports, reason = "reviewed certified-serve test seam")]
 pub(crate) use projection::{
     AdapterEffectAdmissionError, CertifiedServeAdmissionError,
     CertifiedServeTerminalSettlementErrorV1, CertifiedServeTerminalSettlementFailureV1,
+    ProducerTurnTerminalSettlementErrorV1, ProducerTurnTerminalSettlementFailureV1,
 };
 pub(in crate::sumeragi) use replay_authority::LifecycleReplayAuthorityV1;
 pub(in crate::sumeragi) use replay_authority::RecoveredDecisionApplyCandidateLineageV1;
@@ -189,6 +196,9 @@ pub(crate) use replay_authority::{
     RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,
     RecoveredWalVoteReplayEvidenceV1,
 };
+#[cfg(test)]
+pub(in crate::sumeragi) use scheduler_inputs::CertifiedServeSchedulerClaimErrorV1;
+pub(in crate::sumeragi) use scheduler_inputs::ProducerTurnSchedulerClaimErrorV1;
 #[allow(
     unused_imports,
     reason = "reviewed scheduler-input namespace retained for production wiring"
@@ -198,6 +208,9 @@ pub(crate) use scheduler_inputs::{
     ProductionCompletionReadyWorkV1, ProductionIngressCapacityRetry,
     ProductionIngressCapacityStatus, ProductionIngressSchedulerInputsError,
     ProductionIngressTurnPreparation, ProductionSchedulerInputsError, QueuedProductionIngressFetch,
+};
+pub(in crate::sumeragi) use scheduler_inputs::{
+    CertifiedServeSchedulerObservationV1, claim_certified_serve_turn_v1,
 };
 pub(in crate::sumeragi) use scheduler_inputs::{
     ProductionRecoveredCompletionDispatchErrorV1, ProductionRecoveredCompletionDispatchV1,
@@ -265,9 +278,18 @@ pub(in crate::sumeragi) use wal_recovery::{
     RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
     RecoveredLifecycleSignedBroadcastOutputAuthorityV1,
 };
+pub(in crate::sumeragi) use work_registry::ClaimedCertifiedServeDispatchV1;
 pub(in crate::sumeragi) use work_registry::RecoveredDecisionApplyRegistryProjectionPermit;
 #[cfg(test)]
 pub(in crate::sumeragi) use work_registry::RecoveredLifecycleSignClassV1;
+pub(in crate::sumeragi) use work_registry::{
+    AttemptedProducerTurnV1, ClaimedProducerTurnV1, PreparedRecoveredDecisionApplyDispatch,
+    PreparedRecoveredDecisionFetchDispatchV1, PreparedRecoveredLifecycleSignDispatch,
+    ReadyValidateSignPredecessorAuthority, RecoveredDecisionApplyCompletionProjectionPermit,
+    RecoveredDecisionApplyDispatchIdentityV1, RecoveredDecisionApplyDispatchKeyV1,
+    RecoveredDecisionFetchDispatchIdentityV1, RecoveredDecisionFetchDispatchKeyV1,
+    RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1,
+};
 #[allow(unused_imports, reason = "reviewed recovered-WAL registry namespace")]
 pub(crate) use work_registry::{
     AuthenticatedRecoveredWalValidateLifecycleRepair,
@@ -285,14 +307,6 @@ pub(crate) use work_registry::{
 pub(in crate::sumeragi) use work_registry::{
     LiveValidateSignRegistryReservation, LiveValidateSignWorkProjectionPermit,
     PreparedLiveValidateSignRegistryWork,
-};
-pub(in crate::sumeragi) use work_registry::{
-    PreparedRecoveredDecisionApplyDispatch, PreparedRecoveredDecisionFetchDispatchV1,
-    PreparedRecoveredLifecycleSignDispatch, ReadyValidateSignPredecessorAuthority,
-    RecoveredDecisionApplyCompletionProjectionPermit, RecoveredDecisionApplyDispatchIdentityV1,
-    RecoveredDecisionApplyDispatchKeyV1, RecoveredDecisionFetchDispatchIdentityV1,
-    RecoveredDecisionFetchDispatchKeyV1, RecoveredLifecycleSignDispatchIdentityV1,
-    RecoveredLifecycleSignDispatchKeyV1,
 };
 const MAX_PENDING_ADMISSION_WAITS: usize = 64;
 /// Sole allocator and writer of logical Sumeragi lifecycle state.

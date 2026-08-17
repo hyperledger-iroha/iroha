@@ -116,7 +116,6 @@ use super::{
     v2_recovery::PendingKuraApply,
     v2_runtime::{
         BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
-        ExactServePredecessorCompletionEvidence, ExactServePredecessorObservation,
         LeaderWireRuntimeTerminal, LocalProposalEffectOwnership, LocalProposalReadyCommandIdentity,
         NetworkIngressError, PendingRuntimeEffectBinding, RetiredBodyPipelineCompletions,
         RuntimeCandidateAdmissionDisposition, RuntimeClockError, RuntimeEffectOwnership,
@@ -1328,18 +1327,11 @@ pub(crate) enum ConsensusBroadcastDisposition {
 pub(crate) trait V2EffectServices {
     /// Adapter-specific failure type.
     type Error: fmt::Display;
-    /// Fence exact Serve admission immediately before one runtime WAL step.
-    ///
-    /// Implementations publish this marker under the same lock which allocates
-    /// Serve ingress and lifecycle ordinals. While it is present, raw exact
-    /// admission returns bounded backpressure before touching any ordinal.
-    fn begin_decision_serve_reconciliation(&mut self) -> Result<(), Self::Error>;
-    /// Publish the durable Decision observed after the fenced runtime step.
+    /// Advance receiver-side leader-wire recovery after one runtime WAL step.
     ///
     /// `decided_subject` is `None` when the step did not install a Decision.
-    /// A subject is monotone for the height, and the fence is cleared in the
-    /// same queue-lock transaction which publishes it.
-    fn finish_decision_serve_reconciliation(
+    /// A subject is monotone for the height.
+    fn finish_runtime_step_reconciliation(
         &mut self,
         decided_subject: Option<wire::BlockSubject>,
     ) -> Result<(), Self::Error>;
@@ -4060,8 +4052,7 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         self.runtime
             .prepare_recovered_lifecycle_sign_completion(authority)
     }
-    /// Publish executor-retained owners and compare the retained-response
-    /// target without resetting the selected-Serve predecessor retry latch.
+    /// Publish executor-retained owners and compare the retained-response target.
     pub(crate) fn older_runtime_lifecycle_predates_retained_response(
         &mut self,
         now: Instant,
@@ -4074,20 +4065,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             .map_err(EffectExecutorError::Runtime)
     }
 
-    /// Publish executor-retained owners and directly observe the runnable
-    /// predecessor prefix of one exact Serve ticket.
-    pub(crate) fn exact_serve_predecessor_observation(
-        &mut self,
-        now: Instant,
-        serve_lifecycle_ordinal: u128,
-        completion_evidence: Option<ExactServePredecessorCompletionEvidence>,
-    ) -> Result<ExactServePredecessorObservation, EffectExecutorError> {
-        self.ensure_open()?;
-        self.publish_external_lifecycle_owners()?;
-        self.runtime
-            .exact_serve_predecessor_observation(now, serve_lifecycle_ordinal, completion_evidence)
-            .map_err(EffectExecutorError::Runtime)
-    }
     /// Arm the runtime pacemaker after all height startup work has completed.
     pub(in crate::sumeragi) fn arm_live_clocks(
         &mut self,
@@ -6878,10 +6855,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "process restart is required after a fatal consensus failure".to_owned(),
                 )
             })?;
-        if let Err(error) = services.begin_decision_serve_reconciliation() {
-            drop(wal_step);
-            return Err(self.close(service_error(error), services));
-        }
         let step = match self.runtime.step_pacemaker_effects(now) {
             Ok(step) => step,
             Err(reason) => {
@@ -6896,7 +6869,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(self.close(EffectExecutorError::Runtime(reason), services));
         }
         wal_step.complete();
-        if let Err(error) = self.finish_decision_serve_reconciliation(services) {
+        if let Err(error) = self.finish_runtime_step_reconciliation(services) {
             return Err(self.close(error, services));
         }
         match step {
@@ -6956,10 +6929,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "process restart is required after a fatal consensus failure".to_owned(),
                 )
             })?;
-        if let Err(error) = services.begin_decision_serve_reconciliation() {
-            drop(wal_step);
-            return Err(self.close(service_error(error), services));
-        }
         let step = match self.runtime.step_effects(now) {
             Ok(step) => step,
             Err(reason) => {
@@ -6975,7 +6944,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // before invoking any service callback so service operations acquire
         // their own non-nested guard boundary.
         wal_step.complete();
-        if let Err(error) = self.finish_decision_serve_reconciliation(services) {
+        if let Err(error) = self.finish_runtime_step_reconciliation(services) {
             return Err(self.close(error, services));
         }
         match step {
@@ -7032,10 +7001,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "process restart is required after a fatal consensus failure".to_owned(),
                 )
             })?;
-        if let Err(error) = services.begin_decision_serve_reconciliation() {
-            drop(wal_step);
-            return Err(self.close(service_error(error), services));
-        }
         let step = match self.runtime.step_recovery_effects(now) {
             Ok(step) => step,
             Err(reason) => {
@@ -7048,7 +7013,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(self.close(EffectExecutorError::Runtime(reason), services));
         }
         wal_step.complete();
-        if let Err(error) = self.finish_decision_serve_reconciliation(services) {
+        if let Err(error) = self.finish_runtime_step_reconciliation(services) {
             return Err(self.close(error, services));
         }
         match step {
@@ -12180,7 +12145,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         Ok(decision)
     }
-    fn finish_decision_serve_reconciliation<S: V2EffectServices>(
+    fn finish_runtime_step_reconciliation<S: V2EffectServices>(
         &mut self,
         services: &mut S,
     ) -> Result<(), EffectExecutorError> {
@@ -12206,7 +12171,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             None => None,
         };
         services
-            .finish_decision_serve_reconciliation(decided_subject)
+            .finish_runtime_step_reconciliation(decided_subject)
             .map_err(service_error)
     }
     /// Reconcile volatile ownership immediately after the reducer installs a
@@ -13646,6 +13611,5 @@ mod tests {
     include!("tests/v2_effects_main_03.rs");
     include!("tests/v2_effects_main_04.rs");
     include!("tests/v2_effects_main_05.rs");
-    include!("tests/v2_effects_lifecycle_predecessor.rs");
     include!("tests/v2_effects_03_locked_body_and_sidecar.rs");
 }

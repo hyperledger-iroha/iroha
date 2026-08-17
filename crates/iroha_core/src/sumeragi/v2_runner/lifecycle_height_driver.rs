@@ -2,12 +2,26 @@
 
 use super::*;
 
+fn completion_selection_stops_batch(
+    selection: &super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1,
+) -> bool {
+    matches!(
+        selection,
+        super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1::CertifiedServeCompleted
+    )
+}
+
+fn ingress_restart_error(output_guard: &ConsensusOutputGuard) -> V2RunnerError {
+    output_guard.close_admission_for_restart();
+    V2RunnerError::RestartRequired
+}
+
 /// Drain one bounded ordinary Completion/Runtime/Ingress batch through the
 /// activated lifecycle owner.
 ///
 /// Recovered completion and Decision-Fetch work receives the real borrow-bound
 /// runner turn before ordinary work. A pass-through keeps that same borrow
-/// alive until the legacy completion/runtime tail runs, while an ordinary
+/// alive until the ordinary completion/runtime tail runs, while an ordinary
 /// ingress winner is already dequeued and must enter the shared opaque
 /// post-dequeue consumer. Special certified-fence and timeout-vote episodes
 /// remain separate runner modes because they deliberately bypass the ordinary
@@ -45,18 +59,6 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
     while let Some(current_turn) = outer_turns.next_current() {
         match current_turn.target() {
             LifecycleRunnerRankTarget::Completion => {
-                let barrier_owned = activated.with_runner_runtime(
-                    runner,
-                    |_owner, _executor, services, _local_proposal| {
-                        services
-                            .certified_serve_barrier_request_hash()
-                            .map(|barrier| barrier.is_some())
-                            .map_err(V2RunnerError::Service)
-                    },
-                )?;
-                if barrier_owned {
-                    continue;
-                }
                 match activated.drive_completion_turn(current_turn, lane_work) {
                     super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionTurnV1::PassThrough(
                         ordinary_turn,
@@ -71,8 +73,14 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                         drop(ordinary_turn);
                     }
                     super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionTurnV1::Selected(
-                        _selected,
+                        selected,
                     ) => {
+                        if completion_selection_stops_batch(&selected) {
+                            // Settlement makes the adjacent ProducerTurn Ready.
+                            // Let run_inner claim it before any Runtime or
+                            // Ingress owner can add another Serve to the census.
+                            return Ok(());
+                        }
                         if output_guard.restart_required() {
                             return Err(V2RunnerError::RestartRequired);
                         }
@@ -80,18 +88,6 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                 }
             }
             LifecycleRunnerRankTarget::Runtime => {
-                let barrier_owned = activated.with_runner_runtime(
-                    runner,
-                    |_owner, _executor, services, _local_proposal| {
-                        services
-                            .certified_serve_barrier()
-                            .map(|barrier| barrier.is_some())
-                            .map_err(V2RunnerError::Service)
-                    },
-                )?;
-                if barrier_owned {
-                    continue;
-                }
                 let installed_terminal = activated.with_runner_runtime(
                     runner,
                     |_owner, executor, services, _local_proposal| {
@@ -142,14 +138,16 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                     ) => {
                         use super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1;
                         match selected {
-                            ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchQueued => {}
+                            ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchQueued
+                            | ProductionLifecycleIngressSelectionV1::CertifiedServeQueued
+                            | ProductionLifecycleIngressSelectionV1::CertifiedServeTerminal => {}
                             ProductionLifecycleIngressSelectionV1::CapacityPending
                             | ProductionLifecycleIngressSelectionV1::Retry
                             | ProductionLifecycleIngressSelectionV1::OrdinaryRetained => {
                                 return Ok(());
                             }
                             ProductionLifecycleIngressSelectionV1::RestartRequired => {
-                                return Err(V2RunnerError::RestartRequired);
+                                return Err(ingress_restart_error(&output_guard));
                             }
                         }
                     }
@@ -158,4 +156,33 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completed_certified_serve_yields_before_the_next_outer_turn() {
+        use super::super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1;
+
+        assert!(completion_selection_stops_batch(
+            &ProductionLifecycleCompletionSelectionV1::CertifiedServeCompleted
+        ));
+        assert!(!completion_selection_stops_batch(
+            &ProductionLifecycleCompletionSelectionV1::RestartRequired
+        ));
+    }
+
+    #[test]
+    fn ingress_restart_closes_output_admission_before_returning_error() {
+        let output_guard = ConsensusOutputGuard::isolated();
+
+        assert!(!output_guard.restart_required());
+        assert!(matches!(
+            ingress_restart_error(&output_guard),
+            V2RunnerError::RestartRequired
+        ));
+        assert!(output_guard.restart_required());
+    }
 }

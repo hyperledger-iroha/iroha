@@ -471,8 +471,7 @@ fn different_subject_decision_supersedes_protected_lock_and_frees_losing_capacit
     assert_eq!(services.cancelled_fetches, vec![losing_id]);
     assert_eq!(services.retired_all_outbound, 1);
     assert_eq!(services.retired_candidate_work, 1);
-    assert_eq!(services.durable_serve_decision, Some(commit.subject));
-    assert!(!services.decision_serve_reconciliation_pending);
+    assert_eq!(services.durable_runtime_decision, Some(commit.subject));
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
@@ -510,8 +509,7 @@ fn decision_installed_by_same_runtime_step_retires_stale_terminal_effects() {
     assert!(services.sign_tasks.is_empty());
     assert_eq!(services.retired_all_outbound, 1);
     assert_eq!(services.retired_candidate_work, 1);
-    assert_eq!(services.durable_serve_decision, Some(commit.subject));
-    assert!(!services.decision_serve_reconciliation_pending);
+    assert_eq!(services.durable_runtime_decision, Some(commit.subject));
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
@@ -1738,7 +1736,9 @@ fn reproposal_commit_qc_applies_the_exact_unchanged_body() {
     assert_eq!(task.validated_receipt().durable().round(), commit.round);
     assert!(!executor.status().fail_closed);
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(apply_worker_request_has_no_runtime_ownership_sidecar);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    apply_worker_request_has_no_runtime_ownership_sidecar
+);
 #[test]
 fn apply_accepts_decided_old_view_but_rejects_wrong_height_tag() {
     let fixture = Fixture::new();
@@ -1970,28 +1970,18 @@ fn recovered_next_vote_body_catalog_join_is_exact_and_store_bound() {
 include!("v2_effects_kura_tip_replay.rs");
 include!("v2_effects_01_view_churn_and_runtime_steps.rs");
 #[test]
-fn decision_serve_fence_rejects_durable_decision_loss_without_reopening() {
+fn runtime_step_reconciliation_rejects_durable_decision_loss() {
     let fixture = Fixture::new();
     let mut services = fixture.services();
     let subject = fixture.manifest.subject;
     services
-        .begin_decision_serve_reconciliation()
-        .expect("raise the initial Decision/Serve fence");
-    services
-        .finish_decision_serve_reconciliation(Some(subject))
-        .expect("publish the durable Serve Decision");
-    services
-        .begin_decision_serve_reconciliation()
-        .expect("raise the next runtime-step fence");
+        .finish_runtime_step_reconciliation(Some(subject))
+        .expect("publish the durable Decision");
     let error = services
-        .finish_decision_serve_reconciliation(None)
+        .finish_runtime_step_reconciliation(None)
         .expect_err("a durable Decision cannot disappear on a later runtime step");
     assert!(error.contains("lost its durable Decision"));
-    assert_eq!(services.durable_serve_decision, Some(subject));
-    assert!(
-        services.decision_serve_reconciliation_pending,
-        "failed reconciliation keeps exact Serve admission fenced"
-    );
+    assert_eq!(services.durable_runtime_decision, Some(subject));
 }
 #[test]
 fn live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks() {
@@ -2012,7 +2002,7 @@ fn live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks() {
     ));
     assert!(services.broadcasts.is_empty());
     assert!(services.statuses.is_empty());
-    assert!(services.decision_serve_reconciliation_pending);
+    assert!(services.durable_runtime_decision.is_none());
     assert!(executor.output_guard.restart_required());
 }
 #[test]
@@ -2028,7 +2018,7 @@ fn recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks() 
             if reason.contains("scheduler owner was invalid")
     ));
     assert!(services.statuses.is_empty());
-    assert!(services.decision_serve_reconciliation_pending);
+    assert!(services.durable_runtime_decision.is_none());
     assert!(executor.output_guard.restart_required());
 }
 include!("v2_effects_02_admission_handoffs.rs");

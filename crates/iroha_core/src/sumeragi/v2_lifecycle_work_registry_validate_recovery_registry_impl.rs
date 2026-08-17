@@ -1,4 +1,153 @@
 impl ConcreteLifecycleWorkRegistry {
+    /// Seal the complete current Ready census when its oldest row is an
+    /// executable ProducerTurn. `Ok(None)` means another Ready row must run
+    /// first, or there is no Ready work.
+    pub(super) fn attest_ready_producer_turn_census(
+        &self,
+        verified: &VerifiedHeightContext,
+        coordinator: &LifecycleCoordinator,
+        ledger: &super::ledger::LifecycleLedgerV1,
+    ) -> Result<
+        Option<ReadyProducerTurnCensusAttestationV1>,
+        ReadyProducerTurnCensusAttestationErrorV1,
+    > {
+        if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
+            return Err(ReadyProducerTurnCensusAttestationErrorV1::CoordinatorUnavailable);
+        }
+        if !super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+            .is_ok_and(|current| &current == ledger)
+        {
+            return Err(ReadyProducerTurnCensusAttestationErrorV1::LedgerMismatch);
+        }
+        let ready_records = coordinator
+            .records
+            .iter()
+            .filter_map(|(&ordinal, record)| {
+                (record.state == super::LifecycleState::Ready).then_some((ordinal, record.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let ready_ordinals = ready_records
+            .keys()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        if ready_ordinals != coordinator.ready_index {
+            return Err(ReadyProducerTurnCensusAttestationErrorV1::InvalidReadyCensus);
+        }
+        let Some((&producer_ordinal, producer)) = ready_records.first_key_value() else {
+            return Ok(None);
+        };
+        if producer.work_class != LifecycleWorkClass::ProducerTurn {
+            return Ok(None);
+        }
+        if !self.exactly_covers_all_live_work(verified, coordinator) {
+            return Err(ReadyProducerTurnCensusAttestationErrorV1::InvalidRegistry);
+        }
+        let Some((&serve_ordinal, _)) = coordinator
+            .producer_debts
+            .iter()
+            .find(|(_, producer)| **producer == producer_ordinal)
+        else {
+            return Err(ReadyProducerTurnCensusAttestationErrorV1::InvalidProducer);
+        };
+        let (Some(serve), Some(serve_metadata), Some(producer_metadata)) = (
+            coordinator.records.get(&serve_ordinal),
+            coordinator.durable_records.get(&serve_ordinal),
+            coordinator.durable_records.get(&producer_ordinal),
+        ) else {
+            return Err(ReadyProducerTurnCensusAttestationErrorV1::InvalidProducer);
+        };
+        let Some((slot, producer_digest)) =
+            exact_single_record_slot(producer, LifecycleWorkClass::ProducerTurn.capacity_class())
+        else {
+            return Err(ReadyProducerTurnCensusAttestationErrorV1::InvalidProducer);
+        };
+        let Some(producer_address) =
+            ConcreteWorkAddress::new(producer.owner, producer.ordinal, slot)
+        else {
+            return Err(ReadyProducerTurnCensusAttestationErrorV1::InvalidProducer);
+        };
+        let Some(work) = self.entries.get(&producer_address) else {
+            return Err(ReadyProducerTurnCensusAttestationErrorV1::InvalidProducer);
+        };
+        let ConcreteLifecycleWorkKind::DurableProducerTurn(carrier) = &work.kind else {
+            return Err(ReadyProducerTurnCensusAttestationErrorV1::InvalidProducer);
+        };
+        if serve_ordinal.checked_add(1) != Some(producer_ordinal)
+            || !matches!(
+                serve.state,
+                super::LifecycleState::Terminal(outcome)
+                    if outcome != super::TerminalOutcome::Cancelled
+            )
+            || producer.stage.kind() != LifecycleStageKind::ProducerTurn
+            || producer.stage.predecessor_scope() != PredecessorScope::ProducerHandoffBarrier
+            || !coordinator.ready_entry_is_eligible(producer_ordinal, &ready_ordinals)
+            || !serve_ordinal_pair_is_exact(serve, producer)
+            || !serve_metadata
+                .replay_authority
+                .same_persisted_family(&producer_metadata.replay_authority)
+            || work.digest != producer_digest
+            || !carrier.matches_record(producer, producer_metadata, producer_digest)
+        {
+            return Err(ReadyProducerTurnCensusAttestationErrorV1::InvalidProducer);
+        }
+        Ok(Some(ReadyProducerTurnCensusAttestationV1 {
+            ledger_frame: ledger.frame_identity(),
+            ready_records,
+            producer_address,
+            producer_digest,
+            _linearity: ReadyProducerTurnCensusAttestationLinearityV1,
+        }))
+    }
+
+    /// Consume the exact sealed Ready census with its matching active claim.
+    pub(super) fn project_claimed_producer_turn(
+        &self,
+        verified: &VerifiedHeightContext,
+        coordinator: &LifecycleCoordinator,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        lease: TurnLease,
+        attestation: ReadyProducerTurnCensusAttestationV1,
+    ) -> Result<ClaimedProducerTurnV1, ClaimedProducerTurnErrorV1> {
+        if !super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+            .is_ok_and(|current| &current == ledger)
+        {
+            return Err(ClaimedProducerTurnErrorV1::LedgerMismatch);
+        }
+        if !attestation.matches_claimed_census(coordinator, ledger, &lease) {
+            return Err(ClaimedProducerTurnErrorV1::InvalidLease);
+        }
+        if !self.exactly_covers_all_live_work_with_active_producer(verified, coordinator, &lease) {
+            return Err(ClaimedProducerTurnErrorV1::InvalidCarrier);
+        }
+        let record = coordinator
+            .records
+            .get(&lease.ordinal)
+            .ok_or(ClaimedProducerTurnErrorV1::InvalidCarrier)?;
+        let metadata = coordinator
+            .durable_records
+            .get(&lease.ordinal)
+            .ok_or(ClaimedProducerTurnErrorV1::InvalidCarrier)?;
+        let work = self
+            .entries
+            .get(&attestation.producer_address)
+            .ok_or(ClaimedProducerTurnErrorV1::InvalidCarrier)?;
+        let ConcreteLifecycleWorkKind::DurableProducerTurn(producer) = &work.kind else {
+            return Err(ClaimedProducerTurnErrorV1::InvalidCarrier);
+        };
+        if work.digest != attestation.producer_digest
+            || !producer.matches_claimed_record(record, metadata, work.digest, &lease)
+        {
+            return Err(ClaimedProducerTurnErrorV1::InvalidCarrier);
+        }
+        Ok(ClaimedProducerTurnV1 {
+            lease,
+            address: attestation.producer_address,
+            digest: attestation.producer_digest,
+            ledger_frame: attestation.ledger_frame,
+            _linearity: ClaimedProducerTurnLinearityV1,
+        })
+    }
+
     /// Remove one exact fixture carrier without exposing the registry map.
     #[cfg(test)]
     pub(super) fn remove_exact_for_test(&mut self, address: ConcreteWorkAddress) -> bool {
@@ -1542,6 +1691,156 @@ impl ConcreteLifecycleWorkRegistry {
             }
         }
     }
+    /// Prepare the sole carrier removal authorized by one claimed
+    /// ProducerTurn and the complete active lifecycle census.
+    pub(super) fn prepare_producer_turn_terminal_transition(
+        &self,
+        verified: &VerifiedHeightContext,
+        coordinator: &LifecycleCoordinator,
+        attempted: &AttemptedProducerTurnV1,
+    ) -> Option<PreparedProducerTurnTerminalRegistryTransitionV1> {
+        let claimed = attempted.claimed();
+        let lease = claimed.lease();
+        if !self.exactly_covers_all_live_work_with_active_producer(verified, coordinator, lease)
+            || super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+                .ok()?
+                .frame_identity()
+                != claimed.ledger_frame
+            || lease.ordinal() != claimed.address.ordinal
+            || lease.work_class() != LifecycleWorkClass::ProducerTurn
+            || lease.stage().kind() != LifecycleStageKind::ProducerTurn
+            || lease.stage().predecessor_scope() != PredecessorScope::ProducerHandoffBarrier
+            || lease.output_reservation().is_some()
+        {
+            return None;
+        }
+        let record = coordinator.records.get(&lease.ordinal())?;
+        let metadata = coordinator.durable_records.get(&lease.ordinal())?;
+        let (&serve_ordinal, _) = coordinator
+            .producer_debts
+            .iter()
+            .find(|(_, producer)| **producer == lease.ordinal())?;
+        let serve = coordinator.records.get(&serve_ordinal)?;
+        let serve_metadata = coordinator.durable_records.get(&serve_ordinal)?;
+        let work = self.entries.get(&claimed.address)?;
+        let ConcreteLifecycleWorkKind::DurableProducerTurn(producer) = &work.kind else {
+            return None;
+        };
+        if work.digest != claimed.digest
+            || !producer.matches_claimed_record(record, metadata, work.digest, lease)
+            || serve_ordinal.checked_add(1) != Some(record.ordinal)
+            || !matches!(
+                serve.state,
+                super::LifecycleState::Terminal(outcome)
+                    if outcome != super::TerminalOutcome::Cancelled
+            )
+            || !serve_ordinal_pair_is_exact(serve, record)
+            || !serve_metadata
+                .replay_authority
+                .same_persisted_family(&metadata.replay_authority)
+        {
+            return None;
+        }
+        Some(PreparedProducerTurnTerminalRegistryTransitionV1 {
+            address: claimed.address,
+            digest: claimed.digest,
+            ledger_frame: claimed.ledger_frame,
+            _linearity: PreparedProducerTurnTerminalRegistryTransitionLinearityV1,
+        })
+    }
+
+    /// Publish the exact ProducerTurn terminal successor around LedgerV1 fsync.
+    /// Success is followed only by infallible removal of the prevalidated
+    /// carrier; publication failure leaves the incumbent byte-for-byte intact.
+    pub(super) fn publish_producer_turn_terminal_transition<T, E>(
+        &mut self,
+        prepared: PreparedProducerTurnTerminalRegistryTransitionV1,
+        verified: &VerifiedHeightContext,
+        current: &LifecycleCoordinator,
+        staged: &LifecycleCoordinator,
+        attempted: &AttemptedProducerTurnV1,
+        publish: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, ProducerTurnTerminalRegistryPublicationError<E>> {
+        let claimed = attempted.claimed();
+        let lease = claimed.lease();
+        let Some(work) = self.entries.get(&prepared.address) else {
+            return Err(ProducerTurnTerminalRegistryPublicationError::Preflight(
+                prepared,
+            ));
+        };
+        let ConcreteLifecycleWorkKind::DurableProducerTurn(producer) = &work.kind else {
+            return Err(ProducerTurnTerminalRegistryPublicationError::Preflight(
+                prepared,
+            ));
+        };
+        let exact_current = prepared.address == claimed.address
+            && prepared.digest == claimed.digest
+            && prepared.ledger_frame == claimed.ledger_frame
+            && super::ledger::LifecycleLedgerV1::from_coordinator(current)
+                .is_ok_and(|ledger| ledger.frame_identity() == prepared.ledger_frame)
+            && self.exactly_covers_all_live_work_with_active_producer(verified, current, lease)
+            && current
+                .records
+                .get(&lease.ordinal())
+                .zip(current.durable_records.get(&lease.ordinal()))
+                .is_some_and(|(record, metadata)| {
+                    work.digest == prepared.digest
+                        && work.validates_at(prepared.address)
+                        && producer.matches_claimed_record(record, metadata, prepared.digest, lease)
+                });
+        let mut expected = current.stage_durable_transaction();
+        expected.reduce_settle_turn(lease.clone(), super::TurnOutcome::Advanced, None);
+        let same_ledger_target = matches!(
+            (&expected.ledger_store, &staged.ledger_store),
+            (Some(expected_store), Some(staged_store))
+                if expected_store.same_publication_target(staged_store)
+        );
+        let exact_staged = expected.episode_authority == staged.episode_authority
+            && expected.active_context == staged.active_context
+            && expected.records == staged.records
+            && expected.key_index == staged.key_index
+            && expected.owner_index == staged.owner_index
+            && expected.ready_index == staged.ready_index
+            && expected.admission_waits == staged.admission_waits
+            && expected.active_lease == staged.active_lease
+            && expected.high_water == staged.high_water
+            && expected.next_lease == staged.next_lease
+            && expected.durable_records == staged.durable_records
+            && expected.capacity_geometry == staged.capacity_geometry
+            && expected.capacity_used == staged.capacity_used
+            && expected.capacity_generation == staged.capacity_generation
+            && expected.observed_generation == staged.observed_generation
+            && expected.producer_debts == staged.producer_debts
+            && expected.fault == staged.fault
+            && same_ledger_target
+            && staged.fault.is_none()
+            && staged.active_lease.is_none()
+            && staged
+                .records
+                .get(&prepared.address.ordinal)
+                .is_some_and(|record| {
+                    record.state
+                        == super::LifecycleState::Terminal(super::TerminalOutcome::Advanced)
+                });
+        if !exact_current || !exact_staged {
+            return Err(ProducerTurnTerminalRegistryPublicationError::Preflight(
+                prepared,
+            ));
+        }
+        match publish() {
+            Ok(value) => {
+                drop(
+                    self.entries
+                        .remove(&prepared.address)
+                        .expect("ProducerTurn preflight retained the exact carrier"),
+                );
+                Ok(value)
+            }
+            Err(error) => Err(ProducerTurnTerminalRegistryPublicationError::Publication(
+                error, prepared,
+            )),
+        }
+    }
     /// Whether the registry contains exactly one internally consistent
     /// recovered-WAL authority carrier and no other work.
     ///
@@ -1812,8 +2111,40 @@ impl ConcreteLifecycleWorkRegistry {
         verified: &VerifiedHeightContext,
         coordinator: &LifecycleCoordinator,
     ) -> bool {
+        self.exactly_covers_all_live_work_with_optional_active_producer(verified, coordinator, None)
+    }
+
+    /// Verify the same exhaustive census while one exact ProducerTurn owns the
+    /// coordinator's sole volatile lease.
+    pub(super) fn exactly_covers_all_live_work_with_active_producer(
+        &self,
+        verified: &VerifiedHeightContext,
+        coordinator: &LifecycleCoordinator,
+        lease: &TurnLease,
+    ) -> bool {
+        self.exactly_covers_all_live_work_with_optional_active_producer(
+            verified,
+            coordinator,
+            Some(lease),
+        )
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn exactly_covers_all_live_work_with_optional_active_producer(
+        &self,
+        verified: &VerifiedHeightContext,
+        coordinator: &LifecycleCoordinator,
+        active_producer: Option<&TurnLease>,
+    ) -> bool {
+        let active_producer_is_exact = match (&coordinator.active_lease, active_producer) {
+            (None, None) => true,
+            (Some(active), Some(expected)) => {
+                active == expected && active.work_class == LifecycleWorkClass::ProducerTurn
+            }
+            (None, Some(_)) | (Some(_), None) => false,
+        };
         if coordinator.fault.is_some()
-            || coordinator.active_lease.is_some()
+            || !active_producer_is_exact
             || coordinator.active_context != projection::lifecycle_context(verified.context())
             || coordinator.episode_authority.context() != coordinator.active_context
             || coordinator.episode_authority.capacity_geometry() != &coordinator.capacity_geometry
@@ -1981,7 +2312,11 @@ impl ConcreteLifecycleWorkRegistry {
                     }
                 },
                 super::LifecycleState::Ready | super::LifecycleState::Terminal(_) => false,
-                super::LifecycleState::Claimed(_) => true,
+                super::LifecycleState::Claimed(lease_id) => active_producer.is_none_or(|lease| {
+                    record.ordinal != lease.ordinal
+                        || record.work_class != LifecycleWorkClass::ProducerTurn
+                        || lease_id != lease.id
+                }),
             };
             let unique_digests = record
                 .physical_slots
@@ -2168,6 +2503,10 @@ impl ConcreteLifecycleWorkRegistry {
         live.into_iter().all(|(&ordinal, record)| {
             if record.ordinal != ordinal
                 || matches!(record.state, super::LifecycleState::Claimed(_))
+                    && active_producer.is_none_or(|lease| {
+                        record.ordinal != lease.ordinal
+                            || record.state != super::LifecycleState::Claimed(lease.id)
+                    })
                 || coordinator.key_index.get(&record.key) != Some(&ordinal)
                 || coordinator.owner_index.get(&record.owner.causal_root()) != Some(&record.owner)
                 || coordinator.high_water < ordinal
@@ -2337,9 +2676,17 @@ impl ConcreteLifecycleWorkRegistry {
                 ConcreteLifecycleWorkKind::DurableCertifiedServe(serve) => {
                     serve.matches_record(record, metadata, digest)
                 }
-                ConcreteLifecycleWorkKind::DurableProducerTurn(producer) => {
-                    producer.matches_record(record, metadata, digest)
-                }
+                ConcreteLifecycleWorkKind::DurableProducerTurn(producer) => active_producer
+                    .map_or_else(
+                        || producer.matches_record(record, metadata, digest),
+                        |lease| {
+                            if record.ordinal == lease.ordinal {
+                                producer.matches_claimed_record(record, metadata, digest, lease)
+                            } else {
+                                producer.matches_record(record, metadata, digest)
+                            }
+                        },
+                    ),
             }
         })
     }

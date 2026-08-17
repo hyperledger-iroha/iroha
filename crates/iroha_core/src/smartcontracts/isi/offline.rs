@@ -20,11 +20,11 @@ use iroha_data_model::{
         },
     },
     offline::{
+        KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1,
+        KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1,
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_FIXED_HEADER_BYTES_V1,
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1,
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1,
-        KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_GLOBAL_V1,
-        KAGEMUSHA_ACTIVE_DEVICE_REGISTRATIONS_MAX_PER_ACCOUNT_V1,
         KagemushaActiveReceiverActiveEntryV1, KagemushaActiveReceiverAmbiguousEntryV1,
         KagemushaActiveReceiverEntryV1, KagemushaActiveReceiverKeyV1,
         KagemushaActiveReceiverSnapshotV1, KagemushaActiveReceiverValueV1,
@@ -2468,12 +2468,12 @@ pub mod isi {
                 state_transaction
                     .world
                     .smart_contract_state
-                    .remove(&expired.state_key);
+                    .remove(expired.state_key);
                 for replay_key in expired.replay_keys {
                     state_transaction
                         .world
                         .kagemusha_replay_keys
-                        .remove(&replay_key);
+                        .remove(replay_key);
                 }
             }
         }
@@ -2505,8 +2505,7 @@ pub mod isi {
         // per-account counters plus an expiry index. Opportunistic pruning bounds retained work for
         // newly admitted state, but an index would make admission and block snapshot derivation O(1)
         // and O(active registrations), respectively.
-        for (existing_key, existing_archive) in
-            state_transaction.world.smart_contract_state.iter()
+        for (existing_key, existing_archive) in state_transaction.world.smart_contract_state.iter()
         {
             if !existing_key
                 .to_string()
@@ -2553,10 +2552,7 @@ pub mod isi {
                 .into());
             }
             let replay_keys = kagemusha_registration_replay_keys(other, &other_hash);
-            if replay_keys
-                .iter()
-                .any(|key| !seen_replay_keys.insert(*key))
-            {
+            if replay_keys.iter().any(|key| !seen_replay_keys.insert(*key)) {
                 return Err(labeled_invariant(
                     "invalid_attestation",
                     "existing Kagemusha registration states reuse replay-protected material",

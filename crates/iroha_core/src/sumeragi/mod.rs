@@ -885,8 +885,6 @@ struct FairV2IngressState {
     required_control_frame_bytes: usize,
     required_block_sync_frame_bytes: usize,
     required_outbound_high_frame_bytes: usize,
-    requires_certified_serve_gate: bool,
-    certified_serve_gate: Option<v2_worker::CertifiedServeIngressGate>,
     requires_leader_wire_lifecycle_gate: bool,
     leader_wire_lifecycle_gate: Option<Arc<serviced_candidate_store::LeaderWireLifecycleStoreGate>>,
     leader_wire_lifecycle_ordinals: Option<v2_runtime::RuntimeLifecycleOrdinalSource>,
@@ -917,7 +915,6 @@ struct FairV2IngressEntry {
     inbound: Arc<InboundBlockMessage>,
     enqueued_at: Instant,
     admission_ordinal: u64,
-    certified_serve_reservation: Option<v2_worker::CertifiedServeIngressReservation>,
     class: FairV2IngressClass,
     wire_key: Option<FairV2IngressWireKey>,
     leader_wire_token: Option<FairV2IngressLeaderWireToken>,
@@ -3360,7 +3357,6 @@ pub(crate) struct FairV2IngressCapacityError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FairV2IngressCapacityKind {
     Messages,
-    CertifiedServeGate,
     LeaderWireLifecycleGate,
     Bytes,
     CertifiedFenceEscapeBytes,
@@ -3424,20 +3420,10 @@ fn fair_v2_ingress_required_capacity(
 fn fair_v2_ingress_reserve_ordinary_lifecycle_ordinal(
     state: &FairV2IngressState,
 ) -> Result<Option<u128>, String> {
-    let leader_source = state.leader_wire_lifecycle_ordinals.as_ref();
-    let serve_gate = state.certified_serve_gate.as_ref();
-    if let (Some(source), Some(gate)) = (leader_source, serve_gate)
-        && !gate.shares_lifecycle_ordinals(source)
-    {
-        return Err("fair ingress gates changed their shared lifecycle ordinal source".to_owned());
-    }
-    if let Some(source) = leader_source {
+    if let Some(source) = state.leader_wire_lifecycle_ordinals.as_ref() {
         return source.reserve_one().map(Some);
     }
-    if let Some(gate) = serve_gate {
-        return gate.reserve_ordinary_lifecycle_ordinal().map(Some);
-    }
-    if state.requires_certified_serve_gate || state.requires_leader_wire_lifecycle_gate {
+    if state.requires_leader_wire_lifecycle_gate {
         return Err("production fair ingress lost its lifecycle ordinal source".to_owned());
     }
     Ok(None)
@@ -4125,8 +4111,6 @@ impl FairV2Ingress {
                 required_control_frame_bytes: 0,
                 required_block_sync_frame_bytes: 0,
                 required_outbound_high_frame_bytes: 0,
-                requires_certified_serve_gate: false,
-                certified_serve_gate: None,
                 requires_leader_wire_lifecycle_gate: false,
                 leader_wire_lifecycle_gate: None,
                 leader_wire_lifecycle_ordinals: None,
@@ -4226,33 +4210,6 @@ impl FairV2Ingress {
                     .last()
                     .is_none_or(|ordinal| *ordinal <= state.last_admission_ordinal)
             );
-            let certified_entries = state
-                .lanes
-                .values()
-                .flat_map(|lane| lane.entries.iter())
-                .filter(|entry| fair_v2_ingress_is_certified_body_request(&entry.inbound))
-                .collect::<Vec<_>>();
-            if let Some(gate) = state.certified_serve_gate.as_ref() {
-                debug_assert!(certified_entries.iter().all(|entry| {
-                    let BlockMessage::V2(ConsensusMessageV2 {
-                        payload: ConsensusMessageV2Payload::CertifiedBodyRequest(request),
-                        ..
-                    }) = entry.inbound.message()
-                    else {
-                        unreachable!("certified ingress filter returns only requests");
-                    };
-                    gate.requires_reservation(request)
-                        == entry.certified_serve_reservation.is_some()
-                        && entry
-                            .certified_serve_reservation
-                            .as_ref()
-                            .is_none_or(|reservation| {
-                                entry.inbound.ingress_ownership.as_ref().and_then(
-                                    FairV2IngressOwnershipEvidence::runtime_lifecycle_ordinal,
-                                ) == Some(reservation.scheduler_ordinal())
-                            })
-                }));
-            }
             for (source, lane) in &state.lanes {
                 debug_assert!(lane.bytes <= self.source_byte_capacity);
                 debug_assert!(lane.entries.iter().all(|entry| {
@@ -4734,19 +4691,6 @@ impl FairV2Ingress {
         self.debug_assert_consistent(&state);
         Ok(())
     }
-    /// Require one per-height Serve gate before production admission opens.
-    fn require_certified_serve_gate(&self) {
-        let mut state = self.state.lock();
-        assert!(
-            !state.open,
-            "Serve-gate policy changes only while ingress is closed"
-        );
-        assert_eq!(
-            state.len, 0,
-            "Serve-gate policy precedes all ingress ownership"
-        );
-        state.requires_certified_serve_gate = true;
-    }
     /// Require a context-bound durable leader-wire lifecycle before opening.
     fn require_leader_wire_lifecycle_gate(&self) {
         let mut state = self.state.lock();
@@ -4759,30 +4703,6 @@ impl FairV2Ingress {
             "leader-wire lifecycle policy precedes all ingress ownership"
         );
         state.requires_leader_wire_lifecycle_gate = true;
-    }
-    /// Bind the current height's internal Serve owner before opening ingress.
-    pub(crate) fn bind_certified_serve_gate(
-        &self,
-        gate: v2_worker::CertifiedServeIngressGate,
-    ) -> Result<(), String> {
-        let mut state = self.state.lock();
-        if state.open || state.len != 0 {
-            return Err("certified Serve gate can bind only to an empty closed ingress".to_owned());
-        }
-        if state.certified_serve_gate.is_some() {
-            return Err("certified Serve gate is already bound".to_owned());
-        }
-        if state
-            .leader_wire_lifecycle_ordinals
-            .as_ref()
-            .is_some_and(|source| !gate.shares_lifecycle_ordinals(source))
-        {
-            return Err(
-                "certified Serve gate changed the actor-global lifecycle ordinal source".to_owned(),
-            );
-        }
-        state.certified_serve_gate = Some(gate);
-        Ok(())
     }
     /// Bind and restore the current height's durable productive-wire owner.
     pub(crate) fn bind_leader_wire_lifecycle_gate(
@@ -4805,15 +4725,6 @@ impl FairV2Ingress {
             || !state.leader_wire_lifecycles.is_empty()
         {
             return Err("leader-wire lifecycle gate is already bound".to_owned());
-        }
-        if state
-            .certified_serve_gate
-            .as_ref()
-            .is_some_and(|gate| !gate.shares_lifecycle_ordinals(&lifecycle_ordinals))
-        {
-            return Err(
-                "leader-wire gate changed the actor-global lifecycle ordinal source".to_owned(),
-            );
         }
         if gate.restore()? != restore {
             return Err("leader-wire lifecycle restore changed before binding".to_owned());
@@ -4973,158 +4884,13 @@ impl FairV2Ingress {
         self.debug_assert_consistent(&state);
         Ok(())
     }
-    /// Retire every closed-height carrier and atomically detach both durable
-    /// ingress gates.
-    ///
-    /// Productive leader-wire records describe physical entries in the same
-    /// lanes that carry certified Serve reservations. Clearing those lanes
-    /// before detaching the leader-wire gate would transiently leave a durable
-    /// `Ingress` record without its unique carrier. Keep the two per-height
-    /// ownership cuts under one ingress transaction instead.
-    ///
-    /// This detach deliberately does not forge a backward `Ingress` to
-    /// `Dormant` refinement in the persistent leader-wire gate. On shutdown or
-    /// abnormal runner exit, same-height restart reconciliation normalizes
-    /// active records to selector-dormant `Dormant`. After durable height
-    /// finality, replay's decision authority instead retires the obsolete
-    /// records. Both paths retain the ordinal high-watermarks.
-    pub(crate) fn unbind_height_ingress_gates(
-        &self,
-        certified_serve_gate: &v2_worker::CertifiedServeIngressGate,
-        leader_wire_gate: &Arc<serviced_candidate_store::LeaderWireLifecycleStoreGate>,
-    ) -> Result<(), String> {
-        let _service_guard = self.service_lock.lock();
-        let mut state = self.state.lock();
-        if state.open {
-            return Err("height ingress gates cannot unbind from open ingress".to_owned());
-        }
-        let bound_certified_serve = state
-            .certified_serve_gate
-            .as_ref()
-            .ok_or_else(|| "height ingress lost its certified Serve gate".to_owned())?;
-        if !bound_certified_serve.ptr_eq(certified_serve_gate) {
-            return Err("certified Serve gate changed per-height I/O ownership".to_owned());
-        }
-        let bound_leader_wire = state
-            .leader_wire_lifecycle_gate
-            .as_ref()
-            .ok_or_else(|| "height ingress lost its leader-wire lifecycle gate".to_owned())?;
-        if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(
-            bound_leader_wire,
-            leader_wire_gate,
-        ) {
-            return Err("leader-wire lifecycle gate changed per-height ownership".to_owned());
-        }
-        // Every queued carrier belongs to the closed height. Replacing the
-        // lanes drops each Serve RAII ticket while the ingress lock is held;
-        // ticket rollback takes only the I/O lock, and no I/O path calls back
-        // into fair ingress.
-        let mut lanes = BTreeMap::new();
-        for peer in &state.roster {
-            lanes.insert(
-                FairV2IngressSource::Validator(peer.clone()),
-                FairV2IngressLane::default(),
-            );
-        }
-        lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
-        state.lanes = lanes;
-        state.pending_wire_owners.clear();
-        state.ready.clear();
-        state.len = 0;
-        state.bytes = 0;
-        state.nonempty_since = None;
-        state.last_service_attempt_at = None;
-        let detached_certified_serve = state
-            .certified_serve_gate
-            .take()
-            .expect("validated certified Serve gate remains bound");
-        debug_assert!(detached_certified_serve.ptr_eq(certified_serve_gate));
-        let detached_leader_wire = state
-            .leader_wire_lifecycle_gate
-            .take()
-            .expect("validated leader-wire lifecycle gate remains bound");
-        debug_assert!(
-            serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(
-                &detached_leader_wire,
-                leader_wire_gate,
-            )
-        );
-        state.leader_wire_lifecycle_ordinals = None;
-        state.leader_wire_context = None;
-        state.leader_wire_lifecycles.clear();
-        self.debug_assert_consistent(&state);
-        Ok(())
-    }
-    /// Retire all closed-height occurrences, then detach their exact Serve gate.
-    pub(crate) fn unbind_certified_serve_gate(
-        &self,
-        gate: &v2_worker::CertifiedServeIngressGate,
-    ) -> Result<(), String> {
-        let _service_guard = self.service_lock.lock();
-        let mut state = self.state.lock();
-        if state.open {
-            return Err("certified Serve gate cannot unbind from open ingress".to_owned());
-        }
-        let Some(bound) = state.certified_serve_gate.as_ref() else {
-            return Ok(());
-        };
-        if !bound.ptr_eq(gate) {
-            return Err("certified Serve gate changed per-height I/O ownership".to_owned());
-        }
-        // Every queued carrier belongs to the closed height. Replacing the
-        // lanes drops each RAII ticket while the ingress lock is held; ticket
-        // rollback takes only the I/O lock, and no I/O path calls back here.
-        let mut lanes = BTreeMap::new();
-        for peer in &state.roster {
-            lanes.insert(
-                FairV2IngressSource::Validator(peer.clone()),
-                FairV2IngressLane::default(),
-            );
-        }
-        lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
-        state.lanes = lanes;
-        state.pending_wire_owners.clear();
-        for record in state.leader_wire_lifecycles.values_mut() {
-            record.ingress_predecessors.clear();
-        }
-        state.ready.clear();
-        state.len = 0;
-        state.bytes = 0;
-        state.nonempty_since = None;
-        state.last_service_attempt_at = None;
-        let detached = state
-            .certified_serve_gate
-            .take()
-            .expect("validated certified Serve gate remains bound");
-        debug_assert!(detached.ptr_eq(gate));
-        self.debug_assert_consistent(&state);
-        Ok(())
-    }
     /// Open admission for the already-configured immutable height.
     pub(crate) fn open(&self) -> Result<(), FairV2IngressCapacityError> {
         let mut state = self.state.lock();
-        if state.requires_certified_serve_gate && state.certified_serve_gate.is_none() {
-            return Err(FairV2IngressCapacityError {
-                configured: 0,
-                required: 1,
-                kind: FairV2IngressCapacityKind::CertifiedServeGate,
-            });
-        }
         if state.requires_leader_wire_lifecycle_gate
             && (state.leader_wire_lifecycle_gate.is_none()
                 || state.leader_wire_lifecycle_ordinals.is_none()
                 || state.leader_wire_context.is_none())
-        {
-            return Err(FairV2IngressCapacityError {
-                configured: 0,
-                required: 1,
-                kind: FairV2IngressCapacityKind::LeaderWireLifecycleGate,
-            });
-        }
-        if let (Some(gate), Some(source)) = (
-            state.certified_serve_gate.as_ref(),
-            state.leader_wire_lifecycle_ordinals.as_ref(),
-        ) && !gate.shares_lifecycle_ordinals(source)
         {
             return Err(FairV2IngressCapacityError {
                 configured: 0,
@@ -5742,30 +5508,6 @@ impl FairV2Ingress {
             queued.ownership_snapshot = ownership_snapshot;
             return Ok(FairV2IngressPushDisposition::Coalesced);
         }
-        if !fair_v2_ingress_is_certified_body_request(&inbound) {
-            let dormant_serve_debt = match state.certified_serve_gate.as_ref() {
-                Some(gate) => match gate.dormant_ingress_scheduler_ordinal() {
-                    Ok(dormant) => dormant.is_some(),
-                    Err(_) => {
-                        state.open = false;
-                        return Err(FairV2IngressPushError::FailStop(inbound));
-                    }
-                },
-                None if state.requires_certified_serve_gate => {
-                    state.open = false;
-                    return Err(FairV2IngressPushError::FailStop(inbound));
-                }
-                None => false,
-            };
-            if dormant_serve_debt {
-                // Production startup never exposes carrierless Serve debt.
-                // Its appearance in a live height is invariant evidence, not
-                // backpressure that a requester must repair. Close fair
-                // ingress so the runner restarts into local startup discharge.
-                state.open = false;
-                return Err(FairV2IngressPushError::FailStop(inbound));
-            }
-        }
         let source_lane_is_new = !state.lanes.contains_key(&source);
         if source_lane_is_new && !matches!(source, FairV2IngressSource::Authenticated(_)) {
             return Err(FairV2IngressPushError::rejected(
@@ -6218,7 +5960,7 @@ impl FairV2Ingress {
             }) => Some(request.clone()),
             _ => None,
         };
-        let certified_serve_reservation = if let Some(request) = certified_request.as_ref() {
+        if let Some(request) = certified_request.as_ref() {
             if matches!(
                 inbound.message(),
                 BlockMessage::V2(message) if message.validate_version().is_err()
@@ -6238,48 +5980,9 @@ impl FairV2Ingress {
             if reply_routes.semantic_target() != &request.requester {
                 reject_after_leader_wire_admission!();
             }
-            let gate = if let Some(gate) = state.certified_serve_gate.clone() {
-                Some(gate)
-            } else {
-                if state.requires_certified_serve_gate {
-                    state.open = false;
-                    return Err(FairV2IngressPushError::Closed(inbound));
-                }
-                None
-            };
-            if let Some(gate) = gate {
-                let Some(authenticated_via) = inbound.via().cloned() else {
-                    reject_after_leader_wire_admission!();
-                };
-                let requester_is_roster = state.roster.contains(&request.requester);
-                match gate.reserve(
-                    request,
-                    &authenticated_via,
-                    requester_is_roster,
-                    admission_ordinal,
-                ) {
-                    Ok(reservation) => reservation,
-                    Err(v2_worker::CertifiedServeIngressReserveError::Busy) => {
-                        return Err(FairV2IngressPushError::Full(inbound));
-                    }
-                    Err(v2_worker::CertifiedServeIngressReserveError::Rejected) => {
-                        reject_after_leader_wire_admission!();
-                    }
-                    Err(v2_worker::CertifiedServeIngressReserveError::Closed) => {
-                        state.open = false;
-                        return Err(FairV2IngressPushError::Closed(inbound));
-                    }
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        }
         occurrence.lifecycle_ordinal = if let Some(token) = leader_wire_token.as_ref() {
             Some(token.scheduler_ordinal())
-        } else if let Some(reservation) = certified_serve_reservation.as_ref() {
-            Some(reservation.scheduler_ordinal())
         } else {
             match fair_v2_ingress_reserve_ordinary_lifecycle_ordinal(&state) {
                 Ok(ordinal) => ordinal,
@@ -6351,7 +6054,6 @@ impl FairV2Ingress {
             inbound: Arc::new(inbound),
             enqueued_at,
             admission_ordinal,
-            certified_serve_reservation,
             class,
             wire_key,
             leader_wire_token,
@@ -6479,11 +6181,8 @@ impl FairV2Ingress {
                 // scheduler starvation.
                 state.last_service_attempt_at = Some(service_attempt_at);
             }
-            let serve_projection = fair_v2_ingress_serve_selector_projection(&state, None)?;
-            let selected_serve_barrier = serve_projection.selected_barrier;
             let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection(
                 &state,
-                selected_serve_barrier,
                 retire_obsolete_leader_wire,
                 None,
             )?;
@@ -6502,7 +6201,6 @@ impl FairV2Ingress {
                                     source,
                                     lane,
                                     index,
-                                    &serve_projection,
                                     &leader_wire_projection,
                                     barrier_bypass,
                                 );
@@ -6669,42 +6367,12 @@ impl FairV2Ingress {
                 }
             }
         };
-        let has_certified_serve_reservation = state
-            .lanes
-            .get(&source)
-            .and_then(|lane| lane.entries.get(admitted_index))
-            .is_some_and(|entry| entry.certified_serve_reservation.is_some());
-        if has_leader_wire_ownership && has_certified_serve_reservation {
-            return Err(
-                "one ingress carrier cannot own both leader-wire and Certified-Serve durability"
-                    .to_owned(),
-            );
-        }
         if has_leader_wire_ownership {
             // Persist and install the deterministic runtime owner while the
             // physical carrier, durable Ingress record, and queue lock still
             // form one atomic handoff. Existing downstream bind calls then
             // validate this receipt idempotently.
             Self::bind_leader_wire_runtime_ownership_locked(state, &mut staged_ownership)?;
-        }
-        if let Some(reservation) = state
-            .lanes
-            .get(&source)
-            .and_then(|lane| lane.entries.get(admitted_index))
-            .and_then(|entry| entry.certified_serve_reservation.as_ref())
-        {
-            let evidence_lifecycle_ordinal = staged_ownership.first.lifecycle_ordinal;
-            if evidence_lifecycle_ordinal != Some(reservation.scheduler_ordinal()) {
-                return Err(
-                    "Serve carrier ownership disagreed with its reserved lifecycle ordinal"
-                        .to_owned(),
-                );
-            }
-            // Publish exact physical retirement while the carrier and every
-            // capacity/index owner remain intact. Failure leaves the entry
-            // retryable; success makes the following in-memory dequeue
-            // bookkeeping crash-safe.
-            reservation.publish_physical_drain()?;
         }
         // Install only the already validated staged ownership after every
         // fallible durable transition. The remaining queue/accounting tail is
@@ -7465,7 +7133,6 @@ impl SumeragiStartArgs {
                 Some(authenticated_non_validator_source_capacity),
             ),
         );
-        block.require_certified_serve_gate();
         block.require_leader_wire_lifecycle_gate();
         let (lane_relay_tx, lane_relay_rx) = mpsc::sync_channel(lane_relay_channel_cap);
         let (wake_tx, wake_rx) = mpsc::sync_channel(WORKER_WAKE_CHANNEL_CAP);
@@ -8539,28 +8206,6 @@ mod authoritative_runtime_gate_tests {
         assert!(error.is_bytes());
         assert_eq!(error.configured(), 2 * 1024);
         assert_eq!(error.required(), 3 * 1024);
-    }
-    #[test]
-    fn fair_v2_ingress_required_serve_gate_precedes_open() {
-        let validator = validator_peers(1).pop().expect("validator fixture");
-        let ingress = super::FairV2Ingress::new(7, 2 * 1024, 1024, 0, 0);
-        ingress
-            .configure_roster([validator])
-            .expect("validator and anonymous ownership partitions fit");
-        ingress.require_certified_serve_gate();
-        let error = ingress
-            .open()
-            .expect_err("production admission cannot open before its Serve gate binds");
-        assert_eq!(
-            error.kind,
-            super::FairV2IngressCapacityKind::CertifiedServeGate
-        );
-        assert_eq!(error.configured(), 0);
-        assert_eq!(error.required(), 1);
-        assert!(
-            !ingress.state.lock().open,
-            "failed open leaves admission closed"
-        );
     }
     #[test]
     fn fair_v2_ingress_reserves_timeout_vote_bytes_behind_auxiliary_pressure() {

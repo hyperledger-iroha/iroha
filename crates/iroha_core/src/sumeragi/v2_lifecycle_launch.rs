@@ -73,8 +73,8 @@ use crate::{
         },
         v2_runtime::{RuntimeLifecycleOrdinalSource, RuntimeQueueConfig, SerializedV2Runtime},
         v2_worker::{
-            CertifiedServeIngressGate, DurableExactOutputServiceOwner,
-            KuraReplicaAdvertRefreshOwner, PreparedRecoveredDecisionApplyCompletionV1,
+            DurableExactOutputServiceOwner, KuraReplicaAdvertRefreshOwner,
+            PreparedRecoveredDecisionApplyCompletionV1,
             PreparedRecoveredDecisionFetchBodyCompletionV1,
             PreparedRecoveredLifecycleSignCompletionV1, ProductionV2Services,
             RecoveredDecisionApplyDeferredRetryV1, RecoveredLifecycleCompletionTakeV1,
@@ -152,17 +152,15 @@ impl ProductionLifecycleLaunchInputsV1 {
         }
     }
 }
-/// RAII owner of both exact durable ingress gates installed for this launch.
+/// RAII owner of the exact durable leader-wire ingress gate for this launch.
 ///
 /// Leader-wire recovery binds before runtime and service construction. The
-/// certified-Serve gate joins immediately after the exact service starts. The
 /// ingress stays closed throughout this pre-activation tranche; any later
 /// construction error, ordinary wrapper drop, or panic closes it before the
-/// gates detach in one queue transaction.
+/// gate detaches.
 struct ProductionLeaderWireIngressBindingV1 {
     ingress: Arc<FairV2Ingress>,
     gate: Option<Arc<LeaderWireLifecycleStoreGate>>,
-    certified_serve_gate: Option<CertifiedServeIngressGate>,
 }
 impl ProductionLeaderWireIngressBindingV1 {
     fn bind(
@@ -186,54 +184,17 @@ impl ProductionLeaderWireIngressBindingV1 {
         Ok(Self {
             ingress,
             gate: Some(gate),
-            certified_serve_gate: None,
         })
     }
-    /// Join the exact service-owned Serve gate to the retained leader gate.
-    fn bind_certified_serve(mut self, gate: CertifiedServeIngressGate) -> Result<Self, String> {
-        if self.gate.is_none() || self.certified_serve_gate.is_some() {
-            self.ingress.close();
-            return Err("production ingress binding changed its joint ownership".to_owned());
-        }
-        if let Err(error) = self.ingress.bind_certified_serve_gate(gate.clone()) {
-            self.ingress.close();
+    fn retire(&mut self) -> Result<(), String> {
+        let Some(gate) = self.gate.take() else {
+            return Ok(());
+        };
+        self.ingress.close();
+        if let Err(error) = self.ingress.unbind_leader_wire_lifecycle_gate(&gate) {
             return Err(error);
         }
-        self.certified_serve_gate = Some(gate);
-        Ok(self)
-    }
-    fn retire(&mut self) -> Result<(), String> {
-        match (self.gate.as_ref(), self.certified_serve_gate.as_ref()) {
-            (None, None) => Ok(()),
-            (Some(gate), None) => {
-                self.ingress.close();
-                self.ingress.unbind_leader_wire_lifecycle_gate(gate)?;
-                self.gate = None;
-                Ok(())
-            }
-            (None, Some(gate)) => {
-                self.ingress.close();
-                self.ingress.unbind_certified_serve_gate(gate)?;
-                self.certified_serve_gate = None;
-                Ok(())
-            }
-            (Some(leader_wire_gate), Some(certified_serve_gate)) => {
-                self.ingress.close();
-                if let Err(error) = self
-                    .ingress
-                    .unbind_height_ingress_gates(certified_serve_gate, leader_wire_gate)
-                {
-                    // Joint validation failed before mutation. Never fall back
-                    // to split teardown across the shared carrier lanes.
-                    self.certified_serve_gate = None;
-                    self.gate = None;
-                    return Err(error);
-                }
-                self.certified_serve_gate = None;
-                self.gate = None;
-                Ok(())
-            }
-        }
+        Ok(())
     }
 }
 impl Drop for ProductionLeaderWireIngressBindingV1 {
@@ -278,6 +239,10 @@ pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {
     // The wait retains the exact selector and service-generation fence. It is
     // never split back into a caller-selected ordinal or raw queue witness.
     recovered_ingress_capacity_wait: Option<super::PreparedProductionIngressCapacityWait>,
+    // Current-height Serve retains only the worker release-generation fence;
+    // after it advances the full fair-ingress census is captured again.
+    certified_serve_capacity_wait:
+        Option<crate::sumeragi::v2_worker::LifecycleCertifiedServeCapacityWaitV1>,
     #[allow(dead_code)]
     completion_observer_activation: Option<ProductionV2CompletionObserverActivationPermitV1>,
     // Rust drops fields in declaration order. Keep this last so the service
@@ -2045,6 +2010,7 @@ impl ActivatedProductionLifecycleV1 {
             || self.launched.recovered_decision_apply_deferred.is_some()
             || self.launched.recovered_lifecycle_sign_completion.is_some()
             || self.launched.recovered_ingress_capacity_wait.is_some()
+            || self.launched.certified_serve_capacity_wait.is_some()
             || self.launched.completion_observer_activation.is_some()
             || !self
                 .launched
@@ -2083,6 +2049,7 @@ impl ActivatedProductionLifecycleV1 {
             recovered_decision_fetch_body_completion,
             recovered_lifecycle_sign_completion,
             recovered_ingress_capacity_wait,
+            certified_serve_capacity_wait,
             completion_observer_activation,
             leader_wire_ingress_binding,
         } = launched;
@@ -2092,6 +2059,7 @@ impl ActivatedProductionLifecycleV1 {
         debug_assert!(recovered_decision_fetch_body_completion.is_none());
         debug_assert!(recovered_lifecycle_sign_completion.is_none());
         debug_assert!(recovered_ingress_capacity_wait.is_none());
+        debug_assert!(certified_serve_capacity_wait.is_none());
         debug_assert!(completion_observer_activation.is_none());
         drop(recovered_decision_apply_deferred);
         drop(pending_kura_apply_replay);
@@ -2099,6 +2067,7 @@ impl ActivatedProductionLifecycleV1 {
         drop(recovered_decision_fetch_body_completion);
         drop(recovered_lifecycle_sign_completion);
         drop(recovered_ingress_capacity_wait);
+        drop(certified_serve_capacity_wait);
         drop(completion_observer_activation);
         drop(leader_wire_ingress_binding);
 
@@ -2164,6 +2133,7 @@ impl ActivatedProductionLifecycleV1 {
             recovered_decision_fetch_body_completion,
             recovered_lifecycle_sign_completion,
             recovered_ingress_capacity_wait,
+            certified_serve_capacity_wait,
             completion_observer_activation,
             leader_wire_ingress_binding,
         } = launched;
@@ -2173,6 +2143,7 @@ impl ActivatedProductionLifecycleV1 {
         assert!(recovered_decision_fetch_body_completion.is_none());
         assert!(recovered_lifecycle_sign_completion.is_none());
         assert!(recovered_ingress_capacity_wait.is_none());
+        assert!(certified_serve_capacity_wait.is_none());
         assert!(completion_observer_activation.is_none());
         drop(executor);
         drop(pending_kura_apply_replay);
@@ -2181,6 +2152,7 @@ impl ActivatedProductionLifecycleV1 {
         drop(recovered_decision_fetch_body_completion);
         drop(recovered_lifecycle_sign_completion);
         drop(recovered_ingress_capacity_wait);
+        drop(certified_serve_capacity_wait);
         drop(completion_observer_activation);
         drop(leader_wire_ingress_binding);
         ProductionLifecyclePostOutputHandoffV1 {
@@ -2581,12 +2553,6 @@ impl ProductionLifecycleOwnerV1 {
         {
             return Err(ProductionLifecycleLaunchErrorV1::OwnershipMismatch);
         }
-        let certified_serve_gate = services
-            .certified_serve_ingress_gate()
-            .map_err(ProductionLifecycleLaunchErrorV1::Services)?;
-        let leader_wire_ingress_binding = leader_wire_ingress_binding
-            .bind_certified_serve(certified_serve_gate)
-            .map_err(ProductionLifecycleLaunchErrorV1::Services)?;
         self.body_store_identity = Some(body_store_identity);
         construction.complete();
         Ok(Box::new(LaunchedProductionLifecycleV1 {
@@ -2599,6 +2565,7 @@ impl ProductionLifecycleOwnerV1 {
             recovered_decision_fetch_body_completion: None,
             recovered_lifecycle_sign_completion: None,
             recovered_ingress_capacity_wait: None,
+            certified_serve_capacity_wait: None,
             completion_observer_activation: Some(
                 ProductionV2CompletionObserverActivationPermitV1 {
                     _seal: ProductionV2CompletionObserverActivationPermitSealV1,

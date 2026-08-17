@@ -39,8 +39,8 @@ use crate::sumeragi::{
         V2EffectExecutor, v2_ingress_head_can_drain,
     },
     v2_runtime::SerializedV2Runtime,
-    v2_transport::AuthenticatedCertifiedBodyResponse,
     v2_transport::V2TransportError,
+    v2_transport::{AuthenticatedCertifiedBodyRequest, AuthenticatedCertifiedBodyResponse},
     v2_worker::{PreparedCertifiedFetchBodyPersistenceCompletion, ProductionV2Services},
 };
 use iroha_crypto::HashOf;
@@ -448,6 +448,14 @@ pub(in crate::sumeragi) enum RecoveredDecisionFetchExactDequeueErrorV1 {
     /// The frozen queue prefix changed before the service lock was acquired.
     Queue(FairIngressQueueCutError),
 }
+/// Closed failure while pre-locking one selector-owned Certified-Serve row.
+#[derive(Debug)]
+pub(in crate::sumeragi) enum CertifiedServeExactDequeueErrorV1 {
+    /// The selected target no longer names the authenticated request.
+    SelectorAuthority,
+    /// The frozen ingress prefix changed before the service lock was acquired.
+    Queue(FairIngressQueueCutError),
+}
 /// Prevalidated recovered response dequeue held across LedgerV1 fsync.
 #[must_use = "recovered Decision Fetch ingress occurrence has not been acknowledged"]
 pub(in crate::sumeragi) struct PreparedRecoveredDecisionFetchExactDequeueV1<'a> {
@@ -459,6 +467,31 @@ impl PreparedRecoveredDecisionFetchExactDequeueV1<'_> {
         let (inbound, disposition) = self.locked.commit();
         assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
         drop(inbound);
+    }
+}
+/// Prevalidated Certified-Serve dequeue held across capacity capture and LedgerV1 fsync.
+#[must_use = "Certified-Serve ingress occurrence has not been acknowledged"]
+pub(in crate::sumeragi) struct PreparedCertifiedServeExactDequeueV1<'a> {
+    locked: LockedPreparedFairIngressExactDequeue<'a>,
+    selector_debt: u64,
+    selected_positions: FairIngressQueuePositions,
+}
+impl PreparedCertifiedServeExactDequeueV1<'_> {
+    /// Return the complete selector debt frozen before any durable mutation.
+    pub(in crate::sumeragi) const fn selector_debt(&self) -> u64 {
+        self.selector_debt
+    }
+
+    /// Return the exact lane/source positions of the retained request.
+    pub(super) const fn selected_positions(&self) -> FairIngressQueuePositions {
+        self.selected_positions
+    }
+
+    /// Assertion-remove the exact authenticated request after lifecycle publication.
+    pub(in crate::sumeragi) fn commit(
+        self,
+    ) -> (InboundBlockMessage, FairV2IngressDequeueDisposition) {
+        self.locked.commit()
     }
 }
 impl PreparedCertifiedFetchExactDequeue {
@@ -1402,6 +1435,61 @@ impl PreparedLifecycleIngressSelector {
             )
             .map_err(|(error, _witness)| RecoveredDecisionFetchExactDequeueErrorV1::Queue(error))?;
         Ok(PreparedRecoveredDecisionFetchExactDequeueV1 { locked })
+    }
+    /// Consume one selector into an exact prelocked Certified-Serve dequeue.
+    ///
+    /// The returned target remains separate so the worker reservation and
+    /// lifecycle owner must transfer the same move-only authority. The queue
+    /// service lock stays held until the caller either drops this preparation
+    /// before publication or assertion-dequeues it afterwards.
+    pub(in crate::sumeragi) fn into_locked_certified_serve_dequeue<'a>(
+        mut self,
+        ingress: &'a FairV2Ingress,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+    ) -> Result<
+        (
+            PreparedCertifiedServeExactDequeueV1<'a>,
+            LifecycleIngressIoTargetSeal,
+        ),
+        CertifiedServeExactDequeueErrorV1,
+    > {
+        let target = self
+            .take_lifecycle_io_target()
+            .map_err(|_| CertifiedServeExactDequeueErrorV1::SelectorAuthority)?;
+        if target.context() != self.context
+            || target.ingress_identity() != *self.selected_identity()
+            || !target.matches_certified_serve_request(authenticated.request_hash())
+            || self.queue_witness.selected_disposition() != FairV2IngressDequeueDisposition::Admit
+        {
+            return Err(CertifiedServeExactDequeueErrorV1::SelectorAuthority);
+        }
+        let Self {
+            context,
+            request_fence_active: _,
+            queue_witness,
+            io_target: _,
+            verdicts: _,
+            priority_owners: _,
+            claimed_response_families,
+            selector_debt,
+        } = self;
+        drop(claimed_response_families);
+        let selected_positions = queue_witness.selected_positions();
+        let locked = queue_witness
+            .lock_exact_dequeue_retaining(
+                ingress,
+                context,
+                target.ingress_identity().physical_admission_ordinal(),
+            )
+            .map_err(|(error, _witness)| CertifiedServeExactDequeueErrorV1::Queue(error))?;
+        Ok((
+            PreparedCertifiedServeExactDequeueV1 {
+                locked,
+                selector_debt,
+                selected_positions,
+            },
+            target,
+        ))
     }
     fn into_exact_certified_fetch_dequeue(
         self,

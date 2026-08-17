@@ -4544,9 +4544,8 @@ ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
         "restricted pending-Kura live recovery and finalization",
         (
             "executor.has_retained_certified_body_response()",
-            "services.certified_serve_barrier()",
-            "service_pending_certified_serve_barrier(",
-            "services.try_begin_certified_serve_producer_episode()",
+            "settle_certified_serve_completion_for_no_clock_recovery(&mut active_runner)",
+            "claim_producer_turn_for_no_clock_recovery(&mut active_runner)",
             "retry_exact_output_and_apply_sidecar_admissions(",
             "services.service_kura_replica_advert_refresh_turn(Instant::now())",
             "services.drain_completions(executor)?",
@@ -4554,8 +4553,9 @@ ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
             "reconcile_executor_locked_body(executor, services)?",
             "drain_decided_lane_recovery_ingress(",
             "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?",
+            "claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner))",
+            "settle_producer_turn_after_no_clock_recovery(&mut active_runner, attempted)",
             "activated.into_finalized_rollover(&mut active_runner)?",
-            "drop(certified_serve_producer_episode)",
             "finalized.finality()",
             "into_parts_with_lifecycle_storage_authority(",
             "finalized.rollover_outputs(",
@@ -4572,21 +4572,6 @@ ordinary_ingress_consumer::prepare_current_certified_serve_pre_admission(
             "schedule_local_proposal(",
             "drain_lifecycle_v2_ingress(",
             "step_pacemaker_once(",
-        ),
-    )
-    pending_barrier = item("pending_runner", "service_pending_certified_serve_barrier")
-    require_order(
-        "pending_runner",
-        pending_barrier,
-        "pending-Kura Serve barrier forbids pacemaker work",
-        (
-            "service_certified_serve_barrier_liveness_turn(true, |action| match action",
-            "CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix",
-            "drain_timeout_recovery_prefix_completion(executor, timeout_recovery_cut)?",
-            "CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode",
-            "CertifiedServeBarrierLivenessAction::Pacemaker",
-            "output_guard.close_admission_for_restart()",
-            "Err(V2RunnerError::Service(",
         ),
     )
     pending_crash_hook = item("apply_tests", "fail_after_kura_store_for_test")

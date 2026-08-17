@@ -1460,63 +1460,6 @@ pub(crate) struct RuntimeLifecycleOwner {
     lifecycle_ordinal: u128,
     projection_hash: iroha_crypto::Hash,
 }
-/// Process-local evidence that one completed service result can enter runtime.
-///
-/// The production worker derives this value only from its retained completion
-/// ownership or exact local-reconstruction queue. It is neither serialized nor
-/// accepted from transport. The complemented ordinal makes accidental mutation
-/// fail closed before the evidence can affect the runnable-owner minimum.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ExactServePredecessorCompletionEvidence {
-    lifecycle_ordinal: u128,
-    lifecycle_ordinal_complement: u128,
-}
-impl ExactServePredecessorCompletionEvidence {
-    pub(crate) fn try_new(lifecycle_ordinal: u128) -> Option<Self> {
-        let evidence = Self {
-            lifecycle_ordinal,
-            lifecycle_ordinal_complement: !lifecycle_ordinal,
-        };
-        evidence.validate_exact().then_some(evidence)
-    }
-    pub(crate) const fn lifecycle_ordinal(self) -> u128 {
-        self.lifecycle_ordinal
-    }
-    pub(crate) const fn validate_exact(self) -> bool {
-        self.lifecycle_ordinal > 0 && self.lifecycle_ordinal_complement == !self.lifecycle_ordinal
-    }
-}
-
-/// Direct observation of the runnable prefix before one selected Serve target.
-///
-/// The first observation authorizes the worker's one initial checked ingress
-/// pass even when runtime has no predecessor yet. Later observations reopen
-/// that bounded admission only while an exact older owner is runnable. No
-/// episode counter or cross-component witness is retained.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ExactServePredecessorObservation {
-    first_target_observation: bool,
-    runnable_predecessor: bool,
-}
-
-impl ExactServePredecessorObservation {
-    const fn new(first_target_observation: bool, runnable_predecessor: bool) -> Self {
-        Self {
-            first_target_observation,
-            runnable_predecessor,
-        }
-    }
-
-    /// Return whether the exact worker ticket should open one bounded older-I/O admission.
-    pub(crate) const fn should_open_predecessor_admission(self) -> bool {
-        self.first_target_observation || self.runnable_predecessor
-    }
-
-    /// Return whether runtime currently retains a runnable strictly older owner.
-    pub(crate) const fn has_runnable_predecessor(self) -> bool {
-        self.runnable_predecessor
-    }
-}
 impl RuntimeLifecycleOwner {
     fn new(
         mut causal_origin: RuntimeCandidateCausalOrigin,
@@ -11379,14 +11322,8 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     external_lifecycle_owner_capacity: usize,
     schedule: ScheduleState,
     last_scheduler_ownership: Option<RuntimeSchedulerOwnershipEvidence>,
-    /// Exact external Serve/response target whose older runnable prefix is
-    /// receiving one bounded opportunity in the current runner turn.
-    exact_serve_target_ordinal: Option<u128>,
-    /// An older FIFO owner hit retryable adapter pressure during that turn.
-    /// The target must then proceed; retry cannot become an unbounded barrier.
-    exact_serve_predecessor_retry_attempted: bool,
-    /// Retained certified-response target used only by the legacy boolean
-    /// predecessor probe. It must never reset selected-Serve observation state.
+    /// Retained certified-response target whose older runnable prefix receives
+    /// one bounded opportunity before response handling.
     retained_response_predecessor_target_ordinal: Option<u128>,
     /// Whether one older FIFO owner already received its bounded attempt for
     /// the retained-response target.
@@ -11481,8 +11418,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             external_lifecycle_owner_capacity: MAX_EFFECTS_PER_STEP,
             schedule: ScheduleState::default(),
             last_scheduler_ownership: None,
-            exact_serve_target_ordinal: None,
-            exact_serve_predecessor_retry_attempted: false,
             retained_response_predecessor_target_ordinal: None,
             retained_response_predecessor_retry_attempted: false,
             fail_closed: false,
@@ -13192,7 +13127,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn minimum_runnable_lifecycle_ordinal(
         &self,
         now: Instant,
-        completion_evidence: Option<ExactServePredecessorCompletionEvidence>,
     ) -> Result<Option<u128>, EnqueueError> {
         // First validate the complete inventory so excluding passive owners
         // cannot conceal a forged or internally inconsistent capability.
@@ -13232,20 +13166,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             {
                 observe(owner)?;
             }
-        }
-        if let Some(evidence) = completion_evidence {
-            if !evidence.validate_exact()
-                || !self
-                    .ingress
-                    .lifecycle_ordinals
-                    .recognizes_minted(evidence.lifecycle_ordinal())
-                    .map_err(|_| EnqueueError::FailClosed)?
-            {
-                return Err(EnqueueError::FailClosed);
-            }
-            let lifecycle_ordinal = evidence.lifecycle_ordinal();
-            minimum =
-                Some(minimum.map_or(lifecycle_ordinal, |ordinal| ordinal.min(lifecycle_ordinal)));
         }
         Ok(minimum)
     }
@@ -13534,104 +13454,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         Ok(false)
     }
 
-    /// Freeze every due clock and directly observe the runnable prefix before
-    /// one exact Serve ingress ticket from the shared ordinal source.
-    ///
-    /// The caller publishes executor-retained owners immediately before this
-    /// query. The result authorizes at most one worker admission in the current
-    /// outer turn; it is not a persistent episode owner. A runtime owner equal
-    /// to the external ticket is a source-uniqueness violation and latches
-    /// fail-closed.
-    pub(crate) fn exact_serve_predecessor_observation(
-        &mut self,
-        now: Instant,
-        serve_lifecycle_ordinal: u128,
-        completion_evidence: Option<ExactServePredecessorCompletionEvidence>,
-    ) -> Result<ExactServePredecessorObservation, String> {
-        if self.fail_closed {
-            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
-        }
-        let recognized = match self
-            .ingress
-            .lifecycle_ordinals
-            .recognizes_minted(serve_lifecycle_ordinal)
-        {
-            Ok(recognized) => recognized,
-            Err(reason) => {
-                self.latch_fail_closed(reason.clone());
-                return Err(reason);
-            }
-        };
-        if !recognized {
-            self.latch_fail_closed("exact Serve barrier used an unminted lifecycle ordinal");
-            return Err("Sumeragi v2 exact Serve barrier ordinal was invalid".to_owned());
-        }
-        if self.freeze_due_clock_owners(now).is_err() {
-            self.latch_fail_closed("clock lifecycle ownership could not be frozen for Serve");
-            return Err("Sumeragi v2 clock lifecycle ownership could not be frozen".to_owned());
-        }
-        let collision = match self.active_lifecycle_uses_ordinal(serve_lifecycle_ordinal) {
-            Ok(collision) => collision,
-            Err(_) => {
-                self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
-                return Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned());
-            }
-        };
-        if collision {
-            self.latch_fail_closed("runtime and Serve claimed one lifecycle ordinal");
-            return Err("Sumeragi v2 lifecycle ordinal ownership collided".to_owned());
-        }
-        if completion_evidence.is_some_and(|evidence| {
-            !evidence.validate_exact() || evidence.lifecycle_ordinal() >= serve_lifecycle_ordinal
-        }) {
-            self.latch_fail_closed(
-                "exact Serve completion evidence was invalid or did not strictly precede its target",
-            );
-            return Err("Sumeragi v2 exact Serve completion evidence was invalid".to_owned());
-        }
-        let first_target_observation =
-            self.exact_serve_target_ordinal != Some(serve_lifecycle_ordinal);
-        if first_target_observation {
-            self.exact_serve_target_ordinal = Some(serve_lifecycle_ordinal);
-            self.exact_serve_predecessor_retry_attempted = false;
-        }
-        let minimum = match self.minimum_runnable_lifecycle_ordinal(now, completion_evidence) {
-            Ok(minimum) => minimum,
-            Err(_) => {
-                self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
-                return Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned());
-            }
-        };
-        let predecessor = minimum.filter(|ordinal| *ordinal < serve_lifecycle_ordinal);
-        if self.exact_serve_predecessor_retry_attempted {
-            // The exact older owner received its bounded attempt and proved
-            // that adapter capacity, not logical order, prevents admission.
-            // Its restored FIFO occurrence remains runnable. Suppress it while
-            // present so every poll cannot become another predecessor turn.
-            if predecessor.is_none() {
-                self.exact_serve_predecessor_retry_attempted = false;
-            }
-            return Ok(ExactServePredecessorObservation::new(
-                first_target_observation,
-                false,
-            ));
-        }
-        Ok(ExactServePredecessorObservation::new(
-            first_target_observation,
-            predecessor.is_some(),
-        ))
-    }
-    /// Return whether one runnable owner belongs to the currently witnessed
-    /// strictly older prefix of an exact Serve ticket.
-    #[cfg(test)]
-    pub(crate) fn older_lifecycle_predates_exact_serve(
-        &mut self,
-        now: Instant,
-        serve_lifecycle_ordinal: u128,
-    ) -> Result<bool, String> {
-        self.exact_serve_predecessor_observation(now, serve_lifecycle_ordinal, None)
-            .map(ExactServePredecessorObservation::has_runnable_predecessor)
-    }
     /// Return whether one runnable owner strictly predates a retained
     /// certified-response target without mutating selected-Serve observation state.
     pub(crate) fn older_lifecycle_predates_retained_response(
@@ -13676,7 +13498,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             self.retained_response_predecessor_target_ordinal = Some(serve_lifecycle_ordinal);
             self.retained_response_predecessor_retry_attempted = false;
         }
-        let minimum = match self.minimum_runnable_lifecycle_ordinal(now, None) {
+        let minimum = match self.minimum_runnable_lifecycle_ordinal(now) {
             Ok(minimum) => minimum,
             Err(_) => {
                 self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
@@ -14274,12 +14096,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                         Err(error) => return Err(self.close(error)),
                     };
                 if retry_unadmitted {
-                    if self
-                        .exact_serve_target_ordinal
-                        .is_some_and(|target| owner.lifecycle_ordinal() < target)
-                    {
-                        self.exact_serve_predecessor_retry_attempted = true;
-                    }
                     if self
                         .retained_response_predecessor_target_ordinal
                         .is_some_and(|target| owner.lifecycle_ordinal() < target)

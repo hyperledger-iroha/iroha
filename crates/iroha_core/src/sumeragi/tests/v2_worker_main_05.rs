@@ -2157,10 +2157,7 @@ fn durable_decision_advances_live_leader_wire_recovery_cut() {
     let _command_rx = attach_locked_candidate_io(&mut service, 4);
     let decided_subject = locked_candidate_subject(b"live leader-wire Decision cut");
     service
-        .begin_decision_serve_reconciliation()
-        .expect("fence Serve before Decision publication");
-    service
-        .finish_decision_serve_reconciliation(Some(decided_subject))
+        .finish_runtime_step_reconciliation(Some(decided_subject))
         .expect("publish Decision and close live leader-wire admission");
     for view in [service.active_tag.view(), service.active_tag.view() + 1] {
         let (_, _, proposal, _, sender) = productive_chunk_at_view(&service, &keys, view);

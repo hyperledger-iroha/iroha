@@ -3,11 +3,9 @@ use super::super::{
     FairV2Ingress, FairV2IngressClass, FairV2IngressDequeueDisposition, FairV2IngressEntry,
     FairV2IngressLeaderWirePhase, FairV2IngressLeaderWireSelectorProjection,
     FairV2IngressLeaderWireToken, FairV2IngressOwnershipEvidence, FairV2IngressQueueGateVerdict,
-    FairV2IngressServeSelectorProjection, FairV2IngressSource, FairV2IngressSourceClass,
-    FairV2IngressState, FairV2IngressWireKey, InboundBlockMessage,
-    fair_v2_ingress_leader_wire_selector_projection, fair_v2_ingress_queue_gate_verdict,
-    fair_v2_ingress_serve_selector_projection, message::BlockMessage,
-    select_fair_v2_ingress_candidate,
+    FairV2IngressSource, FairV2IngressSourceClass, FairV2IngressState, FairV2IngressWireKey,
+    InboundBlockMessage, fair_v2_ingress_leader_wire_selector_projection,
+    fair_v2_ingress_queue_gate_verdict, message::BlockMessage, select_fair_v2_ingress_candidate,
 };
 use super::schema::{LifecycleContext, LifecycleDigest};
 use iroha_crypto::Hash;
@@ -96,8 +94,6 @@ pub(in crate::sumeragi) enum FairIngressQueueCutError {
     MissingTargetContext,
     /// The target wire context disagrees with the bound fair-ingress height.
     ForeignTargetContext,
-    /// The bound Certified-Serve selector authority is absent or inconsistent.
-    InvalidServeAuthority,
     /// The bound leader-wire selector authority is absent or inconsistent.
     InvalidLeaderWireAuthority,
     /// A prepared witness was presented to a different queue instance.
@@ -127,7 +123,6 @@ struct FrozenFairIngressOccurrence {
     source_class: FairV2IngressSourceClass,
     class: FairV2IngressClass,
     leader_wire_token: Option<FairV2IngressLeaderWireToken>,
-    serve_reservation: FrozenServeReservation,
     queue_gate: FairV2IngressQueueGateVerdict,
     obsolete: bool,
 }
@@ -140,7 +135,6 @@ impl PartialEq for FrozenFairIngressOccurrence {
             && self.source_class == other.source_class
             && self.class == other.class
             && self.leader_wire_token == other.leader_wire_token
-            && self.serve_reservation == other.serve_reservation
             && self.queue_gate == other.queue_gate
             && self.obsolete == other.obsolete
     }
@@ -195,12 +189,6 @@ impl FairIngressSelectorOccurrence {
         Arc::clone(&self.inbound)
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FrozenServeReservation {
-    Absent,
-    PresentUnselected,
-    MatchesSelected,
-}
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct FrozenQueueGeometry<S, V> {
     ready_prefix: Vec<S>,
@@ -224,7 +212,6 @@ pub(super) struct FairIngressQueueCut<'a> {
     geometry: FrozenQueueGeometry<FairV2IngressSource, FrozenFairIngressOccurrence>,
     selector_occurrences: BTreeMap<u64, FairIngressSelectorOccurrence>,
     pending_identities: BTreeMap<u64, PendingFairIngressIdentity>,
-    serve_projection: FairV2IngressServeSelectorProjection,
     leader_wire_projection: FairV2IngressLeaderWireSelectorProjection,
     selected_identity: PendingFairIngressIdentity,
     selected_positions: FairIngressQueuePositions,
@@ -245,7 +232,6 @@ pub(super) struct FairIngressTurnCut<'a> {
     physical_cut: u128,
     geometry: FrozenQueueGeometry<FairV2IngressSource, FrozenFairIngressOccurrence>,
     selector_occurrences: BTreeMap<u64, FairIngressSelectorOccurrence>,
-    serve_projection: FairV2IngressServeSelectorProjection,
     leader_wire_projection: FairV2IngressLeaderWireSelectorProjection,
     bound_context: Option<(wire::HeightContextId, wire::Height)>,
     selected_source_index: usize,
@@ -264,7 +250,7 @@ pub(super) enum FairIngressTurnContextCut<'a> {
 /// Borrow-free opaque witness of one fully revalidated pre-cut queue.
 ///
 /// The witness deliberately retains the complete comparable geometry and both
-/// transitional barrier projections. A future synchronous transaction can
+/// transitional leader-wire barrier projection. A future synchronous transaction can
 /// consume it under fresh service/state locks and reject any pre-cut reorder,
 /// removal, coalescence, gate change, or ownership mutation. It exposes no
 /// constructor, clone, or general mutation surface; its sole dequeue is the
@@ -275,7 +261,6 @@ pub(super) struct PreparedFairIngressQueueWitness {
     physical_cut: u128,
     geometry: FrozenQueueGeometry<FairV2IngressSource, FrozenFairIngressOccurrence>,
     pending_identities: BTreeMap<u64, PendingFairIngressIdentity>,
-    serve_projection: FairV2IngressServeSelectorProjection,
     leader_wire_projection: FairV2IngressLeaderWireSelectorProjection,
     selected_identity: PendingFairIngressIdentity,
     selected_positions: FairIngressQueuePositions,
@@ -323,7 +308,7 @@ impl PreparedFairIngressQueueWitness {
     /// the sealed selector preparation boundary.
     pub(super) fn is_internally_exact(&self) -> bool {
         let selected_ordinal = self.selected_identity.physical_admission_ordinal;
-        let _retained_barrier_projections = (&self.serve_projection, &self.leader_wire_projection);
+        let _retained_barrier_projection = &self.leader_wire_projection;
         self.physical_cut > u128::from(selected_ordinal)
             && self.geometry.positions.len() == self.pending_identities.len()
             && self
@@ -466,29 +451,17 @@ impl PreparedFairIngressQueueWitness {
     ) -> Result<PreparedFairIngressQueueSelection, FairIngressQueueCutError> {
         let state = queue.state.lock();
         validate_live_queue_structure(&state)?;
-        let serve_projection =
-            fair_v2_ingress_serve_selector_projection(&state, Some(self.physical_cut))
-                .map_err(|_| FairIngressQueueCutError::InvalidServeAuthority)?;
-        let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection(
-            &state,
-            serve_projection.selected_barrier,
-            true,
-            Some(self.physical_cut),
-        )
-        .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
-        let (current, selector_occurrences) = freeze_live_geometry(
-            &state,
-            self.physical_cut,
-            &serve_projection,
-            &leader_wire_projection,
-        )?;
+        let leader_wire_projection =
+            fair_v2_ingress_leader_wire_selector_projection(&state, true, Some(self.physical_cut))
+                .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
+        let (current, selector_occurrences) =
+            freeze_live_geometry(&state, self.physical_cut, &leader_wire_projection)?;
         if !state
             .ready
             .iter()
             .take(self.geometry.ready_prefix.len())
             .eq(self.geometry.ready_prefix.iter())
             || current != self.geometry
-            || serve_projection != self.serve_projection
             || leader_wire_projection != self.leader_wire_projection
         {
             return Err(FairIngressQueueCutError::QueueCutChanged);
@@ -586,25 +559,14 @@ impl PreparedFairIngressQueueWitness {
         if validate_live_queue_structure(state).is_err() {
             return false;
         }
-        let Ok(serve_projection) =
-            fair_v2_ingress_serve_selector_projection(state, Some(self.physical_cut))
+        let Ok(leader_wire_projection) =
+            fair_v2_ingress_leader_wire_selector_projection(state, true, Some(self.physical_cut))
         else {
             return false;
         };
-        let Ok(leader_wire_projection) = fair_v2_ingress_leader_wire_selector_projection(
-            state,
-            serve_projection.selected_barrier,
-            true,
-            Some(self.physical_cut),
-        ) else {
-            return false;
-        };
-        let Ok((current, selector_occurrences)) = freeze_live_geometry(
-            state,
-            self.physical_cut,
-            &serve_projection,
-            &leader_wire_projection,
-        ) else {
+        let Ok((current, selector_occurrences)) =
+            freeze_live_geometry(state, self.physical_cut, &leader_wire_projection)
+        else {
             return false;
         };
         drop(selector_occurrences);
@@ -624,7 +586,6 @@ impl PreparedFairIngressQueueWitness {
                 .take(self.geometry.ready_prefix.len())
                 .eq(self.geometry.ready_prefix.iter())
             && current == self.geometry
-            && serve_projection == self.serve_projection
             && leader_wire_projection == self.leader_wire_projection
     }
 }
@@ -695,7 +656,6 @@ impl FairIngressQueueCut<'_> {
             geometry,
             selector_occurrences: _,
             pending_identities,
-            serve_projection,
             leader_wire_projection,
             selected_identity,
             selected_positions,
@@ -708,7 +668,6 @@ impl FairIngressQueueCut<'_> {
             physical_cut,
             geometry,
             pending_identities,
-            serve_projection,
             leader_wire_projection,
             selected_identity,
             selected_positions,
@@ -726,25 +685,14 @@ impl FairIngressQueueCut<'_> {
         if validate_live_queue_structure(&state).is_err() {
             return false;
         }
-        let Ok(serve_projection) =
-            fair_v2_ingress_serve_selector_projection(&state, Some(self.physical_cut))
+        let Ok(leader_wire_projection) =
+            fair_v2_ingress_leader_wire_selector_projection(&state, true, Some(self.physical_cut))
         else {
             return false;
         };
-        let Ok(leader_wire_projection) = fair_v2_ingress_leader_wire_selector_projection(
-            &state,
-            serve_projection.selected_barrier,
-            true,
-            Some(self.physical_cut),
-        ) else {
-            return false;
-        };
-        let Ok((current, selector_occurrences)) = freeze_live_geometry(
-            &state,
-            self.physical_cut,
-            &serve_projection,
-            &leader_wire_projection,
-        ) else {
+        let Ok((current, selector_occurrences)) =
+            freeze_live_geometry(&state, self.physical_cut, &leader_wire_projection)
+        else {
             return false;
         };
         if !state
@@ -753,7 +701,6 @@ impl FairIngressQueueCut<'_> {
             .take(self.geometry.ready_prefix.len())
             .eq(self.geometry.ready_prefix.iter())
             || current != self.geometry
-            || serve_projection != self.serve_projection
             || leader_wire_projection != self.leader_wire_projection
         {
             return false;
@@ -809,25 +756,14 @@ impl FairIngressQueueCut<'_> {
         if validate_live_queue_structure(&state).is_err() {
             return false;
         }
-        let Ok(serve_projection) =
-            fair_v2_ingress_serve_selector_projection(&state, Some(self.physical_cut))
+        let Ok(leader_wire_projection) =
+            fair_v2_ingress_leader_wire_selector_projection(&state, true, Some(self.physical_cut))
         else {
             return false;
         };
-        let Ok(leader_wire_projection) = fair_v2_ingress_leader_wire_selector_projection(
-            &state,
-            serve_projection.selected_barrier,
-            true,
-            Some(self.physical_cut),
-        ) else {
-            return false;
-        };
-        let Ok((current, _)) = freeze_live_geometry(
-            &state,
-            self.physical_cut,
-            &serve_projection,
-            &leader_wire_projection,
-        ) else {
+        let Ok((current, _)) =
+            freeze_live_geometry(&state, self.physical_cut, &leader_wire_projection)
+        else {
             return false;
         };
         state.leader_wire_context == Some(self.bound_context)
@@ -837,7 +773,6 @@ impl FairIngressQueueCut<'_> {
                 .take(self.geometry.ready_prefix.len())
                 .eq(self.geometry.ready_prefix.iter())
             && current == self.geometry
-            && serve_projection == self.serve_projection
             && leader_wire_projection == self.leader_wire_projection
     }
 }
@@ -856,7 +791,6 @@ impl<'a> FairIngressQueueCut<'a> {
             geometry,
             selector_occurrences,
             pending_identities: _,
-            serve_projection,
             leader_wire_projection,
             selected_identity,
             selected_positions,
@@ -876,7 +810,6 @@ impl<'a> FairIngressQueueCut<'a> {
             physical_cut,
             geometry,
             selector_occurrences,
-            serve_projection,
             leader_wire_projection,
             bound_context: Some(bound_context),
             selected_source_index,
@@ -949,7 +882,6 @@ impl<'a> FairIngressTurnCut<'a> {
             physical_cut,
             geometry,
             selector_occurrences,
-            serve_projection,
             leader_wire_projection,
             bound_context: _,
             selected_source_index: _,
@@ -965,7 +897,6 @@ impl<'a> FairIngressTurnCut<'a> {
             geometry,
             selector_occurrences,
             pending_identities,
-            serve_projection,
             leader_wire_projection,
             selected_identity,
             selected_positions,
@@ -1025,9 +956,8 @@ impl FairV2Ingress {
     /// followed by ordinary reselection. It uses the production
     /// strict-before-dependency selector, keeps obsolete false-predicate
     /// retirement, and retains the service guard across the caller's stateful
-    /// Certified-Serve preparation. A false predicate never removes or rotates
-    /// an occurrence; the selected Serve gate therefore continues to prevent a
-    /// later carrier from leapfrogging its off-queue backpressure debt.
+    /// lifecycle preparation. A false predicate never removes or rotates an
+    /// occurrence.
     pub(super) fn capture_next_ingress_turn_cut(
         &self,
         mut predicate: impl FnMut(&FairIngressSelectorOccurrence) -> bool,
@@ -1042,22 +972,11 @@ impl FairV2Ingress {
         let physical_cut = u128::from(state.last_admission_ordinal)
             .checked_add(1)
             .ok_or(FairIngressQueueCutError::PositionOverflow)?;
-        let serve_projection =
-            fair_v2_ingress_serve_selector_projection(&state, Some(physical_cut))
-                .map_err(|_| FairIngressQueueCutError::InvalidServeAuthority)?;
-        let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection(
-            &state,
-            serve_projection.selected_barrier,
-            true,
-            Some(physical_cut),
-        )
-        .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
-        let (geometry, selector_occurrences) = freeze_live_geometry(
-            &state,
-            physical_cut,
-            &serve_projection,
-            &leader_wire_projection,
-        )?;
+        let leader_wire_projection =
+            fair_v2_ingress_leader_wire_selector_projection(&state, true, Some(physical_cut))
+                .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
+        let (geometry, selector_occurrences) =
+            freeze_live_geometry(&state, physical_cut, &leader_wire_projection)?;
         let bound_context = state.leader_wire_context;
         drop(state);
         validate_frozen_ownership_outside_state(&geometry, &selector_occurrences)?;
@@ -1111,7 +1030,6 @@ impl FairV2Ingress {
             physical_cut,
             geometry,
             selector_occurrences,
-            serve_projection,
             leader_wire_projection,
             bound_context,
             selected_source_index,
@@ -1170,22 +1088,11 @@ impl FairV2Ingress {
         let physical_cut = u128::from(state.last_admission_ordinal)
             .checked_add(1)
             .ok_or(FairIngressQueueCutError::PositionOverflow)?;
-        let serve_projection =
-            fair_v2_ingress_serve_selector_projection(&state, Some(physical_cut))
-                .map_err(|_| FairIngressQueueCutError::InvalidServeAuthority)?;
-        let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection(
-            &state,
-            serve_projection.selected_barrier,
-            true,
-            Some(physical_cut),
-        )
-        .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
-        let (geometry, selector_occurrences) = freeze_live_geometry(
-            &state,
-            physical_cut,
-            &serve_projection,
-            &leader_wire_projection,
-        )?;
+        let leader_wire_projection =
+            fair_v2_ingress_leader_wire_selector_projection(&state, true, Some(physical_cut))
+                .map_err(|_| FairIngressQueueCutError::InvalidLeaderWireAuthority)?;
+        let (geometry, selector_occurrences) =
+            freeze_live_geometry(&state, physical_cut, &leader_wire_projection)?;
         let bound_context = state.leader_wire_context;
         drop(state);
         validate_frozen_ownership_outside_state(&geometry, &selector_occurrences)?;
@@ -1256,7 +1163,6 @@ impl FairV2Ingress {
             geometry,
             selector_occurrences,
             pending_identities,
-            serve_projection,
             leader_wire_projection,
             selected_identity,
             selected_positions,
@@ -1346,7 +1252,6 @@ fn mint_pending_identities(
 fn freeze_live_geometry(
     state: &FairV2IngressState,
     physical_cut: u128,
-    serve_projection: &FairV2IngressServeSelectorProjection,
     leader_wire_projection: &FairV2IngressLeaderWireSelectorProjection,
 ) -> Result<
     (
@@ -1367,7 +1272,6 @@ fn freeze_live_geometry(
                 source,
                 lane,
                 index,
-                serve_projection,
                 leader_wire_projection,
                 super::super::FairV2IngressBarrierBypass::None,
             );
@@ -1377,13 +1281,7 @@ fn freeze_live_geometry(
                 .is_some_and(|token| leader_wire_projection.obsolete_tokens.contains(token));
             frozen.push(FrozenQueueOccurrence {
                 physical_admission_ordinal: entry.admission_ordinal,
-                value: exact_occurrence_projection(
-                    source,
-                    entry,
-                    serve_projection.selected_barrier,
-                    queue_gate,
-                    obsolete,
-                )?,
+                value: exact_occurrence_projection(source, entry, queue_gate, obsolete)?,
             });
             if selector_occurrences
                 .insert(
@@ -1698,7 +1596,6 @@ where
 fn exact_occurrence_projection(
     source: &FairV2IngressSource,
     entry: &FairV2IngressEntry,
-    selected_serve_barrier: Option<super::super::v2_worker::CertifiedServeBarrier>,
     queue_gate: FairV2IngressQueueGateVerdict,
     obsolete: bool,
 ) -> Result<FrozenFairIngressOccurrence, FairIngressQueueCutError> {
@@ -1723,16 +1620,6 @@ fn exact_occurrence_projection(
     {
         return Err(FairIngressQueueCutError::InvalidOccurrenceIdentity);
     }
-    let serve_reservation = match entry.certified_serve_reservation.as_ref() {
-        None => FrozenServeReservation::Absent,
-        Some(reservation)
-            if selected_serve_barrier
-                .is_some_and(|barrier| reservation.matches_barrier(barrier)) =>
-        {
-            FrozenServeReservation::MatchesSelected
-        }
-        Some(_) => FrozenServeReservation::PresentUnselected,
-    };
     Ok(FrozenFairIngressOccurrence {
         wire_key: key.clone(),
         encoded_hash: key.hash,
@@ -1741,7 +1628,6 @@ fn exact_occurrence_projection(
         source_class: source.class(),
         class: entry.class,
         leader_wire_token: entry.leader_wire_token.clone(),
-        serve_reservation,
         queue_gate,
         obsolete,
     })
@@ -1913,11 +1799,6 @@ fn pending_identity(
             append_field(&mut projection, &token.encode());
         }
     }
-    projection.push(match occurrence.serve_reservation {
-        FrozenServeReservation::Absent => 0,
-        FrozenServeReservation::PresentUnselected => 1,
-        FrozenServeReservation::MatchesSelected => 2,
-    });
     projection.push(match occurrence.queue_gate {
         FairV2IngressQueueGateVerdict::Blocked => 0,
         FairV2IngressQueueGateVerdict::Strict => 1,
@@ -2787,12 +2668,6 @@ mod tests {
             assert!(lane.pending_wire.insert(removed_key));
         }
         assert!(recaptured.pre_cut_is_intact());
-        ingress.state.lock().requires_certified_serve_gate = true;
-        assert!(
-            !recaptured.pre_cut_is_intact(),
-            "a newly required but unbound Serve authority must invalidate the cut"
-        );
-        ingress.state.lock().requires_certified_serve_gate = false;
         ingress.state.lock().requires_leader_wire_lifecycle_gate = true;
         assert!(
             !recaptured.pre_cut_is_intact(),

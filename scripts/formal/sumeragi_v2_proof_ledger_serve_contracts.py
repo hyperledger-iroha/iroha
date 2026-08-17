@@ -1133,61 +1133,6 @@ _SERVE_TERMINAL_DISCHARGE_EFFECT_REGRESSION_TEST_SHA256 = {
         "c7608c60005b34990c8cb09781649d44a15dca4ed647269073ff068ffc8bd150"
     ),
 }
-_SERVE_INGRESS_ORDINAL_STRUCT_SHA256 = {
-    "FairV2IngressState": (
-        "87125ed4256f628874244f9a3d8e02e1d35be4f127e7b2c78ecd0d82366a6e35"
-    ),
-    "FairV2IngressEntry": (
-        "c618e0fa2240c6622bc0c45988da2a03fafac5d26e377c6b2e46562e8d44e3be"
-    ),
-}
-_SERVE_INGRESS_ORDINAL_REGRESSION_TEST_SHA256 = {
-    "fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve": (
-        "acd2342fdaa5b68d360a911507b5d69f9c1a976f4a98388854a3f867afba118a"
-    ),
-    "fair_v2_ingress_certified_request_cutoff_blocks_later_churn": (
-        "9cd23ee174208b9c763933acbc05848c5975e144ee5afad11e864f80196fed07"
-    ),
-    "fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes": (
-        "9800b454c24f5e09f459a2bd3f2c56d38b789bf4006bf5fe54114b0f26e06ebd"
-    ),
-    "restored_productive_retry_stays_behind_an_earlier_certified_request_carrier": (
-        "8c174be5aff5c9561585c610b8a43f0f977cf77825a82e15c660ee700a9419d4"
-    ),
-    "restored_productive_retry_ordinal_exhaustion_keeps_the_owner_dormant": (
-        "e2850b0677b5219e0960641d23b79a679c1fcc84faaaa7c83db0cfe79a3e6e3b"
-    ),
-}
-_SERVE_INGRESS_GATE_IMPL_ITEM_SHA256 = {
-    "require_certified_serve_gate": (
-        "96b2844effe8a496a06b247860b8790227f1e0c31a4468bff52eeb0631cbe10b"
-    ),
-    "bind_certified_serve_gate": (
-        "b6043f8898779ce68f584813ca53882ba232c0f2cad915c9c643f00b3ad1faca"
-    ),
-    "unbind_certified_serve_gate": (
-        "16c1655f5a4fc1e1cfd65133e09a9dc336eed6cceb7470bd3bc83993d52ee034"
-    ),
-}
-_SERVE_INGRESS_GATE_REGRESSION_TEST_SHA256 = {
-    "fair_v2_ingress_required_serve_gate_precedes_open": (
-        "cde9f2ffe81621458a818cb3ec61f64809ff5f59b5ba2df06e74bb0ca3cae376"
-    ),
-}
-_SERVE_INGRESS_GATE_WORKER_REGRESSION_TEST_SHA256 = {
-    "fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers": (
-        "18af9d5d33613df8489c684650e8fde266299eed705ed67818d7cdd5d99d9f1c"
-    ),
-    "fair_ingress_gate_overflow_closes_without_partial_admission": (
-        "0262b1a40eca9b8916f51a1af1e05c443ed160398b4bf993fd99996bbdc6fe2b"
-    ),
-    "fair_ingress_rollover_retires_ticket_before_old_service_teardown": (
-        "0c27de66d91cd2c0744cf962e673de7e54881838e12f4d920cbfeabeccbcf875"
-    ),
-    "selected_serve_physical_carrier_precedes_reactivated_older_leader_lifecycle": (
-        "956cda57dac79761f171293376a988eae0c1b2c8ad79dd0f5228f7a978d46f75"
-    ),
-}
 _SERVICED_CANDIDATE_STORE_STRUCT_SHA256 = {
     "ServicedCandidateKey": (
         "7ac3f413238c7b14472d7353286b7f4cd8a066be9a454ab8f398911024f1997e"

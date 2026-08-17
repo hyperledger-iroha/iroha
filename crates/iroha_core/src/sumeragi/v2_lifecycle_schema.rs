@@ -1561,6 +1561,7 @@ pub(crate) struct SchedulerReadyInputs {
     owner: OwnerId,
     key: LifecycleKey,
     validate_attestation: Option<AttestedReadyValidateDemand>,
+    producer_handoff_blocked: bool,
     output_capacity_class: Option<CapacityClass>,
     physical_capacity_available: bool,
     mode: u64,
@@ -1588,6 +1589,7 @@ impl SchedulerReadyInputs {
             owner: record.owner,
             key: record.key,
             validate_attestation: None,
+            producer_handoff_blocked: false,
             output_capacity_class: None,
             physical_capacity_available: true,
             mode,
@@ -1636,6 +1638,7 @@ impl SchedulerReadyInputs {
             owner: record.owner,
             key: record.key,
             validate_attestation,
+            producer_handoff_blocked: false,
             output_capacity_class,
             physical_capacity_available: true,
             mode,
@@ -1686,6 +1689,29 @@ impl SchedulerReadyInputs {
         };
         (carrier_matches && row.identity_matches(record.ordinal, record)).then_some(row)
     }
+    /// Join one later Ready row to the registry seal proving that an older
+    /// selectable ProducerHandoffBarrier makes it ineligible in this complete
+    /// planning episode.
+    pub(super) fn from_authenticated_producer_handoff_blocked(
+        _factory: &AuthenticatedSchedulerInputsFactory,
+        record: &LifecycleRecord,
+        seal: super::work_registry::ProducerHandoffBlockedReadySealV1,
+    ) -> Option<Self> {
+        seal.matches_record(record).then_some(Self {
+            owner: record.owner,
+            key: record.key,
+            validate_attestation: None,
+            producer_handoff_blocked: true,
+            output_capacity_class: None,
+            physical_capacity_available: true,
+            mode: 0,
+            capacity: 0,
+            selector: 0,
+            lane: 0,
+            source: 0,
+            runner: 0,
+        })
+    }
     /// Join the same authenticated row to one service-frozen physical corridor result.
     ///
     /// The sealed factory is the only production mint. A physically unavailable
@@ -1733,6 +1759,7 @@ impl SchedulerReadyInputs {
             key: record.key,
             validate_attestation: rejected_validate
                 .and_then(|rejected| AttestedReadyValidateDemand::for_test(record, rejected)),
+            producer_handoff_blocked: false,
             output_capacity_class: rejected_validate
                 .filter(|rejected| *rejected)
                 .map(|_| CapacityClass::Consensus),
@@ -1765,13 +1792,17 @@ impl SchedulerReadyInputs {
         ordinal == record.ordinal
             && self.owner == record.owner
             && self.key == record.key
-            && match (record.work_class, self.validate_attestation) {
-                (LifecycleWorkClass::Validate, Some(attestation)) => {
-                    attestation.matches_record(record)
+            && if self.producer_handoff_blocked {
+                self.validate_attestation.is_none() && self.output_capacity_class.is_none()
+            } else {
+                match (record.work_class, self.validate_attestation) {
+                    (LifecycleWorkClass::Validate, Some(attestation)) => {
+                        attestation.matches_record(record)
+                    }
+                    (LifecycleWorkClass::Validate, None) => false,
+                    (_, None) => true,
+                    (_, Some(_)) => false,
                 }
-                (LifecycleWorkClass::Validate, None) => false,
-                (_, None) => true,
-                (_, Some(_)) => false,
             }
     }
     /// Return the sealed extra capacity class needed before this row is claimed.

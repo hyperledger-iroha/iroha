@@ -215,12 +215,9 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
     ingress
         .configure_roster([validator.clone()])
         .expect("one-validator launch binding geometry");
-    ingress.require_certified_serve_gate();
     ingress.require_leader_wire_lifecycle_gate();
     ingress.state.lock().leader_wire_max_chunk_count = 2;
 
-    let (first_serve_gate, first_ordinals) =
-        crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
     let (first_gate, first_restore) = empty_leader_wire_gate_for_binding_test(
         &directory,
         "explicit.wal",
@@ -232,13 +229,11 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
         Arc::clone(&ingress),
         Arc::clone(&first_gate),
         first_restore,
-        first_ordinals,
+        RuntimeLifecycleOrdinalSource::after_high_watermark(0),
         context_id,
         HEIGHT,
     )
-    .expect("bind the exact launch gate")
-    .bind_certified_serve(first_serve_gate.clone())
-    .expect("join the exact certified Serve gate");
+    .expect("bind the exact launch gate");
     assert!(
         ingress
             .state
@@ -247,27 +242,17 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
             .as_ref()
             .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &first_gate))
     );
-    assert!(
-        ingress
-            .state
-            .lock()
-            .certified_serve_gate
-            .as_ref()
-            .is_some_and(|bound| bound.ptr_eq(&first_serve_gate))
-    );
     binding
         .retire()
-        .expect("explicit retirement detaches both exact launch gates");
+        .expect("explicit retirement detaches the exact launch gate");
     binding
         .retire()
         .expect("explicit retirement remains idempotent");
     {
         let state = ingress.state.lock();
-        assert!(state.leader_wire_lifecycle_gate.is_none() && state.certified_serve_gate.is_none());
+        assert!(state.leader_wire_lifecycle_gate.is_none());
     }
 
-    let (drop_serve_gate, drop_ordinals) =
-        crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
     let (drop_gate, drop_restore) = empty_leader_wire_gate_for_binding_test(
         &directory, "drop.wal", context_id, HEIGHT, &validator,
     );
@@ -275,51 +260,17 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
         Arc::clone(&ingress),
         Arc::clone(&drop_gate),
         drop_restore,
-        drop_ordinals,
-        context_id,
-        HEIGHT,
-    )
-    .expect("rebind the exact launch gate")
-    .bind_certified_serve(drop_serve_gate)
-    .expect("rejoin the certified Serve gate");
-    drop(binding);
-    {
-        let state = ingress.state.lock();
-        assert!(
-            state.leader_wire_lifecycle_gate.is_none() && state.certified_serve_gate.is_none(),
-            "Drop must detach both exact launch gates"
-        );
-    }
-
-    let (mismatched_serve_gate, _) =
-        crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
-    let (mismatch_gate, mismatch_restore) = empty_leader_wire_gate_for_binding_test(
-        &directory,
-        "mismatch.wal",
-        context_id,
-        HEIGHT,
-        &validator,
-    );
-    let mismatch = match ProductionLeaderWireIngressBindingV1::bind(
-        Arc::clone(&ingress),
-        mismatch_gate,
-        mismatch_restore,
         RuntimeLifecycleOrdinalSource::after_high_watermark(0),
         context_id,
         HEIGHT,
     )
-    .expect("bind the leader gate before the mismatched Serve join")
-    .bind_certified_serve(mismatched_serve_gate)
-    {
-        Ok(_) => panic!("a foreign lifecycle ordinal source passed the joint join"),
-        Err(error) => error,
-    };
-    assert!(mismatch.contains("actor-global lifecycle ordinal source"));
+    .expect("rebind the exact launch gate");
+    drop(binding);
     {
         let state = ingress.state.lock();
         assert!(
-            state.leader_wire_lifecycle_gate.is_none() && state.certified_serve_gate.is_none(),
-            "a failed joint join must drop the retained leader binding"
+            state.leader_wire_lifecycle_gate.is_none(),
+            "Drop must detach the exact launch gate"
         );
     }
 
@@ -330,20 +281,15 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
         HEIGHT,
         &validator,
     );
-    let (incumbent_serve_gate, incumbent_ordinals) =
-        crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
     ingress
         .bind_leader_wire_lifecycle_gate(
             Arc::clone(&incumbent_gate),
             incumbent_restore,
-            incumbent_ordinals,
+            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
             context_id,
             HEIGHT,
         )
         .expect("bind the incumbent gate");
-    ingress
-        .bind_certified_serve_gate(incumbent_serve_gate.clone())
-        .expect("bind the incumbent certified Serve gate");
     ingress.open().expect("open the incumbent ingress");
     let (foreign_gate, foreign_restore) = empty_leader_wire_gate_for_binding_test(
         &directory,
@@ -369,8 +315,8 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
         "failed binding must close ingress"
     );
     ingress
-        .unbind_height_ingress_gates(&incumbent_serve_gate, &incumbent_gate)
-        .expect("clean up both incumbent bindings");
+        .unbind_leader_wire_lifecycle_gate(&incumbent_gate)
+        .expect("clean up the incumbent binding");
 }
 
 #[test]
@@ -549,7 +495,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert_eq!(
         launch.matches("inputs.auxiliary_io_capacity,").count(),
         2,
-        "Serve restore and service startup must share the exact certified-request capacity"
+        "lifecycle restore and service startup must share the exact auxiliary capacity"
     );
     let identity = launch
         .rfind("self.body_store_identity = Some(body_store_identity)")
@@ -711,14 +657,10 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
             "executor\n                .install_authenticated_genesis_body(authenticated_genesis.signed_block())",
             "ProductionV2Services::start_with_apply_service(",
-            "services\n            .certified_serve_ingress_gate()",
-            ".bind_certified_serve(certified_serve_gate)",
         ],
     );
-    let joint_ingress_bind =
-        source_token_position(launch, ".bind_certified_serve(certified_serve_gate)");
     let worker = source_token_position(launch, "ProductionV2Services::start_with_apply_service(");
-    assert!(joint_ingress_bind < identity && worker < identity && identity < complete);
+    assert!(worker < identity && identity < complete);
     assert_source_tokens_in_order(
         launch,
         &[
@@ -734,7 +676,6 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         ));
     assert!(launch.contains("leader_wire_ingress_binding,"));
     assert!(source.contains("impl Drop for ProductionLeaderWireIngressBindingV1"));
-    assert!(source.contains("certified_serve_gate: Option<CertifiedServeIngressGate>"));
     let launched_fields = source_region(
         &source,
         "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {",
@@ -760,13 +701,6 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         &[
             "self.ingress.close()",
             "self.ingress.unbind_leader_wire_lifecycle_gate(gate)?",
-        ],
-    );
-    assert_source_tokens_in_order(
-        leader_wire_drop,
-        &[
-            "self.ingress.close()",
-            ".unbind_height_ingress_gates(certified_serve_gate, leader_wire_gate)",
         ],
     );
     assert!(source.contains("impl Drop for ProductionV2CompletionObserverActivationPermitSealV1"));
@@ -1823,7 +1757,7 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     let capacity = source_region(
         worker_source,
         "fn capture_recovered_lifecycle_sign_capacity<'a>(",
-        "fn begin_decision_serve_reconciliation(",
+        "pub(crate) fn restore_lifecycle_ordinal_source(",
     );
     assert_source_token_count(capacity, "operation.complete()", 5);
     assert_forbidden_source_tokens(capacity, &["drop(operation)"]);

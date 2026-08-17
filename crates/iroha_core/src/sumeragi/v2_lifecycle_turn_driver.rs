@@ -1,15 +1,18 @@
 //! Unified lifecycle ownership for one outer Completion or Ingress turn.
 
 use super::*;
+use crate::sumeragi::v2_lifecycle_coordinator::{
+    AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleLedgerV1,
+    claim_certified_serve_turn_v1,
+};
 #[cfg(test)]
 pub(in crate::sumeragi) use crate::sumeragi::v2_runner::ordinary_ingress_consumer::ProductionPreparedCertifiedServeTestSettlementV1;
 #[cfg(test)]
 use crate::sumeragi::v2_runner::ordinary_ingress_consumer::settle_prepared_certified_serve_for_test;
 use crate::sumeragi::v2_runner::ordinary_ingress_consumer::{
-    PreparedDequeuedV2IngressV1, ProductionCurrentCertifiedServePreparationV1,
+    CurrentCertifiedServePreAdmissionV1, PreparedDequeuedV2IngressV1,
     ProductionPreparedCertifiedServeV1, ProductionPreparedOrdinaryIngressConsumptionV1,
-    authorize_current_certified_serve_pre_dequeue, consume_prepared_dequeued_v2_ingress,
-    prepare_current_certified_serve_pre_admission,
+    consume_prepared_dequeued_v2_ingress, prepare_current_certified_serve_pre_admission,
 };
 
 /// Closed result of servicing one recovered Sign completion.
@@ -62,6 +65,8 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
     ),
     /// One parked recovered Decision Fetch body entered its Store settlement.
     RecoveredDecisionFetchCompletion(ProductionRecoveredDecisionFetchStoreSettlementV1),
+    /// One lifecycle-owned Serve reached LedgerV1, reply delivery, and worker acknowledgement.
+    CertifiedServeCompleted,
     /// One durable recovered Broadcast entered its typed refanout transaction.
     RecoveredLifecycleBroadcastRefanout(
         Result<
@@ -94,6 +99,10 @@ pub(in crate::sumeragi) enum ProductionLifecycleIngressSelectionV1 {
     CapacityPending,
     /// Recovered Phase A queued its exact body-persistence command.
     RecoveredDecisionFetchQueued,
+    /// One lifecycle-owned Serve entered the dedicated auxiliary worker.
+    CertifiedServeQueued,
+    /// One exact replay or typed negative reached its lifecycle terminal.
+    CertifiedServeTerminal,
     /// A retryable pre-publication cut retained the physical response in ingress.
     Retry,
     /// The exact ordinary winner retained its physical carrier under backpressure.
@@ -241,24 +250,17 @@ fn selected_ingress_is_certified_body_response(inbound: &InboundBlockMessage) ->
     )
 }
 
-fn prepare_and_dequeue_current_certified_serve<'cursor>(
+fn prepare_and_dispatch_current_certified_serve<'cursor>(
+    owner: &mut ProductionLifecycleOwnerV1,
     executor: &V2EffectExecutor<SerializedV2Runtime>,
-    services: &mut ProductionV2Services,
+    services: &ProductionV2Services,
+    capacity_wait: &mut Option<crate::sumeragi::v2_worker::LifecycleCertifiedServeCapacityWaitV1>,
     receiver: &std::sync::Arc<FairV2Ingress>,
     cut: FairIngressTurnCut<'_>,
     runner: LifecycleCurrentRunnerTurn<'cursor>,
     terminal_subject: Option<iroha_data_model::block::consensus_v2::BlockSubject>,
 ) -> ProductionLifecycleIngressTurnV1<'cursor> {
-    let output_guard = services.lifecycle_output_guard();
-    let Some(operation) = output_guard.begin_fail_stop_operation() else {
-        drop(cut);
-        drop(runner);
-        return ProductionLifecycleIngressTurnV1::Selected(
-            ProductionLifecycleIngressSelectionV1::RestartRequired,
-        );
-    };
-
-    let prepared = prepare_current_certified_serve_pre_admission(
+    let classified = prepare_current_certified_serve_pre_admission(
         cut.selected_occurrence().inbound(),
         executor.context().height,
         terminal_subject,
@@ -268,42 +270,350 @@ fn prepare_and_dequeue_current_certified_serve<'cursor>(
                 .map_err(|error| error.to_string())
         },
     );
-    let prepared = match authorize_current_certified_serve_pre_dequeue(prepared, services) {
-        ProductionCurrentCertifiedServePreparationV1::Prepared(prepared) => prepared,
-        ProductionCurrentCertifiedServePreparationV1::Retain => {
-            operation.complete();
+    let (authenticated, negative) = match classified {
+        CurrentCertifiedServePreAdmissionV1::Authenticated { request } => (request, None),
+        CurrentCertifiedServePreAdmissionV1::AuthenticatedNegative {
+            request,
+            reason: _,
+        } => (
+            request,
+            Some(
+                crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadNegativeOutcome::Cancelled,
+            ),
+        ),
+        CurrentCertifiedServePreAdmissionV1::Negative { reason } => {
+            return dequeue_prepared_ordinary_ingress(
+                receiver,
+                cut,
+                runner,
+                Some(ProductionPreparedCertifiedServeV1::Rejected(reason)),
+                terminal_subject,
+                services,
+            );
+        }
+        CurrentCertifiedServePreAdmissionV1::Service(_reason) => {
+            services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
+            drop(cut);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
+    };
+    if !services.lifecycle_certified_serve_is_locally_authorized(&authenticated) {
+        return dequeue_prepared_ordinary_ingress(
+            receiver,
+            cut,
+            runner,
+            Some(ProductionPreparedCertifiedServeV1::Rejected(
+                "local validator has no certified retention authority".to_owned(),
+            )),
+            terminal_subject,
+            services,
+        );
+    }
+
+    let expected_context = lifecycle_context_for_ingress(executor.context());
+    let lifecycle_cut = match cut.narrow_to_lifecycle(expected_context) {
+        Ok(FairIngressTurnContextCut::Lifecycle(cut)) => cut,
+        Ok(FairIngressTurnContextCut::Ordinary(cut)) => {
             drop(cut);
             drop(runner);
             return ProductionLifecycleIngressTurnV1::Selected(
                 ProductionLifecycleIngressSelectionV1::OrdinaryRetained,
             );
         }
-    };
-
-    match cut.dequeue_exact_retaining() {
-        Ok((inbound, disposition)) => {
-            let turn = prepared_ordinary_ingress_turn(
-                std::sync::Arc::clone(receiver),
-                inbound,
-                disposition,
-                Some(prepared),
-                terminal_subject,
-                std::sync::Arc::clone(&output_guard),
-            );
-            operation.complete();
-            drop(runner);
-            ProductionLifecycleIngressTurnV1::Ordinary(turn)
-        }
         Err((_error, retained)) => {
-            // Close output while the exact queue service episode is still held.
-            drop(operation);
+            services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
             drop(retained);
             drop(runner);
-            ProductionLifecycleIngressTurnV1::Selected(
+            return ProductionLifecycleIngressTurnV1::Selected(
                 ProductionLifecycleIngressSelectionV1::RestartRequired,
-            )
+            );
         }
+    };
+    let selector = match executor.capture_lifecycle_ingress_selector(lifecycle_cut) {
+        Ok(selector) => selector,
+        Err(_) => {
+            services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
+    };
+    let (dequeue, target) =
+        match selector.into_locked_certified_serve_dequeue(receiver, &authenticated) {
+            Ok(prepared) => prepared,
+            Err(_) => {
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                drop(runner);
+                return ProductionLifecycleIngressTurnV1::Selected(
+                    ProductionLifecycleIngressSelectionV1::RestartRequired,
+                );
+            }
+        };
+    let local_signer = services.lifecycle_local_signer().clone();
+    let mut reservation = match services.capture_lifecycle_certified_serve_capacity(target) {
+        Ok(crate::sumeragi::v2_worker::LifecycleCertifiedServeCapacityCaptureV1::Reserved(
+            reservation,
+        )) => reservation,
+        Ok(crate::sumeragi::v2_worker::LifecycleCertifiedServeCapacityCaptureV1::Unavailable(
+            wait,
+        )) => {
+            assert!(capacity_wait.is_none());
+            *capacity_wait = Some(wait);
+            drop(dequeue);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::CapacityPending,
+            );
+        }
+        Err(_) => {
+            services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
+            drop(dequeue);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
+    };
+    let target = match reservation.take_certified_serve_target(&authenticated) {
+        Ok(target) => target,
+        Err(()) => {
+            drop(reservation);
+            drop(dequeue);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
+    };
+    let admission = owner.admit_selected_certified_serve(target, &local_signer, &authenticated);
+    let continuation = match admission.into_safe_continuation() {
+        Ok(continuation) => continuation,
+        Err(_restart) => {
+            drop(reservation);
+            drop(dequeue);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
+    };
+    let decision = continuation.decision();
+    let failed_before_publication = continuation.failure().is_some() && decision.is_none();
+    let (target, terminal_replay) = continuation.into_target_and_terminal_replay();
+    if reservation
+        .restore_certified_serve_target(target, &authenticated)
+        .is_err()
+    {
+        drop(reservation);
+        drop(dequeue);
+        drop(runner);
+        return ProductionLifecycleIngressTurnV1::Selected(
+            ProductionLifecycleIngressSelectionV1::RestartRequired,
+        );
     }
+    if failed_before_publication {
+        reservation.abort_certified_serve_before_plan();
+        drop(dequeue);
+        drop(runner);
+        return ProductionLifecycleIngressTurnV1::Selected(
+            ProductionLifecycleIngressSelectionV1::Retry,
+        );
+    }
+    if matches!(decision, Some(AdmissionDecision::StutterTerminal { .. })) {
+        if terminal_replay.is_some() {
+            drop(reservation);
+            drop(dequeue);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
+        reservation.abort_certified_serve_before_plan();
+        let (inbound, disposition) = dequeue.commit();
+        assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
+        drop(inbound);
+        drop(runner);
+        return ProductionLifecycleIngressTurnV1::Selected(
+            ProductionLifecycleIngressSelectionV1::CertifiedServeTerminal,
+        );
+    }
+    if matches!(decision, Some(AdmissionDecision::ReplayTerminal { .. })) {
+        let Some(terminal_replay) = terminal_replay else {
+            drop(reservation);
+            drop(dequeue);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        };
+        let (inbound, disposition) = dequeue.commit();
+        assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
+        let task =
+            match crate::sumeragi::v2_worker::LifecycleCertifiedServeTaskV1::from_terminal_replay(
+                terminal_replay,
+                authenticated,
+                inbound,
+            ) {
+                Ok(task) => task,
+                Err(_) => {
+                    drop(reservation);
+                    drop(runner);
+                    return ProductionLifecycleIngressTurnV1::Selected(
+                        ProductionLifecycleIngressSelectionV1::RestartRequired,
+                    );
+                }
+            };
+        if !reservation.preflight_lifecycle_certified_serve(&task) {
+            drop(reservation);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
+        reservation.commit_lifecycle_certified_serve(task);
+        drop(runner);
+        return ProductionLifecycleIngressTurnV1::Selected(
+            ProductionLifecycleIngressSelectionV1::CertifiedServeQueued,
+        );
+    }
+    if terminal_replay.is_some() {
+        drop(reservation);
+        drop(dequeue);
+        drop(runner);
+        return ProductionLifecycleIngressTurnV1::Selected(
+            ProductionLifecycleIngressSelectionV1::RestartRequired,
+        );
+    }
+    if !matches!(
+        decision,
+        Some(AdmissionDecision::Admitted { .. } | AdmissionDecision::Retry { .. })
+    ) {
+        drop(reservation);
+        drop(dequeue);
+        drop(runner);
+        return ProductionLifecycleIngressTurnV1::Selected(
+            ProductionLifecycleIngressSelectionV1::RestartRequired,
+        );
+    }
+
+    let ledger = match LifecycleLedgerV1::from_coordinator(&owner.coordinator) {
+        Ok(ledger) => ledger,
+        Err(_) => {
+            drop(reservation);
+            drop(dequeue);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
+    };
+    let registry = owner.registry.registry();
+    let attestation = match registry.attest_ready_certified_serve_request(
+        &owner.coordinator,
+        &ledger,
+        &authenticated,
+    ) {
+        Ok(attestation) => attestation,
+        Err(_) => {
+            drop(reservation);
+            drop(dequeue);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
+    };
+    let observation = CertifiedServeSchedulerObservationV1::from_live_cuts(
+        attestation,
+        &reservation,
+        &dequeue,
+        &runner,
+    );
+    let dispatch = match claim_certified_serve_turn_v1(
+        &mut owner.coordinator,
+        registry,
+        &ledger,
+        vec![observation],
+    ) {
+        Ok(dispatch) => dispatch,
+        Err(_) => {
+            drop(reservation);
+            drop(dequeue);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
+    };
+
+    if let Some(outcome) = negative {
+        if owner
+            .settle_certified_serve_negative(
+                dispatch.lease().clone(),
+                dispatch.authenticated_request(),
+                outcome,
+            )
+            .is_err()
+        {
+            drop(dispatch);
+            drop(reservation);
+            drop(dequeue);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
+        drop(dispatch);
+        reservation.abort_certified_serve_before_plan();
+        let (inbound, disposition) = dequeue.commit();
+        assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
+        drop(inbound);
+        drop(runner);
+        return ProductionLifecycleIngressTurnV1::Selected(
+            ProductionLifecycleIngressSelectionV1::CertifiedServeTerminal,
+        );
+    }
+
+    let (inbound, disposition) = dequeue.commit();
+    assert_eq!(disposition, FairV2IngressDequeueDisposition::Admit);
+    let task = match crate::sumeragi::v2_worker::LifecycleCertifiedServeTaskV1::from_dequeued(
+        dispatch, inbound,
+    ) {
+        Ok(task) => task,
+        Err(_) => {
+            drop(reservation);
+            drop(runner);
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
+    };
+    if !reservation.preflight_lifecycle_certified_serve(&task) {
+        drop(reservation);
+        drop(runner);
+        return ProductionLifecycleIngressTurnV1::Selected(
+            ProductionLifecycleIngressSelectionV1::RestartRequired,
+        );
+    }
+    reservation.commit_lifecycle_certified_serve(task);
+    drop(runner);
+    ProductionLifecycleIngressTurnV1::Selected(
+        ProductionLifecycleIngressSelectionV1::CertifiedServeQueued,
+    )
 }
 
 fn dequeue_prepared_ordinary_ingress<'cursor>(
@@ -451,6 +761,18 @@ impl LaunchedProductionLifecycleV1 {
                     ),
                 );
             }
+            Ok(RecoveredLifecycleCompletionTakeV1::CertifiedServe(completion)) => {
+                let selected = if completion
+                    .settle_deliver_and_acknowledge(&mut self.owner, &self.services)
+                    .is_ok()
+                {
+                    ProductionLifecycleCompletionSelectionV1::CertifiedServeCompleted
+                } else {
+                    self.close_output_for_restart();
+                    ProductionLifecycleCompletionSelectionV1::RestartRequired
+                };
+                return ProductionLifecycleCompletionTurnV1::Selected(selected);
+            }
             Ok(RecoveredLifecycleCompletionTakeV1::None) => {}
             Err(_) => {
                 self.close_output_for_restart();
@@ -525,6 +847,14 @@ impl LaunchedProductionLifecycleV1 {
         ) {
             return ProductionLifecycleIngressTurnV1::PassThrough(runner);
         }
+        if self.recovered_ingress_capacity_wait.is_some()
+            && self.certified_serve_capacity_wait.is_some()
+        {
+            self.close_output_for_restart();
+            return ProductionLifecycleIngressTurnV1::Selected(
+                ProductionLifecycleIngressSelectionV1::RestartRequired,
+            );
+        }
 
         if let Some(wait) = self.recovered_ingress_capacity_wait.take() {
             match wait.retry(&self.services, &self.executor) {
@@ -539,6 +869,28 @@ impl LaunchedProductionLifecycleV1 {
                     return self.drive_recovered_ingress_selector(selector, runner);
                 }
                 super::super::ProductionIngressCapacityRetry::RestartRequired => {
+                    self.close_output_for_restart();
+                    return ProductionLifecycleIngressTurnV1::Selected(
+                        ProductionLifecycleIngressSelectionV1::RestartRequired,
+                    );
+                }
+            }
+        }
+
+        if let Some(wait) = self.certified_serve_capacity_wait.take() {
+            match wait.status(&self.services) {
+                crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::SamePending => {
+                    assert!(self.certified_serve_capacity_wait.is_none());
+                    self.certified_serve_capacity_wait = Some(wait);
+                    return ProductionLifecycleIngressTurnV1::Selected(
+                        ProductionLifecycleIngressSelectionV1::CapacityPending,
+                    );
+                }
+                crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::Released => {
+                    drop(wait);
+                }
+                crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::GenerationExhausted
+                | crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::ForeignOrDisconnected => {
                     self.close_output_for_restart();
                     return ProductionLifecycleIngressTurnV1::Selected(
                         ProductionLifecycleIngressSelectionV1::RestartRequired,
@@ -597,11 +949,17 @@ impl LaunchedProductionLifecycleV1 {
             self.executor.context().height,
         ) {
             let Self {
-                executor, services, ..
-            } = self;
-            return prepare_and_dequeue_current_certified_serve(
+                owner,
                 executor,
                 services,
+                certified_serve_capacity_wait,
+                ..
+            } = self;
+            return prepare_and_dispatch_current_certified_serve(
+                owner,
+                executor,
+                services,
+                certified_serve_capacity_wait,
                 &ingress,
                 cut,
                 runner,
@@ -795,6 +1153,31 @@ impl LaunchedProductionLifecycleV1 {
 }
 
 impl ActivatedProductionLifecycleV1 {
+    /// Claim the oldest lifecycle-owned ProducerTurn at the exact bounded
+    /// local-proposal point held by the serialized runner.
+    pub(in crate::sumeragi) fn claim_producer_turn_for_local_proposal(
+        &mut self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+    ) -> Result<
+        Option<super::super::work_registry::ClaimedProducerTurnV1>,
+        super::super::scheduler_inputs::ProducerTurnSchedulerClaimErrorV1,
+    > {
+        let mode = self.launched.executor.lifecycle_mode_rank_snapshot();
+        self.launched
+            .owner
+            .claim_producer_turn_at_bounded_producer_point(&mode)
+    }
+
+    /// Durably terminalize one ProducerTurn after its single bounded local
+    /// proposal attempt returned successfully.
+    pub(in crate::sumeragi) fn settle_producer_turn_after_local_proposal(
+        &mut self,
+        _runner: &mut crate::sumeragi::v2_runner::ProductionLifecycleActiveRunnerBorrowV1,
+        attempted: super::super::work_registry::AttemptedProducerTurnV1,
+    ) -> Result<(), super::super::projection::ProducerTurnTerminalSettlementErrorV1> {
+        self.launched.owner.settle_producer_turn_advanced(attempted)
+    }
+
     /// Forward one Completion turn without exposing the launched stack.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::sumeragi) fn drive_completion_turn<'cursor>(
@@ -888,46 +1271,6 @@ impl ActivatedProductionLifecycleV1 {
             return Err("prepared Serve token lost its exact runner handoff".to_owned());
         };
         settle_prepared_certified_serve_for_test(handoff, &mut self.launched.services)
-    }
-
-    /// Inspect whether the test service retains no Serve barrier or dormant owner.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn certified_serve_owners_are_clear_for_test(
-        &self,
-    ) -> Result<bool, String> {
-        Ok(self
-            .launched
-            .services
-            .certified_serve_barrier_request_hash()?
-            .is_none()
-            && self
-                .launched
-                .services
-                .dormant_certified_serve_ingress_scheduler_ordinal()?
-                .is_none())
-    }
-
-    /// Match the retained test Serve barrier to one exact request hash.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn certified_serve_barrier_matches_for_test(
-        &self,
-        expected: iroha_crypto::HashOf<iroha_data_model::block::consensus_v2::CertifiedBodyRequest>,
-    ) -> Result<bool, String> {
-        Ok(self
-            .launched
-            .services
-            .certified_serve_barrier_request_hash()?
-            == Some(expected))
-    }
-
-    /// Claim one finite local-producer episode for a lifecycle finalization test.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn take_certified_serve_producer_episode_for_test(
-        &self,
-    ) -> Result<Option<crate::sumeragi::v2_worker::CertifiedServeProducerEpisode>, String> {
-        self.launched
-            .services
-            .try_begin_certified_serve_producer_episode()
     }
 }
 

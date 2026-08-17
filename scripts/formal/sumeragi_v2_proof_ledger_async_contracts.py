@@ -344,10 +344,11 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     'RetireLeaderWireLifecycleRetainsTerminalTombstone',
     'RetireLeaderWireLifecycleRecoveryCutPrunesOnlyDormant',
     'AsyncGateOpenDueResponsivePacketReentersClockDeadline',
-    'AsyncServeProducerEpisodeMeasureIsFinite',
-    'AsyncServeProducerEpisodeBlocksFreshServeAdmission',
-    'AsyncServeProducerEpisodeFinalRetirementArmsOneShotDebt',
-    'AsyncServeProducerEpisodeRunnerTurnStrictlyConsumesDebt',
+    'AsyncServeProducerTurnMeasureIsFinite',
+    'AsyncServeProducerTurnBlocksFreshServeAdmission',
+    'AsyncServeCompletionArmsOneShotProducerTurn',
+    'AsyncServeProducerTurnRunnerAttemptStrictlyConsumesDebt',
+    'AsyncServeProducerTurnRestartPreservesDebt',
     'AsyncTimeoutRecoveryResetRetiresExactlyResetNodes',
     'AsyncCandidateProducerContinuationResetPreservesExactReservation',
     'AsyncCandidateProducerContinuationUnresetOwnerPreserved',
@@ -4348,7 +4349,7 @@ def _async_spec_shape_errors(formal_dir: Path) -> list[str]:
         "AsyncAllVars": (
             "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, "
             "AsyncProducerVars, asyncFixedCorridorDeadlines, "
-            "asyncServeProducerEpisodeDue>>"
+            "asyncServeProducerTurnReady>>"
         ),
         "AsyncSpec": "AsyncInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness",
         "AsyncSpecAt": (

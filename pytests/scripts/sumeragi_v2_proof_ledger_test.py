@@ -302,52 +302,29 @@ def copy_process_lifetime_worker_launch_fixture(tmp_path: Path) -> Path:
 
 
 def copy_serve_lifecycle_production_fixture(tmp_path: Path, module) -> Path:
-    """Copy the complete Serve worker/effect source and lexical test closure."""
+    """Copy the coordinator-owned Serve lifecycle and regression closure."""
 
     for relative in (
-        Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_body_store.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-        Path(
-            "crates/iroha_core/src/sumeragi/v2_worker/"
-            "exact_output_rollover_claim.rs"
-        ),
-        Path(
-            "crates/iroha_core/src/sumeragi/v2_worker/"
-            "kura_replica_advert_refresh.rs"
-        ),
-        Path(
-            "crates/iroha_core/src/sumeragi/v2_worker/"
-            "current_lane_output_rollover_claim.rs"
-        ),
-        Path(
-            "crates/iroha_core/src/sumeragi/tests/"
-            "v2_worker_equivocation_and_selected_serve_fixture.rs"
-        ),
-        Path(
-            "crates/iroha_core/src/sumeragi/v2_worker/"
-            "applied_height_handoff_tests.rs"
-        ),
-        Path(
-            "crates/iroha_core/src/sumeragi/v2_worker/"
-            "upstream_reply_route_test.rs"
-        ),
-        Path(
-            "crates/iroha_core/src/sumeragi/tests/"
-            "v2_worker_nonzero_view_restart.rs"
-        ),
-        Path(
-            "crates/iroha_core/src/sumeragi/tests/"
-            "v2_worker_certified_serve_budget_cases.rs"
-        ),
-        Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
-        *(
-            Path("crates/iroha_core/src/sumeragi/tests") / filename
-            for filename in module._WORKER_TEST_INCLUDE_SOURCE_SHA256
-        ),
+        Path("crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs"),
+        Path("crates/iroha_core/src/sumeragi/tests/v2_lifecycle_scheduler_certified_serve_cases.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_tests_durable_recovery_02.rs"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(module.ROOT_DIR / relative, destination)
+    copy_reviewed_rust_include_components(tmp_path)
+    # The registry itself includes a reviewed recovery component which then
+    # includes two provider children; close that second include layer too.
     copy_reviewed_rust_include_components(tmp_path)
     return tmp_path
 
@@ -21816,183 +21793,6 @@ def test_terminal_authority_batch_commit_waits_for_complete_macro_step_after_dig
 
 
 @pytest.mark.parametrize(
-    ("mutation", "checker_name", "expected_error"),
-    (
-        (
-            "reply_route_geometry",
-            "exact_output",
-            "lifecycle construction must pass the exact P2P source geometry into lane work",
-        ),
-        (
-            "watchdog_poll",
-            "local_runner",
-            "every ordinary serialized height-loop iteration must poll liveness",
-        ),
-        (
-            "ordinary_ingress_cut",
-            "local_runner",
-            "the ordinary loop must retain its configured post-ingress runtime batch",
-        ),
-        (
-            "retained_response_pacemaker",
-            "local_runner",
-            "the retained response episode must receive exactly one direct typed pacemaker turn",
-        ),
-        (
-            "selected_serve_pacemaker",
-            "timeout_vote_episode",
-            "selected Serve must keep certificate escape inside",
-        ),
-        (
-            "pending_recovery_wake_bound",
-            "local_runner",
-            "closed pending recovery must wait only for the lesser of its remaining deadline",
-        ),
-        (
-            "exact_admission_timed_continue",
-            "local_runner",
-            "ordinary loop's four explicit continue edges and loop tail must remain finitely timed",
-        ),
-        (
-            "retained_response_timeout_turn",
-            "retained_response",
-            "fresh certificate credit must remain conditional while the independent TimeoutVote drain",
-        ),
-    ),
-)
-def test_modular_runner_semantics_survive_their_item_digest_refreshes(
-    tmp_path: Path,
-    mutation: str,
-    checker_name: str,
-    expected_error: str,
-) -> None:
-    """Every modular run-loop owner retains an independent semantic mutation."""
-
-    module = load_checker()
-    formal_dir = reviewed_run_inner_fixture(tmp_path, module, checker_name)
-    ordinary_path = (
-        tmp_path
-        / "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
-    )
-    pending_path = (
-        tmp_path
-        / "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"
-    )
-    if mutation == "reply_route_geometry":
-        path, item_name = ordinary_path, "run_non_pending_lifecycle_loop"
-        mutate_rust_item_source(
-            module,
-            path,
-            item_name,
-            "let lane_work_limits = lane_work_limits(\n"
-            "            &shared_config,\n"
-            "            network.reply_route_source_capacity(),",
-            "let lane_work_limits = lane_work_limits(\n"
-            "            &shared_config,\n"
-            "            network.reply_route_source_capacity().saturating_sub(1),",
-        )
-    elif mutation == "watchdog_poll":
-        path, item_name = ordinary_path, "run_lifecycle_active_height"
-        mutate_rust_item_source(
-            module,
-            path,
-            item_name,
-            "liveness_watchdog.poll(Instant::now());",
-            "let _watchdog_now = Instant::now();",
-        )
-    elif mutation == "ordinary_ingress_cut":
-        path, item_name = ordinary_path, "run_lifecycle_active_height"
-        mutate_rust_item_source(
-            module,
-            path,
-            item_name,
-            "advance_executor(receiver, executor, services, control_queue_capacity)?;",
-            "advance_executor(\n"
-            "                    receiver,\n"
-            "                    executor,\n"
-            "                    services,\n"
-            "                    control_queue_capacity.saturating_sub(1),\n"
-            "                )?;",
-        )
-    elif mutation == "retained_response_pacemaker":
-        path, item_name = ordinary_path, "service_retained_certified_response"
-        mutate_rust_item_source(
-            module,
-            path,
-            item_name,
-            "advance_pacemaker_once(receiver, executor, services)?;",
-            "let _ = (receiver, executor, services);",
-        )
-    elif mutation == "selected_serve_pacemaker":
-        path, item_name = ordinary_path, "service_certified_serve_barrier"
-        mutate_rust_item_source(
-            module,
-            path,
-            item_name,
-            "service_certified_serve_barrier_liveness_turn(",
-            "service_certified_serve_barrier_liveness_turn_for_test(",
-        )
-    elif mutation == "pending_recovery_wake_bound":
-        path, item_name = pending_path, "run_pending_kura_lifecycle_height"
-        mutate_rust_item_source(
-            module,
-            path,
-            item_name,
-            "wake_rx.recv_timeout(remaining.min(IDLE_POLL))",
-            "wake_rx.recv_timeout(remaining)",
-        )
-    elif mutation == "exact_admission_timed_continue":
-        path, item_name = ordinary_path, "run_lifecycle_active_height"
-        mutate_rust_item_source(
-            module,
-            path,
-            item_name,
-            "let Some(certified_serve_producer_episode) = certified_serve_producer_episode else {\n"
-            "            let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
-            "            continue;\n"
-            "        };",
-            "let Some(certified_serve_producer_episode) = certified_serve_producer_episode else {\n"
-            "            let _ = wake_rx.recv();\n"
-            "            continue;\n"
-            "        };",
-        )
-    else:
-        path, item_name = ordinary_path, "service_retained_certified_response"
-        mutate_rust_item_source(
-            module,
-            path,
-            item_name,
-            "V2IngressDrainMode::TimeoutVoteEpisode,",
-            "V2IngressDrainMode::Ordinary,",
-        )
-
-    mutated_items = module.rust_items(path.read_text(encoding="utf-8"), item_name)
-    assert len(mutated_items) == 1
-    digest = module._rust_item_token_sha256(mutated_items[0])
-    if checker_name == "exact_output":
-        module._PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256["ordinary_loop"] = digest
-    elif checker_name == "timeout_vote_episode":
-        module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[
-            "lifecycle_runner::service_certified_serve_barrier"
-        ] = digest
-    elif checker_name == "retained_response":
-        module._PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256[
-            "lifecycle_runner::service_retained_certified_response"
-        ] = digest
-    else:
-        role = "pending" if path == pending_path else "ordinary"
-        module._PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256[
-            f"{role}::{item_name}"
-        ] = digest
-
-    errors = reviewed_run_inner_source_fidelity_errors(
-        module, tmp_path, formal_dir, checker_name
-    )
-
-    assert any(expected_error in error for error in errors), errors
-
-
-@pytest.mark.parametrize(
     ("item_name", "old", "new", "checker_name", "expected_error"),
     (
         (
@@ -23108,29 +22908,10 @@ def test_timeout_vote_episode_runner_mode_inventory_mutation(
     assert any("exactly Ordinary, CertifiedFenceEscape" in error for error in errors)
 
 
-@pytest.mark.parametrize(
-    ("mutation", "expected_error"),
-    (
-        (
-            "remove_retained_response_timeout_turn",
-            "retained-response backpressure must give a conditional one-shot",
-        ),
-        (
-            "remove_selected_serve_timeout_turn",
-            "selected Serve must close its move-only predecessor admission before mapping the complete timeout-recovery suffix independently of it",
-        ),
-        (
-            "couple_selected_serve_liveness_to_predecessor",
-            "selected Serve must close its move-only predecessor admission before mapping the complete timeout-recovery suffix independently of it",
-        ),
-    ),
-)
 def test_timeout_vote_episode_runner_schedule_mutations(
     tmp_path: Path,
-    mutation: str,
-    expected_error: str,
 ) -> None:
-    """Both TimeoutVote turns are unconditional and independent of the aperture."""
+    """Retained-response backpressure keeps its independent TimeoutVote turn."""
 
     module = load_checker()
     formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
@@ -23138,10 +22919,8 @@ def test_timeout_vote_episode_runner_schedule_mutations(
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
     )
     runner = tmp_path / relative
-
-    if mutation == "remove_retained_response_timeout_turn":
-        item_name = "service_retained_certified_response"
-        old = """        drain_v2_ingress(
+    item_name = "service_retained_certified_response"
+    old = """        drain_v2_ingress(
             receiver,
             executor,
             services,
@@ -23157,27 +22936,23 @@ def test_timeout_vote_episode_runner_schedule_mutations(
             1,
         )?;
 """
-        new = ""
-    elif mutation == "remove_selected_serve_timeout_turn":
-        item_name = "service_certified_serve_barrier"
-        old = "V2IngressDrainMode::TimeoutVoteEpisode"
-        new = "V2IngressDrainMode::Ordinary"
-    else:
-        item_name = "service_certified_serve_barrier"
-        old = "service_certified_serve_barrier_liveness_turn(false, |action| match action {"
-        new = "service_certified_serve_barrier_liveness_turn(older_predecessor_remains, |action| match action {"
-
-    mutate_rust_item_source(module, runner, item_name, old, new)
+    mutate_rust_item_source(module, runner, item_name, old, "")
     rebind_timeout_vote_episode_rust_item_seal(
         module,
         tmp_path,
         relative,
         item_name,
     )
+
     errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
     )
-    assert any(expected_error in error for error in errors), errors
+
+    assert any(
+        "retained-response backpressure must give a conditional one-shot"
+        in error
+        for error in errors
+    ), errors
 
 
 @pytest.mark.parametrize(
@@ -24498,56 +24273,56 @@ def test_timeout_recovery_operator_mutations_survive_digest_refresh(
     ("symbol", "old", "new", "expected_error"),
     (
         (
-            "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+            "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileProducerTurnReady",
             "=> AsyncServeIngressLifecycleOwnerIdentities(node)' = {}",
             "=> TRUE",
             "must retain the exact reviewed statement",
         ),
         (
-            "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+            "AsyncNextPreservesEmptyServeIngressOwnersWhileProducerTurnReady",
             "=> AsyncServeIngressLifecycleOwnerIdentities(node)' = {}",
             "=> TRUE",
             "must retain the exact reviewed statement",
         ),
         (
-            "AsyncNextPreservesServeProducerEpisodeTypeInvariant",
-            "=> AsyncServeProducerEpisodeTypeInvariant'",
+            "AsyncNextPreservesServeProducerTurnTypeInvariant",
+            "=> AsyncServeProducerTurnTypeInvariant'",
             "=> TRUE",
             "must retain the exact reviewed statement",
         ),
         (
-            "AsyncNextPreservesServeProducerEpisodeInvariants",
-            "=> /\\ AsyncServeProducerEpisodeTypeInvariant'",
+            "AsyncNextPreservesServeProducerTurnInvariants",
+            "=> /\\ AsyncServeProducerTurnTypeInvariant'",
             "=> /\\ TRUE",
             "must retain the exact reviewed statement",
         ),
         (
-            "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue",
-            "AsyncServeProducerEpisodeBlocksFreshServeAdmission",
+            "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileProducerTurnReady",
+            "AsyncServeProducerTurnBlocksFreshServeAdmission",
             "MutationBlocksFreshServeAdmission",
             "must retain the exact reviewed proof dependencies",
         ),
         (
-            "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue",
-            "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+            "AsyncNextPreservesEmptyServeIngressOwnersWhileProducerTurnReady",
+            "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileProducerTurnReady",
             "MutationNetworkStepPreservesEmptyOwners",
             "must retain the exact reviewed proof dependencies",
         ),
         (
-            "AsyncNextPreservesServeProducerEpisodeTypeInvariant",
+            "AsyncNextPreservesServeProducerTurnTypeInvariant",
             "FunctionValueHasCodomain",
             "MutationFunctionValueHasCodomain",
             "must retain the exact reviewed proof dependencies",
         ),
         (
-            "AsyncNextPreservesServeProducerEpisodeInvariants",
-            "AsyncNextPreservesServeProducerEpisodeTypeInvariant",
+            "AsyncNextPreservesServeProducerTurnInvariants",
+            "AsyncNextPreservesServeProducerTurnTypeInvariant",
             "MutationPreservesProducerEpisodeType",
             "must retain the exact reviewed proof dependencies",
         ),
         (
-            "AsyncNextPreservesServeProducerEpisodeInvariants",
-            "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+            "AsyncNextPreservesServeProducerTurnInvariants",
+            "AsyncNextPreservesEmptyServeIngressOwnersWhileProducerTurnReady",
             "MutationPreservesEmptyServeIngressOwners",
             "must retain the exact reviewed proof dependencies",
         ),
@@ -27651,214 +27426,6 @@ def test_adequate_leader_static_carrier_rejects_branch_loss_or_dynamic_state(
     ), errors
 
 
-@pytest.mark.parametrize(
-    ("item_name", "old", "new", "expected_error"),
-    (
-        (
-            "try_push_at",
-            "state.last_admission_ordinal.checked_add(1)",
-            "state.last_admission_ordinal.wrapping_add(1)",
-            "physical carrier ordinal exhaustion must fail stop",
-        ),
-        (
-            "try_push_at",
-            "            state.open = false;\n"
-            "            return Err(FairV2IngressPushError::FailStop(inbound));",
-            "            return Err(FairV2IngressPushError::FailStop(inbound));",
-            "physical carrier ordinal exhaustion must fail stop",
-        ),
-        (
-            "try_push_at",
-            "        let admission_ordinal = carrier_admission_ordinal;",
-            "        let admission_ordinal = leader_wire_token.as_ref().map_or(\n"
-            "            carrier_admission_ordinal,\n"
-            "            |token| token.admission_ordinal,\n"
-            "        );",
-            "validated admission must commit the fresh physical carrier",
-        ),
-        (
-            "try_push_at",
-            "        let Some(carrier_admission_ordinal) = "
-            "state.last_admission_ordinal.checked_add(1) else {",
-            "        let _premature_leader_publication = "
-            "fair_v2_ingress_admit_leader_wire(\n"
-            "            &mut state,\n"
-            "            derivation,\n"
-            "            true,\n"
-            "        );\n"
-            "        let Some(carrier_admission_ordinal) = "
-            "state.last_admission_ordinal.checked_add(1) else {",
-            "fresh physical carrier allocation must follow all capacity cuts",
-        ),
-        (
-            "try_recv_if_at_checked",
-            "            .map(|entry| entry.admission_ordinal)\n"
-            "                        .min()",
-            "            .map(|entry| entry.admission_ordinal)\n"
-            "                        .max()",
-            "globally earliest eligible Serve physical carrier",
-        ),
-        (
-            "try_recv_if_at_checked",
-            "entry.admission_ordinal <= cutoff",
-            "entry.admission_ordinal >= cutoff",
-            "fallback must retain the earliest physical request cutoff",
-        ),
-        (
-            "try_recv_if_at_checked",
-            "serve.carrier_ordinal() <= leader_ordinal",
-            "serve.lifecycle_ordinal() <= u128::from(leader_ordinal)",
-            "must compare current physical carrier ordinals",
-        ),
-        (
-            "try_recv_if_at_checked",
-            "fair_v2_ingress_is_certified_fence_escape(&entry.inbound)",
-            "false",
-            "a version-valid TC or CommitQC must remain visible across either retained Serve or leader-wire reservation",
-        ),
-        (
-            "configure_roster_with_byte_requirements",
-            "        state.pending_wire_owners.clear();",
-            "        state.pending_wire_owners.clear();\n"
-            "        state.last_admission_ordinal = 0;",
-            "rollover may not reset or reuse",
-        ),
-    ),
-)
-def test_serve_ingress_ordinal_contract_rejects_ordering_mutations(
-    tmp_path: Path,
-    item_name: str,
-    old: str,
-    new: str,
-    expected_error: str,
-) -> None:
-    """Wrapping, reuse, late allocation, scheduler, and cutoff mutants fail."""
-
-    module = load_checker()
-    relative = Path("crates/iroha_core/src/sumeragi/mod.rs")
-    target = tmp_path / relative
-    target.parent.mkdir(parents=True)
-    shutil.copy2(module.ROOT_DIR / relative, target)
-    mutate_rust_item_source_in_context(
-        module,
-        target,
-        item_name,
-        (("impl", "FairV2Ingress"),),
-        old,
-        new,
-    )
-
-    errors = module._serve_ingress_ordinal_production_source_fidelity_errors(
-        tmp_path
-    )
-
-    assert any(expected_error in error for error in errors), errors
-
-
-@pytest.mark.parametrize(
-    ("old", "new"),
-    (
-        ("message.validate_version().is_ok()", "true"),
-        (
-            "v2_effects::network_ingress_is_certified_fence_escape(&message.payload)",
-            "true",
-        ),
-    ),
-)
-def test_serve_ingress_certified_escape_classifier_remains_closed(
-    tmp_path: Path,
-    old: str,
-    new: str,
-) -> None:
-    module = load_checker()
-    relative = Path("crates/iroha_core/src/sumeragi/mod.rs")
-    target = tmp_path / relative
-    target.parent.mkdir(parents=True)
-    shutil.copy2(module.ROOT_DIR / relative, target)
-    mutate_rust_item_source_in_context(
-        module,
-        target,
-        "fair_v2_ingress_is_certified_fence_escape",
-        (),
-        old,
-        new,
-    )
-
-    errors = module._serve_ingress_ordinal_production_source_fidelity_errors(
-        tmp_path
-    )
-
-    assert any(
-        "fair ingress must use the closed, version-validated TC/CommitQC classifier"
-        in error
-        for error in errors
-    ), errors
-
-
-def test_serve_ingress_ordinal_carrier_must_remain_private(
-    tmp_path: Path,
-) -> None:
-    """Admission metadata cannot become a public or wire-visible field."""
-
-    module = load_checker()
-    relative = Path("crates/iroha_core/src/sumeragi/mod.rs")
-    target = tmp_path / relative
-    target.parent.mkdir(parents=True)
-    shutil.copy2(module.ROOT_DIR / relative, target)
-    mutate_source_once(
-        target,
-        "struct FairV2IngressEntry {",
-        "pub(crate) struct FairV2IngressEntry {",
-    )
-
-    errors = module._serve_ingress_ordinal_production_source_fidelity_errors(
-        tmp_path
-    )
-
-    assert any(
-        "FairV2IngressEntry must remain private and internal" in error
-        for error in errors
-    ), errors
-
-
-@pytest.mark.parametrize(
-    "test_name",
-    (
-        "fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve",
-        "fair_v2_ingress_certified_request_cutoff_blocks_later_churn",
-        "fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes",
-        "restored_productive_retry_stays_behind_an_earlier_certified_request_carrier",
-        "restored_productive_retry_ordinal_exhaustion_keeps_the_owner_dormant",
-    ),
-)
-def test_serve_ingress_ordinal_regressions_cannot_be_deleted(
-    tmp_path: Path,
-    test_name: str,
-) -> None:
-    """Release source fidelity retains each ordering and rollover regression."""
-
-    module = load_checker()
-    relative = Path("crates/iroha_core/src/sumeragi/mod.rs")
-    target = tmp_path / relative
-    target.parent.mkdir(parents=True)
-    shutil.copy2(module.ROOT_DIR / relative, target)
-    mutate_rust_item_source(
-        module,
-        target,
-        test_name,
-        f"fn {test_name}(",
-        f"fn removed_{test_name}(",
-    )
-
-    errors = module._serve_ingress_ordinal_production_source_fidelity_errors(
-        tmp_path
-    )
-
-    assert any(
-        f"named {test_name}; found 0" in error for error in errors
-    ), errors
-
-
 def test_serve_ingress_gate_contract_is_complete(tmp_path: Path) -> None:
     """The current per-height gate implementation and regressions are sealed."""
 
@@ -27984,183 +27551,6 @@ def test_serve_ingress_gate_regressions_cannot_be_deleted(
     )
 
     errors = module._serve_ingress_gate_production_source_fidelity_errors(
-        tmp_path
-    )
-
-    assert any(
-        f"named {test_name}; found 0" in error for error in errors
-    ), errors
-
-
-@pytest.mark.parametrize(
-    ("old", "new", "expected_error"),
-    (
-        (
-            "next_serve_admission_ordinal: u128",
-            "next_serve_admission_ordinal_removed: u128",
-            "Serve admission ordinals must remain immutable internal state",
-        ),
-        (
-            "self.command_tx.rollback_serve_barrier_for_shutdown()?;",
-            "self.command_tx.serve_barrier_request_hash()?;",
-            "roll back the unclaimed Serve barrier",
-        ),
-        (
-            "if response_request_hash != lifecycle_id.request_hash {",
-            "if false {",
-            "mismatched response hash must fail before network delivery",
-        ),
-        (
-            "if reply_routes.is_empty() {",
-            "if false {",
-            "fully retired authenticated route set must complete its guard",
-        ),
-        (
-            "if placeholder.is_some() {",
-            "if true {",
-            "physically materialized reservation",
-        ),
-        (
-            "tracked.terminal = Some(V2IoServeTerminal::Response(response.clone()));",
-            "tracked.terminal = None;",
-            "durable response must become replayable before network delivery",
-        ),
-        (
-            "if tracked.terminal.as_ref() != Some(&terminal) {",
-            "if false {",
-            "network acknowledgement must match the durable replayable terminal",
-        ),
-    ),
-)
-def test_serve_lifecycle_production_contract_rejects_bypass(
-    tmp_path: Path,
-    old: str,
-    new: str,
-    expected_error: str,
-) -> None:
-    """Queue, shutdown, response binding, and empty-route retention are sealed."""
-
-    module = load_checker()
-    copy_serve_lifecycle_production_fixture(tmp_path, module)
-    relative = Path(
-        "crates/iroha_core/src/sumeragi/v2_worker.rs"
-    )
-    source = (module.ROOT_DIR / relative).read_text(encoding="utf-8")
-    assert source.count(old) >= 1
-    target = tmp_path / relative
-    target.write_text(source.replace(old, new, 1), encoding="utf-8")
-
-    errors = module._serve_lifecycle_production_source_fidelity_errors(
-        tmp_path
-    )
-
-    assert any(expected_error in error for error in errors), errors
-
-
-def test_serve_lifecycle_reply_route_control_flow_rejects_reordering(
-    tmp_path: Path,
-) -> None:
-    """Empty-route retention cannot run before ownership validation."""
-
-    module = load_checker()
-    copy_serve_lifecycle_production_fixture(tmp_path, module)
-    relative = Path("crates/iroha_core/src/sumeragi/v2_worker.rs")
-    source = (module.ROOT_DIR / relative).read_text(encoding="utf-8")
-    validation = (
-        "        if reply_routes.semantic_target() != &peer\n"
-        "            || !ingress_ownership.validate_exact()\n"
-        "            || !ingress_ownership.matches_reply_routes(Some(&reply_routes))\n"
-    )
-    assert source.count(validation) == 1
-    reordered = (
-        "        if reply_routes.is_empty() {\n"
-        "            return Ok(());\n"
-        "        }\n"
-        + validation
-    )
-    target = tmp_path / relative
-    target.write_text(
-        source.replace(validation, reordered, 1),
-        encoding="utf-8",
-    )
-
-    errors = module._serve_lifecycle_production_source_fidelity_errors(
-        tmp_path
-    )
-
-    assert any(
-        "exact reply control flow must validate ownership" in error
-        for error in errors
-    ), errors
-
-
-def test_serve_lifecycle_reply_route_empty_branch_cannot_be_noop(
-    tmp_path: Path,
-) -> None:
-    """The checked empty predicate must own completion and return."""
-
-    module = load_checker()
-    copy_serve_lifecycle_production_fixture(tmp_path, module)
-    relative = Path("crates/iroha_core/src/sumeragi/v2_worker.rs")
-    source = (module.ROOT_DIR / relative).read_text(encoding="utf-8")
-    branch = "        if reply_routes.is_empty() {\n"
-    assert source.count(branch) == 1
-    target = tmp_path / relative
-    target.write_text(
-        source.replace(
-            branch,
-            branch + "        }\n        if false {\n",
-            1,
-        ),
-        encoding="utf-8",
-    )
-
-    errors = module._serve_lifecycle_production_source_fidelity_errors(
-        tmp_path
-    )
-
-    assert any(
-        "fully retired authenticated route set must complete its guard" in error
-        for error in errors
-    ), errors
-
-
-@pytest.mark.parametrize(
-    "test_name",
-    (
-        "certified_serve_receiver_close_rolls_back_pending_capacity_replacement",
-        "certified_serve_receiver_close_rolls_back_materialized_unclaimed_replacement",
-        "certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement",
-        "certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fifo",
-        "certified_serve_terminal_replay_source_retains_retired_route_and_reconnects",
-    ),
-)
-def test_serve_lifecycle_required_regressions_cannot_be_deleted(
-    tmp_path: Path,
-    test_name: str,
-) -> None:
-    """Release source fidelity requires each repaired-defect regression."""
-
-    module = load_checker()
-    copy_serve_lifecycle_production_fixture(tmp_path, module)
-    relative = Path(
-        "crates/iroha_core/src/sumeragi/tests/"
-        "v2_worker_certified_serve_budget_cases.rs"
-    )
-    source = (module.ROOT_DIR / relative).read_text(encoding="utf-8")
-    declaration = f"fn {test_name}("
-    assert source.count(declaration) == 1
-    target = tmp_path / relative
-    target.write_text(
-        source.replace(
-            declaration,
-            f"fn removed_{test_name}(",
-            1,
-        ),
-        encoding="utf-8",
-    )
-
-    errors = module._serve_lifecycle_production_source_fidelity_errors(
         tmp_path
     )
 
@@ -35023,7 +34413,7 @@ def test_async_original_state_erasure_keeps_serve_episode_debt(
         mutate_tla_operator(
             source,
             "AsyncOriginalAllVars",
-            ",\n    asyncServeProducerEpisodeDue",
+            ",\n    asyncServeProducerTurnReady",
             "",
         ),
         encoding="utf-8",
@@ -35033,7 +34423,7 @@ def test_async_original_state_erasure_keeps_serve_episode_debt(
 
     assert any(
         "AsyncOriginalAllVars must equal only" in error
-        and "asyncServeProducerEpisodeDue" in error
+        and "asyncServeProducerTurnReady" in error
         for error in errors
     ), errors
 

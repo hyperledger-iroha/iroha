@@ -188,7 +188,7 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
     ):
         assert providers[theorem] == boundary_continuation
     for theorem in (
-        "AsyncServeProducerEpisodeTransitionPreservesTypeInvariant",
+        "AsyncServeProducerTurnTransitionPreservesTypeInvariant",
         "AsyncStrongTypeProjectsControlServiceStateType",
         "FreshReplayCandidateIsDisjointFromScheduled",
         "ReplayingOrdinaryStepPreservesRecoveryCorridor",

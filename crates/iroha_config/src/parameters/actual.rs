@@ -5788,32 +5788,31 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
         &nexus.commit.window_slots.get(),
     );
     let da = &nexus.da;
-    for (tag, value) in [
-        ("nexus.da.q_in_slot_total", da.q_in_slot_total.get()),
-        (
-            "nexus.da.q_in_slot_per_ds_min",
-            da.q_in_slot_per_ds_min.get(),
-        ),
-        ("nexus.da.sample_size_base", da.sample_size_base.get()),
-        ("nexus.da.sample_size_max", da.sample_size_max.get()),
-        ("nexus.da.threshold_base", da.threshold_base.get()),
-        ("nexus.da.per_attester_shards", da.per_attester_shards.get()),
-        (
-            "nexus.da.ingest_quota_window_blocks",
-            da.ingest_quota_window_blocks.get(),
-        ),
-        (
-            "nexus.da.ingest_quota_max_count_per_account",
+    macro_rules! append_da_fields {
+        ($($tag:literal => $value:expr),+ $(,)?) => {
+            $(
+                append(
+                    &mut preimage,
+                    $tag,
+                    &$value,
+                );
+            )+
+        };
+    }
+    append_da_fields! {
+        "nexus.da.q_in_slot_total" => da.q_in_slot_total.get(),
+        "nexus.da.q_in_slot_per_ds_min" => da.q_in_slot_per_ds_min.get(),
+        "nexus.da.sample_size_base" => da.sample_size_base.get(),
+        "nexus.da.sample_size_max" => da.sample_size_max.get(),
+        "nexus.da.threshold_base" => da.threshold_base.get(),
+        "nexus.da.per_attester_shards" => da.per_attester_shards.get(),
+        "nexus.da.ingest_quota_window_blocks" => da.ingest_quota_window_blocks.get(),
+        "nexus.da.ingest_quota_max_count_per_account" =>
             da.ingest_quota_max_count_per_account.get(),
-        ),
-        (
-            "nexus.da.ingest_quota_max_bytes_per_account",
+        "nexus.da.ingest_quota_max_bytes_per_account" =>
             da.ingest_quota_max_bytes_per_account.get(),
-        ),
-        ("nexus.da.audit.sample_size", da.audit.sample_size.get()),
-        ("nexus.da.audit.window_count", da.audit.window_count.get()),
-    ] {
-        append(&mut preimage, tag, &value);
+        "nexus.da.audit.sample_size" => da.audit.sample_size.get(),
+        "nexus.da.audit.window_count" => da.audit.window_count.get(),
     }
     append(
         &mut preimage,

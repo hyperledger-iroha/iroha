@@ -1669,27 +1669,6 @@ EffectExecutorStep::Advanced { .. } => {
                 "the production runner must reconcile the exact durable lock or Decision after every serialized transition",
             ),
         ),
-        "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-            (
-                """
-pub(crate) fn certified_serve_predecessor_completion_evidence(
-    &self,
-    runtime_capacity_available: bool,
-    serve_lifecycle_ordinal: u128,
-) -> Result<Option<ExactServePredecessorCompletionEvidence>, String> {
-    if serve_lifecycle_ordinal == 0 {
-        return Err("Sumeragi v2 Serve completion cut was zero".to_owned());
-    }
-    let ownership_position =
-        usize::from(!runtime_capacity_available && self.held_io_completion.is_some());
-    let io_ordinal = self
-        .io
-        .as_ref()
-        .and_then(|io| io.completion_ownership_at(ownership_position))
-""",
-                "selected-Serve completion evidence must project the exact held offset without consuming a completion",
-            ),
-        ),
         "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
             (
                 """

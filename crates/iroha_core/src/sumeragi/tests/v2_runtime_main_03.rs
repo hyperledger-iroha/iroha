@@ -906,54 +906,6 @@ fn later_same_semantic_fair_retry_retains_runtime_lifecycle_root() {
     assert!(!runtime.fail_closed);
 }
 #[test]
-fn ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it() {
-    let directory = TempDir::new().expect("temporary fair-to-runtime predecessor directory");
-    let (mut runtime, context, keys) =
-        authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 2, 2));
-    let message = signed_runtime_proposal(&context, &keys, 0xD6);
-    let lifecycle_ordinals = runtime.ingress.lifecycle_ordinals.clone();
-    let fair_ordinal = lifecycle_ordinals
-        .reserve_one()
-        .expect("mint ordinary fair-ingress predecessor lifecycle");
-    let ownership = fair_runtime_ownership_at_lifecycle(
-        fair_runtime_ownership(
-            &message,
-            PeerId::new(keys[0].public_key().clone()),
-            PeerId::new(keys[1].public_key().clone()),
-        ),
-        fair_ordinal,
-    );
-    runtime
-        .enqueue_network_with_ingress_ownership(message, ownership)
-        .expect("transfer ordinary fair predecessor into serialized runtime");
-    let serve_ordinal = lifecycle_ordinals
-        .reserve_one()
-        .expect("mint exact Serve target behind the transferred predecessor");
-    let now = Instant::now();
-    runtime
-        .arm_live_clocks(now)
-        .expect("arm runtime for exact predecessor comparison");
-    assert!(
-        runtime
-            .older_lifecycle_predates_exact_serve(now, serve_ordinal)
-            .expect("transferred Fair owner participates in runtime minimum"),
-        "the exact Serve target cannot prepare past the transferred predecessor"
-    );
-    let (_, consumed) = runtime
-        .ingress
-        .pop_next_with_ownership()
-        .expect("runtime predecessor selection remains exact")
-        .expect("ordinary Fair predecessor is ready");
-    assert_eq!(consumed.lifecycle_ordinal, fair_ordinal);
-    assert!(
-        !runtime
-            .older_lifecycle_predates_exact_serve(now, serve_ordinal)
-            .expect("recompute minimum after consuming the predecessor"),
-        "Serve becomes eligible only after the transferred lifecycle drains"
-    );
-    assert!(!runtime.fail_closed);
-}
-#[test]
 fn older_frozen_aggregate_carrier_rebases_queued_runtime_minimum() {
     let directory = TempDir::new().expect("temporary aggregate-rebase runtime directory");
     let (mut runtime, context, keys) =
@@ -1036,18 +988,10 @@ fn older_frozen_aggregate_carrier_rebases_queued_runtime_minimum() {
         Ok(Some(older_ordinal))
     );
     assert!(ownership.validate_exact());
-    let now = Instant::now();
-    runtime
-        .arm_live_clocks(now)
-        .expect("arm runtime before exact Serve comparison");
-    let serve_ordinal = lifecycle_ordinals
-        .reserve_one()
-        .expect("mint exact Serve barrier after both aggregate carriers");
-    assert!(
-        runtime
-            .older_lifecycle_predates_exact_serve(now, serve_ordinal)
-            .expect("compare reconciled aggregate minimum"),
-        "the later-transferred frozen carrier must become the active minimum"
+    assert_eq!(
+        runtime.minimum_active_lifecycle_ordinal(),
+        Ok(Some(older_ordinal)),
+        "the later-transferred frozen carrier must become the active minimum",
     );
     assert!(!runtime.fail_closed);
 }
@@ -1254,8 +1198,7 @@ fn busy_deferred_request_merges_alternate_source_and_services_exact_carrier() {
     );
     let replay_origin = &runtime.deferred_remote_proposal_replay[&admission_ordinal];
     assert_eq!(
-        replay_origin.ingress,
-        runtime.deferred_ingress_ownership[&admission_ordinal],
+        replay_origin.ingress, runtime.deferred_ingress_ownership[&admission_ordinal],
         "the Proposal replay sidecar must atomically adopt merged ingress ownership"
     );
     assert!(

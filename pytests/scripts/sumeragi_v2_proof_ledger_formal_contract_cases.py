@@ -277,6 +277,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs'): (
         Path('tests/v2_lifecycle_projection_cases.rs'),
     ),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs'): (
+        Path('tests/v2_lifecycle_scheduler_certified_serve_cases.rs'),
+    ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs'): (
         Path('v2_lifecycle_replay_authority_certified_serve.rs'),
         Path('v2_lifecycle_replay_authority_certified_body.rs'),
@@ -331,17 +334,15 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_worker_main_00.rs'),
         Path('tests/v2_worker_main_01.rs'),
         Path('tests/v2_worker_lifecycle_capacity_cases.rs'),
-        Path('tests/v2_worker_equivocation_and_selected_serve_fixture.rs'),
+        Path('tests/v2_worker_equivocation_fixture.rs'),
         Path('v2_worker/applied_height_handoff_tests.rs'),
         Path('v2_worker/queue_plan_admission_handoff_tests.rs'),
         Path('v2_worker/upstream_reply_route_test.rs'),
         Path('tests/v2_worker_main_02.rs'),
-        Path('tests/v2_worker_main_03.rs'),
         Path('tests/v2_worker_main_04.rs'),
         Path('tests/v2_worker_main_05.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_runner.rs'): (
-        Path('v2_runner/height_ingress_bindings.rs'),
         Path('v2_runner/lifecycle_terminal_recovery.rs'),
         Path('v2_runner/decided_lane_recovery.rs'),
         Path('v2_runner/outer_ingress_cursor.rs'),
@@ -394,7 +395,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_effects_main_03.rs'),
         Path('tests/v2_effects_main_04.rs'),
         Path('tests/v2_effects_main_05.rs'),
-        Path('tests/v2_effects_lifecycle_predecessor.rs'),
         Path('tests/v2_effects_03_locked_body_and_sidecar.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lane_work.rs'): (
@@ -442,11 +442,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_worker_backpressure_cases.rs'),
         Path('v2_worker_recovered_lifecycle_output_cases.rs'),
         Path('v2_worker_nonzero_view_restart.rs'),
-    ),
-    Path('crates/iroha_core/src/sumeragi/tests/v2_worker_main_04.rs'): (
-        Path('v2_worker_serve_unsealed_cases.rs'),
-        Path('v2_worker_serve_decision_restart_cases.rs'),
-        Path('v2_worker_certified_serve_budget_cases.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/tests/v2_effects_main_05.rs'): (
         Path('v2_effects_kura_tip_replay.rs'),

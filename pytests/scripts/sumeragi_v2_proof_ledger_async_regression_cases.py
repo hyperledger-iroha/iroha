@@ -3,25 +3,25 @@
     (
         (
             "AsyncAllVars",
-            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
-            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>",
             "AsyncAllVars must equal only",
         ),
         (
             "AsyncAllVars",
-            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
-            "<<gst, vars, AsyncRecoveryVars, AsyncSchedulerVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>",
+            "<<gst, vars, AsyncRecoveryVars, AsyncSchedulerVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>",
             "AsyncAllVars must equal only",
         ),
         (
             "AsyncAllVars",
-            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>",
             "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines>>",
             "AsyncAllVars must equal only",
         ),
         (
             "AsyncAllVars",
-            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerEpisodeDue>>",
+            "<<gst, vars, AsyncSchedulerVars, AsyncRecoveryVars, AsyncProducerVars, asyncFixedCorridorDeadlines, asyncServeProducerTurnReady>>",
             "<<gst, coreState, schedulerState, recoveryPhase, recoveryQueue, producerKnown>>",
             "AsyncAllVars must equal only",
         ),
@@ -341,7 +341,7 @@ def test_async_source_fidelity_requires_configuration_before_capacity_theorems(
             0,
         ),
         ("AsyncProducerProjectionStep", "AsyncCoreOuterFrame", 0),
-        ("AsyncServeProducerEpisodeTransition", "AsyncCoreOuterFrame", 0),
+        ("AsyncServeProducerTurnTransition", "AsyncCoreOuterFrame", 0),
         ("AsyncCoreOuterFrame", "AsyncNonCrashOuterFrame", 0),
         ("AsyncCoreOuterFrame", "AsyncRecoveryOuterFrame", 0),
         ("AsyncNonCrashOuterFrame", "AsyncNonRunnerOuterFrame", 0),
@@ -449,12 +449,12 @@ def test_async_source_fidelity_requires_configuration_before_capacity_theorems(
         ("AsyncProducerTypeInvariant", "AsyncTypeInvariant", 0),
         ("AsyncProducerTypeInvariant", "AsyncStrongTypeInvariant", 0),
         (
-            "AsyncServeProducerEpisodeTypeInvariant",
+            "AsyncServeProducerTurnTypeInvariant",
             "AsyncStrongTypeInvariant",
             0,
         ),
         (
-            "AsyncServeProducerEpisodeOwnershipInvariant",
+            "AsyncServeProducerTurnOwnershipInvariant",
             "AsyncStrongTypeInvariant",
             0,
         ),
@@ -577,8 +577,8 @@ def test_async_source_fidelity_pins_sany_provider_dependency_and_order(
     "conjunct",
     (
         "AsyncProducerTypeInvariant",
-        "AsyncServeProducerEpisodeTypeInvariant",
-        "AsyncServeProducerEpisodeOwnershipInvariant",
+        "AsyncServeProducerTurnTypeInvariant",
+        "AsyncServeProducerTurnOwnershipInvariant",
         "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant",
     ),
 )
@@ -620,8 +620,8 @@ def test_async_strong_type_invariant_retains_producer_episode_conjuncts(
     ("symbol", "old", "new"),
     (
         (
-            "AsyncInitEstablishesServeProducerEpisodeInvariants",
-            "=> /\\ AsyncServeProducerEpisodeTypeInvariant",
+            "AsyncInitEstablishesServeProducerTurnInvariants",
+            "=> /\\ AsyncServeProducerTurnTypeInvariant",
             "=> /\\ TRUE",
         ),
         (
@@ -630,8 +630,8 @@ def test_async_strong_type_invariant_retains_producer_episode_conjuncts(
             "=> TRUE",
         ),
         (
-            "AsyncNextPreservesServeProducerEpisodeInvariants",
-            "=> /\\ AsyncServeProducerEpisodeTypeInvariant'",
+            "AsyncNextPreservesServeProducerTurnInvariants",
+            "=> /\\ AsyncServeProducerTurnTypeInvariant'",
             "=> /\\ TRUE",
         ),
         (
@@ -668,9 +668,9 @@ def test_strong_type_producer_timeout_bridge_statements_fail_closed(
     (
         (
             "AsyncInitEstablishesStrongTypeInvariant",
-            "AsyncInitEstablishesServeProducerEpisodeInvariants",
+            "AsyncInitEstablishesServeProducerTurnInvariants",
             "TRUE",
-            "must use the exact finite Serve-producer episode init bridge",
+            "must use the exact finite Serve ProducerTurn init bridge",
         ),
         (
             "AsyncInitEstablishesStrongTypeInvariant",
@@ -687,10 +687,10 @@ def test_strong_type_producer_timeout_bridge_statements_fail_closed(
         ),
         (
             "AsyncAllVarsStutterPreservesStrongTypeInvariant",
-            "AsyncServeProducerEpisodeOwnershipInvariant,\n"
+            "AsyncServeProducerTurnOwnershipInvariant,\n"
             "             AsyncServeIngressLifecycleOwnerIdentities",
             "TRUE,\n             AsyncServeIngressLifecycleOwnerIdentities",
-            "must retain the exact Serve-producer episode stutter bridge",
+            "must retain the exact Serve ProducerTurn stutter bridge",
         ),
         (
             "AsyncAllVarsStutterPreservesStrongTypeInvariant",
@@ -702,14 +702,14 @@ def test_strong_type_producer_timeout_bridge_statements_fail_closed(
             "AsyncAllVarsStutterPreservesStrongTypeInvariant",
             "<2>7, <2>8, <2>8p, <2>8t",
             "<2>7, <2>8",
-            "must retain producer-episode and timeout-boundary prime steps "
+            "must retain ProducerTurn and timeout-boundary prime steps "
             "as exact QED dependencies",
         ),
         (
             "AsyncNextPreservesStrongTypeInvariant",
-            "AsyncNextPreservesServeProducerEpisodeInvariants",
+            "AsyncNextPreservesServeProducerTurnInvariants",
             "TRUE",
-            "must retain the exact finite Serve-producer episode prime step",
+            "must retain the exact finite Serve ProducerTurn prime step",
         ),
         (
             "AsyncNextPreservesStrongTypeInvariant",
@@ -721,7 +721,7 @@ def test_strong_type_producer_timeout_bridge_statements_fail_closed(
             "AsyncNextPreservesStrongTypeInvariant",
             "<2>4b, <2>4c, <2>4d, <2>4e, <2>5",
             "<2>4b, <2>4c, <2>5",
-            "candidate-lifecycle, producer-episode, and timeout-boundary "
+            "candidate-lifecycle, ProducerTurn, and timeout-boundary "
             "prime step an exact QED dependency",
         ),
     ),
@@ -755,44 +755,46 @@ def test_strong_type_producer_timeout_bridge_dependencies_fail_closed(
     ("symbol", "old", "new"),
     (
         (
-            "AsyncServeProducerEpisodeTransition",
-            "       IF AsyncServeProducerEpisodeRestartStep(node)\n"
-            "            \\/ AsyncServeProducerEpisodeReceiverCloseStep(node)\n"
+            "AsyncServeProducerTurnTransition",
+            "       IF AsyncServeProducerTurnCompletionStep(node)\n"
+            "       THEN TRUE",
+            "       IF AsyncServeProducerTurnRestartStep(node)\n"
             "       THEN FALSE\n"
-            "       ELSE IF AsyncServeProducerEpisodeFinalRetirementStep(node)\n"
+            "       ELSE IF AsyncServeProducerTurnCompletionStep(node)\n"
             "            THEN TRUE",
-            "       IF AsyncServeProducerEpisodeFinalRetirementStep(node)\n"
-            "       THEN TRUE\n"
-            "       ELSE IF AsyncServeProducerEpisodeRestartStep(node)\n"
-            "            \\/ AsyncServeProducerEpisodeReceiverCloseStep(node)\n"
-            "            THEN FALSE",
         ),
         (
-            "AsyncServeProducerEpisodeTransition",
-            "               ELSE asyncServeProducerEpisodeDue[node]",
+            "AsyncServeProducerTurnTransition",
+            "               ELSE asyncServeProducerTurnReady[node]",
             "               ELSE FALSE",
         ),
         (
-            "AsyncServeProducerEpisodeActiveThisStep",
+            "AsyncServeProducerTurnAttemptThisStep",
             "   \\/ RunHistoricalServer(node)",
             "   \\/ RunHistoricalServer(node)\n"
             "   \\/ (\\E source \\in AsyncIngressSources:\n"
             "         CoalesceHiddenPacket(node, source))",
         ),
         (
-            "AsyncServeProducerEpisodeOwnershipInvariant",
+            "AsyncServeProducerTurnOwnershipInvariant",
             "       /\\ AsyncServeOffQueueReservations(node) = {}",
             "       /\\ TRUE",
         ),
+        (
+            "AsyncServeProducerTurnCompletionStep",
+            "        /\\ AsyncServeReconstructedTerminalOutcome(\n"
+            "             node, job.candidate.item) = AsyncServeResponseOutcome",
+            "        /\\ TRUE",
+        ),
     ),
 )
-def test_serve_producer_episode_transition_mutations_are_rejected(
+def test_serve_producer_turn_transition_mutations_are_rejected(
     tmp_path: Path,
     symbol: str,
     old: str,
     new: str,
 ) -> None:
-    """Restart/close precedence, retry stutter, and ownership stay exact."""
+    """Completion, restart-stable debt, and ownership stay exact."""
 
     module = load_checker()
     formal_dir = copy_async_source_fidelity_fixture(
@@ -811,8 +813,8 @@ def test_serve_producer_episode_transition_mutations_are_rejected(
 
     assert any(
         symbol in error
-        and "must retain the exact one-shot producer-debt ownership, "
-        "classifier, and transition semantics" in error
+        and "must retain the exact one-shot ProducerTurn ownership, "
+        "completion, and transition semantics" in error
         for error in errors
     ), errors
 
@@ -843,7 +845,7 @@ def test_fresh_serve_admission_cannot_bypass_producer_episode_debt(
         mutate_tla_operator(
             source,
             symbol,
-            "~asyncServeProducerEpisodeDue[node]",
+            "~asyncServeProducerTurnReady[node]",
             "TRUE",
         ),
         encoding="utf-8",
@@ -868,12 +870,12 @@ def test_fresh_serve_admission_cannot_bypass_producer_episode_debt(
         ),
         (
             "AsyncTypeInvariant",
-            "  /\\ AsyncServeProducerEpisodeTypeInvariant\n",
+            "  /\\ AsyncServeProducerTurnTypeInvariant\n",
             "",
         ),
         (
             "AsyncServiceActivationFrameVars",
-            ", asyncServeProducerEpisodeDue",
+            ", asyncServeProducerTurnReady",
             "",
         ),
     ),
