@@ -25,6 +25,13 @@ use super::v2_lifecycle_coordinator::{
     substitute_recovered_decision_fetch_owner_for_test,
     substitute_recovered_decision_fetch_replay_authority_for_test,
 };
+#[cfg(all(test, feature = "bls"))]
+use super::v2_lifecycle_coordinator::{
+    control_timeout_supersession_persistence_failure_for_test,
+    control_timeout_supersession_summary_for_test,
+    install_non_timeout_broadcast_before_current_control_for_test,
+    install_timeout_broadcasts_before_current_control_for_test,
+};
 use super::{
     safety_wal::{
         RecoveredRecord, SafetyWal, SafetyWalAppendReceipt, SafetyWalError,
@@ -46,26 +53,28 @@ use super::{
         ValidatedBodyReceipt,
     },
     v2_lifecycle_coordinator::{
-        AdapterEffectAdmissionError, AuthenticatedRecoveredWalControlProjection,
+        AdapterEffectAdmissionError, AuthenticatedRecoveredLifecycleSuccessorFloorV1,
+        AuthenticatedRecoveredWalControlProjection,
         AuthenticatedRecoveredWalDecisionFetchProjection,
         AuthenticatedRecoveredWalValidateLifecycleRepair, CandidateAdmission,
         DurableValidateReplayEvidenceV1, ExactStoreRecoveredWalPersistError,
         ExactStoreRecoveredWalSignInstallError, InstalledRecoveredWalSignStorage,
-        InvalidBodyReportReplayEvidenceV1, LifecycleContext, LifecycleDigest, LifecycleLedgerV1,
-        LifecycleWorkRegistryHolder, LiveValidateSignRegistryReservation,
+        InvalidBodyReportReplayEvidenceV1, LifecycleContext, LifecycleDigest, LifecycleLedgerError,
+        LifecycleLedgerV1, LifecycleWorkRegistryHolder, LiveValidateSignRegistryReservation,
         LiveValidateSignWorkProjectionPermit, OpenedRecoveredWalValidateLedger,
         PersistedRecoveredWalValidateLedger, PreparedLiveValidateSignRegistryWork,
         ProductionLifecycleOwnerV1, ProductionOpenedRecoveredWalSignLifecycleCut,
-        ProductionRecoveredWalStorageError, ReadyRejectedAdapterAuthority,
-        ReadyValidateSignPredecessorAuthority, ReadyValidatedAdapterAuthority,
-        RecoveredDecisionApplyCandidateLineageV1, RecoveredDecisionApplyCompletionProjectionPermit,
-        RecoveredDecisionApplyDispatchIdentityV1, RecoveredDecisionApplyDispatchKeyV1,
-        RecoveredDecisionApplyPendingLineageV1, RecoveredDecisionApplyRegistryProjectionPermit,
-        RecoveredDecisionFetchStoreProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
-        RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,
-        RecoveredWalParentFactoryError, RecoveredWalProductionOwnerOpenV1,
-        RecoveredWalVoteReplayEvidenceV1, SealedInvalidBodyReportProjectionPermit,
-        SealedLiveWalPersistedEffectV1, SealedValidateSignProjectionPermit,
+        ProductionRecoveredWalStorageError, PublishedFinalizedLifecycleRetainedFloorV1,
+        ReadyRejectedAdapterAuthority, ReadyValidateSignPredecessorAuthority,
+        ReadyValidatedAdapterAuthority, RecoveredDecisionApplyCandidateLineageV1,
+        RecoveredDecisionApplyCompletionProjectionPermit, RecoveredDecisionApplyDispatchIdentityV1,
+        RecoveredDecisionApplyDispatchKeyV1, RecoveredDecisionApplyPendingLineageV1,
+        RecoveredDecisionApplyRegistryProjectionPermit, RecoveredDecisionFetchStoreProjectionV1,
+        RecoveredLifecycleNextWalVoteSealV1, RecoveredWalControlReplayEvidenceV1,
+        RecoveredWalDecisionFetchReplayEvidenceV1, RecoveredWalParentFactoryError,
+        RecoveredWalProductionOwnerOpenV1, RecoveredWalVoteReplayEvidenceV1,
+        SealedInvalidBodyReportProjectionPermit, SealedLiveWalPersistedEffectV1,
+        SealedValidateSignProjectionPermit,
     },
     v2_runtime::{
         PendingRuntimeEffectBinding, RecoveredWalCandidateProjectionPermit,
@@ -77,7 +86,7 @@ use iroha_data_model::{account::AccountId, block::consensus_v2 as wire, peer::Pe
 use norito::codec::{Decode, Encode};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -686,10 +695,10 @@ enum RecoveredWalStartupAuthorityV1 {
 
 /// Opaque recovered ownership of one already-attempted local Proposal.
 ///
-/// The WAL-authenticated control Sign is the sole mint. The token exposes only
-/// a fixed comparison against the reducer's current proposal directive, so the
-/// runner can suppress duplicate local assembly without receiving a replayed
-/// effect, tag, round, or subject.
+/// The replay-authenticated current-round [`reducer::WalRecord::ProposalIntent`]
+/// is the sole mint. The token exposes only a fixed comparison against the
+/// reducer's current proposal directive, so the runner can suppress duplicate
+/// local assembly without receiving a replayed effect, tag, round, or subject.
 #[must_use = "recovered local Proposal ownership must initialize runner proposal state"]
 pub(in crate::sumeragi) struct RecoveredLifecycleLocalProposalAttemptV1 {
     tag: reducer::EventTag,
@@ -698,6 +707,36 @@ pub(in crate::sumeragi) struct RecoveredLifecycleLocalProposalAttemptV1 {
 }
 
 impl RecoveredLifecycleLocalProposalAttemptV1 {
+    /// Project one already-attempted current-round Proposal from the exact
+    /// replay-authenticated durable reducer frontier.
+    ///
+    /// A later Prepare/Timeout record or residual phase-vote/control owner must
+    /// not hide the earlier same-view ProposalIntent. Conversely, an intent
+    /// from an older view is only durable non-equivocation history and cannot
+    /// suppress a proposal in the reducer's successor view.
+    fn from_authenticated_durable_current_round(
+        adapter: &SumeragiV2Adapter,
+    ) -> Result<Option<Self>, AdapterError> {
+        let tag = adapter.reducer.current_tag();
+        let round = reducer::Round::new(tag.height(), tag.view());
+        let Some(proposal) = adapter.reducer.durable_state().proposal_intent(round) else {
+            return Ok(None);
+        };
+        let wire_round = adapter.registry.round_to_wire(proposal.round());
+        let subject = adapter.registry.subject(proposal.manifest().subject())?;
+        if wire_round.context_id != adapter.wire_context.id()
+            || wire_round.height != tag.height()
+            || wire_round.view != tag.view()
+        {
+            return Err(AdapterError::RecoveredStartupEffectMismatch);
+        }
+        Ok(Some(Self {
+            tag,
+            round: wire_round,
+            subject,
+        }))
+    }
+
     fn from_control(control: &RecoveredWalControlSign) -> Option<Self> {
         let AdapterEffect::Sign {
             tag,
@@ -722,13 +761,10 @@ impl RecoveredLifecycleLocalProposalAttemptV1 {
             && self.round.height == self.tag.height()
             && self.round.view == self.tag.view()
             && current.decided_subject().is_none()
-            && current
-                .locked_body()
-                .is_none_or(|(locked_round, locked_subject)| {
-                    self.round.context_id == locked_round.context_id
-                        && self.round.height == locked_round.height
-                        && self.subject == locked_subject
-                })
+            && current.locked_body().is_none_or(|(locked_round, _)| {
+                self.round.context_id == locked_round.context_id
+                    && self.round.height == locked_round.height
+            })
     }
 
     /// Build a comparison-only recovery owner for focused boundary tests.
@@ -764,6 +800,7 @@ pub(crate) struct ProductionLifecycleAdapterStartupV1 {
 pub(crate) struct RecoveredLifecycleStorageAuthorityV1 {
     kura_identity: KuraInstanceIdentity,
     genesis_account: AccountId,
+    predecessor: Option<RecoveredLifecyclePredecessorStorageIdentityV1>,
     context_id: wire::HeightContextId,
     height: wire::Height,
     wal_path: PathBuf,
@@ -771,6 +808,29 @@ pub(crate) struct RecoveredLifecycleStorageAuthorityV1 {
     lifecycle_root: PathBuf,
     body_store_root: PathBuf,
     signature_policy: super::v2_body_store::BlockSignaturePolicy,
+    successor_floor: Option<AuthenticatedRecoveredLifecycleSuccessorFloorV1>,
+}
+/// Exact predecessor address retained by one recovered successor storage seal.
+struct RecoveredLifecyclePredecessorStorageIdentityV1 {
+    context_id: wire::HeightContextId,
+    height: wire::Height,
+    lifecycle_root: PathBuf,
+}
+/// Kura-bound finalized predecessor floor awaiting its exact successor seal.
+#[must_use = "the finalized lifecycle floor must bind recovered successor storage"]
+pub(in crate::sumeragi) struct FinalizedLifecycleRetainedFloorV1 {
+    kura_identity: KuraInstanceIdentity,
+    published: PublishedFinalizedLifecycleRetainedFloorV1,
+}
+/// Closed H/H+1 target projected only by recovered lifecycle storage authority.
+///
+/// The lifecycle ledger consumes this token as a whole; no caller can supply a
+/// raw root, context, or ordinal floor to successor initialization.
+#[must_use = "the recovered lifecycle successor target must consume its finalized floor"]
+pub(in crate::sumeragi) struct RecoveredLifecycleSuccessorFloorTargetV1 {
+    predecessor: RecoveredLifecyclePredecessorStorageIdentityV1,
+    successor_context: LifecycleContext,
+    successor_root: PathBuf,
 }
 /// Move-only execution and storage inputs for the recovered lifecycle owner.
 ///
@@ -856,6 +916,16 @@ impl RecoveredLifecycleOwnerKuraBindingV1 {
                 chunk_root: self.chunk_root.clone(),
             })
     }
+    /// Join the just-retired LedgerV1 floor to this exact live Kura instance.
+    pub(in crate::sumeragi) fn bind_finalized_lifecycle_floor(
+        self,
+        published: PublishedFinalizedLifecycleRetainedFloorV1,
+    ) -> FinalizedLifecycleRetainedFloorV1 {
+        FinalizedLifecycleRetainedFloorV1 {
+            kura_identity: self.kura_identity,
+            published,
+        }
+    }
     #[cfg(test)]
     /// Build a Kura binding for unlaunchable raw-root fixtures or exact-signer tests.
     pub(in crate::sumeragi) fn for_test(kura: &Kura, local_signer: Option<&KeyPair>) -> Self {
@@ -870,7 +940,45 @@ impl RecoveredLifecycleOwnerKuraBindingV1 {
         }
     }
 }
+
+impl RecoveredLifecycleSuccessorFloorTargetV1 {
+    /// Compare the finalized frame with the exact predecessor retained by H+1.
+    pub(in crate::sumeragi) fn authorizes_predecessor(
+        &self,
+        root: &Path,
+        context: LifecycleContext,
+    ) -> bool {
+        self.predecessor.lifecycle_root == root
+            && self.predecessor.context_id.0.as_ref() == context.id().as_bytes()
+            && self.predecessor.height == context.height()
+            && self.predecessor.height.checked_add(1) == Some(self.successor_context.height())
+            && self.predecessor.context_id.0.as_ref() != self.successor_context.id().as_bytes()
+            && self.predecessor.lifecycle_root != self.successor_root
+            && self.predecessor.lifecycle_root.parent() == self.successor_root.parent()
+    }
+
+    /// Consume the already-authenticated target into its canonical successor.
+    pub(in crate::sumeragi) fn into_successor_target(self) -> (PathBuf, LifecycleContext) {
+        (self.successor_root, self.successor_context)
+    }
+}
+
 impl RecoveredLifecycleStorageAuthorityV1 {
+    fn predecessor_storage_identity(
+        storage_root: &Path,
+        verified: &VerifiedHeightContext,
+    ) -> Option<RecoveredLifecyclePredecessorStorageIdentityV1> {
+        verified.verified_predecessor_context().map(|context| {
+            RecoveredLifecyclePredecessorStorageIdentityV1 {
+                context_id: context.id(),
+                height: context.height,
+                lifecycle_root: storage_root
+                    .join("lifecycle-v1")
+                    .join(hex::encode(context.id().0.as_ref())),
+            }
+        })
+    }
+
     /// Mint the sole production storage seal from authenticated height recovery.
     pub(in crate::sumeragi) fn mint_from_recovered_height(
         kura: &Kura,
@@ -885,6 +993,7 @@ impl RecoveredLifecycleStorageAuthorityV1 {
         Self {
             kura_identity: kura.instance_identity(),
             genesis_account: genesis_account.clone(),
+            predecessor: Self::predecessor_storage_identity(&storage_root, verified),
             context_id: context.id(),
             height: context.height,
             wal_path: storage_root
@@ -896,11 +1005,44 @@ impl RecoveredLifecycleStorageAuthorityV1 {
                 .join(hex::encode(context.id().0.as_ref())),
             body_store_root: storage_root.join("bodies"),
             signature_policy: signature_policy.clone(),
+            successor_floor: None,
         }
+    }
+    /// Bind the exact finalized H floor, initialize/authenticate H+1, and
+    /// retain that frame proof until the production coordinator opens it.
+    pub(in crate::sumeragi) fn bind_finalized_predecessor_floor(
+        mut self,
+        floor: FinalizedLifecycleRetainedFloorV1,
+    ) -> Result<Self, LifecycleLedgerError> {
+        if self.successor_floor.is_some()
+            || !self.kura_identity.same_instance(&floor.kura_identity)
+            || !matches!(
+                &self.signature_policy,
+                super::v2_body_store::BlockSignaturePolicy::RotatingLeader
+            )
+        {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "finalized lifecycle floor changed its recovered Kura or policy".to_owned(),
+            ));
+        }
+        let predecessor = self.predecessor.take().ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "recovered successor storage has no authenticated predecessor".to_owned(),
+            )
+        })?;
+        let mut context_id = [0_u8; 32];
+        context_id.copy_from_slice(self.context_id.0.as_ref());
+        let target = RecoveredLifecycleSuccessorFloorTargetV1 {
+            predecessor,
+            successor_context: LifecycleContext::new(LifecycleDigest::new(context_id), self.height),
+            successor_root: self.lifecycle_root.clone(),
+        };
+        self.successor_floor = Some(floor.published.initialize_successor(target)?);
+        Ok(self)
     }
     /// Build the exact sealed storage input for a production-factory fixture.
     #[cfg(test)]
-    fn for_test(
+    pub(in crate::sumeragi) fn for_test(
         kura: &Kura,
         verified: &VerifiedHeightContext,
         signature_policy: super::v2_body_store::BlockSignaturePolicy,
@@ -911,6 +1053,7 @@ impl RecoveredLifecycleStorageAuthorityV1 {
         Self {
             kura_identity: kura.instance_identity(),
             genesis_account,
+            predecessor: Self::predecessor_storage_identity(&storage_root, verified),
             context_id: context.id(),
             height: context.height,
             wal_path: storage_root
@@ -922,6 +1065,7 @@ impl RecoveredLifecycleStorageAuthorityV1 {
                 .join(hex::encode(context.id().0.as_ref())),
             body_store_root: storage_root.join("bodies"),
             signature_policy,
+            successor_floor: None,
         }
     }
 }
@@ -1697,6 +1841,8 @@ enum ProductionLifecycleOwnerStartupErrorKindV1 {
     ResidualEffects,
     #[error("recovered adapter safety WAL changed its Kura-derived storage path")]
     StorageLayout,
+    #[error("recovered lifecycle successor ordinal floor failed: {0}")]
+    SuccessorFloor(#[source] LifecycleLedgerError),
     #[error("recovered lifecycle execution dependencies changed identity")]
     ExecutionIdentity,
     #[error("recovered body marker replay failed: {0}")]
@@ -1723,6 +1869,8 @@ enum ProductionLifecycleOwnerStartupErrorKindV1 {
     RecoveredOwner(#[source] super::v2_lifecycle_coordinator::ProductionLifecycleStartupErrorV1),
     #[error("recovered WAL control Sign startup failed: {0}")]
     RecoveredControl(&'static str),
+    #[error("recovered local Proposal attempt startup failed: {0}")]
+    RecoveredLocalProposal(&'static str),
     #[error("recovered WAL Decision Fetch startup failed: {0}")]
     RecoveredDecisionFetch(&'static str),
     #[error("recovered WAL Decision body preflight failed: {0}")]
@@ -10897,6 +11045,21 @@ impl SumeragiV2Adapter {
             locked_subject,
             decided_subject,
         })
+    }
+    /// Return whether replay-authenticated safety authority closes local
+    /// production for the reducer's exact current round.
+    ///
+    /// This is a defense-in-depth admission fact beneath runner-local attempt
+    /// bookkeeping. A recovered phase vote, timeout, Decision, or empty
+    /// residual effect set must not reopen the active-view producer after the
+    /// safety WAL has fixed or closed that round.
+    pub(crate) fn durable_current_round_local_proposal_is_closed(&self) -> bool {
+        let tag = self.reducer.current_tag();
+        let round = reducer::Round::new(tag.height(), tag.view());
+        let durable = self.reducer.durable_state();
+        durable.proposal_intent(round).is_some()
+            || durable.timeout_intent(round).is_some()
+            || durable.decision().is_some()
     }
     /// Mint the bounded validation-marker frontier authorized by WAL replay.
     ///

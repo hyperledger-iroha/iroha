@@ -124,7 +124,9 @@ mod lifecycle_runner_authority;
 pub(in crate::sumeragi) mod ordinary_ingress_consumer;
 #[path = "v2_runner/preactivation_ingress.rs"]
 mod preactivation_ingress;
-pub(in crate::sumeragi) use lifecycle_height_driver::drain_lifecycle_v2_ingress;
+pub(in crate::sumeragi) use lifecycle_height_driver::{
+    LifecycleProducerClaimDispositionV1, drain_lifecycle_v2_ingress,
+};
 #[cfg(test)]
 use lifecycle_pending_kura::{PendingTipRecoveryDeadline, pending_tip_recovery_deadline_error};
 use lifecycle_run_inner::PendingSuccessorActivation;

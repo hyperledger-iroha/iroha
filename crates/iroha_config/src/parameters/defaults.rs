@@ -3886,6 +3886,10 @@ pub mod sumeragi {
     /// This is shared with the executable refinement gate so configuration
     /// validation reserves the exact same producer batch used by production.
     pub const V2_MAX_EFFECTS_PER_STEP: usize = 8;
+    /// Number of separately reserved certified Serve/Producer phase families.
+    pub const V2_CERTIFIED_SERVE_PHASE_FAMILIES: usize = 2;
+    /// Maximum height-local lifecycle records addressable by the canonical slot index.
+    pub const V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize = u16::MAX as usize + 1;
     /// Number of independently reserved exact-output progress classes.
     ///
     /// Safety, lane-progress, and bulk-progress each require one ownership

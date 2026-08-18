@@ -2565,6 +2565,7 @@ struct DurableRecoveredWalDecisionFetchWork {
     carrier: DurableRecoveredWalDecisionFetchCarrierV1,
     address: ConcreteWorkAddress,
     dispatch_key: Option<RecoveredDecisionFetchDispatchKeyV1>,
+    wait_source: Option<super::WaitSource>,
 }
 /// Dedicated Store carrier which permanently retains its recovered WAL Fetch lineage.
 ///
@@ -3063,12 +3064,17 @@ impl PreparedRecoveredDecisionFetchDispatchV1<'_> {
         self.key
     }
     /// Arm the exact carrier after the executor and output reservations preflight.
-    pub(in crate::sumeragi) fn commit_for_executor(self) -> RecoveredDecisionFetchDispatchKeyV1 {
+    pub(in crate::sumeragi) fn commit_for_executor(
+        self,
+        wait_source: super::WaitSource,
+    ) -> RecoveredDecisionFetchDispatchKeyV1 {
         assert!(
-            self.work.dispatch_key.is_none(),
+            self.work.dispatch_key.is_none() && self.work.wait_source.is_none(),
             "prepared recovered Decision Fetch remains the sole dispatch owner"
         );
+        assert!(matches!(wait_source, super::WaitSource::External(_)));
         self.work.dispatch_key = Some(self.key);
+        self.work.wait_source = Some(wait_source);
         self.key
     }
 }
@@ -3156,6 +3162,7 @@ impl fmt::Debug for DurableRecoveredWalDecisionFetchWork {
         formatter
             .debug_struct("DurableRecoveredWalDecisionFetchWork")
             .field("dispatched", &self.dispatch_key.is_some())
+            .field("waiting", &self.wait_source.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -3201,6 +3208,19 @@ impl DurableRecoveredWalDecisionFetchWork {
     ) -> bool {
         self.validates_at(address, installed_digest)
             && self.carrier.matches_claimed_record(coordinator, lease)
+    }
+    fn matches_waiting_record(
+        &self,
+        address: ConcreteWorkAddress,
+        installed_digest: LifecycleDigest,
+        coordinator: &LifecycleCoordinator,
+        wait_source: super::WaitSource,
+    ) -> bool {
+        self.validates_at(address, installed_digest)
+            && self.wait_source == Some(wait_source)
+            && self
+                .carrier
+                .matches_waiting_record(coordinator, wait_source)
     }
 }
 impl fmt::Debug for DurableRecoveredWalSignWork {

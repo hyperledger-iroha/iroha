@@ -507,11 +507,11 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
 #[cfg(feature = "bls")]
 #[test]
 #[allow(clippy::too_many_lines)]
-fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
+fn production_empty_genesis_complete_tip_adopts_control_repair_and_launches() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     crate::sumeragi::status::clear_v2_status();
-    let (kura, verified, local_signer, retirement) =
-        super::super::v2_lifecycle_coordinator::complete_tip_lifecycle_shutdown_fixture();
+    let (kura, state, verified, storage_authority, local_signer, retirement) =
+        super::super::v2_recovery::production_empty_genesis_complete_tip_fixture_for_test();
     let context = verified.context().clone();
     let local_peer = PeerId::new(local_signer.public_key().clone());
     let local_validator = context
@@ -524,6 +524,37 @@ fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
     let wal_path = storage_root
         .join("wal")
         .join(format!("{:020}.wal", context.height));
+    let successor_ledger_path = storage_root
+        .join("lifecycle-v1")
+        .join(hex::encode(context.id().0.as_ref()))
+        .join("lifecycle-ledger-v1.norito");
+    let empty_successor = std::fs::read(&successor_ledger_path)
+        .expect("read the retirement-time empty successor frame");
+    let (mut adapter, effects) = SumeragiV2Adapter::open_with_aggregator(
+        wal_path.clone(),
+        verified.clone(),
+        Some(local_validator),
+        reducer::Generation::new(1),
+        [0x4D; 32],
+        fingerprints(),
+        Box::new(TestAggregator),
+        deferred_admission_ordinals(),
+    )
+    .expect("open production-shaped H+1 adapter");
+    assert!(effects.is_empty());
+    let timeout = adapter
+        .timeout_elapsed(adapter.current_tag())
+        .expect("persist the exact H+1 TimeoutIntent")
+        .into_effects();
+    assert!(matches!(
+        timeout.as_slice(),
+        [AdapterEffect::Sign {
+            request: SignRequest::TimeoutVote(_),
+            ..
+        }]
+    ));
+    drop(adapter);
+    crate::sumeragi::status::clear_v2_status();
     let authenticated = SumeragiV2Adapter::open_recovered_startup_with_aggregator(
         wal_path,
         verified.clone(),
@@ -537,8 +568,9 @@ fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
     .expect("open sealed empty H+1 adapter startup")
     .authenticate_final_wal_startup_authority()
     .unwrap_or_else(|(error, _startup)| {
-        panic!("authenticate empty CompleteTip successor WAL: {error}")
+        panic!("authenticate CompleteTip successor TimeoutIntent: {error}")
     });
+    assert!(authenticated.has_recovered_control_sign_for_test());
     let signature_policy = super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader;
     let body_store = super::super::v2_body_store::V2BodyStore::open_with_policy(
         storage_root.join("bodies"),
@@ -547,13 +579,6 @@ fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
     )
     .expect("open canonical H+1 body store");
     let body_store = quarantined_lifecycle_body_store_for_test(body_store);
-    let storage_authority = RecoveredLifecycleStorageAuthorityV1::for_test(
-        kura.as_ref(),
-        &verified,
-        signature_policy,
-        AccountId::new(local_signer.public_key().clone()),
-    );
-    let state = lifecycle_factory_state_for_test(Arc::clone(&kura), context.network_id);
     let factory_inputs = try_lifecycle_factory_inputs_for_test(
         &authenticated,
         storage_authority,
@@ -570,6 +595,12 @@ fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
             body_store,
         )
         .unwrap_or_else(|error| panic!("open CompleteTip H+1 lifecycle owner: {error}"));
+    let repaired_successor = std::fs::read(&successor_ledger_path)
+        .expect("read the owner-open recovered-control successor frame");
+    assert_ne!(
+        repaired_successor, empty_successor,
+        "owner startup must reproduce the production empty-to-control-repair publication"
+    );
     let ingress = Arc::new(
         crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
             64,
@@ -603,19 +634,30 @@ fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
         )
         .expect("bind CompleteTip H+1 Kura advert source"),
     );
-    let (exact_output_handoff_owner, _transport_owner) =
+    let (exact_output_handoff_owner, transport_owner) =
         super::super::v2_worker::durable_exact_output_handoff_owner_pair();
+    let mut lane_work =
+        super::super::v2_lane_work::V2LaneWorkAdapter::lifecycle_finalization_fixture_for_test(
+            context.clone(),
+            local_peer.clone(),
+            local_signer.clone(),
+            Arc::clone(&state),
+            Arc::clone(&kura),
+            Arc::clone(&output_guard),
+            transport_owner,
+        )
+        .expect("open exact CompleteTip lifecycle lane/output owner");
     let launch_inputs =
         super::super::v2_lifecycle_coordinator::ProductionLifecycleLaunchInputsV1::new(
             launched_at,
             Duration::from_secs(10),
             super::super::v2_runtime::RuntimeQueueConfig::default(),
             super::super::v2_effects::EffectQueueConfig::default(),
-            local_peer,
+            local_peer.clone(),
             Some(local_validator),
-            local_signer,
+            local_signer.clone(),
             crate::IrohaNetwork::closed_for_tests(),
-            state,
+            Arc::clone(&state),
             Arc::clone(&kura),
             None,
             64,
@@ -626,16 +668,112 @@ fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
             kura_replica_advert_refresh,
             exact_output_handoff_owner,
         );
-    let setup_context =
-        super::super::v2_runner::lifecycle_run_inner::launch_non_pending_lifecycle_height_and_shutdown_for_test(
+    let (mut activated, setup_context) =
+        super::super::v2_runner::lifecycle_run_inner::launch_non_pending_lifecycle_height_and_activate_for_test(
             owner,
             launch_inputs,
             Some(retirement),
             &ingress_ready,
             &ingress,
         )
-        .unwrap_or_else(|error| panic!("launch and stop sealed CompleteTip H+1 owner: {error}"));
+        .unwrap_or_else(|error| panic!("launch sealed CompleteTip H+1 owner: {error}"));
     assert_eq!(setup_context, context.id());
+
+    let mut active_runner =
+        super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
+    let mut block_sync_server =
+        super::super::v2_block_sync::V2BlockSyncServer::new(context.network_id.clone(), 64)
+            .expect("open CompleteTip block-sync server");
+    let mut block_sync =
+        super::super::v2_block_sync::V2BlockSyncDiscovery::new(context.clone(), local_peer, 64)
+            .expect("open CompleteTip block-sync discovery");
+    let mut block_sync_request = None;
+    let mut npos_vrf = super::super::v2_npos::V2NposVrfLifecycle::open(
+        &context,
+        state.as_ref(),
+        Some(local_validator),
+        &local_signer,
+    )
+    .expect("open CompleteTip NPoS lifecycle");
+    let first = super::super::v2_runner::drain_lifecycle_v2_ingress(
+        &mut activated,
+        &mut active_runner,
+        &ingress,
+        &mut lane_work,
+        kura.as_ref(),
+        &local_signer,
+        &mut block_sync_server,
+        &mut block_sync,
+        &mut block_sync_request,
+        &mut npos_vrf,
+        1,
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
+    )
+    .expect("dispatch the first active CompleteTip recovered Sign");
+    assert_eq!(
+        first.producer_claim(),
+        super::super::v2_runner::LifecycleProducerClaimDispositionV1::AwaitingCompletion,
+        "the recovered Sign worker owns Completion before ProducerTurn may claim"
+    );
+    assert!(first.requires_yield());
+    assert!(
+        !output_guard.restart_required(),
+        "queueing the recovered Sign must keep consensus output open"
+    );
+
+    let completion_deadline = Instant::now() + Duration::from_secs(5);
+    let mut producer_claim = first.producer_claim();
+    loop {
+        let next = super::super::v2_runner::drain_lifecycle_v2_ingress(
+            &mut activated,
+            &mut active_runner,
+            &ingress,
+            &mut lane_work,
+            kura.as_ref(),
+            &local_signer,
+            &mut block_sync_server,
+            &mut block_sync,
+            &mut block_sync_request,
+            &mut npos_vrf,
+            1,
+            producer_claim,
+        )
+        .expect("settle the active CompleteTip recovered Sign");
+        producer_claim = next.producer_claim();
+        if producer_claim == super::super::v2_runner::LifecycleProducerClaimDispositionV1::Eligible
+        {
+            assert!(!next.requires_yield());
+            break;
+        }
+        assert!(next.requires_yield());
+        assert!(!output_guard.restart_required());
+        if Instant::now() >= completion_deadline {
+            panic!("timed out waiting for the CompleteTip recovered Sign completion");
+        }
+        std::thread::yield_now();
+    }
+    assert!(
+        !output_guard.restart_required(),
+        "the recovered Sign Broadcast settlement must keep output open"
+    );
+    let broadcast_successor = std::fs::read(&successor_ledger_path)
+        .expect("read the durable CompleteTip Broadcast successor frame");
+    assert_ne!(
+        broadcast_successor, repaired_successor,
+        "the worker completion must durably replace the recovered Sign with its Broadcast child"
+    );
+    let producer = activated
+        .claim_producer_turn_for_local_proposal(&mut active_runner)
+        .unwrap_or_else(|error| {
+            panic!("post-Sign ProducerTurn claim must not see an unsettled lease: {error:?}")
+        });
+    assert!(
+        producer.is_none(),
+        "the repaired CompleteTip fixture has no ready ProducerTurn"
+    );
+    activated
+        .into_clean_shutdown(&mut active_runner)
+        .unwrap_or_else(|error| panic!("stop active CompleteTip H+1 owner: {error}"));
 
     assert!(!ingress_ready.load(Ordering::Acquire));
     let ingress_state = ingress.state.lock();
@@ -643,6 +781,8 @@ fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
     assert!(ingress_state.leader_wire_lifecycle_gate.is_none());
     drop(ingress_state);
     assert!(!output_guard.restart_required());
+    assert!(crate::sumeragi::status::v2_status().is_some());
+    crate::sumeragi::status::clear_v2_status();
     assert!(crate::sumeragi::status::v2_status().is_none());
 }
 
@@ -1832,7 +1972,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             ));
             let mut batch_runner =
                 super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test();
-            super::super::v2_runner::drain_lifecycle_v2_ingress(
+            let producer_claim = super::super::v2_runner::drain_lifecycle_v2_ingress(
                 &mut activated,
                 &mut batch_runner,
                 &leader_wire_ingress,
@@ -1844,8 +1984,10 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 &mut block_sync_request,
                 &mut npos_vrf,
                 1,
+                super::super::v2_runner::LifecycleProducerClaimDispositionV1::initial(),
             )
             .expect("drain one exact lifecycle-owned ordinary batch");
+            assert!(!producer_claim.requires_yield());
             assert_eq!(leader_wire_ingress.len(), 0);
             assert!(!output_guard.restart_required());
             let (rejected_serve, admitted_serve) =
@@ -1922,7 +2064,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 |runner| {
                     match activated.drive_ingress_turn(runner) {
                         ProductionLifecycleIngressTurnV1::Selected(
-                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CapacityPending,
+                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending,
                         ) => true,
                         ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
                             drop(runner);
@@ -1978,9 +2120,10 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 let (completed, _) = with_lifecycle_current_runner_turn_for_test(
                     &recovered_context,
                     LifecycleRunnerRankTarget::Completion,
-                    |runner| match activated.drive_completion_turn(runner, &mut lane_work) {
+                    |runner| {
+                        match activated.drive_completion_turn(runner, &mut lane_work) {
                         ProductionLifecycleCompletionTurnV1::Selected(
-                            ProductionLifecycleCompletionSelectionV1::CertifiedServeCompleted,
+                            ProductionLifecycleCompletionSelectionV1::CertifiedServeClaimedCompleted,
                         ) => true,
                         ProductionLifecycleCompletionTurnV1::PassThrough(_) => false,
                         ProductionLifecycleCompletionTurnV1::Selected(selected) => {
@@ -1990,6 +2133,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                             );
                             false
                         }
+                    }
                     },
                 );
                 if completed {
@@ -2001,6 +2145,46 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 );
                 std::thread::yield_now();
             }
+            assert!(matches!(
+                leader_wire_ingress.try_push(
+                    super::super::v2_worker::tests::certified_serve_inbound(
+                        admitted_serve.request(),
+                        local_peer.clone(),
+                    ),
+                ),
+                Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+            ));
+            let competing_serve_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
+            let ((), after_competing_serve) = with_lifecycle_current_runner_turn_for_test(
+                &recovered_context,
+                LifecycleRunnerRankTarget::Ingress,
+                |runner| {
+                    match activated.drive_ingress_turn(runner) {
+                    ProductionLifecycleIngressTurnV1::Selected(
+                        super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeCompetingReady,
+                    ) => {}
+                    ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
+                        drop(runner);
+                        panic!("Ready Producer must retain the current certified Serve")
+                    }
+                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => {
+                        drop(turn);
+                        panic!("Ready Producer cannot let the current certified Serve drain")
+                    }
+                    ProductionLifecycleIngressTurnV1::Selected(_) => {
+                        panic!("Ready Producer selected the wrong Serve outcome")
+                    }
+                }
+                },
+            );
+            assert_eq!(after_competing_serve, LifecycleRunnerRankTarget::Completion);
+            assert_eq!(leader_wire_ingress.len(), 1);
+            assert_eq!(
+                leader_wire_ingress.state.lock().last_admission_ordinal,
+                competing_serve_ordinal,
+                "the Ready-Producer guard cannot dequeue or renumber the retained Serve"
+            );
+            assert!(!output_guard.restart_required());
             let claimed_producer = activated
                 .claim_producer_turn_for_local_proposal(&mut serve_runner)
                 .expect("authenticate the complete Ready Producer census")
@@ -2010,6 +2194,63 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             activated
                 .settle_producer_turn_after_local_proposal(&mut serve_runner, attempted_producer)
                 .expect("durably settle the attempted ProducerTurn");
+            assert!(!output_guard.restart_required());
+
+            let ((), after_terminal_replay_queue) = with_lifecycle_current_runner_turn_for_test(
+                &recovered_context,
+                LifecycleRunnerRankTarget::Ingress,
+                |runner| {
+                    match activated.drive_ingress_turn(runner) {
+                    ProductionLifecycleIngressTurnV1::Selected(
+                        super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeReplayQueued,
+                    ) => {}
+                    ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
+                        drop(runner);
+                        panic!("released Producer must expose the retained Serve terminal replay")
+                    }
+                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => {
+                        drop(turn);
+                        panic!("authenticated terminal Serve replay remains lifecycle-owned")
+                    }
+                    ProductionLifecycleIngressTurnV1::Selected(_) => {
+                        panic!("retained Serve replay selected the wrong outcome")
+                    }
+                }
+                },
+            );
+            assert_eq!(
+                after_terminal_replay_queue,
+                LifecycleRunnerRankTarget::Completion
+            );
+            assert_eq!(leader_wire_ingress.len(), 0);
+            let replay_deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let (completed, _) = with_lifecycle_current_runner_turn_for_test(
+                    &recovered_context,
+                    LifecycleRunnerRankTarget::Completion,
+                    |runner| match activated.drive_completion_turn(runner, &mut lane_work) {
+                        ProductionLifecycleCompletionTurnV1::Selected(
+                            ProductionLifecycleCompletionSelectionV1::CertifiedServeReplayCompleted,
+                        ) => true,
+                        ProductionLifecycleCompletionTurnV1::PassThrough(_) => false,
+                        ProductionLifecycleCompletionTurnV1::Selected(selected) => {
+                            assert!(
+                                !selected.restart_required(),
+                                "terminal Serve replay completion requires lifecycle restart"
+                            );
+                            false
+                        }
+                    },
+                );
+                if completed {
+                    break;
+                }
+                assert!(
+                    Instant::now() < replay_deadline,
+                    "timed out waiting for retained Serve terminal replay completion"
+                );
+                std::thread::yield_now();
+            }
             assert!(!output_guard.restart_required());
 
             let ((), after_activated_ingress_pass_through) =
@@ -2739,250 +2980,4 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status() {
     crate::sumeragi::status::clear_v2_status();
 }
 
-#[test]
-fn recovered_prepare_already_repaired_child_reopens_and_publishes() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
-    let safety = TempDir::new().expect("repaired-child safety directory");
-    let ledger = TempDir::new().expect("repaired-child ledger");
-    let payload = TempDir::new().expect("repaired-child payload store");
-    let body = TempDir::new().expect("repaired-child body store");
-    let (startup, _vote, proposal, manifest, validated) = reopen_with_prepare_intent(&safety, 0xDD);
-    let replay_proposal = proposal.clone();
-    let replay_manifest = manifest.clone();
-    let replay_validated = validated.clone();
-
-    let mut first_holder =
-        super::super::v2_lifecycle_coordinator::LifecycleWorkRegistryHolder::empty();
-    let first =
-        join_recovered_prepare_startup(startup, proposal, manifest, validated, &mut first_holder);
-    let (_summary, durable_before_crash) = first
-        .persist_repair_for_test(ledger.path())
-        .unwrap_or_else(|error| panic!("fsync the first repaired frame: {}", error.reason()));
-    drop(durable_before_crash);
-
-    let restarted = open_recovered_startup_test(&safety)
-        .expect("fresh startup replays the unchanged repaired WAL frame");
-    let mut restarted_holder =
-        super::super::v2_lifecycle_coordinator::LifecycleWorkRegistryHolder::empty();
-    let restarted = join_recovered_prepare_startup(
-        restarted,
-        replay_proposal,
-        replay_manifest,
-        replay_validated,
-        &mut restarted_holder,
-    );
-    let (changed, durable) = restarted
-        .persist_reopened_repair_for_test(ledger.path())
-        .unwrap_or_else(|error| {
-            panic!(
-                "stutter on the already repaired ledger frame: {}",
-                error.reason()
-            )
-        });
-    assert!(!changed);
-    let installed = durable
-        .install_recovered_sign_for_test(ledger.path())
-        .unwrap_or_else(|error| {
-            panic!("install the repaired-frame Sign child: {}", error.reason())
-        });
-    let verified = verified_from_installed_startup(&installed);
-    let (mut payload_store, mut recovery) = empty_authenticated_lifecycle_recovery(
-        &verified,
-        ledger.path(),
-        payload.path(),
-        body.path(),
-    );
-    assert!(
-        installed
-            .installed
-            .seed_child_recovery_for_test(&mut recovery)
-    );
-    crate::sumeragi::status::clear_v2_status();
-    let published = installed
-        .open_coordinator_and_publish_for_test(ledger.path(), &mut payload_store, recovery)
-        .unwrap_or_else(|error| {
-            panic!(
-                "already-repaired child must reopen idempotently: {}",
-                error.reason()
-            )
-        });
-    assert!(published.exact_published_join_for_test());
-    assert!(crate::sumeragi::status::v2_status().is_some());
-    drop(published);
-    crate::sumeragi::status::clear_v2_status();
-}
-
-#[cfg(feature = "bls")]
-#[test]
-fn recovered_commit_vote_sign_retains_the_exact_authenticated_prepare_qc() {
-    let directory = TempDir::new().expect("temporary Commit recovery directory");
-    let (mut adapter, startup) = open_test(&directory).expect("open Commit replay fixture");
-    assert!(startup.is_empty());
-    let locked_subject = subject(0xD2);
-    let round = wire::ConsensusRound {
-        context_id: adapter.wire_context.id(),
-        height: adapter.wire_context.height,
-        view: 0,
-    };
-    let (_, keys, _) = authenticated_context();
-    let mut wire_prepare = wire::QuorumCertificate {
-        round,
-        proposal_round: round,
-        phase: wire::GlobalPhase::Prepare,
-        subject: locked_subject,
-        execution_commitment: execution_commitment(0xD2),
-        signers: vec![0, 1, 2],
-        aggregate_signature: Vec::new(),
-    };
-    authenticate_qc(&mut wire_prepare, &keys);
-    let prepare = adapter
-        .registry
-        .qc_to_core(&wire_prepare, &adapter.wire_context)
-        .expect("register the authenticated PrepareQC");
-    let core_context = adapter.reducer.context().id();
-    let core_round = reducer::Round::new(round.height, round.view);
-    let core_subject = prepare.subject();
-    let local_validator = adapter
-        .registry
-        .validator_id(0)
-        .expect("fixture local validator");
-    let entry = reducer::WalEntry::new(
-        reducer::PersistenceId::new(1),
-        reducer::WalRecord::LockAndCommit {
-            prepare,
-            vote: reducer::Vote::new_with_proposal_round(
-                core_context,
-                core_round,
-                core_round,
-                reducer::Phase::Commit,
-                core_subject,
-                local_validator,
-            ),
-        },
-    );
-    let encoded = adapter
-        .registry
-        .encode_wal_entry(&entry, &TestAggregator)
-        .expect("encode the exact LockAndCommit frame");
-    assert_eq!(
-        adapter
-            .wal
-            .append(&encoded)
-            .expect("append lock frame")
-            .sequence(),
-        0
-    );
-    drop(adapter);
-
-    let startup = open_recovered_startup_test(&directory)
-        .expect("replay authenticated LockAndCommit behind the sealed startup cut");
-    let authenticated = match startup.authenticate_final_wal_startup_authority() {
-        Ok(authenticated) => authenticated,
-        Err((error, _startup)) => {
-            panic!("authenticate the current recovered LockAndCommit: {error}")
-        }
-    };
-    let authority = authenticated
-        .recovered_phase_vote_for_test()
-        .expect("LockAndCommit carries one restart vote");
-    assert!(authenticated.effects.is_empty());
-    assert!(authority.wal_identity().is_exact());
-    assert!(authority.replay_evidence_is_exact());
-    assert!(
-        authority.exactly_matches_wal_record(
-            authenticated
-                .adapter
-                .wal
-                .recovered_records()
-                .last()
-                .expect("LockAndCommit WAL frame remains retained")
-        )
-    );
-    assert_eq!(authority.vote().phase, wire::GlobalPhase::Commit);
-    assert_eq!(authority.vote().round, round);
-    assert_eq!(authority.vote().proposal_round, round);
-    assert_eq!(authority.vote().subject, locked_subject);
-    let retained_prepare = authority
-        .prepare_certificate()
-        .expect("Commit recovery retains the exact PrepareQC");
-    assert_eq!(retained_prepare, &wire_prepare);
-    assert_eq!(
-        retained_prepare.execution_commitment,
-        authority.vote().execution_commitment
-    );
-    drop(authenticated);
-}
-
-#[test]
-fn recovered_vote_sign_startup_cut_is_one_shot_and_drop_inert() {
-    let directory = TempDir::new().expect("temporary recovery seal directory");
-    let (startup, _expected_vote, _proposal, _manifest, _validated) =
-        reopen_with_prepare_intent(&directory, 0xD3);
-    let wal_path = directory.path().join("safety.wal");
-    let durable_before = std::fs::read(&wal_path).expect("read sealed WAL before drop");
-    let authenticated = match startup.authenticate_final_wal_startup_authority() {
-        Ok(authenticated) => authenticated,
-        Err((error, _startup)) => panic!("authenticate exact replay vote: {error}"),
-    };
-    assert!(authenticated.recovered_phase_vote_for_test().is_some());
-    assert!(
-        authenticated.effects.iter().all(|effect| !matches!(
-            effect,
-            AdapterEffect::Sign {
-                request: SignRequest::Vote(_),
-                ..
-            }
-        )),
-        "the retained batch no longer contains the sealed vote"
-    );
-    assert!(
-        authenticated.finish_without_wal_vote().is_err(),
-        "a phase-vote startup cannot escape through the no-vote path"
-    );
-    assert_eq!(
-        std::fs::read(&wal_path).expect("read sealed WAL after drop"),
-        durable_before,
-        "dropping the sealed startup cannot rewrite its WAL"
-    );
-
-    let repeated = open_recovered_startup_test(&directory)
-        .expect("the unchanged WAL can be authenticated by a new sealed startup instance");
-    let repeated = repeated
-        .authenticate_final_wal_startup_authority()
-        .unwrap_or_else(|(error, _startup)| panic!("reauthenticate unchanged WAL: {error}"));
-    assert!(repeated.recovered_phase_vote_for_test().is_some());
-    assert!(repeated.effects.is_empty());
-    drop(repeated);
-}
-
-#[test]
-fn recovered_startup_seals_authenticated_control_wal_records() {
-    let directory = TempDir::new().expect("temporary non-vote recovery directory");
-    let (mut adapter, startup) = open_test(&directory).expect("open timeout replay fixture");
-    assert!(startup.is_empty());
-    let timeout = adapter
-        .timeout_elapsed(adapter.current_tag())
-        .expect("persist the exact TimeoutIntent")
-        .into_effects();
-    assert!(matches!(
-        timeout.as_slice(),
-        [AdapterEffect::Sign {
-            request: SignRequest::TimeoutVote(_),
-            ..
-        }]
-    ));
-    drop(adapter);
-
-    let startup = open_recovered_startup_test(&directory)
-        .expect("replay the durable TimeoutIntent behind the sealed startup cut");
-    let authenticated = startup
-        .authenticate_final_wal_startup_authority()
-        .unwrap_or_else(|(error, _startup)| panic!("authenticate TimeoutIntent: {error}"));
-    assert!(authenticated.has_recovered_control_sign_for_test());
-    assert!(authenticated.effects.is_empty());
-    assert!(
-        authenticated.finish_without_wal_vote().is_err(),
-        "a control Sign cannot escape through the no-authority path"
-    );
-}
+include!("v2_adapter_04b_lifecycle_startup_tail.rs");

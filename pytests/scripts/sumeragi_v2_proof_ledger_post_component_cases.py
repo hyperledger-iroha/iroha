@@ -1,5 +1,203 @@
 """Late-bound proof-ledger cases executed in the canonical test namespace."""
 
+def test_test_only_height_ingress_wrappers_are_not_production_seals() -> None:
+    """Only current atomic retirement seams belong to the production inventory."""
+
+    module = load_checker()
+    assert set(module._PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256) == {
+        "runner::close_ingress_for_rollover",
+        "ingress::retire_leader_wire_lifecycle_gate",
+        "leader_wire_store::park_sealed_ingress",
+        "ingress::close",
+    }
+    assert not hasattr(
+        module,
+        "_PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256",
+    )
+    assert not hasattr(
+        module,
+        "_PRODUCTION_CERTIFIED_SERVE_INGRESS_BINDING_ITEM_SHA256",
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "digest_key",
+        "relative_path",
+        "item_name",
+        "brace_context",
+        "old",
+        "new",
+        "expected_error",
+    ),
+    (
+        (
+            "runner::close_ingress_for_rollover",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "close_ingress_for_rollover",
+            (),
+            "ingress_ready.store(false, Ordering::Release);\n    block_ingress.close();",
+            "block_ingress.close();\n    ingress_ready.store(false, Ordering::Release);",
+            "rollover close must publish not-ready before closing",
+        ),
+        (
+            "ingress::retire_leader_wire_lifecycle_gate",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "retire_leader_wire_lifecycle_gate",
+            (("impl", "FairV2Ingress"),),
+            "let _service_guard = self.service_lock.lock();",
+            "let _service_guard = self.state.lock();",
+            "atomic leader-wire retirement must exclude consumers and producers",
+        ),
+        (
+            "ingress::retire_leader_wire_lifecycle_gate",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "retire_leader_wire_lifecycle_gate",
+            (("impl", "FairV2Ingress"),),
+            "state.open = false;",
+            "state.open = true;",
+            "atomic leader-wire retirement must exclude consumers and producers",
+        ),
+        (
+            "ingress::retire_leader_wire_lifecycle_gate",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "retire_leader_wire_lifecycle_gate",
+            (("impl", "FairV2Ingress"),),
+            "if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(&bound, gate) {",
+            "if false {",
+            "atomic leader-wire retirement must exclude consumers and producers",
+        ),
+        (
+            "ingress::retire_leader_wire_lifecycle_gate",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "retire_leader_wire_lifecycle_gate",
+            (("impl", "FairV2Ingress"),),
+            "if carriers != mirrored_ingress {",
+            "if false {",
+            "atomic leader-wire retirement must exclude consumers and producers",
+        ),
+        (
+            "ingress::retire_leader_wire_lifecycle_gate",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "retire_leader_wire_lifecycle_gate",
+            (("impl", "FairV2Ingress"),),
+            "let retirement = bound.park_sealed_ingress(carriers)?;",
+            "let retirement = bound.park_sealed_ingress(BTreeMap::new())?;",
+            "atomic leader-wire retirement must exclude consumers and producers",
+        ),
+        (
+            "ingress::retire_leader_wire_lifecycle_gate",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "retire_leader_wire_lifecycle_gate",
+            (("impl", "FairV2Ingress"),),
+            "state.leader_wire_lifecycle_gate = None;",
+            "let _ = state.leader_wire_lifecycle_gate.as_ref();",
+            "atomic leader-wire retirement must exclude consumers and producers",
+        ),
+        (
+            "ingress::retire_leader_wire_lifecycle_gate",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "retire_leader_wire_lifecycle_gate",
+            (("impl", "FairV2Ingress"),),
+            "retirement.complete();",
+            "drop(retirement);",
+            "atomic leader-wire retirement must exclude consumers and producers",
+        ),
+        (
+            "leader_wire_store::park_sealed_ingress",
+            "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+            "park_sealed_ingress",
+            (("impl", "LeaderWireLifecycleStoreGate"),),
+            "slot != &token.slot",
+            "slot == &token.slot",
+            "durable leader-wire retirement must validate the exact Ingress set",
+        ),
+        (
+            "leader_wire_store::park_sealed_ingress",
+            "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+            "park_sealed_ingress",
+            (("impl", "LeaderWireLifecycleStoreGate"),),
+            "if durable_ingress != carriers",
+            "if durable_ingress == carriers",
+            "durable leader-wire retirement must validate the exact Ingress set",
+        ),
+        (
+            "leader_wire_store::park_sealed_ingress",
+            "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+            "park_sealed_ingress",
+            (("impl", "LeaderWireLifecycleStoreGate"),),
+            "|| record.runtime_owner.is_some()",
+            "|| record.runtime_owner.is_none()",
+            "durable leader-wire retirement must validate the exact Ingress set",
+        ),
+        (
+            "leader_wire_store::park_sealed_ingress",
+            "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+            "park_sealed_ingress",
+            (("impl", "LeaderWireLifecycleStoreGate"),),
+            "*state = previous;\n            return Err(error);",
+            "return Err(error);\n            *state = previous;",
+            "durable leader-wire retirement must validate the exact Ingress set",
+        ),
+        (
+            "leader_wire_store::park_sealed_ingress",
+            "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
+            "park_sealed_ingress",
+            (("impl", "LeaderWireLifecycleStoreGate"),),
+            "Ok(SealedLeaderWireIngressRetirementV1 { _private: () })",
+            "Err(\"retirement receipt lost\".to_owned())",
+            "durable leader-wire retirement must validate the exact Ingress set",
+        ),
+        (
+            "ingress::close",
+            "crates/iroha_core/src/sumeragi/mod.rs",
+            "close",
+            (("impl", "FairV2Ingress"),),
+            "self.state.lock().open = false;",
+            "self.state.lock().open = true;",
+            "fair ingress close must make admission unavailable",
+        ),
+    ),
+)
+def test_leader_wire_height_ingress_semantics_survive_pending_digest_refresh(
+    tmp_path: Path,
+    digest_key: str,
+    relative_path: str,
+    item_name: str,
+    brace_context: tuple[tuple[str, ...], ...],
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Each leader-wire production retirement seam survives a refreshed digest."""
+
+    module = load_checker()
+    exact_output_production_fixture(tmp_path)
+    path = tmp_path / relative_path
+    mutate_rust_item_source_in_context(
+        module,
+        path,
+        item_name,
+        brace_context,
+        old,
+        new,
+    )
+    items = [
+        item
+        for item in module.rust_items(path.read_text(encoding="utf-8"), item_name)
+        if item.brace_context == brace_context
+    ]
+    assert len(items) == 1, digest_key
+    module._PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256[digest_key] = (
+        module._rust_item_token_sha256(items[0])
+    )
+
+    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+
 
 def wrap_tla_theorem_proof_step(
     source: str,
@@ -777,6 +975,7 @@ def exact_output_production_fixture(tmp_path: Path) -> None:
         Path("crates/iroha_core/src/lib.rs"),
         Path("crates/iroha_core/src/merge_sidecar.rs"),
         Path("crates/iroha_core/src/sumeragi/mod.rs"),
+        Path("crates/iroha_core/src/sumeragi/serviced_candidate_store.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_core.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
@@ -885,7 +1084,7 @@ def test_autonomous_retirement_mutations_survive_item_digest_refresh(
         / "src"
         / "sumeragi"
         / "v2_worker"
-        / "autonomous_lane_output_retirement.rs"
+        / "autonomous_lane_output_reconstruction.rs"
     )
     mutate_rust_item_source(module, component, item_name, old, new)
     original = rebind_reviewed_rust_item_digests(
@@ -924,9 +1123,7 @@ def test_autonomous_retirement_atomic_regression_survives_digest_refresh(
         / "v2_worker"
         / "applied_height_handoff_tests.rs"
     )
-    item_name = (
-        "applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only"
-    )
+    item_name = "applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically"
     mutate_rust_item_source(
         module,
         regression,

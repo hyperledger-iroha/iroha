@@ -20,6 +20,7 @@ fn gossip_batch_returns_routing_metadata() {
     assert_eq!(entry.routing.lane_id, LaneId::SINGLE);
     assert_eq!(entry.routing.dataspace_id, DataSpaceId::UNIVERSAL);
 }
+#[test]
 fn gossip_batch_preserves_admitted_routing_across_policy_change() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();

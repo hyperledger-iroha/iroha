@@ -18,7 +18,7 @@ fun interface AliasPlanBodyNoritoEncoder {
     fun encode(body: AliasTransactionPlanBodyV1): ByteArray
 }
 
-/** Safe local handoff from a verified alias plan to the ordinary transaction pipeline. */
+/** Safe local handoff from a verified alias plan to the public transaction pipeline. */
 object AliasPlanApply {
     /** Builds a transaction using the repository's canonical V1 alias codecs. */
     @JvmStatic
@@ -46,7 +46,7 @@ object AliasPlanApply {
     )
 
     /**
-     * Builds one ordinary transaction containing every exact planner frame.
+     * Builds one transaction containing every exact planner frame.
      *
      * No alias mutation endpoint is involved. The caller supplies only generic transaction fields;
      * authority and exact network are pinned by the signed planner response. The caller's trusted
@@ -95,7 +95,7 @@ object AliasPlanApply {
         )
     }
 
-    /** Locally signs a verified plan and submits it through the normal transaction endpoint. */
+    /** Locally signs a verified plan and submits it through the public transaction endpoint. */
     @JvmStatic
     @JvmOverloads
     fun signAndSubmit(

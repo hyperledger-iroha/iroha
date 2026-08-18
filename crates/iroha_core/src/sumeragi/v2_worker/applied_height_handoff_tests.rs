@@ -489,7 +489,8 @@ fn pending_autonomous_lane_output(
 }
 
 #[test]
-fn applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only() {
+fn applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically()
+ {
     let (base_service, validators) = fixture();
     let retired = crate::kura::tests::retired_autonomous_lane_attempt_fixture(&validators[0]);
     let (service, artifact, authority) =

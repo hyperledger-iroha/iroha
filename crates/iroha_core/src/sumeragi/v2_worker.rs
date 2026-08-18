@@ -799,7 +799,6 @@ struct V2RetireCommand {
     chunk_root: PathBuf,
 }
 const LOCAL_IO_CONTROL_RESERVE: usize = 1;
-const CERTIFIED_SERVE_PHASE_FAMILIES: usize = 2;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum V2IoAdmissionClass {
     Auxiliary,
@@ -2453,27 +2452,6 @@ fn v2_io_command_channel(
 ) -> (V2IoCommandSender, V2IoCommandReceiver) {
     build_v2_io_command_channel(capacity, admission)
 }
-pub(super) fn certified_serve_family_capacity(
-    roster_serve_capacity: usize,
-    observer_source_capacity: usize,
-    observer_per_source_capacity: usize,
-) -> Result<usize, String> {
-    assert!(
-        roster_serve_capacity != 0
-            || (observer_source_capacity != 0 && observer_per_source_capacity != 0),
-        "Sumeragi v2 Serve owner capacity must be non-zero"
-    );
-    roster_serve_capacity
-        .checked_add(
-            observer_source_capacity
-                .checked_mul(observer_per_source_capacity)
-                .ok_or_else(|| {
-                    "bounded observer Serve owner capacity must not overflow".to_owned()
-                })?,
-        )
-        .and_then(|owners| owners.checked_mul(CERTIFIED_SERVE_PHASE_FAMILIES))
-        .ok_or_else(|| "bounded Serve phase-family capacity must not overflow".to_owned())
-}
 fn build_v2_io_command_channel(
     capacity: usize,
     admission: Arc<V2IoAdmission>,
@@ -3528,6 +3506,15 @@ pub(in crate::sumeragi) struct PreparedLifecycleCertifiedServeCompletionV1 {
     guarded: Box<GuardedLifecycleCertifiedServeWorkerResultV1>,
     queue: Arc<V2IoCommandQueue>,
 }
+/// Authority consumed by one successfully settled Certified-Serve completion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use = "the Certified-Serve completion authority must be observed"]
+pub(in crate::sumeragi) enum LifecycleCertifiedServeCompletionSettlementV1 {
+    /// A live Certified-Serve lease reached its terminal and was released.
+    Claimed,
+    /// An already-terminal request was revalidated without owning a live lease.
+    TerminalReplay,
+}
 impl PreparedLifecycleCertifiedServeCompletionV1 {
     fn new(
         guarded: Box<GuardedLifecycleCertifiedServeWorkerResultV1>,
@@ -3549,8 +3536,8 @@ impl PreparedLifecycleCertifiedServeCompletionV1 {
         mut self,
         owner: &mut crate::sumeragi::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1,
         services: &ProductionV2Services,
-    ) -> Result<(), String> {
-        {
+    ) -> Result<LifecycleCertifiedServeCompletionSettlementV1, String> {
+        let settlement = {
             let result = self
                 .guarded
                 .result
@@ -3563,28 +3550,35 @@ impl PreparedLifecycleCertifiedServeCompletionV1 {
                 "lifecycle Certified-Serve completion lost its terminal authority".to_owned()
             })?;
             match authority {
-                LifecycleCertifiedServeTaskAuthorityV1::Claimed(lease) => owner
-                    .settle_certified_serve_worker_completed(
-                        lease,
-                        &result.task.authenticated,
-                        body_readback,
-                        &result.response,
-                    )
-                    .map_err(|_| {
-                        "lifecycle Certified-Serve terminal settlement failed".to_owned()
-                    })?,
-                LifecycleCertifiedServeTaskAuthorityV1::TerminalReplay(authorization) => owner
-                    .verify_certified_serve_terminal_replay(
-                        authorization,
-                        &result.task.authenticated,
-                        body_readback,
-                        &result.response,
-                    )
-                    .map_err(|_| {
-                        "lifecycle Certified-Serve terminal replay verification failed".to_owned()
-                    })?,
+                LifecycleCertifiedServeTaskAuthorityV1::Claimed(lease) => {
+                    owner
+                        .settle_certified_serve_worker_completed(
+                            lease,
+                            &result.task.authenticated,
+                            body_readback,
+                            &result.response,
+                        )
+                        .map_err(|_| {
+                            "lifecycle Certified-Serve terminal settlement failed".to_owned()
+                        })?;
+                    LifecycleCertifiedServeCompletionSettlementV1::Claimed
+                }
+                LifecycleCertifiedServeTaskAuthorityV1::TerminalReplay(authorization) => {
+                    owner
+                        .verify_certified_serve_terminal_replay(
+                            authorization,
+                            &result.task.authenticated,
+                            body_readback,
+                            &result.response,
+                        )
+                        .map_err(|_| {
+                            "lifecycle Certified-Serve terminal replay verification failed"
+                                .to_owned()
+                        })?;
+                    LifecycleCertifiedServeCompletionSettlementV1::TerminalReplay
+                }
             }
-        }
+        };
         let result = self.guarded.result();
         services.post_to_peer_on_reply_routes(
             result.task.recipient.clone(),
@@ -3599,7 +3593,7 @@ impl PreparedLifecycleCertifiedServeCompletionV1 {
             result.request_hash(),
         );
         let _ = (*self.guarded).into_result();
-        Ok(())
+        Ok(settlement)
     }
 }
 impl PreparedRecoveredDecisionFetchBodyCompletionV1 {
@@ -13353,6 +13347,21 @@ impl ProductionV2Services {
         executor: &mut V2EffectExecutor<R>,
     ) -> Result<usize, EffectExecutorError> {
         let outcome = self.drain_completions_with_lifecycle(executor)?;
+        self.require_no_unowned_lifecycle_completion(executor, outcome)
+    }
+    /// Drain exactly the physical head already classified as an ordinary
+    /// lifecycle pass-through.
+    ///
+    /// The one-item bound prevents this ordinary owner from crossing into a
+    /// lifecycle completion which arrived immediately behind it. The next
+    /// outer Completion turn must classify that lifecycle owner itself.
+    pub(in crate::sumeragi) fn drain_one_ordinary_completion_after_lifecycle_pass_through<
+        R: EffectRuntime,
+    >(
+        &mut self,
+        executor: &mut V2EffectExecutor<R>,
+    ) -> Result<usize, EffectExecutorError> {
+        let outcome = self.drain_completions_inner(executor, 1, CompletionDrainPolicy::Fair)?;
         self.require_no_unowned_lifecycle_completion(executor, outcome)
     }
     /// Take and classify the oldest Completion-lane owner in one operation.

@@ -38,6 +38,7 @@ public final class TransactionBuilderTests {
 
   public static void main(final String[] args) throws Exception {
     encodeAndSignWithExplicitSigner();
+    publicBuilderCanonicalizesCallerSuppliedQueuePlanMarker();
     encodeAndSignWithKeyManagerAlias();
     instructionsVariantRoundTrips();
     mixedBatchBuilderAndSignerPreserveOrder();
@@ -62,6 +63,12 @@ public final class TransactionBuilderTests {
     final TransactionBuilder builder =
         new TransactionBuilder(codec, IrohaKeyManager.withSoftwareProvider());
 
+    final TransactionPayload direct = codec.decodeTransaction(codec.encodeTransaction(payload));
+    assert !direct
+        .metadata()
+        .containsKey(TransactionBuilder.QUEUE_PLAN_SYNCED_ADMISSION_METADATA_KEY)
+        : "Direct codec payloads must remain ordinary";
+
     final SignedTransaction signed = builder.encodeAndSign(payload, signer);
     final byte[] expectedSignature = concat(signed.encodedPayload(), "-signature".getBytes());
     assert Arrays.equals(expectedSignature, signed.signature())
@@ -78,7 +85,42 @@ public final class TransactionBuilderTests {
         : "Norito codec must roundtrip instructions";
     assert decoded.timeToLiveMs().equals(payload.timeToLiveMs()) : "TTL must round-trip";
     assert decoded.nonce().equals(payload.nonce()) : "Nonce must round-trip";
-    assert decoded.metadata().equals(payload.metadata()) : "Metadata must round-trip";
+    assert decoded.metadata().get("channel").equals(payload.metadata().get("channel"))
+        : "Caller metadata must round-trip";
+    assert JsonValue.bool(true)
+        .equals(decoded.metadata().get(TransactionBuilder.QUEUE_PLAN_SYNCED_ADMISSION_METADATA_KEY))
+        : "Public signing must bind QueuePlan admission";
+    assert !payload
+        .metadata()
+        .containsKey(TransactionBuilder.QUEUE_PLAN_SYNCED_ADMISSION_METADATA_KEY)
+        : "Public signing must not mutate the caller payload";
+  }
+
+  private static void publicBuilderCanonicalizesCallerSuppliedQueuePlanMarker() throws Exception {
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
+            .setNetworkId(TestNetworkIds.fromSeed(12L))
+            .setAuthority(TestAccountIds.ed25519Authority(0x32))
+            .setExecutable(Executable.ivm("canonical-marker".getBytes()))
+            .putMetadata(
+                TransactionBuilder.QUEUE_PLAN_SYNCED_ADMISSION_METADATA_KEY,
+                JsonValue.bool(false))
+            .build();
+    final NoritoCodecAdapter codec =
+        new NoritoJavaCodecAdapter(
+            org.hyperledger.iroha.android.address.AccountAddress.DEFAULT_I105_DISCRIMINANT);
+    final SignedTransaction signed =
+        new TransactionBuilder(codec, IrohaKeyManager.withSoftwareProvider())
+            .encodeAndSign(payload, new FakeSigner());
+    final TransactionPayload decoded = codec.decodeTransaction(signed.encodedPayload());
+
+    assert JsonValue.bool(true)
+        .equals(decoded.metadata().get(TransactionBuilder.QUEUE_PLAN_SYNCED_ADMISSION_METADATA_KEY))
+        : "Public signing must canonicalize the reserved marker to true";
+    assert JsonValue.bool(false)
+        .equals(payload.metadata().get(TransactionBuilder.QUEUE_PLAN_SYNCED_ADMISSION_METADATA_KEY))
+        : "Canonicalization must not mutate the caller payload";
   }
 
   private static void encodeAndSignWithKeyManagerAlias() throws Exception {

@@ -3089,6 +3089,20 @@ mod decode_tests {
         );
     }
     #[test]
+    fn borrowed_snapshot_field_errors_retain_the_schema_field() {
+        let error = match SnapshotJsonField::Borrowed("[]")
+            .decode_canonical::<Cell<Vec<PeerId>>>("commit_topology")
+        {
+            Ok(_) => panic!("an array must not decode as an MV topology cell"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            json::Error::InvalidField { field, message }
+                if field == "commit_topology" && message.contains("expected object start")
+        ));
+    }
+    #[test]
     fn snapshot_record_order_must_be_strict_and_duplicate_free() {
         validate_canonical_snapshot_record_order(&[1_u8, 2, 3], "fixture", |value| *value)
             .expect("strict order is canonical");

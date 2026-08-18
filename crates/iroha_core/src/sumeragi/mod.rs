@@ -4861,101 +4861,97 @@ impl FairV2Ingress {
         self.debug_assert_consistent(&state);
         Ok(retiring.len())
     }
-    /// Drain a closed height's volatile carriers before detaching its durable owner.
+    /// Seal one height, durably park its queued productive carriers, and detach.
     ///
-    /// Productive carriers cross the normal checked `Ingress -> Runtime`
-    /// dequeue and are then durably marked `VolatileTerminal`. A restart can
-    /// therefore reopen their exact immutable token as `Dormant`; finalized
-    /// rollover may instead retire the complete height store. Nonproductive
-    /// carriers have no durable lifecycle to transfer and are discarded only
-    /// after the checked dequeue validates and releases their bounded queue
-    /// accounting. The ordinary empty-on-unbind invariant remains intact.
-    pub(crate) fn retire_queued_for_leader_wire_unbind(
-        &self,
-        gate: &Arc<serviced_candidate_store::LeaderWireLifecycleStoreGate>,
-    ) -> Result<usize, String> {
-        {
-            let state = self.state.lock();
-            if state.open {
-                return Err(
-                    "leader-wire queued-carrier retirement requires closed ingress".to_owned(),
-                );
-            }
-            let bound = state.leader_wire_lifecycle_gate.as_ref().ok_or_else(|| {
-                "leader-wire queued-carrier retirement crossed an unbound lifecycle gate".to_owned()
-            })?;
-            if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(bound, gate) {
-                return Err(
-                    "leader-wire queued-carrier retirement changed per-height ownership".to_owned(),
-                );
-            }
-        }
-
-        let mut retired = 0usize;
-        while let Some(inbound) = self.try_recv_if_checked(|_| true)? {
-            let ownership = inbound.ingress_ownership().ok_or_else(|| {
-                "retired fair-ingress carrier lost its checked ownership evidence".to_owned()
-            })?;
-            match (
-                ownership.leader_wire_token(),
-                ownership.leader_wire_runtime_receipt(),
-            ) {
-                (Some(token), Some(runtime)) if runtime.token() == token => {
-                    self.mark_leader_wire_volatile_terminal(runtime)?;
-                }
-                (None, None) => {}
-                _ => {
-                    return Err(
-                        "retired fair-ingress carrier changed its leader-wire handoff ownership"
-                            .to_owned(),
-                    );
-                }
-            }
-            retired = retired
-                .checked_add(1)
-                .ok_or_else(|| "leader-wire queued-carrier retirement overflowed".to_owned())?;
-        }
-
-        let state = self.state.lock();
-        if state.open || state.len != 0 {
-            return Err(format!(
-                "leader-wire queued-carrier retirement left {} owned ingress entries",
-                state.len
-            ));
-        }
-        let bound = state.leader_wire_lifecycle_gate.as_ref().ok_or_else(|| {
-            "leader-wire queued-carrier retirement lost its lifecycle gate".to_owned()
-        })?;
-        if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(bound, gate) {
-            return Err(
-                "leader-wire queued-carrier retirement changed per-height ownership".to_owned(),
-            );
-        }
-        self.debug_assert_consistent(&state);
-        Ok(retired)
-    }
-    /// Detach a closed height's durable productive-wire owner.
-    pub(crate) fn unbind_leader_wire_lifecycle_gate(
+    /// `service_lock` excludes a consumer whose predicate snapshot temporarily
+    /// lives outside the state mutex. Closing under the state mutex then excludes
+    /// every producer. Productive carriers are returned to Dormant before any
+    /// volatile queue bytes disappear; auxiliary and future packets own no
+    /// height lifecycle and may be retransmitted into the successor ingress.
+    pub(crate) fn retire_leader_wire_lifecycle_gate(
         &self,
         gate: &Arc<serviced_candidate_store::LeaderWireLifecycleStoreGate>,
     ) -> Result<(), String> {
+        let _service_guard = self.service_lock.lock();
         let mut state = self.state.lock();
-        if state.open || state.len != 0 {
-            return Err(
-                "leader-wire lifecycle gate cannot unbind from nonempty open ingress".to_owned(),
-            );
-        }
-        let Some(bound) = state.leader_wire_lifecycle_gate.as_ref() else {
-            return Ok(());
-        };
-        if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(bound, gate) {
+        state.open = false;
+        let bound = state
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "leader-wire lifecycle gate was already unbound".to_owned())?;
+        if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(&bound, gate) {
             return Err("leader-wire lifecycle gate changed per-height ownership".to_owned());
         }
+        let (context_id, height) = state
+            .leader_wire_context
+            .ok_or_else(|| "leader-wire lifecycle gate lost its height context".to_owned())?;
+        let mut carriers = BTreeMap::new();
+        for entry in state.lanes.values().flat_map(|lane| lane.entries.iter()) {
+            let Some(inbound_ownership) = entry.inbound.ingress_ownership() else {
+                return Err("sealed leader-wire ingress lost queued ownership evidence".to_owned());
+            };
+            if !inbound_ownership.validate_exact()
+                || !entry.ownership_snapshot.validate_exact()
+                || entry.leader_wire_token.as_ref() != inbound_ownership.leader_wire_token()
+                || entry.leader_wire_token.as_ref() != entry.ownership_snapshot.leader_wire_token()
+            {
+                return Err(
+                    "sealed leader-wire ingress changed a queued ownership projection".to_owned(),
+                );
+            }
+            let Some(token) = entry.leader_wire_token.as_ref() else {
+                continue;
+            };
+            if token.identity.context_id != context_id
+                || token.identity.height != height
+                || carriers.insert(token.slot.clone(), token.clone()).is_some()
+            {
+                return Err(
+                    "sealed leader-wire ingress changed its exact retiring carrier set".to_owned(),
+                );
+            }
+        }
+        let mirrored_ingress = state
+            .leader_wire_lifecycles
+            .iter()
+            .filter_map(|(slot, record)| {
+                (record.status == FairV2IngressLeaderWireStatus::Ingress)
+                    .then(|| (slot.clone(), record.token.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        if carriers != mirrored_ingress {
+            return Err(
+                "sealed leader-wire ingress disagreed with live carrier ownership".to_owned(),
+            );
+        }
+        let retirement = bound.park_sealed_ingress(carriers)?;
+
+        let mut empty_lanes = state
+            .roster
+            .iter()
+            .cloned()
+            .map(|peer| {
+                (
+                    FairV2IngressSource::Validator(peer),
+                    FairV2IngressLane::default(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        empty_lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
+        state.lanes = empty_lanes;
+        state.pending_wire_owners.clear();
+        state.ready.clear();
+        state.len = 0;
+        state.bytes = 0;
+        state.nonempty_since = None;
+        state.last_service_attempt_at = None;
+        state.leader_wire_lifecycles.clear();
         state.leader_wire_lifecycle_gate = None;
         state.leader_wire_lifecycle_ordinals = None;
         state.leader_wire_context = None;
-        state.leader_wire_lifecycles.clear();
         self.debug_assert_consistent(&state);
+        retirement.complete();
         Ok(())
     }
     /// Open admission for the already-configured immutable height.

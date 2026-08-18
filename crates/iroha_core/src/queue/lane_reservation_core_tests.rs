@@ -256,7 +256,7 @@ fn reserve_two_canonical_cleanup_carrier_groups(
             queue,
             state,
             dir,
-            accepted_unique_entrypoint_tx_by_someone(time_source),
+            accepted_queue_plan_unique_entrypoint_tx_by_someone(time_source),
         );
     }
     let reserve_one = |scope| {
@@ -313,7 +313,7 @@ fn commit_barrier_owns_hash_until_plan_reconciliation() {
     let dir = tempdir().expect("tempdir");
     let queue = Queue::test(config_factory(), &time_source);
     install_globally_certified_test_reservation_journals(&queue, &dir);
-    let transaction = accepted_unique_entrypoint_tx_by_someone(&time_source);
+    let transaction = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
     let hash = transaction.hash();
     let key = persist_unreconciled_commit_barrier(
         &queue,
@@ -483,10 +483,10 @@ fn reservation_append_does_not_convoy_unrelated_queue_removal() {
     let dir = tempdir().expect("tempdir");
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     install_globally_certified_test_reservation_journals(&queue, &dir);
-    let selected = accepted_unique_entrypoint_tx_by_someone(&time_source);
+    let selected = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
     let selected_hash = selected.hash();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, selected);
-    let unrelated = accepted_unique_entrypoint_tx_by_someone(&time_source);
+    let unrelated = accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source);
     let unrelated_hash = unrelated.hash();
     push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, unrelated);
     let reached = Arc::new(Barrier::new(2));

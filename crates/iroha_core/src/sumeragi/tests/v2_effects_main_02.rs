@@ -386,12 +386,10 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
         std::slice::from_ref(&effect),
         vec![RuntimeEffectOwnership::fresh_for_test(tag(0), 999)],
     )
-    .expect("construct an independently owned mutation candidate");
-    assert!(matches!(
-        executor.retain_effect_batch(vec![effect.clone()], conflicting),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("owner replacement")
-    ));
+    .expect("construct an independently produced semantic retry");
+    executor
+        .retain_effect_batch(vec![effect.clone()], conflicting)
+        .expect("independent causal producer coalesces under the incumbent Sign owner");
     assert_eq!(executor.pending_signatures.len(), 1);
     assert_eq!(services.sign_tasks.len(), 1);
     assert!(executor.retained_effect_batch.is_none());
@@ -411,12 +409,10 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
             1_000,
         )],
     )
-    .expect("construct a local-incarnation owner replacement");
-    assert!(matches!(
-        executor.retain_effect_batch(vec![effect], reincarnated),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("owner replacement")
-    ));
+    .expect("construct a later-incarnation semantic retry");
+    executor
+        .retain_effect_batch(vec![effect], reincarnated)
+        .expect("later causal producer cannot replace the incumbent Sign owner");
     assert_eq!(executor.pending_signatures.len(), 1);
     assert_eq!(services.sign_tasks.len(), 1);
     assert!(executor.retained_effect_batch.is_none());
@@ -579,8 +575,7 @@ fn runtime_terminal_body_candidate_stutters_before_cached_redispatch() {
             .expect("an exact foreign carrier stutters under the terminal owner");
         assert_eq!(executor.runtime.terminal_body_candidate_commits, 2);
         assert_eq!(
-            executor.runtime.terminal_body_candidate_owners[&identity],
-            bound,
+            executor.runtime.terminal_body_candidate_owners[&identity], bound,
             "candidate-specific terminal ownership remains unchanged"
         );
         assert!(executor.pending_stores.is_empty());

@@ -2200,7 +2200,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert recovered_decision_fetch_regression in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     autonomous_retirement_regression = (
         "sumeragi::v2_worker::tests::"
-        "applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only"
+        "applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically"
     )
     assert autonomous_retirement_regression in production_inventory
     assert (

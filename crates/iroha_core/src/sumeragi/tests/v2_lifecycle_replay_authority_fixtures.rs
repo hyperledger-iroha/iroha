@@ -438,6 +438,41 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_record_fixture(
         .find(|case| case.stage.kind() == stage)
         .expect("the canonical V1 fixture covers every lifecycle stage")
 }
+
+/// Build the canonical replay pair for one exact unsigned/signed timeout edge.
+pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_timeout_sign_broadcast_fixture(
+    context: LifecycleContext,
+    unsigned: wire::TimeoutVote,
+    signed: wire::TimeoutVote,
+) -> [ReplayCase; 2] {
+    assert!(unsigned.signature.is_empty());
+    assert!(!signed.signature.is_empty());
+    let mut expected = unsigned.clone();
+    expected.signature.clone_from(&signed.signature);
+    assert_eq!(expected, signed);
+    let locator = RecoveredWalFrameIdentity::for_test(88, 89, [0xD8; 32]).persisted_locator();
+    let tag = ReplayEventTagV1::new(unsigned.round.height, unsigned.round.view, 0);
+    let parent = replay_case(
+        context,
+        LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+            locator,
+            role: ReplayWalRoleV1::TIMEOUT_INTENT,
+            tag,
+            action: WalReplayActionV1::SignTimeoutVote(unsigned),
+        }),
+        LifecycleStageKind::SignTimeoutVote,
+        DurablePayloadReference::None,
+    );
+    let child = replay_case(
+        context,
+        LifecycleReplaySourceV1::ConsensusBroadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutVote(signed),
+        )),
+        LifecycleStageKind::BroadcastTimeoutVote,
+        DurablePayloadReference::None,
+    );
+    [parent, child]
+}
 pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_replay_authority_for_payload_fixture(
     context: LifecycleContext,
     stage: LifecycleStageKind,

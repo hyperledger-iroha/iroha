@@ -456,7 +456,7 @@ impl PendingKuraActivatedProductionLifecycleV1 {
         let Some(completion) = completion else {
             return Ok(false);
         };
-        completion
+        let _settlement = completion
             .settle_deliver_and_acknowledge(&mut self.launched.owner, &self.launched.services)
             .map_err(|_| "pending Kura Certified-Serve settlement requires restart".to_owned())?;
         Ok(true)

@@ -57598,7 +57598,7 @@ def _require_autonomous_retirement_source_contract(
         )
 
     regression = test_items.get(
-        "applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only"
+        "applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically"
     )
     for sequence_name, description in (
         (
@@ -57724,6 +57724,7 @@ def _exact_output_production_source_fidelity_errors(
     ingress_path = (
         repo_root / "crates" / "iroha_core" / "src" / "sumeragi" / "mod.rs"
     )
+    leader_wire_store_path = ingress_path.parent / "serviced_candidate_store.rs"
     effects_path = (
         repo_root
         / "crates"
@@ -57775,6 +57776,10 @@ def _exact_output_production_source_fidelity_errors(
         (refinement_path, "production exact-output reducer refinement source"),
         (embedded_core_path, "production embedded reducer binding source"),
         (ingress_path, "production fair-ingress ownership source"),
+        (
+            leader_wire_store_path,
+            "production leader-wire durable ownership store source",
+        ),
         (effects_path, "production ingress-owned effect source"),
         (
             ordinary_ingress_consumer_path,
@@ -57802,6 +57807,7 @@ def _exact_output_production_source_fidelity_errors(
     refinement_source = loaded_sources[refinement_path]
     embedded_core_source = loaded_sources[embedded_core_path]
     ingress_source = loaded_sources[ingress_path]
+    leader_wire_store_source = loaded_sources[leader_wire_store_path]
     effects_source = loaded_sources[effects_path]
     ordinary_ingress_consumer_source = loaded_sources[ordinary_ingress_consumer_path]
 
@@ -57889,9 +57895,11 @@ pub const V2_MERGE_SIDECAR_SERVER_REQUEST_GATES_PER_SOURCE: NonZeroUsize =
         """
 pub const V2_RUNTIME_COMPLETION_RESERVE_DIVISOR: usize = 4;
 pub const V2_MAX_EFFECTS_PER_STEP: usize = 8;
+pub const V2_CERTIFIED_SERVE_PHASE_FAMILIES: usize = 2;
+pub const V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize = u16::MAX as usize + 1;
 pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;
 """,
-        "exact-output defaults must retain the reviewed completion divisor, reducer batch, and three-class geometry",
+        "exact-output defaults must retain the reviewed completion divisor, two Serve phase families, bounded lifecycle records, reducer batch, and three-class geometry",
         errors,
     )
     _require_rust_source_token_sequence(
@@ -58045,6 +58053,21 @@ if sumeragi.queues.authenticated_non_validator_sources.get() > reply_source_capa
 let effect_work_capacity = (sumeragi.queues.commands.get()
     / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
     .max(1);
+let validator_roster_len = trusted_peers.value().validator_roster_len();
+if let Err(error) = actual::sumeragi_v2_lifecycle_capacity_geometry(
+    validator_roster_len,
+    effect_work_capacity,
+    sumeragi.queues.bodies.get(),
+    sumeragi.queues.authenticated_non_validator_sources.get(),
+) {
+    emitter.emit(
+        Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+            "{error}; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {}, and certified-request capacity is {}",
+            sumeragi.queues.authenticated_non_validator_sources,
+            sumeragi.queues.bodies,
+        )),
+    );
+}
 let geometry = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
     effect_work_capacity,
     sumeragi.queues.bodies.get(),
@@ -58063,7 +58086,7 @@ if let Err(error) = geometry {
     );
 }
 """,
-        "root configuration must derive the authenticated-source bound from network geometry and fail parsing when one exact fanout cannot fit",
+        "root configuration must derive the authenticated-source bound from network geometry and reject invalid lifecycle or exact-output capacity",
         errors,
     )
     _require_exact_rust_tokens(
@@ -68075,112 +68098,12 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
             "be a regular file"
         )
         return errors
-    height_ingress_source = height_ingress_path.read_text(encoding="utf-8")
-    # Production retirement is owned by queue-level close and the exact
-    # leader-wire lifecycle unbind. Retired Certified-Serve and joint
-    # height-ingress gate wrappers are not first-release seams.
-    height_ingress_binding_items: dict[str, RustItem | None] = {
-        "runner::close_ingress_for_rollover": (
-            _require_rust_item(
-                height_ingress_path,
-                height_ingress_source,
-                "close_ingress_for_rollover",
-                errors,
-            )
-        )
-    }
-    for item_name in (
-        "unbind_leader_wire_lifecycle_gate",
-        "close",
-    ):
-        height_ingress_binding_items[f"ingress::{item_name}"] = (
-            _require_qualified_rust_item(
-                ingress_path,
-                ingress_source,
-                "FairV2Ingress",
-                item_name,
-                errors,
-                f"leader-wire height-ingress transaction FairV2Ingress::{item_name}",
-            )
-        )
-    expected_height_ingress_binding_keys = {
-        "runner::close_ingress_for_rollover",
-        "ingress::unbind_leader_wire_lifecycle_gate",
-        "ingress::close",
-    }
-    observed_height_ingress_binding_keys = set(
-        _PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256
-    )
-    if observed_height_ingress_binding_keys != expected_height_ingress_binding_keys:
-        errors.append(
-            f"{runner_path}: leader-wire height-ingress token-seal inventory mismatch: "
-            f"missing={sorted(expected_height_ingress_binding_keys - observed_height_ingress_binding_keys)}, "
-            f"extra={sorted(observed_height_ingress_binding_keys - expected_height_ingress_binding_keys)}"
-        )
-    for qualified_name, expected_sha256 in (
-        _PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256.items()
-    ):
-        if qualified_name.startswith("ingress::"):
-            path = ingress_path
-        else:
-            path = height_ingress_path
-        _require_rust_item_token_sha256(
-            path,
-            height_ingress_binding_items.get(qualified_name),
-            expected_sha256,
-            f"leader-wire height-ingress ownership {qualified_name}",
-            errors,
-        )
-
-    _require_exact_rust_tokens(
+    _require_leader_wire_height_ingress_retirement(
         height_ingress_path,
-        height_ingress_binding_items["runner::close_ingress_for_rollover"],
-        """
-fn close_ingress_for_rollover(ingress_ready: &AtomicBool, block_ingress: &FairV2Ingress) {
-    ingress_ready.store(false, Ordering::Release);
-    block_ingress.close();
-}
-""",
-        "rollover close must publish not-ready before closing fair-ingress admission",
-        errors,
-    )
-    _require_exact_rust_tokens(
         ingress_path,
-        height_ingress_binding_items["ingress::close"],
-        """
-pub(crate) fn close(&self) {
-    self.state.lock().open = false;
-}
-""",
-        "fair ingress close must make admission unavailable under the queue lock",
-        errors,
-    )
-    _require_rust_token_sequence(
-        ingress_path,
-        height_ingress_binding_items[
-            "ingress::unbind_leader_wire_lifecycle_gate"
-        ],
-        """
-let mut state = self.state.lock();
-if state.open || state.len != 0 {
-    return Err(
-        "leader-wire lifecycle gate cannot unbind from nonempty open ingress".to_owned(),
-    );
-}
-let Some(bound) = state.leader_wire_lifecycle_gate.as_ref() else {
-    return Ok(());
-};
-if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(bound, gate) {
-    return Err("leader-wire lifecycle gate changed per-height ownership".to_owned());
-}
-state.leader_wire_lifecycle_gate = None;
-state.leader_wire_lifecycle_ordinals = None;
-state.leader_wire_context = None;
-state.leader_wire_lifecycles.clear();
-self.debug_assert_consistent(&state);
-Ok(())
-""",
-        "standalone leader-wire unbind must require closed empty ingress, validate the exact gate, and clear local mirrors only afterward",
+        ingress_source,
+        leader_wire_store_path,
+        leader_wire_store_source,
         errors,
     )
     expected_exact_output_runner_items = {

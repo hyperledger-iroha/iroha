@@ -976,6 +976,26 @@ fn v2_finality_artifacts_for_chain(blocks: &[Arc<SignedBlock>]) -> Vec<V2Finalit
     }
     artifacts
 }
+fn assert_v2_finality_telemetry(metrics: &Metrics, artifact: &V2FinalityArtifact) {
+    assert_eq!(metrics.sumeragi_commit_qc_height.get(), artifact.height);
+    assert_eq!(
+        metrics.sumeragi_commit_qc_view.get(),
+        artifact.commit_qc.round.view
+    );
+    assert_eq!(
+        metrics.sumeragi_commit_qc_epoch.get(),
+        artifact.height_context.epoch
+    );
+    assert_eq!(
+        metrics.sumeragi_commit_qc_signatures_total.get(),
+        u64::try_from(artifact.commit_qc.signers.len()).expect("fixture signer count fits u64")
+    );
+    assert_eq!(
+        metrics.sumeragi_commit_qc_validator_set_len.get(),
+        u64::try_from(artifact.height_context.roster.len())
+            .expect("fixture roster length fits u64")
+    );
+}
 pub(super) fn persist_v2_finality_chain_through(
     kura: &Kura,
     height: NonZeroUsize,
@@ -1433,6 +1453,174 @@ fn v2_finality_artifact_roundtrips_with_unforgeable_receipt() {
             .exists(),
         "successful atomic write must not leave a temporary artifact"
     );
+}
+#[test]
+fn v2_finality_summary_maps_to_public_status_without_regression() {
+    let mut generator = DummyBlocks::new();
+    let blocks = vec![generator.next(), generator.next()];
+    let artifacts = v2_finality_artifacts_for_chain(&blocks);
+    let kura = Kura::blank_kura_for_testing();
+    for block in &blocks {
+        kura.store_block(Arc::clone(block))
+            .expect("store canonical telemetry fixture block");
+    }
+    let metrics = Arc::new(Metrics::default());
+    kura.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
+    let _lower_receipt = kura
+        .store_v2_finality_artifact(&artifacts[0])
+        .expect("persist lower finality artifact");
+    let _higher_receipt = kura
+        .store_v2_finality_artifact(&artifacts[1])
+        .expect("persist higher finality artifact");
+    assert_v2_finality_telemetry(&metrics, &artifacts[1]);
+    let _historical_retry_receipt = kura
+        .store_v2_finality_artifact(&artifacts[0])
+        .expect("historical idempotent retry remains valid");
+    assert_v2_finality_telemetry(&metrics, &artifacts[1]);
+    let _latest_retry_receipt = kura
+        .store_v2_finality_artifact(&artifacts[1])
+        .expect("latest idempotent retry remains valid");
+    assert_v2_finality_telemetry(&metrics, &artifacts[1]);
+    let status = iroha_telemetry::metrics::Status::from(metrics.as_ref());
+    let sumeragi = status
+        .sumeragi
+        .expect("public status includes Sumeragi telemetry");
+    assert_eq!(sumeragi.commit_qc_height, artifacts[1].height);
+    assert_eq!(sumeragi.highest_qc_height, artifacts[1].height);
+    assert_eq!(sumeragi.locked_qc_height, artifacts[1].height);
+}
+#[test]
+fn disabled_telemetry_tracks_durable_v2_finality_before_enable() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block))
+        .expect("store canonical disabled-telemetry fixture block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let metrics = Arc::new(Metrics::default());
+    let telemetry = StateTelemetry::new(Arc::clone(&metrics), false);
+    kura.attach_telemetry(telemetry.clone());
+    let _disabled_receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("persist finality while telemetry observations are disabled");
+    assert_v2_finality_telemetry(&metrics, &artifact);
+    telemetry.enable();
+    assert_v2_finality_telemetry(&metrics, &artifact);
+}
+#[test]
+fn failed_v2_finality_store_does_not_publish_telemetry() {
+    let kura = Kura::blank_kura_for_testing();
+    let metrics = Arc::new(Metrics::default());
+    kura.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block))
+        .expect("store canonical telemetry fixture block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    kura.fail_next_v2_finality_write_for_tests();
+    assert!(matches!(
+        kura.store_v2_finality_artifact(&artifact),
+        Err(Error::IO(error, _)) if error.to_string().contains("injected failure")
+    ));
+    assert_eq!(metrics.sumeragi_commit_qc_height.get(), 0);
+    assert_eq!(metrics.sumeragi_commit_qc_view.get(), 0);
+    assert_eq!(metrics.sumeragi_commit_qc_signatures_total.get(), 0);
+    let _recovered_receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("publish finality after injected failure");
+    assert_v2_finality_telemetry(&metrics, &artifact);
+    let _idempotent_receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("idempotent finality retry remains observable");
+    assert_v2_finality_telemetry(&metrics, &artifact);
+}
+#[test]
+fn telemetry_attach_hydrates_authenticated_durable_tip_after_restart() {
+    let temp_dir = TempDir::new().expect("create persistent telemetry Kura root");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let artifact = {
+        let (kura, _) = Kura::new(&config, &lane_config).expect("open persistent telemetry Kura");
+        let block = DummyBlocks::new().next();
+        kura.store_block(Arc::clone(&block))
+            .expect("store persistent telemetry fixture block");
+        let artifact = v2_finality_artifact_for_block(&block);
+        let _restart_receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("store persistent telemetry fixture finality");
+        artifact
+    };
+    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen persistent telemetry Kura");
+    let metrics = Arc::new(Metrics::default());
+    reopened.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
+    assert_v2_finality_telemetry(&metrics, &artifact);
+    let status = iroha_telemetry::metrics::Status::from(metrics.as_ref());
+    let sumeragi = status
+        .sumeragi
+        .expect("public status includes hydrated Sumeragi telemetry");
+    assert_eq!(sumeragi.commit_qc_height, artifact.height);
+    assert_eq!(sumeragi.highest_qc_height, artifact.height);
+}
+#[test]
+fn telemetry_attach_hydrates_highest_finality_below_durable_tip_after_restart() {
+    let temp_dir = TempDir::new().expect("create persistent lagging-finality Kura root");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let lane_config = RuntimeLaneConfig::default();
+    let artifact = {
+        let (kura, _) = Kura::new(&config, &lane_config).expect("open persistent telemetry Kura");
+        let mut generator = DummyBlocks::new();
+        let blocks = vec![generator.next(), generator.next()];
+        for block in &blocks {
+            kura.store_block(Arc::clone(block))
+                .expect("store persistent lagging-finality fixture block");
+        }
+        let artifact = v2_finality_artifacts_for_chain(&blocks)
+            .into_iter()
+            .next()
+            .expect("height-one finality fixture");
+        let _lagging_tip_receipt = kura
+            .store_v2_finality_artifact(&artifact)
+            .expect("store finality below the durable block tip");
+        artifact
+    };
+    let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen persistent telemetry Kura");
+    {
+        let inventory = reopened.v2_startup_finality_verification_inventory.lock();
+        let inventory = inventory
+            .as_ref()
+            .expect("startup finality inventory is installed");
+        assert!(
+            inventory.durable_tip_artifact.is_none(),
+            "replay authority must remain absent when the durable tip has no finality artifact"
+        );
+        assert_eq!(
+            inventory
+                .highest_verified_finality_artifact
+                .as_ref()
+                .map(|artifact| artifact.height),
+            Some(artifact.height)
+        );
+    }
+    let metrics = Arc::new(Metrics::default());
+    reopened.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
+    assert_v2_finality_telemetry(&metrics, &artifact);
+}
+#[test]
+fn late_startup_inventory_install_hydrates_attached_telemetry() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block))
+        .expect("store late-inventory telemetry fixture block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let _late_inventory_receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store late-inventory telemetry fixture finality");
+    let metrics = Arc::new(Metrics::default());
+    kura.attach_telemetry(StateTelemetry::new(Arc::clone(&metrics), true));
+    assert_eq!(metrics.sumeragi_commit_qc_height.get(), 0);
+    let inventory = kura
+        .validate_v2_finality_inventory_on_startup()
+        .expect("authenticate late startup finality inventory");
+    kura.install_v2_startup_finality_verification_inventory(inventory);
+    assert_v2_finality_telemetry(&metrics, &artifact);
 }
 #[test]
 fn kagemusha_topup_witness_stage_promotes_only_after_exact_finality_persistence() {

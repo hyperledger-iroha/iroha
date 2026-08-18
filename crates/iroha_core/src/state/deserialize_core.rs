@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};
+use super::{default_oracle, *};
 use norito::codec::{DecodeAll, Encode};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use super::{default_oracle, *};
+use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};
 enum SnapshotJsonField<'a> {
     Borrowed(&'a str),
     #[cfg(test)]
@@ -15,28 +15,18 @@ impl<'a> SnapshotJsonField<'a> {
         let decoded: Result<T, json::Error> = match self {
             #[cfg(test)]
             Self::Owned(value) => json::value::from_value(value),
-            Self::Borrowed(raw) => {
-                let value = json::from_str::<T>(raw).map_err(|error| {
-                    json::Error::InvalidField {
-                        field: field.to_owned(),
-                        message: error.to_string(),
-                    }
-                })?;
+            Self::Borrowed(raw) => (|| {
+                let value = json::from_str::<T>(raw)?;
                 // TODO: Teach Norito JSON serialization to target a comparison sink so
                 // canonical verification does not need one field-sized temporary String.
-                let canonical =
-                    json::to_json(&value).map_err(|error| json::Error::InvalidField {
-                        field: field.to_owned(),
-                        message: error.to_string(),
-                    })?;
+                let canonical = json::to_json(&value)?;
                 if canonical.as_bytes() != raw.as_bytes() {
-                    return Err(json::Error::InvalidField {
-                        field: field.to_owned(),
-                        message: "snapshot field is not canonically encoded".to_owned(),
-                    });
+                    return Err(json::Error::Message(
+                        "snapshot field is not canonically encoded".to_owned(),
+                    ));
                 }
                 Ok(value)
-            }
+            })(),
         };
         decoded.map_err(|error| json::Error::InvalidField {
             field: field.to_owned(),

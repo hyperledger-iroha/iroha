@@ -140,6 +140,8 @@ struct BodyOwnershipProjection {
     durable_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
     validated_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
     rejected_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
+    retired_rejected_bodies:
+        BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableBodyReceipt>,
     runtime_completions: Vec<RuntimeCompletion>,
     runtime_bound_validations: Vec<(wire::PayloadManifest, ValidatedBodyReceipt)>,
     runtime_body_reservation: Option<BodyAvailableReservation>,
@@ -164,6 +166,7 @@ impl V2EffectExecutor<FakeRuntime> {
             durable_bodies: self.durable_bodies.clone(),
             validated_bodies: self.validated_bodies.clone(),
             rejected_bodies: self.rejected_bodies.clone(),
+            retired_rejected_bodies: self.retired_rejected_bodies.clone(),
             runtime_completions: self.runtime.completions.clone(),
             runtime_bound_validations: self.runtime.bound_validations.clone(),
             runtime_body_reservation: self.runtime.reserved_body_available.clone(),

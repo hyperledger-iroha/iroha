@@ -35796,7 +35796,7 @@ impl State {
     ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {
         Self::queue_plan_pending_binding_in_view(&self.view(), entrypoint_hash)
     }
-    fn queue_plan_pending_binding_in_view(
+    pub(crate) fn queue_plan_pending_binding_in_view(
         state_view: &impl StateReadOnlyWithTransactions,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {

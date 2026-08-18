@@ -3870,6 +3870,11 @@ enum PlanJournalAdmissionMode {
 enum QueueAdmissionPreparationMode {
     Ordinary,
     AtomicJournalReplay,
+    /// Materialize a body for the exact immutable QueuePlan obligation already
+    /// pending in canonical WSV. The certificate's historical admission checks
+    /// replace mutable policy revalidation, but queue resource and durability
+    /// checks remain mandatory.
+    CanonicalPendingHandoff,
 }
 #[cfg(test)]
 #[derive(Clone)]
@@ -10044,8 +10049,8 @@ impl Queue {
             // has already been authenticated above; current fee, registry,
             // manifest, and route policy must not reject accepted work after
             // canonical application.
-            let global_registry_match = if state_committed {
-                None
+            let (global_registry_match, canonical_pending_handoff) = if state_committed {
+                (None, false)
             } else if recorded_global_admission_identity.is_some() {
                 let binding =
                     crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
@@ -10074,20 +10079,43 @@ impl Queue {
                         "queue-plan journal transaction {hash} belongs to another network; retaining its durable record"
                     )));
                 }
-                Some(
-                    queue_plan_admission_registry_match(
+                let registry_match = queue_plan_admission_registry_match(
+                    state_view,
+                    binding.entrypoint_hash.clone(),
+                    binding.canonical_hash(),
+                )
+                .map_err(|reason| {
+                    invalid(format!(
+                        "queue-plan journal transaction {hash} cannot validate its global admission registry marker; retaining its durable record: {reason}"
+                    ))
+                })?;
+                if registry_match == QueuePlanAdmissionRegistryMatch::Exact {
+                    let canonical_binding = State::queue_plan_pending_binding_in_view(
                         state_view,
-                        binding.entrypoint_hash,
-                        binding.canonical_hash(),
+                        binding.entrypoint_hash.clone(),
                     )
                     .map_err(|reason| {
                         invalid(format!(
-                            "queue-plan journal transaction {hash} cannot validate its global admission registry marker; retaining its durable record: {reason}"
+                            "queue-plan journal transaction {hash} cannot validate its canonical pending binding; retaining its durable record: {reason}"
                         ))
-                    })?,
+                    })?
+                    .ok_or_else(|| {
+                        invalid(format!(
+                            "queue-plan journal transaction {hash} has an exact registry owner without a pending application obligation"
+                        ))
+                    })?;
+                    if canonical_binding != binding {
+                        return Err(invalid(format!(
+                            "queue-plan journal transaction {hash} differs from its full canonical pending binding"
+                        )));
+                    }
+                }
+                (
+                    Some(registry_match),
+                    registry_match == QueuePlanAdmissionRegistryMatch::Exact,
                 )
             } else {
-                None
+                (None, false)
             };
             if global_registry_match == Some(QueuePlanAdmissionRegistryMatch::Conflict) {
                 if has_materialized_owner || has_durable_reservation_owner {
@@ -10204,7 +10232,11 @@ impl Queue {
                     recorded_routing_plan,
                     &mut state_access,
                     None,
-                    QueueAdmissionPreparationMode::AtomicJournalReplay,
+                    if canonical_pending_handoff {
+                        QueueAdmissionPreparationMode::CanonicalPendingHandoff
+                    } else {
+                        QueueAdmissionPreparationMode::AtomicJournalReplay
+                    },
                     #[cfg(feature = "telemetry")]
                     telemetry_handle,
                 )
@@ -12817,7 +12849,42 @@ impl Queue {
         let _ = self.sync_nexus_routing_with_state(state);
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
-        let mut batch = self.gossip_batch(n, &state_view);
+        #[cfg(feature = "telemetry")]
+        let backpressure_telemetry: Option<&StateTelemetry> = Some(state_view.telemetry);
+        #[cfg(not(feature = "telemetry"))]
+        let backpressure_telemetry: Option<&StateTelemetry> = None;
+        let mut batch = self.gossip_batch_inner(
+            n,
+            |hash, tx_ref| {
+                if tx_ref.is_in_blockchain(&state_view) {
+                    GossipEntryState::Committed
+                } else if !self.is_expired(tx_ref.as_accepted()) {
+                    GossipEntryState::Pending
+                } else {
+                    match self.global_admission_registry_match_for_hash(hash, &state_view) {
+                        Ok(Some((
+                            _,
+                            QueuePlanAdmissionRegistryMatch::Absent
+                            | QueuePlanAdmissionRegistryMatch::Exact,
+                        ))) => GossipEntryState::Pending,
+                        Ok(None | Some((_, QueuePlanAdmissionRegistryMatch::Conflict))) => {
+                            GossipEntryState::Other
+                        }
+                        Err(reason) => {
+                            self.mark_accepted_work_validation_fault(
+                                hash,
+                                "expired_global_gossip_registry",
+                                &reason,
+                                backpressure_telemetry,
+                            );
+                            GossipEntryState::Other
+                        }
+                    }
+                }
+            },
+            |hash, tx_ref| self.immutable_queued_routing_plan_with_view(hash, tx_ref, &state_view),
+            backpressure_telemetry,
+        );
         for entry in &mut batch {
             entry.queue_plan_admission = match self
                 .global_admission_registry_match_for_hash(entry.tx.hash(), &state_view)
@@ -13838,6 +13905,7 @@ impl Queue {
             None,
             &mut state_access,
             gossip_payload,
+            QueueAdmissionPreparationMode::Ordinary,
             PlanJournalAdmissionMode::OptionalDurable,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
@@ -13880,6 +13948,39 @@ impl Queue {
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let state_view = state.view();
         self.sync_nexus_routing_with_view(&state_view);
+        let tx_hash = tx.hash();
+        if state_view.transactions.get(&tx_hash).is_some() {
+            return Err(Failure {
+                tx: tx.into(),
+                err: Error::InBlockchain,
+            });
+        }
+        let canonical_pending_handoff = if let Some(binding) = expected_admission_binding {
+            match State::queue_plan_pending_binding_in_view(
+                &state_view,
+                binding.entrypoint_hash.clone(),
+            ) {
+                Ok(Some(canonical_binding)) if canonical_binding == *binding => true,
+                Ok(Some(_)) => {
+                    return Err(Failure {
+                        tx: tx.into(),
+                        err: Error::UnresolvedRoute {
+                            reason: "canonical WSV owns a different QueuePlan admission binding"
+                                .to_owned(),
+                        },
+                    });
+                }
+                Ok(None) => false,
+                Err(reason) => {
+                    return Err(Failure {
+                        tx: tx.into(),
+                        err: Error::UnresolvedRoute { reason },
+                    });
+                }
+            }
+        } else {
+            false
+        };
         let supplied_routing_plan = routing_plan.clone();
         let immutable_durable_retry =
             if plan_journal_mode == PlanJournalAdmissionMode::RequiredDurableClaim {
@@ -13902,11 +14003,13 @@ impl Queue {
                 false
             };
         let routing_plan = match routing_plan {
-            Some(plan) if immutable_durable_retry => resolve_routing_plan_for_queue_admission(
-                plan,
-                state_view.nexus(),
-                state_view_height_for_routing(&state_view),
-            ),
+            Some(plan) if immutable_durable_retry || canonical_pending_handoff => {
+                resolve_routing_plan_for_queue_admission(
+                    plan,
+                    state_view.nexus(),
+                    state_view_height_for_routing(&state_view),
+                )
+            }
             Some(plan) => self.resolve_precomputed_routing_plan_with_view(&tx, &state_view, plan),
             None => self
                 .router
@@ -13964,13 +14067,6 @@ impl Queue {
         let expected_admission_context = expected_admission_binding
             .map(|binding| &binding.admission_context)
             .or(expected_admission_context);
-        let tx_hash = tx.hash();
-        if state_view.transactions.get(&tx_hash).is_some() {
-            return Err(Failure {
-                tx: tx.into(),
-                err: Error::InBlockchain,
-            });
-        }
         if plan_journal_mode == PlanJournalAdmissionMode::RequiredDurableClaim {
             let Some(expected_admission_context) = expected_admission_context else {
                 return Err(Failure {
@@ -14062,6 +14158,16 @@ impl Queue {
                         });
                     }
                     Ok(None) => break,
+                    Err(reason) if canonical_pending_handoff => {
+                        return Err(Failure {
+                            tx: tx.into(),
+                            err: Error::UnresolvedRoute {
+                                reason: format!(
+                                    "canonical pending QueuePlan ownership cannot roll over to a mutable admission context: {reason}"
+                                ),
+                            },
+                        });
+                    }
                     Err(reason) => {
                         let current_context =
                             Self::queue_plan_admission_context_in_view(&state_view, &routing_plan)
@@ -14250,7 +14356,7 @@ impl Queue {
             PlanJournalAdmissionMode::RequiredDurable
             | PlanJournalAdmissionMode::RequiredDurableClaim => true,
         };
-        let current_context = context_required
+        let current_context = (context_required && !canonical_pending_handoff)
             .then(|| Self::queue_plan_admission_context_in_view(&state_view, &routing_plan))
             .transpose()
             .map_err(|err| Failure {
@@ -14262,26 +14368,51 @@ impl Queue {
         let admission_context = if plan_journal_mode
             == PlanJournalAdmissionMode::RequiredDurableClaim
         {
-            match expected_admission_context {
-                Some(expected_context) if current_context.as_ref() == Some(expected_context) => {}
-                Some(_) => {
+            if canonical_pending_handoff {
+                let Some(expected_context) = expected_admission_context else {
                     return Err(Failure {
                         tx: tx.into(),
                         err: Error::UnresolvedRoute {
-                            reason: "queue-plan admission context no longer matches the active lane/authority generation".to_owned(),
+                            reason: "canonical pending QueuePlan handoff requires its exact historical admission context".to_owned(),
                         },
                     });
-                }
-                None => {
+                };
+                if !Self::durable_plan_claim_context_revalidates_in_view(
+                    &state_view,
+                    &routing_plan,
+                    expected_context,
+                ) {
                     return Err(Failure {
                         tx: tx.into(),
                         err: Error::UnresolvedRoute {
-                            reason: "strict durable queue-plan claims require an exact admission context".to_owned(),
+                            reason: "canonical pending QueuePlan handoff no longer matches its historical predecessor or active lane incarnation".to_owned(),
                         },
                     });
                 }
+                Some(expected_context.clone())
+            } else {
+                match expected_admission_context {
+                    Some(expected_context)
+                        if current_context.as_ref() == Some(expected_context) => {}
+                    Some(_) => {
+                        return Err(Failure {
+                            tx: tx.into(),
+                            err: Error::UnresolvedRoute {
+                                reason: "queue-plan admission context no longer matches the active lane/authority generation".to_owned(),
+                            },
+                        });
+                    }
+                    None => {
+                        return Err(Failure {
+                            tx: tx.into(),
+                            err: Error::UnresolvedRoute {
+                                reason: "strict durable queue-plan claims require an exact admission context".to_owned(),
+                            },
+                        });
+                    }
+                }
+                current_context
             }
-            current_context
         } else {
             debug_assert!(expected_admission_context.is_none());
             debug_assert!(expected_admission_binding.is_none());
@@ -14297,7 +14428,7 @@ impl Queue {
             "Pushing to the queue"
         );
         let checked = CheckedTransaction::new_unchecked(tx);
-        if self.is_expired(checked.as_accepted()) {
+        if !canonical_pending_handoff && self.is_expired(checked.as_accepted()) {
             return Err(Failure {
                 tx: Box::new(checked.into_accepted()),
                 err: Error::Expired,
@@ -14324,6 +14455,11 @@ impl Queue {
             expected_admission_binding.map(|binding| binding.journal_record_digest),
             &mut state_access,
             gossip_payload,
+            if canonical_pending_handoff {
+                QueueAdmissionPreparationMode::CanonicalPendingHandoff
+            } else {
+                QueueAdmissionPreparationMode::Ordinary
+            },
             plan_journal_mode,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
@@ -14342,6 +14478,7 @@ impl Queue {
         expected_journal_record_digest: Option<Hash>,
         state_access: &mut C,
         gossip_payload: Option<Arc<Vec<u8>>>,
+        preparation_mode: QueueAdmissionPreparationMode,
         plan_journal_mode: PlanJournalAdmissionMode,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<QueuePushOutcome, Failure> {
@@ -14351,7 +14488,7 @@ impl Queue {
             routing_plan,
             state_access,
             gossip_payload,
-            QueueAdmissionPreparationMode::Ordinary,
+            preparation_mode,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
         )?;
@@ -14454,6 +14591,36 @@ impl Queue {
                 err,
             });
         }
+        let routing_decision = routing_plan.coordinator_route();
+        if preparation_mode == QueueAdmissionPreparationMode::CanonicalPendingHandoff {
+            let proposal_gas_cost = Self::compute_proposal_gas_cost(checked.as_accepted())
+                .map_err(|error| Failure {
+                    tx: Box::new(checked.as_accepted().clone()),
+                    err: Error::NexusFeeAdmissionRejected {
+                        code: FeeRejectionCode::InvalidGasLimit,
+                        reason: error.to_string(),
+                    },
+                })?;
+            let enqueued_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
+            #[cfg(feature = "telemetry")]
+            let pending_teu = Self::compute_teu_weight(checked.as_accepted());
+            return Ok(PreparedQueueAdmission {
+                checked,
+                hash,
+                routing_decision,
+                routing_plan,
+                encoded_len,
+                proposal_gas_cost,
+                enqueued_at_ms,
+                admission_context: None,
+                global_admission_identity: None,
+                expected_journal_record_digest: None,
+                replayed_journal_record_digest: None,
+                fee_reservation: None,
+                #[cfg(feature = "telemetry")]
+                pending_teu,
+            });
+        }
         if let Some(transaction) = checked.as_accepted().external() {
             let authority = transaction.authority();
             if !state_access.authority_exists(authority)
@@ -14467,7 +14634,6 @@ impl Queue {
                 });
             }
         }
-        let routing_decision = routing_plan.coordinator_route();
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
         let fee_reservation = if checked.as_accepted().external().is_some() {
@@ -19510,7 +19676,7 @@ pub mod tests {
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install global guard fixture journal");
-        let transaction = accepted_tx_by_someone(&time_source);
+        let transaction = accepted_queue_plan_tx_by_someone(&time_source);
         let follower_transaction = accepted_tx_by_someone(&time_source);
         register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
         register_accepted_tx_authority_for_queue_test(&mut state, &follower_transaction);
@@ -22675,6 +22841,16 @@ pub mod tests {
         let (account_id, key_pair) = gen_account_in("wonderland");
         accepted_tx_by(account_id, &key_pair, time_source)
     }
+    fn accepted_queue_plan_tx_by_someone(time_source: &TimeSource) -> AcceptedTransaction<'static> {
+        let (account_id, key_pair) = gen_account_in("wonderland");
+        accepted_queue_plan_tx_with(
+            account_id,
+            &key_pair,
+            time_source,
+            vec![sample_unregister_instruction()],
+            Metadata::default(),
+        )
+    }
     fn register_accepted_tx_authority_for_queue_test(
         state: &mut State,
         transaction: &AcceptedTransaction<'_>,
@@ -22690,6 +22866,22 @@ pub mod tests {
             DomainId::try_new(&domain_name, "universal").expect("unique reservation domain"),
         ))];
         accepted_tx_with(
+            account_id,
+            &key_pair,
+            time_source,
+            instructions,
+            Metadata::default(),
+        )
+    }
+    fn accepted_queue_plan_unique_entrypoint_tx_by_someone(
+        time_source: &TimeSource,
+    ) -> AcceptedTransaction<'static> {
+        let (account_id, key_pair) = gen_account_in("wonderland");
+        let domain_name = unique_test_domain_name("reservation");
+        let instructions = vec![InstructionBox::from(Unregister::domain(
+            DomainId::try_new(&domain_name, "universal").expect("unique reservation domain"),
+        ))];
+        accepted_queue_plan_tx_with(
             account_id,
             &key_pair,
             time_source,
@@ -23662,7 +23854,7 @@ pub mod tests {
             queue
                 .install_plan_journal(&journal_path, 1024 * 1024, true)
                 .expect("install strict-global promotion journal");
-            let tx = accepted_tx_by_someone(&time_source);
+            let tx = accepted_queue_plan_tx_by_someone(&time_source);
             register_accepted_tx_authority_for_queue_test(&mut state, &tx);
             let hash = tx.hash();
             let plan = queue
@@ -23809,7 +24001,7 @@ pub mod tests {
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install strict-global retry journal");
-        let tx = accepted_tx_by_someone(&time_source);
+        let tx = accepted_queue_plan_tx_by_someone(&time_source);
         register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let plan = queue
             .route_plan_with_state(&tx, &state)
@@ -25305,7 +25497,7 @@ pub mod tests {
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install journal");
-        let tx = accepted_tx_by_someone(&time_source);
+        let tx = accepted_queue_plan_tx_by_someone(&time_source);
         register_accepted_tx_authority_for_queue_test(&mut state, &tx);
         let hash = tx.hash();
         let entrypoint = tx.entrypoint().clone();
@@ -25446,7 +25638,7 @@ pub mod tests {
         queue
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install strict queue-plan journal");
-        let transaction = accepted_tx_by_someone(&time_source);
+        let transaction = accepted_queue_plan_tx_by_someone(&time_source);
         let routing_plan = queue
             .route_plan_with_state(&transaction, &state)
             .expect("route strict admission fixture");

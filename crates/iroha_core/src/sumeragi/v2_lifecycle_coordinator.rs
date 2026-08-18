@@ -83,13 +83,14 @@ pub(in crate::sumeragi) use launch::{
     LaunchedProductionLifecycleV1, PendingKuraActivatedProductionLifecycleV1,
     PendingKuraProductionLifecycleV1, PreparedPendingKuraLaneRecoveryV1,
     ProductionLifecycleActivationErrorV1, ProductionLifecycleCleanupReadyV1,
-    ProductionLifecycleCompletionSelectionV1, ProductionLifecycleCompletionTurnV1,
-    ProductionLifecycleFinalizationErrorV1, ProductionLifecycleFinalizationOutcomeV1,
-    ProductionLifecycleIngressSelectionV1, ProductionLifecycleIngressTurnV1,
-    ProductionLifecycleLaunchErrorV1, ProductionLifecycleLaunchInputsV1,
-    ProductionLifecycleLiveClockActivationPermitV1, ProductionLifecycleOutputRolloverPermitV1,
-    ProductionLifecyclePostOutputHandoffV1, ProductionLifecyclePreActivationErrorV1,
-    ProductionLifecyclePreparedLocalProposalStateV1,
+    ProductionLifecycleCompletionPreGateV1, ProductionLifecycleCompletionSelectionV1,
+    ProductionLifecycleCompletionTurnV1, ProductionLifecycleFinalizationErrorV1,
+    ProductionLifecycleFinalizationOutcomeV1, ProductionLifecycleIngressSelectionV1,
+    ProductionLifecycleIngressTurnV1, ProductionLifecycleLaunchErrorV1,
+    ProductionLifecycleLaunchInputsV1, ProductionLifecycleLiveClockActivationPermitV1,
+    ProductionLifecycleOutputRolloverPermitV1, ProductionLifecyclePostOutputHandoffV1,
+    ProductionLifecyclePreActivationErrorV1, ProductionLifecyclePreparedLocalProposalStateV1,
+    ProductionLifecycleReadyCompletionTurnV1,
     ProductionLifecycleServeRetirementAuthenticationPermitV1, ProductionLifecycleShutdownErrorV1,
     ProductionPendingKuraApplyInstallErrorV1, ProductionPendingKuraApplyRecoveryErrorV1,
     ProductionPendingKuraApplyRecoveryProgressV1, ProductionPreparedOrdinaryIngressTurnV1,
@@ -110,8 +111,9 @@ pub(crate) use ledger::ProductionLifecycleStartupErrorV1;
 #[allow(unused_imports)]
 pub(crate) use ledger::WalVoteLedgerRepairTestSummary;
 pub(in crate::sumeragi) use ledger::{
-    AuthenticatedCompleteTipPredecessorStorageV1, CompleteTipPredecessorStorageErrorV1,
-    LaunchedRecoveredCompleteTipSuccessorLifecycleV1, LifecycleLedgerV1,
+    AuthenticatedCompleteTipPredecessorStorageV1, AuthenticatedRecoveredLifecycleSuccessorFloorV1,
+    CompleteTipPredecessorStorageErrorV1, LaunchedRecoveredCompleteTipSuccessorLifecycleV1,
+    LifecycleLedgerError, LifecycleLedgerV1, PublishedFinalizedLifecycleRetainedFloorV1,
     RetiredRecoveredCompleteTipActivationAuthorityV1, open_complete_tip_predecessor_storage,
 };
 #[cfg(all(test, feature = "bls"))]
@@ -134,16 +136,6 @@ pub(crate) fn complete_tip_restart_activation_fixture() -> (
 ) {
     ledger::tests::durable_ready_fetch_recovery::complete_tip_restart_activation_fixture()
 }
-#[cfg(all(test, feature = "bls"))]
-/// Build the exact retired H/H+1 inputs for lifecycle clean-shutdown tests.
-pub(in crate::sumeragi) fn complete_tip_lifecycle_shutdown_fixture() -> (
-    std::sync::Arc<crate::kura::Kura>,
-    super::v2::VerifiedHeightContext,
-    iroha_crypto::KeyPair,
-    RetiredRecoveredCompleteTipActivationAuthorityV1,
-) {
-    ledger::tests::durable_ready_fetch_recovery::complete_tip_lifecycle_shutdown_fixture()
-}
 #[cfg(test)]
 pub(in crate::sumeragi) use ledger::LifecycleLedgerStoreV1;
 #[cfg(test)]
@@ -152,6 +144,13 @@ pub(crate) use ledger::{
     substitute_recovered_control_replay_authority_for_test,
     substitute_recovered_decision_fetch_owner_for_test,
     substitute_recovered_decision_fetch_replay_authority_for_test,
+};
+#[cfg(all(test, feature = "bls"))]
+pub(in crate::sumeragi) use ledger::{
+    control_timeout_supersession_persistence_failure_for_test,
+    control_timeout_supersession_summary_for_test,
+    install_non_timeout_broadcast_before_current_control_for_test,
+    install_timeout_broadcasts_before_current_control_for_test,
 };
 pub(super) use open::TerminalValidateNoSuccessorClaim;
 #[allow(unused_imports, reason = "release-bound lifecycle error seam")]
@@ -214,8 +213,6 @@ pub(in crate::sumeragi) use scheduler_inputs::{
     ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
     ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
 };
-#[cfg(test)]
-use schema::MAX_LIFECYCLE_RECORDS_PER_HEIGHT;
 #[cfg_attr(
     not(test),
     allow(unused_imports, reason = "reviewed scheduler schema namespace")
@@ -230,12 +227,14 @@ pub(crate) use schema::{
     TurnLease, TurnOutcome, TurnPlan, WaitSource, WaitToken,
 };
 use schema::{
-    CapacityAdmissionWait, CapacityGeometry, DurableContinuation, DurablePayloadReference,
-    DurableRecordMetadata, DurableServeNegativeOutcome, LeaseCapacityReservation,
-    RecoveredLifecycleRecord, RecoverySnapshot, SchedulerEpisode, SchedulerReadyInputs,
-    first_capacity_wait, frozen_predecessors, has_lifecycle_record_capacity,
-    lower_enter_view_ordinals, serve_and_producer_keys_match,
+    CapacityAdmissionWait, CapacityGeometry, DurablePayloadReference, DurableRecordMetadata,
+    DurableServeNegativeOutcome, LeaseCapacityReservation, RecoveredLifecycleRecord,
+    RecoverySnapshot, SchedulerEpisode, SchedulerReadyInputs, first_capacity_wait,
+    frozen_predecessors, has_lifecycle_record_capacity, lower_enter_view_ordinals,
+    serve_and_producer_keys_match,
 };
+#[cfg(test)]
+use schema::{DurableContinuation, MAX_LIFECYCLE_RECORDS_PER_HEIGHT};
 #[cfg(test)]
 pub(crate) use schema::{NonCandidateEffect, RetryAction};
 #[cfg(test)]
@@ -346,6 +345,8 @@ pub(crate) struct ProductionLifecycleOwnerV1 {
     kura_binding: Option<crate::sumeragi::v2::RecoveredLifecycleOwnerKuraBindingV1>,
     apply_service: Option<crate::sumeragi::v2_apply::V2ApplyService>,
     adapter_startup: Option<crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1>,
+    timeout_supersession_successor:
+        Option<ledger::AuthenticatedRecoveredTimeoutSupersessionSuccessorV1>,
 }
 // PRODUCTION_LIFECYCLE_OWNER_DECLARATION_END
 /// Move-only permit for transferring the recovery-replay Apply service.

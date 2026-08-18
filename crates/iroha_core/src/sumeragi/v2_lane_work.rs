@@ -6788,13 +6788,6 @@ impl V2LaneWorkAdapter {
         }
         Ok(sources)
     }
-    /// Recheck this adapter's exact Kura lane boundary before consuming it.
-    pub(crate) fn durable_completion_matches_finality(
-        &self,
-        artifact: &wire::finality::V2FinalityArtifact,
-    ) -> Result<bool, String> {
-        durable_lane_completion_matches_finality(self.kura.as_ref(), artifact)
-    }
     /// Build the complete lane-output rollover authority after every winning
     /// current-height session is independently readable across Kura's strict
     /// certificate and application-receipt boundaries.
@@ -6919,10 +6912,20 @@ impl V2LaneWorkAdapter {
                 descriptor.lane_block_height,
             );
             let Some(durable) = durable else {
-                return Err(V2LaneWorkError::Persistence(
-                    "winning lane proposal has not crossed its durable certificate boundary"
-                        .to_owned(),
-                ));
+                let retained = durable_sessions.get(&proposal.proposal_hash);
+                if !matches!(
+                    retained,
+                    Some(DurableLaneSessionSource::Retained {
+                        proposal: retained_proposal,
+                        ..
+                    }) if retained_proposal == proposal
+                ) {
+                    return Err(V2LaneWorkError::Persistence(
+                        "unfinished winning lane proposal has no bounded successor owner"
+                            .to_owned(),
+                    ));
+                }
+                continue;
             };
             let autonomous_anchor = self.canonical_autonomous_anchor_matches_kura(proposal);
             let autonomous_certificate = require_lane_certificate_execution_role_matches_anchor(
@@ -22782,7 +22785,7 @@ pub(super) mod tests {
         );
     }
     #[test]
-    fn decided_lane_ownership_blocks_rollover_until_its_session_is_durable() {
+    fn decided_lane_ownership_moves_to_successor_until_its_session_is_durable() {
         // Result-bearing genesis carries external entrypoints before any lane
         // ownership can exist. Its empty ownership set is complete, not a
         // malformed lane plan or a missing lane certificate.
@@ -22846,19 +22849,22 @@ pub(super) mod tests {
             .retain_merge_sidecars_for_global_view(locked_round.view, Some(decided), Some(decided))
             .expect("install exact global Decision");
         let finality_artifact = finality_artifact_for_block(&adapter, &keys, &block);
+        adapter
+            .prepare_canonical_lane_rollover(&finality_artifact)
+            .expect("canonicalize incomplete decided lane ownership");
+        let incomplete_authority = adapter
+            .durable_lane_rollover_authority(&finality_artifact)
+            .expect("inspect incomplete decided lane boundary")
+            .expect("unfinished canonical ownership has a move-only successor source");
         assert!(
-            !adapter
-                .durable_completion_matches_finality(&finality_artifact)
-                .expect("inspect incomplete decided lane boundary"),
-            "an unfinished winning lane proposal must keep the predecessor height live"
-        );
-        assert!(
-            matches!(
-                adapter.durable_lane_rollover_authority(&finality_artifact),
-                Err(V2LaneWorkError::Persistence(message))
-                    if message.contains("durable certificate boundary")
-            ),
-            "unfinished lane ownership must not mint successor rollover authority"
+            incomplete_authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockProposal(proposal.clone()),
+                )
+                .expect("validate retained canonical proposal")
+                .is_some(),
+            "global finality must transfer, not discard, an unfinished winning lane proposal"
         );
         assert_eq!(proposal.descriptor.validator_count, 4);
         assert_eq!(proposal.descriptor.min_quorum, 3);
@@ -22906,15 +22912,6 @@ pub(super) mod tests {
                 .kura
                 .lane_block_application_receipt_available(&proposal)
         );
-        assert!(
-            adapter
-                .durable_completion_matches_finality(&finality_artifact)
-                .expect("recheck completed decided lane boundary"),
-            "the exact certificate and receipt must release the durability gate"
-        );
-        adapter
-            .prepare_canonical_lane_rollover(&finality_artifact)
-            .expect("canonicalize completed decided lane ownership");
         let authority = adapter
             .durable_lane_rollover_authority(&finality_artifact)
             .expect("inspect completed decided lane boundary")
@@ -23714,26 +23711,96 @@ pub(super) mod tests {
             Ok(LaneBlockSessionInsertOutcome::Inserted),
             "retain one valid PrepareQC as the successor-owned decision"
         );
+        adapter
+            .prepare_canonical_lane_rollover(&finality_artifact)
+            .expect("canonicalize the late-applied lane owner");
+        let authority = adapter
+            .durable_lane_rollover_authority(&finality_artifact)
+            .expect("inspect incomplete decided-lane rollover")
+            .expect("the incomplete lane owner must move into the successor");
+        assert!(
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockProposal(proposal.clone()),
+                )
+                .expect("validate the retained proposal source")
+                .is_some(),
+            "the decided height may close only after transferring exact unfinished lane ownership"
+        );
+        let subsumed_prepare_vote = signed_lane_vote(&proposal, CertPhase::Prepare, &keys[3]);
+        assert!(
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockVote(subsumed_prepare_vote.clone()),
+                )
+                .expect("authenticate a still-backpressured vote subsumed by retained PrepareQC")
+                .is_some(),
+            "a retained same-phase QC must release a redundant vote still owned by network fanout"
+        );
+        assert!(
+            !authority
+                .uses_retained_source(&BlockMessage::LaneBlockVote(subsumed_prepare_vote.clone())),
+            "a QC-subsumed vote must retire instead of crossing into the successor"
+        );
+        let mut forged_subsumed_vote = subsumed_prepare_vote;
+        forged_subsumed_vote.bls_signature[0] ^= 0x80;
+        assert!(
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockVote(forged_subsumed_vote),
+                )
+                .is_err(),
+            "rollover must never retire a forged vote under a retained QC"
+        );
+        let unique_commit_vote = signed_lane_vote(&proposal, CertPhase::Commit, &keys[3]);
+        assert!(
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockVote(unique_commit_vote),
+                )
+                .is_err(),
+            "a PrepareQC cannot retire a Commit vote which still carries unique phase progress"
+        );
+        assert!(
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockQc(recovered.prepare_qc.clone()),
+                )
+                .expect("authenticate an uncached same-proposal quorum variant")
+                .is_some(),
+            "a valid QC learned from another 3-of-4 subset must cross the retained rollover boundary"
+        );
+        assert!(
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockQc(recovered.commit_qc.clone()),
+                )
+                .is_err(),
+            "rollover must not discard a new CommitQC when the successor owns only Prepare progress"
+        );
         assert!(
             adapter
                 .lane_sessions
                 .qcs_for_incomplete_sessions()
                 .contains(&retained_prepare_qc),
-            "the predecessor must retain the incomplete exact PrepareQC"
+            "the semantically equivalent retained QC must remain successor-owned"
         );
+        let mut forged_rollover_qc = recovered.prepare_qc.clone();
+        forged_rollover_qc.bls_aggregate_signature[0] ^= 0x80;
         assert!(
-            !adapter
-                .durable_completion_matches_finality(&finality_artifact)
-                .expect("inspect the late-applied incomplete lane boundary"),
-            "global application without the lane certificate must keep this height live"
-        );
-        assert!(
-            matches!(
-                adapter.durable_lane_rollover_authority(&finality_artifact),
-                Err(V2LaneWorkError::Persistence(message))
-                    if message.contains("durable certificate boundary")
-            ),
-            "a retained PrepareQC alone must not authorize successor activation"
+            authority
+                .covered_source_hash(
+                    &finality_artifact,
+                    &BlockMessage::LaneBlockQc(forged_rollover_qc),
+                )
+                .is_err(),
+            "semantic proof-variant recovery must still reject a forged aggregate"
         );
         let _ = adapter.drain_effects(usize::MAX);
         adapter
@@ -23787,15 +23854,6 @@ pub(super) mod tests {
                 .lane_block_application_receipt_available(&proposal),
             "certificate recovery must finish the lane application boundary"
         );
-        assert!(
-            adapter
-                .durable_completion_matches_finality(&finality_artifact)
-                .expect("recheck the recovered lane boundary"),
-            "the recovered certificate and receipt must release the predecessor gate"
-        );
-        adapter
-            .prepare_canonical_lane_rollover(&finality_artifact)
-            .expect("canonicalize the recovered durable lane owner");
         assert!(
             adapter
                 .durable_lane_rollover_authority(&finality_artifact)

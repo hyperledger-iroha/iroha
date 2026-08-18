@@ -15,7 +15,7 @@ use crate::{
     gossiper::{GossipPlane, gossip_plane_label},
     governance::manifest::{LaneManifestRegistryHandle, LaneManifestStatus},
     json_macros::{JsonDeserialize, JsonSerialize},
-    kura::Kura,
+    kura::{DurableV2FinalityTelemetrySummary, Kura},
     nexus::space_directory::SpaceDirectoryManifestSet,
     queue::{Queue, QueueLimits},
     state::{State, WorldReadOnly},
@@ -46,7 +46,6 @@ use iroha_data_model::{
     Identifiable,
     asset::AssetDefinitionId,
     block::BlockHeader,
-    consensus::Qc,
     nexus::{
         AxtPolicySnapshot, AxtRejectReason, DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId,
         LaneStorageProfile, LaneVisibility, PublicLaneValidatorStatus, UniversalAccountId,
@@ -573,6 +572,40 @@ pub struct AxtRejectHint {
     /// Reason label for the rejection (e.g., `era`, `sub_nonce`, `expiry`).
     pub reason: AxtRejectReason,
 }
+struct CommitQcTelemetryPublisher {
+    metrics: Arc<Metrics>,
+    update: StdRwLock<()>,
+}
+impl CommitQcTelemetryPublisher {
+    fn new(metrics: Arc<Metrics>) -> Self {
+        Self {
+            metrics,
+            update: StdRwLock::new(()),
+        }
+    }
+    fn publish(&self, summary: DurableV2FinalityTelemetrySummary) {
+        let _update_guard = self
+            .update
+            .write()
+            .expect("commit QC telemetry summary lock poisoned");
+        let current = (
+            self.metrics.sumeragi_commit_qc_height.get(),
+            self.metrics.sumeragi_commit_qc_view.get(),
+        );
+        if summary.position() < current {
+            return;
+        }
+        self.metrics.sumeragi_commit_qc_height.set(summary.height());
+        self.metrics.sumeragi_commit_qc_view.set(summary.view());
+        self.metrics.sumeragi_commit_qc_epoch.set(summary.epoch());
+        self.metrics
+            .sumeragi_commit_qc_signatures_total
+            .set(summary.signatures_total());
+        self.metrics
+            .sumeragi_commit_qc_validator_set_len
+            .set(summary.validator_set_len());
+    }
+}
 /// Slice of metrics used to be used from within [`State`].
 ///
 /// Needed to brake the circular dependency from [`Telemetry`] to [`State`].
@@ -580,6 +613,7 @@ pub struct AxtRejectHint {
 pub struct StateTelemetry {
     metrics: Arc<Metrics>,
     enabled: Arc<AtomicBool>,
+    commit_qc_publisher: Arc<CommitQcTelemetryPublisher>,
     nexus_enabled: Arc<AtomicBool>,
     time_source: TimeSource,
     lane_metadata: Arc<StdRwLock<BTreeMap<u32, LaneMetadataSnapshot>>>,
@@ -657,9 +691,11 @@ impl StateTelemetry {
         let soranet_privacy = Arc::new(
             SoranetSecureAggregator::new(privacy_config).expect("valid SoraNet privacy config"),
         );
+        let commit_qc_publisher = Arc::new(CommitQcTelemetryPublisher::new(Arc::clone(&metrics)));
         let telemetry = Self {
             metrics,
             enabled: Arc::new(AtomicBool::new(enabled)),
+            commit_qc_publisher,
             nexus_enabled: Arc::new(AtomicBool::new(true)),
             time_source: TimeSource::new_system(),
             lane_metadata: Arc::new(StdRwLock::new(BTreeMap::new())),
@@ -2212,6 +2248,13 @@ impl StateTelemetry {
     #[inline]
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Relaxed)
+    }
+    /// Publish a Kura-authenticated durable v2 finality summary monotonically.
+    pub(crate) fn record_durable_v2_finality_summary(
+        &self,
+        summary: DurableV2FinalityTelemetrySummary,
+    ) {
+        self.commit_qc_publisher.publish(summary);
     }
     /// Whether Nexus lane/dataspace telemetry is allowed.
     #[inline]
@@ -4680,6 +4723,7 @@ pub struct Telemetry {
     last_reported_block: Arc<RwLock<Option<BlockCommitReport>>>,
     metrics: Arc<Metrics>,
     enabled: Arc<AtomicBool>,
+    commit_qc_publisher: Arc<CommitQcTelemetryPublisher>,
     sync_requested: Arc<AtomicBool>,
     nexus_enabled: Arc<AtomicBool>,
     time_source: TimeSource,
@@ -4701,6 +4745,7 @@ impl Clone for Telemetry {
             last_reported_block: Arc::clone(&self.last_reported_block),
             metrics: Arc::clone(&self.metrics),
             enabled: Arc::clone(&self.enabled),
+            commit_qc_publisher: Arc::clone(&self.commit_qc_publisher),
             sync_requested: Arc::clone(&self.sync_requested),
             nexus_enabled: Arc::clone(&self.nexus_enabled),
             time_source: self.time_source.clone(),
@@ -5047,11 +5092,13 @@ impl Telemetry {
             SoranetSecureAggregator::new(PrivacyBucketConfig::default())
                 .expect("valid default SoraNet privacy config"),
         );
+        let commit_qc_publisher = Arc::new(CommitQcTelemetryPublisher::new(Arc::clone(&metrics)));
         let telemetry = Telemetry {
             actor,
             last_reported_block: Arc::new(RwLock::new(None)),
             metrics,
             enabled: Arc::new(AtomicBool::new(enabled)),
+            commit_qc_publisher,
             sync_requested: Arc::new(AtomicBool::new(false)),
             nexus_enabled: Arc::new(AtomicBool::new(true)),
             time_source: TimeSource::new_system(),
@@ -7133,21 +7180,6 @@ impl Telemetry {
                 .set(required);
         }
     }
-    /// Record the latest commit certificate summary (best-effort).
-    pub fn set_commit_qc_summary(&self, cert: &Qc) {
-        if self.enabled.load(Ordering::Relaxed) {
-            self.metrics.sumeragi_commit_qc_height.set(cert.height);
-            self.metrics.sumeragi_commit_qc_view.set(cert.view);
-            self.metrics.sumeragi_commit_qc_epoch.set(cert.epoch);
-            self.metrics.sumeragi_commit_qc_signatures_total.set(
-                u64::try_from(crate::sumeragi::consensus::qc_signer_count(cert))
-                    .unwrap_or(u64::MAX),
-            );
-            self.metrics
-                .sumeragi_commit_qc_validator_set_len
-                .set(u64::try_from(cert.validator_set.len()).unwrap_or(u64::MAX));
-        }
-    }
     /// Report the event of block commit, measuring the block time.
     pub fn report_block_commit_blocking(&self, block_header: &BlockHeader) {
         let report = BlockCommitReport::new(block_header, &self.time_source);
@@ -7312,6 +7344,7 @@ impl From<StateTelemetry> for Telemetry {
             last_reported_block: Arc::new(RwLock::new(None)),
             metrics: st.metrics.clone(),
             enabled: st.enabled.clone(),
+            commit_qc_publisher: Arc::clone(&st.commit_qc_publisher),
             sync_requested: Arc::new(AtomicBool::new(false)),
             nexus_enabled: st.nexus_enabled.clone(),
             time_source: TimeSource::new_system(),
@@ -7975,6 +8008,7 @@ pub fn start(
     let last_reported_block = Arc::new(RwLock::new(None));
     let enabled_arc = Arc::new(AtomicBool::new(enabled));
     let sync_requested = Arc::new(AtomicBool::new(false));
+    let commit_qc_publisher = Arc::new(CommitQcTelemetryPublisher::new(Arc::clone(&metrics)));
     let soranet_privacy = Arc::new(
         SoranetSecureAggregator::new(PrivacyBucketConfig::default())
             .expect("valid default SoraNet privacy config"),
@@ -7985,6 +8019,7 @@ pub fn start(
             last_reported_block: last_reported_block.clone(),
             metrics: metrics.clone(),
             enabled: enabled_arc.clone(),
+            commit_qc_publisher,
             sync_requested: sync_requested.clone(),
             nexus_enabled: Arc::new(AtomicBool::new(true)),
             time_source: time_source.clone(),
@@ -8587,40 +8622,15 @@ mod tests {
         assert_eq!(metrics.torii_da_chunking_seconds.get_sample_count(), 1);
     }
     #[test]
-    fn commit_qc_summary_metrics_updated() {
+    fn state_telemetry_conversion_shares_durable_qc_publisher() {
         let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        let peer_a = checked_peer_id();
-        let peer_b = checked_peer_id();
-        let validator_set = vec![peer_a, peer_b];
-        let validator_set_hash = HashOf::new(&validator_set);
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; 32]));
-        let cert = Qc {
-            phase: consensus::Phase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-            height: 42,
-            view: 7,
-            epoch: 1,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash,
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: validator_set.clone(),
-            aggregate: consensus::QcAggregate {
-                signers_bitmap: Vec::new(),
-                bls_aggregate_signature: Vec::new(),
-            },
-        };
-        telemetry.set_commit_qc_summary(&cert);
-        assert_eq!(metrics.sumeragi_commit_qc_height.get(), 42);
-        assert_eq!(metrics.sumeragi_commit_qc_view.get(), 7);
-        assert_eq!(metrics.sumeragi_commit_qc_epoch.get(), 1);
-        assert_eq!(metrics.sumeragi_commit_qc_signatures_total.get(), 0);
-        assert_eq!(metrics.sumeragi_commit_qc_validator_set_len.get(), 2);
+        let state_telemetry = StateTelemetry::new(metrics, true);
+        let expected_publisher = Arc::clone(&state_telemetry.commit_qc_publisher);
+        let telemetry = Telemetry::from(state_telemetry);
+        assert!(Arc::ptr_eq(
+            &telemetry.commit_qc_publisher,
+            &expected_publisher
+        ));
     }
     #[test]
     fn isi_metrics_record_when_enabled() {

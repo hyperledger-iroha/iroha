@@ -382,6 +382,13 @@ const LOCALNET_SUMERAGI_QUEUE_BODIES: usize =
 const LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize =
     iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
         .get();
+/// Total P2P connection bound for generated localnets.
+///
+/// This admits the other thirty validators in the maximum legal committee plus
+/// two authenticated non-validator sources. Lifecycle ownership is bounded
+/// separately by the configured fair-ingress source population.
+const LOCALNET_MAX_TOTAL_CONNECTIONS: usize =
+    MAX_VALIDATORS_PER_HEIGHT - 1 + LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES;
 /// Per-source canonical outer-ingress wire bytes for generated localnets.
 const LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES: usize =
     iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
@@ -420,6 +427,16 @@ fn localnet_sumeragi_body_bytes(validator_count: usize) -> Result<usize> {
             "localnet validator count {validator_count} is not an exact Sumeragi v2 3f+1 committee in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}"
         ));
     }
+    let effect_work_capacity = (LOCALNET_SUMERAGI_QUEUE_COMMANDS
+        / iroha_config::parameters::defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
+        .max(1);
+    actual::sumeragi_v2_lifecycle_capacity_geometry(
+        validator_count,
+        effect_work_capacity,
+        LOCALNET_SUMERAGI_QUEUE_BODIES,
+        LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
+    )
+    .wrap_err("localnet Sumeragi lifecycle capacity geometry is inadmissible")?;
     let source_count = validator_count
         .checked_add(LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES)
         .and_then(|count| count.checked_add(1))
@@ -2605,6 +2622,13 @@ fn render_peer_config(
     network.insert(
         "public_address".into(),
         Value::String(public_host.addr_literal(peer.p2p_port)),
+    );
+    network.insert(
+        "max_total_connections".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_MAX_TOTAL_CONNECTIONS)
+                .expect("LOCALNET_MAX_TOTAL_CONNECTIONS fits i64"),
+        ),
     );
     network.insert(
         "p2p_subscriber_queue_cap".into(),
@@ -6677,6 +6701,15 @@ mod tests {
             .get("network")
             .and_then(toml::Value::as_table)
             .expect("network table");
+        let max_total_connections = network
+            .get("max_total_connections")
+            .and_then(toml::Value::as_integer)
+            .and_then(|value| usize::try_from(value).ok())
+            .expect("positive network connection bound");
+        assert_eq!(
+            max_total_connections, LOCALNET_MAX_TOTAL_CONNECTIONS,
+            "the localnet connection envelope must be explicit"
+        );
         assert_eq!(
             network
                 .get("max_frame_bytes")
@@ -6764,6 +6797,16 @@ mod tests {
             queues.get("ready_bodies").and_then(toml::Value::as_integer),
             Some(i64::try_from(LOCALNET_SUMERAGI_QUEUE_READY_BODIES).expect("queue fits i64"))
         );
+        let effect_work_capacity = (LOCALNET_SUMERAGI_QUEUE_COMMANDS
+            / iroha_config::parameters::defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
+            .max(1);
+        actual::sumeragi_v2_lifecycle_capacity_geometry(
+            usize::from(opts.peers.get()),
+            effect_work_capacity,
+            LOCALNET_SUMERAGI_QUEUE_BODIES,
+            LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
+        )
+        .expect("generated localnet lifecycle geometry must remain admissible");
         let keys = sumeragi
             .get("keys")
             .and_then(toml::Value::as_table)

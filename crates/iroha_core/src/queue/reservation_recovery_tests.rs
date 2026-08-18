@@ -16,7 +16,7 @@ fn live_snapshot_phase_fixture() -> (
             &queue,
             &state,
             &dir,
-            accepted_tx_by_someone(&time_source),
+            accepted_queue_plan_tx_by_someone(&time_source),
         );
     }
     let keys = queue
@@ -68,7 +68,7 @@ fn replayed_snapshot_recovery_fixture(
                     &writer,
                     &state,
                     &journal_dir,
-                    accepted_tx_by_someone(&time_source),
+                    accepted_queue_plan_tx_by_someone(&time_source),
                 );
             }
             let owner = format!("snapshot-planner-owner-{index}");
@@ -363,7 +363,7 @@ fn snapshot_recovery_authority_requires_complete_exact_group_coverage_and_is_a_s
                 &writer,
                 &state,
                 &dir,
-                accepted_tx_by_someone(&time_source),
+                accepted_queue_plan_tx_by_someone(&time_source),
             );
         }
         let keys = writer
@@ -709,7 +709,7 @@ fn completed_release_install_and_replay_remain_quarantined_until_explicit_proof(
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
             .expect("install reservation journal");
         let transactions = (0..2)
-            .map(|_| accepted_tx_by_someone(&time_source))
+            .map(|_| accepted_queue_plan_tx_by_someone(&time_source))
             .collect::<Vec<_>>();
         for transaction in &transactions {
             push_globally_bound_lane_reservation_candidate(
@@ -842,7 +842,7 @@ fn reservation_restart_restore_blocks_resync_until_explicit_release() {
     let dir = tempdir().expect("tempdir");
     let plan_path = dir.path().join("queue-plans.norito");
     let reservation_path = dir.path().join("lane-reservations.norito");
-    let tx = accepted_tx_by_someone(&time_source);
+    let tx = accepted_queue_plan_tx_by_someone(&time_source);
     let hash = tx.hash();
     let key = {
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
@@ -920,7 +920,7 @@ fn state_committed_live_reservation_replays_quarantined_until_explicit_proof_com
     let reservation_path = dir
         .path()
         .join("lane-reservations-committed-live-owner.norito");
-    let transaction = accepted_tx_by_someone(&time_source);
+    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
     let hash = transaction.hash();
     let key = {
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
@@ -1035,7 +1035,7 @@ fn expired_live_reservation_replays_payload_without_fifo_or_tombstone() {
         expired_cull_batch: nonzero!(16_usize),
         ..config_factory()
     };
-    let transaction = accepted_tx_by_someone(&time_source);
+    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
     let hash = transaction.hash();
     let reserved_key = {
         let queue = Arc::new(Queue::test(config, &time_source));
@@ -1123,7 +1123,7 @@ fn missing_replayed_reservation_owns_capacity_until_exact_payload_replay() {
         capacity_per_user: nonzero!(1_usize),
         ..config_factory()
     };
-    let transaction = accepted_tx_by_someone(&time_source);
+    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
     let transaction_hash = transaction.hash();
     let retained_cost = Queue::retained_byte_cost(Queue::compute_tx_encoded_len(&transaction));
     {
@@ -1220,7 +1220,7 @@ fn missing_replayed_reservation_owns_retained_budget_until_exact_payload_replay(
     let dir = tempdir().expect("tempdir");
     let plan_path = dir.path().join("queue-plans-owner-bytes.norito");
     let reservation_path = dir.path().join("lane-reservations-owner-bytes.norito");
-    let transaction = accepted_tx_by_someone(&time_source);
+    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
     let retained_cost = Queue::retained_byte_cost(Queue::compute_tx_encoded_len(&transaction));
     let bounded_config = || Config {
         capacity: nonzero!(2_usize),
@@ -1313,7 +1313,7 @@ fn restart_commit_barrier_stays_quarantined_until_explicit_proof_commit() {
     let dir = tempdir().expect("tempdir");
     let plan_path = dir.path().join("queue-plans-commit-window.norito");
     let reservation_path = dir.path().join("lane-reservations-commit-window.norito");
-    let transaction = accepted_tx_by_someone(&time_source);
+    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
     register_accepted_tx_authority_for_queue_test(
         Arc::get_mut(&mut state).expect("unshared lane-reservation test state"),
         &transaction,
@@ -1421,7 +1421,7 @@ fn stale_reservation_commit_digest_cannot_tombstone_or_forget_live_plan() {
         queue
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
             .expect("install reservation journal");
-        let transaction = accepted_tx_by_someone(&time_source);
+        let transaction = accepted_queue_plan_tx_by_someone(&time_source);
         hash = transaction.hash();
         push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
         let mut stale = *queue
@@ -1474,7 +1474,7 @@ fn stale_reservation_commit_binding_cannot_tombstone_or_forget_live_plan() {
         queue
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
             .expect("install reservation journal");
-        let transaction = accepted_tx_by_someone(&time_source);
+        let transaction = accepted_queue_plan_tx_by_someone(&time_source);
         hash = transaction.hash();
         push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
         let mut stale = *queue
@@ -1538,7 +1538,7 @@ fn high_volume_commit_barriers_require_explicit_proof_before_consumption() {
                 &queue,
                 &state,
                 &dir,
-                accepted_tx_by_someone(&time_source),
+                accepted_queue_plan_tx_by_someone(&time_source),
                 &index.to_le_bytes(),
                 &index.wrapping_add(1).to_le_bytes(),
             ));
@@ -1640,7 +1640,7 @@ fn replay_late_forged_commit_barrier_preserves_every_durable_owner() {
                     &queue,
                     &state,
                     &dir,
-                    accepted_unique_entrypoint_tx_by_someone(&time_source),
+                    accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source),
                     &[index],
                     &[index.wrapping_add(1)],
                 )
@@ -1723,7 +1723,7 @@ fn restart_commit_barrier_rejects_mismatched_queue_hash_without_tombstone_or_for
             &queue,
             &state,
             &dir,
-            accepted_tx_by_someone(&time_source),
+            accepted_queue_plan_tx_by_someone(&time_source),
             b"mismatched-hash-owner",
             b"mismatched-hash-proposal",
         )
@@ -1819,7 +1819,7 @@ fn restart_commit_barrier_rejects_retargeted_coordinator_without_tombstone_or_fo
             &queue,
             &state,
             &dir,
-            accepted_tx_by_someone(&time_source),
+            accepted_queue_plan_tx_by_someone(&time_source),
             b"retargeted-owner",
             b"retargeted-proposal",
         )
@@ -1917,7 +1917,7 @@ fn restart_commit_barrier_rejects_same_plan_binding_aba_without_tombstone_or_for
             &queue,
             &state,
             &dir,
-            accepted_tx_by_someone(&time_source),
+            accepted_queue_plan_tx_by_someone(&time_source),
             b"aba-owner",
             b"aba-proposal",
         );
@@ -2005,7 +2005,7 @@ fn plan_tombstoned_commit_barrier_replays_absent_until_explicit_proof() {
             &queue,
             &state,
             &dir,
-            accepted_tx_by_someone(&time_source),
+            accepted_queue_plan_tx_by_someone(&time_source),
             b"tombstone-owner",
             b"tombstone-proposal",
         );
@@ -2147,7 +2147,7 @@ fn unmarked_commit_without_live_or_retained_v4_tombstone_fails_closed() {
             &queue,
             &state,
             &dir,
-            accepted_tx_by_someone(&time_source),
+            accepted_queue_plan_tx_by_someone(&time_source),
             b"unproven-tombstone-owner",
             b"unproven-tombstone-proposal",
         );
@@ -2224,7 +2224,7 @@ fn commit_barrier_pressure_clears_only_after_explicit_proof_commit() {
             &queue,
             &state,
             &dir,
-            accepted_tx_by_someone(&time_source),
+            accepted_queue_plan_tx_by_someone(&time_source),
             b"pressure-owner",
             b"pressure-proposal",
         )
@@ -2321,7 +2321,7 @@ fn globally_bound_reservation_survives_expiry_until_canonical_commit() {
     ));
     let dir = tempdir().expect("tempdir");
     install_test_reservation_journal(&queue, &dir);
-    let transaction = accepted_tx_by_someone(&time_source);
+    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
     let hash = transaction.hash();
     let binding = push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
     let key = queue
@@ -2387,7 +2387,7 @@ fn concurrent_lane_reserve_attempts_cannot_duplicate_one_transaction() {
         &queue,
         &state,
         &dir,
-        accepted_tx_by_someone(&time_source),
+        accepted_queue_plan_tx_by_someone(&time_source),
     );
     let barrier = Arc::new(std::sync::Barrier::new(3));
     let mut handles = Vec::new();
@@ -2428,7 +2428,7 @@ fn stale_lane_incarnation_identity_fails_closed() {
         &queue,
         &state,
         &dir,
-        accepted_tx_by_someone(&time_source),
+        accepted_queue_plan_tx_by_someone(&time_source),
     );
     let mut stale = lane_reservation_scope(&state, b"stale-owner", b"stale-proposal");
     stale.lane_incarnation = Hash::new(b"retired-incarnation");
@@ -2443,8 +2443,8 @@ include!("native_amx_reservation_tests.rs");
 fn opposite_global_and_lane_call_orders_never_select_the_same_hash() {
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let state = lane_reservation_test_state();
-    let first = accepted_tx_by_someone(&time_source);
-    let second = accepted_tx_by_someone(&time_source);
+    let first = accepted_queue_plan_tx_by_someone(&time_source);
+    let second = accepted_queue_plan_tx_by_someone(&time_source);
     let all_hashes = BTreeSet::from([first.hash(), second.hash()]);
     let run = |lane_first: bool, suffix: &str| {
         let queue = Arc::new(Queue::test(config_factory(), &time_source));

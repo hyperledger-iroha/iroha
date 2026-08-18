@@ -1280,7 +1280,7 @@ fn detached_validation_outcomes_replay_only_after_current_consumer_attaches() {
     }
 }
 #[test]
-fn rejected_local_proposal_retries_exact_durable_body_with_fresh_validation_owner() {
+fn rejected_local_proposal_is_terminal_and_fails_closed_without_new_work() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
@@ -1318,53 +1318,33 @@ fn rejected_local_proposal_retries_exact_durable_body_with_fresh_validation_owne
         vec!["transient local prerequisite"]
     );
 
-    services.validation_error = None;
-    executor
-        .admit_local_proposal(
+    let before = executor.body_ownership_projection();
+    assert!(matches!(
+        executor.admit_local_proposal(
             tag(0),
             fixture.manifest.clone(),
             fixture.body.clone(),
             &mut services,
-        )
-        .expect("retry the exact rejected local proposal from durable bytes");
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("durable deterministic rejection")
+    ));
     assert_eq!(
         services.store_tasks.len(),
         1,
-        "the retry must not repeat the completed durable Store operation"
+        "a sealed rejection must not repeat the durable Store operation"
     );
-    assert_eq!(services.validation_tasks.len(), 2);
-    let retry_validation_id = services.validation_tasks[1].id();
-    assert_ne!(retry_validation_id, first_validation_id);
-    assert!(
-        executor
-            .pending_validations
-            .contains_key(&retry_validation_id)
-    );
-    assert!(
-        executor
-            .local_validate_replay
-            .contains_key(&retry_validation_id)
-    );
-    assert!(
-        !executor.rejected_bodies.contains_key(&key),
-        "worker admission atomically retires the stale cached rejection"
-    );
+    assert_eq!(services.validation_tasks.len(), 1);
+    assert_eq!(executor.body_ownership_projection(), before);
+    assert!(executor.rejected_bodies.contains_key(&key));
     assert!(executor.durable_bodies.contains_key(&key));
     assert!(executor.recovered_bodies.contains_key(&key));
-
-    let validated = services.execute_validation(retry_validation_id);
-    assert_eq!(
-        executor
-            .complete_body_validation(validated, &mut services)
-            .expect("complete the replacement validation owner"),
-        CompletionDisposition::Accepted
-    );
     assert!(executor.pending_validations.is_empty());
     assert!(executor.local_validate_replay.is_empty());
-    assert!(executor.validated_bodies.contains_key(&key));
-    assert_eq!(executor.local_proposal_ready_replay.len(), 1);
-    assert!(!executor.status().fail_closed);
-    assert!(services.closed.is_empty());
+    assert!(executor.validated_bodies.is_empty());
+    assert!(executor.local_proposal_ready_replay.is_empty());
+    assert!(executor.status().fail_closed);
+    assert_eq!(services.closed.len(), 1);
 }
 #[test]
 fn contradictory_terminal_validation_catalogues_fail_closed() {

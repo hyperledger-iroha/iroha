@@ -2502,7 +2502,11 @@ signer config as-is and fail if it is missing; neither script overwrites or
 bootstraps over an operator-supplied path. Omit `--write-config` only when the
 intended flow is to bootstrap the default runtime canary config automatically,
 and then pass the exact owner-private credential with
-`--onboarding-token-file /absolute/runtime/path/onboarding-token`.
+`--onboarding-token-file /absolute/runtime/path/onboarding-token`. The MCP
+rollout passes its exact operator-bound `--operator-network-id` through to the
+bootstrap helper and rejects any generated or supplied config whose top-level
+`network_id` differs; it never accepts the helper's repository default as a
+substitute for the deployment under test.
 
 Expected result:
 

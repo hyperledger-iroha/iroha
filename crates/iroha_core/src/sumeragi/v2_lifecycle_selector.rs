@@ -283,6 +283,10 @@ impl RecoveredDecisionFetchBodyPersistenceTaskV1 {
     pub(in crate::sumeragi) fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
         HashOf::new(self.authenticated.response())
     }
+    /// Hash of the exact signed request family answered by this task.
+    pub(in crate::sumeragi) fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
+        self.authenticated.response().request_hash
+    }
     /// Return the response-family state observed by the final exact probe.
     pub(in crate::sumeragi) const fn claim_preflight(
         &self,
@@ -332,6 +336,10 @@ impl RecoveredDecisionFetchBodyPersistenceCompletionV1 {
     /// Hash the exact durable authenticated response.
     pub(in crate::sumeragi) fn response_hash(&self) -> HashOf<wire::CertifiedBodyResponse> {
         HashOf::new(self.authenticated.response())
+    }
+    /// Hash of the exact signed request family answered by this completion.
+    pub(in crate::sumeragi) fn request_hash(&self) -> HashOf<wire::CertifiedBodyRequest> {
+        self.authenticated.response().request_hash
     }
     /// Project the fixed body-frame authority without exposing response or receipt parts.
     pub(in crate::sumeragi) fn project_store_body_authority(
@@ -1309,6 +1317,65 @@ impl PreparedLifecycleIngressSelector {
             incumbent_digest: location.incumbent_digest(),
             wake_generation: (wait.source(), next_generation),
             post_submit_wait: super::WaitToken::new(wait.source(), next_generation),
+        })
+    }
+    /// Prove that the selected signed response names the exact externally
+    /// parked recovered-WAL Fetch and its installed request owner.
+    pub(super) fn attest_scheduler_recovered_fetch_carrier(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        registry: &mut LifecycleWorkRegistryHolder,
+    ) -> Result<LifecycleIngressSchedulerFetchSeal, LifecycleIngressSchedulerCarrierError> {
+        if !matches!(
+            self.io_target,
+            PreparedLifecycleIngressIoTarget::RecoveredDecisionFetchBodyPersistence
+        ) {
+            return Err(LifecycleIngressSchedulerCarrierError::UnsupportedCarrier);
+        }
+        let family = self
+            .selected_claimed_response_family()
+            .map_err(|_| LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
+        let candidate = family
+            .candidate
+            .recovered()
+            .ok_or(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
+        if family.request_hash() != candidate.request_hash() {
+            return Err(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch);
+        }
+        let dispatch_key = candidate.dispatch_key();
+        let ordinal = dispatch_key.lifecycle_ordinal();
+        let wait_source = certified_fetch_wait_source(candidate.request_hash());
+        if !registry
+            .registry_mut()
+            .matches_waiting_dispatched_recovered_decision_fetch(
+                coordinator,
+                dispatch_key,
+                wait_source,
+            )
+        {
+            return Err(LifecycleIngressSchedulerCarrierError::InvalidRegistryIncumbent);
+        }
+        let record = coordinator
+            .records
+            .get(&ordinal)
+            .ok_or(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
+        let LifecycleState::Waiting(wait) = record.state else {
+            return Err(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch);
+        };
+        let next_generation = certified_fetch_scheduler_generation(wait)
+            .ok_or(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
+        let (&slot, &incumbent_digest) = record
+            .physical_slots
+            .first_key_value()
+            .ok_or(LifecycleIngressSchedulerCarrierError::InvalidWaitingFetch)?;
+        Ok(LifecycleIngressSchedulerFetchSeal {
+            owner: record.owner,
+            ordinal,
+            key: record.key,
+            slot,
+            incumbent_digest,
+            wake_generation: (wait_source, next_generation),
+            post_submit_wait: super::WaitToken::new(wait_source, next_generation),
         })
     }
     /// Derive a sealed wake authority only when the queue-selected occurrence

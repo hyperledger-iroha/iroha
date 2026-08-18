@@ -158,14 +158,26 @@ fn view_change_cancels_non_durable_store_and_unprotected_validation() {
             .durable_bodies
             .contains_key(&(fixture.manifest.round, fixture.manifest.subject))
     );
+    let durable = executor
+        .durable_bodies
+        .get(&(fixture.manifest.round, fixture.manifest.subject))
+        .expect("late Store retained its durable receipt")
+        .clone();
     executor
-        .admit_local_proposal(
-            tag(0),
-            fixture.manifest.clone(),
-            fixture.body.clone(),
+        .bind_body_pipeline_owner(tag(0), &fixture.manifest)
+        .expect("restore the stale reducer validation owner");
+    executor
+        .begin_validation(
+            fixture.manifest.round,
+            fixture.manifest.subject,
+            durable,
+            ValidationConsumer::Reducer {
+                tag: tag(0),
+                ownership: RuntimeEffectOwnership::fresh_for_test(tag(0), 0),
+            },
             &mut services,
         )
-        .expect("durable body starts validation");
+        .expect("durable body starts reducer validation");
     assert_eq!(executor.pending_validations.len(), 1);
     let validation_id = services.validation_tasks[0].id();
     executor

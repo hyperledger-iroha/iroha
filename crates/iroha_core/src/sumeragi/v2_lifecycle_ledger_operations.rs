@@ -932,6 +932,138 @@ impl LifecycleLedgerV1 {
             vote: vote.clone(),
         })
     }
+    /// Terminalize the sole roster-authenticated timeout Broadcast superseded
+    /// by the current recovered WAL control round.
+    ///
+    /// This is a narrow pre-assembly reconciliation, not a classifier escape.
+    /// Ledger validation first proves the canonical unsigned-to-signed timeout
+    /// continuation. The verified height authenticates the signed child, the
+    /// recovered WAL projection proves a strictly newer view in the same
+    /// context, and the two-row owner census excludes partial lineage claims.
+    /// Zero matching rows stutter; multiple eligible rows fail closed.
+    fn reconcile_superseded_timeout_broadcast(
+        &self,
+        verified: &VerifiedHeightContext,
+        projection: &AuthenticatedRecoveredWalControlProjection,
+    ) -> Result<(Self, Option<StagedRecoveredTimeoutSupersessionSuccessorV1>), LifecycleLedgerError>
+    {
+        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        if !projection.is_exact(verified) || !projection.belongs_to_context(self.context()) {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered control supersession belongs to another verified context".to_owned(),
+            ));
+        }
+        let mut eligible = Vec::new();
+        for parent in &self.records {
+            let Some((edge, child_ordinal)) = parent
+                .continuation()
+                .and_then(DurableContinuation::successor_parts)
+            else {
+                continue;
+            };
+            if edge != DurableContinuationEdge::SignTimeoutToBroadcast
+                || parent.work_class() != Some(LifecycleWorkClass::SignTimeout)
+                || parent.stage()
+                    != Some(LifecycleStage::new(
+                        LifecycleStageKind::SignTimeoutVote,
+                        PredecessorScope::Independent,
+                    ))
+                || parent.terminal() != Some(Some(TerminalOutcome::Advanced))
+                || parent.owner().first_admission_ordinal() != parent.ordinal()
+            {
+                continue;
+            }
+            let child = self
+                .records
+                .binary_search_by_key(&child_ordinal, LifecycleLedgerRecordV1::ordinal)
+                .ok()
+                .and_then(|index| self.records.get(index))
+                .ok_or_else(|| {
+                    LifecycleLedgerError::InvalidLedger(
+                        "advanced timeout Sign lost its Broadcast child".to_owned(),
+                    )
+                })?;
+            let child_key = child.key().ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "timeout Broadcast child lost its semantic key".to_owned(),
+                )
+            })?;
+            if child.terminal() != Some(None) {
+                continue;
+            }
+            if child.owner() != parent.owner()
+                || child.work_class() != Some(LifecycleWorkClass::Broadcast)
+                || child.stage()
+                    != Some(LifecycleStage::new(
+                        LifecycleStageKind::BroadcastTimeoutVote,
+                        PredecessorScope::Independent,
+                    ))
+                || child_key.phase() != LifecyclePhase::BroadcastTimeoutVote
+                || child.reconstruction_source() != parent.reconstruction_source()
+                || child.durable_payload() != Some(DurablePayloadReference::None)
+                || child.continuation() != Some(DurableContinuation::None)
+                || self
+                    .records
+                    .iter()
+                    .filter(|record| record.owner() == parent.owner())
+                    .count()
+                    != 2
+            {
+                continue;
+            }
+            let Some(timeout) = child
+                .project_recovered_signed_broadcast_child(self.context())
+                .and_then(|child| child.authenticate_timeout_broadcast(verified))
+            else {
+                continue;
+            };
+            let Some(obsolete) = projection.supersede_older_timeout_broadcast(verified, timeout)
+            else {
+                continue;
+            };
+            eligible.push((child_ordinal, obsolete));
+        }
+        if eligible.len() > 1 {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered control supersession matched multiple timeout Broadcast rows".to_owned(),
+            ));
+        }
+        let Some((child_ordinal, obsolete)) = eligible.pop() else {
+            return Ok((self.clone(), None));
+        };
+        let mut reconciled = self.clone();
+        let Some(child) = reconciled
+            .records
+            .binary_search_by_key(&child_ordinal, LifecycleLedgerRecordV1::ordinal)
+            .ok()
+            .and_then(|index| reconciled.records.get_mut(index))
+        else {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "timeout Broadcast supersession lost its selected row".to_owned(),
+            ));
+        };
+        let Some(child_key) = child.key() else {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "timeout Broadcast supersession lost its selected key".to_owned(),
+            ));
+        };
+        if !obsolete.authorizes_exact_row(child_key, child.owner()) {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "timeout Broadcast supersession changed its sealed row".to_owned(),
+            ));
+        }
+        child.terminal = Some(PersistedTerminalV1::from_schema(TerminalOutcome::Cancelled));
+        reconciled.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        let staged = StagedRecoveredTimeoutSupersessionSuccessorV1::new(self, &reconciled)
+            .ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "timeout Broadcast supersession did not change the exact ledger frame"
+                        .to_owned(),
+                )
+            })?;
+        Ok((reconciled, Some(staged)))
+    }
+
     /// Stage exactly one standalone Proposal/Timeout control Sign row.
     ///
     /// An exact existing row stutters without rewriting it. Absence appends
@@ -1410,6 +1542,50 @@ impl LifecycleLedgerV1 {
             ));
         }
         Ok((staged, ordinal, true))
+    }
+    /// Distinguish an exact advanced recovered-Decision Fetch from every
+    /// malformed live-Fetch coalescing failure.
+    ///
+    /// Store recovery is the sole caller.  It may consult the body store only
+    /// after the opened frame proves that the exact WAL Fetch parent advanced
+    /// to a Store continuation.  In particular, a process-generation replay
+    /// mismatch must not be misclassified as a body-fsynced Store crash cut.
+    pub(super) fn has_exact_recovered_decision_fetch_store_parent(
+        &self,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+    ) -> bool {
+        if self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT).is_err()
+            || !projection.belongs_to_context(self.context())
+        {
+            return false;
+        }
+        let mut matching = self
+            .records
+            .iter()
+            .filter(|record| projection.names_record(record));
+        let Some(fetch) = matching.next() else {
+            return false;
+        };
+        if matching.next().is_some() {
+            return false;
+        }
+        let Some((DurableContinuationEdge::FetchToStore, store_ordinal)) = fetch
+            .continuation()
+            .and_then(DurableContinuation::successor_parts)
+        else {
+            return false;
+        };
+        projection.exactly_matches_advanced_apply_parent(fetch, store_ordinal)
+            && self
+                .records
+                .binary_search_by_key(&store_ordinal, LifecycleLedgerRecordV1::ordinal)
+                .ok()
+                .and_then(|index| self.records.get(index))
+                .is_some_and(|store| {
+                    store.owner() == fetch.owner()
+                        && store.ordinal() == store_ordinal
+                        && store.work_class() == Some(LifecycleWorkClass::Store)
+                })
     }
     /// Authenticate the crash cut after a recovered Fetch advanced to one live Store.
     ///
@@ -1965,6 +2141,94 @@ impl LifecycleLedgerV1 {
         }
         Ok(apply_ordinal)
     }
+    /// Classify or stage the exact predecessor behind durable Kura finality.
+    ///
+    /// The Apply worker can durably commit State/Kura before its completion is
+    /// observed by the serialized lifecycle owner. A process failure in that
+    /// interval leaves the exact four-row Decision lineage in LedgerV1 with a
+    /// live Apply tail, while Kura already exposes a canonical CompleteTip.
+    /// CompleteTip is sufficient to terminalize only that exact tail: its full
+    /// finality artifact reauthenticates the retained replay envelope, and the
+    /// ordinary terminal-chain oracle below rechecks every immutable owner,
+    /// payload, continuation, and predecessor after staging. A canonical-sync
+    /// height can instead be already retired with no rows; that no-mutation
+    /// classification requires the separate store-minted proof that its exact
+    /// empty frame physically existed.
+    fn stage_complete_tip_terminal_apply_recovery(
+        &self,
+        complete_tip: &crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
+        present_frame: Option<AuthenticatedPresentLifecycleFrameV1>,
+    ) -> Result<(Self, bool, CompleteTipPredecessorLifecycleEvidenceV1), LifecycleLedgerError> {
+        if self.high_water() == 0
+            && self.records.is_empty()
+            && self.producer_debts.is_empty()
+            && complete_tip.authorizes_empty_genesis_lifecycle(self.context())
+        {
+            return Ok((
+                self.clone(),
+                false,
+                CompleteTipPredecessorLifecycleEvidenceV1::EmptyGenesis,
+            ));
+        }
+        if let Some(present_frame) = present_frame
+            && present_frame.authorizes_empty_retired_predecessor(self, complete_tip)
+        {
+            return Ok((
+                self.clone(),
+                false,
+                CompleteTipPredecessorLifecycleEvidenceV1::EmptyRetired(present_frame),
+            ));
+        }
+        if let Ok(apply_ordinal) = self.authenticate_complete_tip_terminal_apply(complete_tip) {
+            return Ok((
+                self.clone(),
+                false,
+                CompleteTipPredecessorLifecycleEvidenceV1::TerminalApply(apply_ordinal),
+            ));
+        }
+        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        if self.context().height() != complete_tip.predecessor().height() {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "live CompleteTip recovery belongs to another height".to_owned(),
+            ));
+        }
+        let mut candidates = self
+            .records
+            .iter()
+            .enumerate()
+            .filter_map(|(index, record)| {
+                (record.work_class() == Some(LifecycleWorkClass::Apply)
+                    && record.stage().is_some_and(|stage| {
+                        stage.kind() == LifecycleStageKind::ApplyDecision
+                            && stage.predecessor_scope() == PredecessorScope::Independent
+                    })
+                    && record.terminal() == Some(None)
+                    && record.continuation() == Some(DurableContinuation::None)
+                    && complete_tip.authorizes_terminal_apply_replay(&record.replay_authority))
+                .then_some(index)
+            });
+        let apply_index = candidates.next().ok_or_else(|| {
+            LifecycleLedgerError::InvalidLedger(
+                "CompleteTip finality has neither an exact terminal nor live Decision Apply row"
+                    .to_owned(),
+            )
+        })?;
+        if candidates.next().is_some() {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "CompleteTip finality names multiple live Decision Apply rows".to_owned(),
+            ));
+        }
+        let mut staged = self.clone();
+        staged.records[apply_index].terminal =
+            Some(PersistedTerminalV1::from_schema(TerminalOutcome::Advanced));
+        staged.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        let apply_ordinal = staged.authenticate_complete_tip_terminal_apply(complete_tip)?;
+        Ok((
+            staged,
+            true,
+            CompleteTipPredecessorLifecycleEvidenceV1::TerminalApply(apply_ordinal),
+        ))
+    }
     /// Consume the exact opened predecessor store, frame, and CompleteTip proof
     /// into one non-decomposable authentication cut.
     ///
@@ -1976,22 +2240,23 @@ impl LifecycleLedgerV1 {
         self,
         ledger_store: LifecycleLedgerStoreV1,
         complete_tip: crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
+        predecessor_evidence: CompleteTipPredecessorLifecycleEvidenceV1,
     ) -> Result<AuthenticatedCompleteTipTerminalApplyStoreJoinV1, LifecycleLedgerError> {
         if !ledger_store.is_authorized_complete_tip_predecessor_target(&complete_tip)
             || ledger_store.context != self.context()
             || ledger_store.load()? != self
+            || !predecessor_evidence.exactly_matches(&ledger_store, &self, &complete_tip)
         {
             return Err(LifecycleLedgerError::InvalidLedger(
                 "CompleteTip predecessor store target or frame changed before authentication"
                     .to_owned(),
             ));
         }
-        let apply_ordinal = self.authenticate_complete_tip_terminal_apply(&complete_tip)?;
         let cut = AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
             complete_tip,
             ledger_store,
             ledger: self,
-            apply_ordinal,
+            predecessor_evidence,
         };
         if !cut.is_exact()? {
             return Err(LifecycleLedgerError::InvalidLedger(

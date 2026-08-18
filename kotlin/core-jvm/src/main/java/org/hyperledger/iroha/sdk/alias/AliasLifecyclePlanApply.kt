@@ -18,7 +18,7 @@ fun interface AliasLifecyclePlanBodyNoritoEncoder {
     fun encode(body: AliasLifecycleTransactionPlanBodyV1): ByteArray
 }
 
-/** Safe local handoff from a verified lifecycle plan to the ordinary transaction pipeline. */
+/** Safe local handoff from a verified lifecycle plan to the public transaction pipeline. */
 object AliasLifecyclePlanApply {
     /** Builds a lifecycle transaction using the repository's canonical V1 alias codecs. */
     @JvmStatic
@@ -45,7 +45,7 @@ object AliasLifecyclePlanApply {
         metadata,
     )
 
-    /** Builds one ordinary transaction containing the exact planner lifecycle frame. */
+    /** Builds one transaction containing the exact planner lifecycle frame. */
     @JvmStatic
     @JvmOverloads
     fun buildTransactionPayload(
@@ -94,7 +94,7 @@ object AliasLifecyclePlanApply {
         )
     }
 
-    /** Locally signs a verified lifecycle plan and submits it through the normal endpoint. */
+    /** Locally signs a verified lifecycle plan and submits it through the public endpoint. */
     @JvmStatic
     @JvmOverloads
     fun signAndSubmit(

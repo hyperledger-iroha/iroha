@@ -50,16 +50,12 @@ fn globally_bound_gossip_waits_for_certificate_and_retains_it_after_exact_marker
         QueuePlanGossipAdmission::AwaitingCertificate
     ));
 
-    let validator_key = iroha_crypto::KeyPair::from_seed(
-        vec![0xB9; 32],
-        iroha_crypto::Algorithm::Ed25519,
-    );
+    let validator_key =
+        iroha_crypto::KeyPair::from_seed(vec![0xB9; 32], iroha_crypto::Algorithm::Ed25519);
     let binding_hash = fixture.binding.canonical_hash();
-    let preimage = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v2(
-        binding_hash,
-        0,
-    )
-    .expect("build exact QueuePlan attestation preimage");
+    let preimage =
+        crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v2(binding_hash, 0)
+            .expect("build exact QueuePlan attestation preimage");
     let certificate = crate::torii_proxy::QueuePlanAdmissionCertificateV2 {
         version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
         binding: fixture.binding.clone(),
@@ -93,6 +89,112 @@ fn globally_bound_gossip_waits_for_certificate_and_retains_it_after_exact_marker
         &exact_pending[0].queue_plan_admission,
         QueuePlanGossipAdmission::Certified(bytes) if bytes.as_slice() == certificate
     ));
+
+    fixture
+        .time_handle
+        .advance(fixture.transaction_time_to_live + Duration::from_millis(1));
+    fixture.queue.requeue_gossip_hashes([hash]);
+    let expired_exact_pending = fixture.queue.gossip_batch_with_state(1, &fixture.state);
+    assert_eq!(expired_exact_pending.len(), 1);
+    assert!(matches!(
+        &expired_exact_pending[0].queue_plan_admission,
+        QueuePlanGossipAdmission::Certified(bytes) if bytes.as_slice() == certificate
+    ));
+}
+
+#[test]
+fn exact_pending_body_handoff_preserves_historical_admission_after_ttl() {
+    let dir = tempdir().expect("exact pending body-handoff directory");
+    let journal_path = dir.path().join("exact_pending_body_handoff.norito");
+    let mut state = State::new(
+        world_with_test_domains(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let mut nexus = state.nexus_snapshot();
+    nexus.enabled = false;
+    state
+        .set_nexus(nexus)
+        .expect("apply disabled Nexus state for exact pending handoff");
+    install_single_validator_topology_for_queue_test(&state, 0xBA);
+    let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+    let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+        lane: LaneId::SINGLE,
+        dataspace: DataSpaceId::UNIVERSAL,
+    });
+    let config = config_factory();
+    let transaction_time_to_live = config.transaction_time_to_live;
+    let queue = Queue::test_with_router_for_routes(config, &time_source, router.clone(), &[]);
+    queue
+        .install_plan_journal(&journal_path, 1024 * 1024, true)
+        .expect("install exact pending handoff journal");
+    let transaction = accepted_queue_plan_tx_by_someone(&time_source);
+    register_accepted_tx_authority_for_queue_test(&mut state, &transaction);
+    let routing_plan = queue
+        .route_plan_with_state(&transaction, &state)
+        .expect("route exact pending handoff transaction");
+    let admission_context = queue
+        .plan_admission_context_with_state(&state, &routing_plan)
+        .expect("capture exact pending historical context");
+    let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+        state.network_id_ref(),
+        transaction.entrypoint(),
+        &routing_plan,
+        admission_context,
+        queue.queue_plan_admission_timestamp_ms(),
+    )
+    .expect("build exact pending handoff binding");
+    install_queue_plan_registry_value_for_test(&state, &binding);
+
+    seed_committed_height_for_queue_test(&state, 1);
+    time_handle.advance(transaction_time_to_live + Duration::from_millis(1));
+    let authority = transaction.authority().clone();
+    let mut world = state.world.block();
+    world.accounts.remove(authority);
+    world.commit();
+
+    queue
+        .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+            transaction.clone(),
+            &state,
+            routing_plan,
+            &binding,
+        )
+        .expect("canonical pending proof must authorize historical body handoff");
+    let durable = queue
+        .durable_plan_admission_claim_with_state(&transaction, &state)
+        .expect("read exact pending durable handoff")
+        .expect("exact pending handoff must own one durable claim");
+    let reconstructed =
+        crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(&durable)
+            .expect("reconstruct exact pending handoff binding");
+    assert_eq!(reconstructed, binding);
+    assert_eq!(queue.queued_len(), 1);
+
+    drop(queue);
+    let replay_queue =
+        Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+    assert_eq!(
+        replay_queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("reopen exact pending handoff journal"),
+        1
+    );
+    let replay = replay_queue
+        .replay_plan_journal(&state)
+        .expect("replay exact pending handoff after historical policy drift");
+    assert_eq!(replay.records, 1);
+    assert_eq!(replay.replayed, 1);
+    let replayed_durable = replay_queue
+        .durable_plan_admission_claim_with_state(&transaction, &state)
+        .expect("read replayed exact pending durable handoff")
+        .expect("replayed exact pending handoff must own one durable claim");
+    let replayed_binding =
+        crate::torii_proxy::QueuePlanAdmissionBindingV2::try_from_durable_admission(
+            &replayed_durable,
+        )
+        .expect("reconstruct replayed exact pending handoff binding");
+    assert_eq!(replayed_binding, binding);
 }
 
 #[test]

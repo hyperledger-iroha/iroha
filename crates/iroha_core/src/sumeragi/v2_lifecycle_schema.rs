@@ -6,7 +6,8 @@ use super::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 pub(super) const MAX_PHYSICAL_SLOTS_PER_RECORD: usize = 64;
-pub(super) const MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize = u16::MAX as usize + 1;
+pub(super) const MAX_LIFECYCLE_RECORDS_PER_HEIGHT: usize =
+    iroha_config::parameters::defaults::sumeragi::V2_MAX_LIFECYCLE_RECORDS_PER_HEIGHT;
 pub(super) fn has_lifecycle_record_capacity(current: usize, additional: usize) -> bool {
     current
         .checked_add(additional)
@@ -1595,9 +1596,9 @@ impl SchedulerReadyInputs {
     /// Join one reserved ordinary certified-Fetch ingress transaction to its
     /// exact Waiting coordinator row.
     ///
-    /// This path is distinct from recovered-WAL Fetch scheduling: the selector
-    /// seal authenticates the prospective generation transition while the
-    /// caller retains the bounded I/O reservation.
+    /// The selector seal authenticates the prospective generation transition
+    /// for either an ordinary or recovered-WAL Fetch while the caller retains
+    /// the bounded I/O reservation.
     pub(super) fn from_authenticated_waiting_fetch(
         _factory: &AuthenticatedSchedulerInputsFactory,
         record: &LifecycleRecord,
