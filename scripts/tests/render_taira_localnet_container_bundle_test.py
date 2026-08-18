@@ -264,7 +264,7 @@ class RenderTairaLocalnetContainerBundleTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("must carry an identical `trusted_peers_pop` roster", result.stderr)
 
-    def test_runtime_renderer_requires_pop_roster_without_test_flag(self) -> None:
+    def test_runtime_renderer_requires_pop_roster(self) -> None:
         self.remove_runtime_pop_rosters()
 
         result = self.run_script()

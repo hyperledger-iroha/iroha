@@ -2576,7 +2576,7 @@ def render_bundle(
         raise ValueError(
             "base config contains managed Kagemusha release paths without "
             f"--kagemusha-release-root: {listed}"
-    )
+        )
     _validate_privacy_issuer_template(template, validators)
     _validate_receipt_signer_template(template)
     sumeragi_body_bytes = _scaled_sumeragi_body_bytes(template, len(validators))

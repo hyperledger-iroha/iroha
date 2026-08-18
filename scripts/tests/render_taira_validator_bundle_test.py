@@ -2026,7 +2026,7 @@ def test_render_bundle_rejects_queue_values_above_toml_i64(
         MODULE.render_bundle(base_config_path, roster_path, tmp_path / "out")
 
 
-def test_scaled_sumeragi_bodies_raises_only_underbudget_capacity(
+def test_scaled_sumeragi_bodies_increases_only_underbudget_capacity(
     tmp_path: Path,
 ) -> None:
     base_config_path = tmp_path / "config.toml"
