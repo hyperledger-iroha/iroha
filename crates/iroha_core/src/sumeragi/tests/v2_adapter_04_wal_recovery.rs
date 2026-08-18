@@ -966,6 +966,389 @@ fn bls_timeout_intent_control_sign_repairs_and_coalesces_exactly() {
     let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
     assert_control_repair_and_coalesce(false, 0xC2);
 }
+
+#[cfg(feature = "bls")]
+fn persist_timeout_broadcasts_and_successor_timeout_intent(
+    directory: &TempDir,
+) -> Vec<(wire::TimeoutVote, wire::TimeoutVote)> {
+    persist_timeout_broadcast_count_and_successor_timeout_intent(directory, 1)
+}
+
+#[cfg(feature = "bls")]
+fn persist_timeout_broadcast_count_and_successor_timeout_intent(
+    directory: &TempDir,
+    obsolete_count: usize,
+) -> Vec<(wire::TimeoutVote, wire::TimeoutVote)> {
+    assert!(obsolete_count > 0);
+    let (mut adapter, startup) = open_test(directory).expect("open two-view timeout WAL");
+    assert!(startup.is_empty());
+    let mut keys = (1_u8..=4)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic timeout signer")
+        })
+        .collect::<Vec<_>>();
+    keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let mut obsolete = Vec::with_capacity(obsolete_count);
+    for expected_view in 0..obsolete_count {
+        let old_tag = adapter.current_tag();
+        assert_eq!(
+            old_tag.view(),
+            u64::try_from(expected_view).expect("small requested timeout view")
+        );
+        let mut old_sign = adapter
+            .timeout_elapsed(old_tag)
+            .expect("persist the old-view TimeoutIntent")
+            .into_effects();
+        let AdapterEffect::Sign {
+            tag,
+            request: SignRequest::TimeoutVote(unsigned),
+        } = old_sign.remove(0)
+        else {
+            panic!("old TimeoutIntent owns one exact Sign")
+        };
+        assert!(old_sign.is_empty());
+        let signature = Signature::new(keys[0].private_key(), &unsigned.signature_preimage())
+            .payload()
+            .to_vec();
+        let completed = adapter
+            .signature_completed(tag, signature)
+            .expect("complete the old-view timeout signature")
+            .into_effects();
+        let signed = completed
+            .iter()
+            .find_map(|effect| match effect {
+                AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                    payload: wire::ConsensusMessageV2Payload::TimeoutVote(vote),
+                    ..
+                }) => Some(vote.clone()),
+                _ => None,
+            })
+            .expect("old timeout completion emits its signed Broadcast");
+        let timeout_certificate =
+            authenticated_timeout_certificate(unsigned.round, None, vec![0, 1, 2], &keys);
+        let _entered = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
+            ))
+            .expect("install the authenticated successor view");
+        obsolete.push((unsigned, signed));
+    }
+    let current_tag = adapter.current_tag();
+    assert_eq!(
+        current_tag.view(),
+        u64::try_from(obsolete_count).expect("small requested timeout count")
+    );
+    let current = adapter
+        .timeout_elapsed(current_tag)
+        .expect("persist the successor-view TimeoutIntent");
+    assert!(matches!(
+        current.effects(),
+        [AdapterEffect::Sign {
+            request: SignRequest::TimeoutVote(vote),
+            ..
+        }] if vote.round.view == current_tag.view()
+    ));
+    obsolete
+}
+
+#[cfg(feature = "bls")]
+fn lifecycle_context_for_control_test() -> LifecycleContext {
+    let wire_context = context();
+    let mut context_id = [0_u8; 32];
+    context_id.copy_from_slice(wire_context.id().0.as_ref());
+    LifecycleContext::new(LifecycleDigest::new(context_id), wire_context.height)
+}
+
+#[cfg(feature = "bls")]
+fn signed_timeout_pair(round: wire::ConsensusRound) -> (wire::TimeoutVote, wire::TimeoutVote) {
+    let mut keys = (1_u8..=4)
+        .map(|seed| {
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                .expect("deterministic timeout signer")
+        })
+        .collect::<Vec<_>>();
+    keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+    let unsigned = wire::TimeoutVote {
+        round,
+        highest_prepare_qc: None,
+        signer: 0,
+        signature: Vec::new(),
+    };
+    let mut signed = unsigned.clone();
+    signed.signature = Signature::new(keys[0].private_key(), &unsigned.signature_preimage())
+        .payload()
+        .to_vec();
+    (unsigned, signed)
+}
+
+#[cfg(feature = "bls")]
+fn assert_control_owner_rejected_without_rewrite(
+    safety: &TempDir,
+    storage: &TempDir,
+    proposal: bool,
+    expected_frame: &[u8],
+) -> String {
+    crate::sumeragi::status::clear_v2_status();
+    let startup = if proposal {
+        open_recovered_leader_startup_test(safety)
+    } else {
+        open_recovered_startup_test(safety)
+    }
+    .expect("reopen rejected recovered control startup");
+    let authenticated = startup
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|(error, _startup)| panic!("WAL control authority remains exact: {error}"));
+    let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+        .expect("deterministic rejected control signer");
+    let error = match authenticated.open_production_lifecycle_owner_v1_from_roots_for_test(
+        &lifecycle_owner_config(),
+        4,
+        &storage.path().join("ledger"),
+        &storage.path().join("serve"),
+        &storage.path().join("body"),
+        super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+        &local_signer,
+    ) {
+        Ok(_owner) => panic!("unsupported control-neighbor row must fail closed"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        std::fs::read(storage.path().join("ledger/lifecycle-ledger-v1.norito"))
+            .expect("reread rejected control frame"),
+        expected_frame,
+        "rejected supersession cannot rewrite the lifecycle frame"
+    );
+    assert!(crate::sumeragi::status::v2_status().is_none());
+    error.to_string()
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn obsolete_timeout_broadcast_is_atomically_cancelled_before_current_control_recovery() {
+    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let safety = TempDir::new().expect("temporary superseded timeout WAL");
+    let storage = TempDir::new().expect("temporary superseded timeout lifecycle stores");
+    let obsolete = persist_timeout_broadcasts_and_successor_timeout_intent(&safety);
+    crate::sumeragi::status::clear_v2_status();
+    drop(open_control_owner_for_test(&safety, &storage, false));
+    crate::sumeragi::status::clear_v2_status();
+    let lifecycle_context = lifecycle_context_for_control_test();
+    let ledger_root = storage.path().join("ledger");
+    assert!(install_timeout_broadcasts_before_current_control_for_test(
+        &ledger_root,
+        lifecycle_context,
+        obsolete,
+        true,
+    ));
+    let ledger_path = ledger_root.join("lifecycle-ledger-v1.norito");
+    let incident = std::fs::read(&ledger_path).expect("read exact three-row incident frame");
+
+    let authenticated = open_recovered_startup_test(&safety)
+        .expect("reopen exact current control startup")
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|(error, _)| panic!("authenticate current control WAL: {error}"));
+    let verified = VerifiedHeightContext {
+        context: authenticated.adapter.wire_context.clone(),
+        proofs_of_possession: authenticated.adapter.proofs_of_possession.clone(),
+        parent_verification: authenticated.adapter.parent_verification.clone(),
+    };
+    let AuthenticatedRecoveredAdapterStartup {
+        adapter,
+        effects,
+        authority,
+        validation_authority: _,
+        factory_owner: _,
+    } = authenticated;
+    assert!(effects.is_empty());
+    let RecoveredWalStartupAuthorityV1::ControlSign(control) = authority else {
+        panic!("successor TimeoutIntent retains current control authority")
+    };
+    let projection =
+        crate::sumeragi::v2_runtime::project_recovered_wal_control_sign(&verified, control)
+            .unwrap_or_else(|_| panic!("project exact current control Sign"));
+    assert!(control_timeout_supersession_persistence_failure_for_test(
+        &ledger_root,
+        lifecycle_context,
+        &verified,
+        &projection,
+    ));
+    assert_eq!(
+        std::fs::read(&ledger_path).expect("reread publication-failure frame"),
+        incident,
+        "a failed exact publication cannot terminalize or stage either row"
+    );
+    drop(projection);
+    drop(adapter);
+
+    drop(open_control_owner_for_test(&safety, &storage, false));
+    crate::sumeragi::status::clear_v2_status();
+    assert_eq!(
+        control_timeout_supersession_summary_for_test(&ledger_root, lifecycle_context),
+        Some((3, 1, 1)),
+        "only the old timeout Broadcast is cancelled beside the incumbent current Sign"
+    );
+    let repaired = std::fs::read(&ledger_path).expect("read atomic supersession frame");
+    assert_ne!(repaired, incident);
+    #[cfg(unix)]
+    let repaired_inode = {
+        use std::os::unix::fs::MetadataExt as _;
+        std::fs::metadata(&ledger_path)
+            .expect("inspect atomic supersession frame")
+            .ino()
+    };
+    drop(open_control_owner_for_test(&safety, &storage, false));
+    crate::sumeragi::status::clear_v2_status();
+    assert_eq!(
+        std::fs::read(&ledger_path).expect("read repeated exact supersession frame"),
+        repaired,
+        "repeat recovery stutters without another cancellation or rewrite"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        assert_eq!(
+            std::fs::metadata(&ledger_path)
+                .expect("inspect repeated supersession frame")
+                .ino(),
+            repaired_inode,
+            "repeat recovery skips a second lifecycle publication"
+        );
+    }
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn obsolete_timeout_broadcast_and_missing_current_sign_publish_one_successor() {
+    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let safety = TempDir::new().expect("temporary missing-current timeout WAL");
+    let storage = TempDir::new().expect("temporary missing-current lifecycle stores");
+    let obsolete = persist_timeout_broadcasts_and_successor_timeout_intent(&safety);
+    crate::sumeragi::status::clear_v2_status();
+    drop(open_control_owner_for_test(&safety, &storage, false));
+    crate::sumeragi::status::clear_v2_status();
+    let lifecycle_context = lifecycle_context_for_control_test();
+    let ledger_root = storage.path().join("ledger");
+    assert!(install_timeout_broadcasts_before_current_control_for_test(
+        &ledger_root,
+        lifecycle_context,
+        obsolete,
+        false,
+    ));
+    let ledger_path = ledger_root.join("lifecycle-ledger-v1.norito");
+    let incident = std::fs::read(&ledger_path).expect("read timeout-only incident frame");
+    drop(open_control_owner_for_test(&safety, &storage, false));
+    crate::sumeragi::status::clear_v2_status();
+    assert_eq!(
+        control_timeout_supersession_summary_for_test(&ledger_root, lifecycle_context),
+        Some((3, 1, 1)),
+        "one fsynced successor must both cancel the old Broadcast and stage current Sign"
+    );
+    assert_ne!(
+        std::fs::read(&ledger_path).expect("read repaired missing-current frame"),
+        incident
+    );
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn same_view_timeout_broadcast_is_not_superseded_or_rewritten() {
+    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let safety = TempDir::new().expect("temporary same-view control WAL");
+    let storage = TempDir::new().expect("temporary same-view lifecycle stores");
+    persist_proposal_intent_for_control_recovery(&safety, 0xDA);
+    crate::sumeragi::status::clear_v2_status();
+    drop(open_control_owner_for_test(&safety, &storage, true));
+    crate::sumeragi::status::clear_v2_status();
+    let wire_context = context();
+    let round = wire::ConsensusRound {
+        context_id: wire_context.id(),
+        height: wire_context.height,
+        view: 0,
+    };
+    let lifecycle_context = lifecycle_context_for_control_test();
+    assert!(install_timeout_broadcasts_before_current_control_for_test(
+        &storage.path().join("ledger"),
+        lifecycle_context,
+        vec![signed_timeout_pair(round)],
+        true,
+    ));
+    let frame = std::fs::read(storage.path().join("ledger/lifecycle-ledger-v1.norito"))
+        .expect("read same-view timeout frame");
+    let error = assert_control_owner_rejected_without_rewrite(&safety, &storage, true, &frame);
+    assert!(error.contains("recovered control storage census assembly failed"));
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn foreign_timeout_signature_is_not_superseded_or_rewritten() {
+    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let safety = TempDir::new().expect("temporary foreign timeout WAL");
+    let storage = TempDir::new().expect("temporary foreign timeout lifecycle stores");
+    let mut obsolete = persist_timeout_broadcasts_and_successor_timeout_intent(&safety);
+    obsolete[0].1.signature[0] ^= 0x01;
+    crate::sumeragi::status::clear_v2_status();
+    drop(open_control_owner_for_test(&safety, &storage, false));
+    crate::sumeragi::status::clear_v2_status();
+    let lifecycle_context = lifecycle_context_for_control_test();
+    assert!(install_timeout_broadcasts_before_current_control_for_test(
+        &storage.path().join("ledger"),
+        lifecycle_context,
+        obsolete,
+        true,
+    ));
+    let frame = std::fs::read(storage.path().join("ledger/lifecycle-ledger-v1.norito"))
+        .expect("read foreign timeout frame");
+    let error = assert_control_owner_rejected_without_rewrite(&safety, &storage, false, &frame);
+    assert!(error.contains("recovered control storage census assembly failed"));
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn multiple_obsolete_timeout_broadcasts_fail_before_publication() {
+    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let safety = TempDir::new().expect("temporary ambiguous timeout WAL");
+    let storage = TempDir::new().expect("temporary ambiguous timeout lifecycle stores");
+    let obsolete = persist_timeout_broadcast_count_and_successor_timeout_intent(&safety, 2);
+    crate::sumeragi::status::clear_v2_status();
+    drop(open_control_owner_for_test(&safety, &storage, false));
+    crate::sumeragi::status::clear_v2_status();
+    let lifecycle_context = lifecycle_context_for_control_test();
+    assert!(install_timeout_broadcasts_before_current_control_for_test(
+        &storage.path().join("ledger"),
+        lifecycle_context,
+        obsolete,
+        true,
+    ));
+    let frame = std::fs::read(storage.path().join("ledger/lifecycle-ledger-v1.norito"))
+        .expect("read ambiguous timeout frame");
+    let error = assert_control_owner_rejected_without_rewrite(&safety, &storage, false, &frame);
+    assert!(error.contains("recovered control timeout supersession invariant failed"));
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn non_timeout_broadcast_remains_owned_by_the_closed_census() {
+    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let safety = TempDir::new().expect("temporary non-timeout control WAL");
+    let storage = TempDir::new().expect("temporary non-timeout lifecycle stores");
+    persist_timeout_intent_for_control_recovery(&safety);
+    crate::sumeragi::status::clear_v2_status();
+    drop(open_control_owner_for_test(&safety, &storage, false));
+    crate::sumeragi::status::clear_v2_status();
+    let lifecycle_context = lifecycle_context_for_control_test();
+    assert!(
+        install_non_timeout_broadcast_before_current_control_for_test(
+            &storage.path().join("ledger"),
+            lifecycle_context,
+        )
+    );
+    let frame = std::fs::read(storage.path().join("ledger/lifecycle-ledger-v1.norito"))
+        .expect("read non-timeout Broadcast frame");
+    let error = assert_control_owner_rejected_without_rewrite(&safety, &storage, false, &frame);
+    assert!(error.contains("recovered control storage census assembly failed"));
+}
+
 #[cfg(feature = "bls")]
 #[test]
 fn durable_current_round_proposal_survives_later_prepare_and_timeout_authority() {

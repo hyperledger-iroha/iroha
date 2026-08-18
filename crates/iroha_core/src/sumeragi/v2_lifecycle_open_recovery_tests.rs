@@ -63,14 +63,7 @@ mod recovery_tests {
             roster,
             nexus_amx_context_hash: Hash::new(b"storage-only recovery AMX context"),
             execution_policy_hash: Hash::new(b"storage-only recovery execution policy"),
-            da_layout: wire::DataAvailabilityLayout {
-                encoding: wire::PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1_048_576,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 1_048_576,
-                max_chunk_count: 2,
-            },
+            da_layout: wire::SumeragiV2GenesisContextParameters::recommended().da_layout,
             leader_seed: [0xC5; 32],
         };
         let proofs = keys
@@ -473,6 +466,13 @@ mod recovery_tests {
             digest_bytes(error._serve_payloads.context_id().0.as_ref()),
             context.id()
         );
+        let expected_detail = error.kind().to_string();
+        let startup =
+            super::super::ledger::ProductionRecoveredWalControlStartupErrorV1::from_assembly(error);
+        assert_eq!(startup.assembly_detail(), Some(expected_detail.as_str()));
+        assert!(expected_detail.contains("live lifecycle ordinal 1"));
+        assert!(expected_detail.contains("SignProposal"));
+        assert!(expected_detail.contains("Independent"));
     }
     #[cfg(feature = "bls")]
     #[test]
@@ -1070,7 +1070,9 @@ mod recovery_tests {
         assert_eq!(ordinal, 7);
         assert_eq!(stage.kind(), LifecycleStageKind::ValidateBody);
     }
-    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(storage_only_assembler_source_is_sealed_and_exhaustive);
+    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+        storage_only_assembler_source_is_sealed_and_exhaustive
+    );
     fn terminal_validate_no_successor_ledger()
     -> (LifecycleLedgerV1, AuthenticatedValidateNoSuccessorRecovery) {
         let context = LifecycleContext::new(LifecycleDigest::new([0x81; 32]), 9);

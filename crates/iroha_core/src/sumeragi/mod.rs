@@ -4911,22 +4911,14 @@ impl FairV2Ingress {
             .leader_wire_context
             .ok_or_else(|| "leader-wire lifecycle gate lost its height context".to_owned())?;
         let mut carriers = BTreeMap::new();
-        for entry in state
-            .lanes
-            .values()
-            .flat_map(|lane| lane.entries.iter())
-        {
+        for entry in state.lanes.values().flat_map(|lane| lane.entries.iter()) {
             let Some(inbound_ownership) = entry.inbound.ingress_ownership() else {
-                return Err(
-                    "sealed leader-wire ingress lost queued ownership evidence".to_owned(),
-                );
+                return Err("sealed leader-wire ingress lost queued ownership evidence".to_owned());
             };
             if !inbound_ownership.validate_exact()
                 || !entry.ownership_snapshot.validate_exact()
-                || entry.leader_wire_token.as_ref()
-                    != inbound_ownership.leader_wire_token()
-                || entry.leader_wire_token.as_ref()
-                    != entry.ownership_snapshot.leader_wire_token()
+                || entry.leader_wire_token.as_ref() != inbound_ownership.leader_wire_token()
+                || entry.leader_wire_token.as_ref() != entry.ownership_snapshot.leader_wire_token()
             {
                 return Err(
                     "sealed leader-wire ingress changed a queued ownership projection".to_owned(),

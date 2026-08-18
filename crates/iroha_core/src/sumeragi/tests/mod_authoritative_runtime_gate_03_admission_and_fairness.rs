@@ -736,7 +736,6 @@ fn sealed_height_retirement_persistence_failure_keeps_the_exact_carrier_bound() 
 
 #[test]
 fn sealed_height_retirement_parks_ingress_without_consuming_runtime_owners() {
-    let ingress = Arc::new(super::FairV2Ingress::new(64, 1 << 20, 1 << 18, 0, 0));
     let validator = PeerId::new(KeyPair::random().public_key().clone());
     let proposal = v2_maximum_structural_proposal_wire(minimal_rs16_layout(), 1);
     let BlockMessage::V2(proposal_envelope) = &proposal else {
@@ -747,7 +746,6 @@ fn sealed_height_retirement_parks_ingress_without_consuming_runtime_owners() {
         unreachable!("proposal fixture carries Proposal");
     };
     let round = proposal_payload.round;
-    let _directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
     let mut timeout = v2_timeout_vote();
     let BlockMessage::V2(timeout_envelope) = &mut timeout else {
         unreachable!("timeout fixture is a v2 envelope");
@@ -757,6 +755,15 @@ fn sealed_height_retirement_parks_ingress_without_consuming_runtime_owners() {
         unreachable!("timeout fixture carries TimeoutVote");
     };
     timeout_vote.round = round;
+    let timeout_bytes = encoded_v2_len(&timeout);
+    let ingress = Arc::new(super::FairV2Ingress::new(
+        64,
+        1 << 20,
+        1 << 18,
+        timeout_bytes,
+        0,
+    ));
+    let _directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::new(
             proposal,

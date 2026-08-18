@@ -1176,3 +1176,222 @@ pub(crate) fn append_same_owner_foreign_terminal_for_test(
     ledger.high_water = ordinal;
     ledger.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT).is_ok() && store.persist(&ledger).is_ok()
 }
+
+/// Install exact historical timeout Broadcasts before an incumbent current control Sign.
+#[cfg(all(test, feature = "bls"))]
+pub(crate) fn install_timeout_broadcasts_before_current_control_for_test(
+    root: &Path,
+    context: LifecycleContext,
+    timeout_edges: Vec<(wire::TimeoutVote, wire::TimeoutVote)>,
+    incumbent_current: bool,
+) -> bool {
+    let Ok((store, ledger)) = LifecycleLedgerStoreV1::open(root, context) else {
+        return false;
+    };
+    let [current] = ledger.records.as_slice() else {
+        return false;
+    };
+    if !matches!(
+        current.work_class(),
+        Some(LifecycleWorkClass::SignProposal | LifecycleWorkClass::SignTimeout)
+    ) || current.terminal() != Some(None)
+        || current.continuation() != Some(DurableContinuation::None)
+    {
+        return false;
+    }
+    if timeout_edges.is_empty() {
+        return false;
+    }
+    let mut records = Vec::with_capacity(timeout_edges.len().saturating_mul(2).saturating_add(1));
+    let mut ordinal = 1_u128;
+    for (index, (unsigned, signed)) in timeout_edges.into_iter().enumerate() {
+        let [parent_replay, child_replay] =
+            super::replay_authority::exact_timeout_sign_broadcast_fixture(
+                context, unsigned, signed,
+            );
+        let mut root = [0xD7; 32];
+        root[31] = u8::try_from(index).unwrap_or(u8::MAX);
+        let old_owner = OwnerId::new(CausalRoot::new(LifecycleDigest::new(root)), ordinal);
+        let Some(child_ordinal) = ordinal.checked_add(1) else {
+            return false;
+        };
+        let Ok(parent) = LifecycleLedgerRecordV1::new(
+            parent_replay.key,
+            old_owner,
+            ordinal,
+            LifecycleWorkClass::SignTimeout,
+            parent_replay.stage,
+            Some(TerminalOutcome::Advanced),
+            old_owner.causal_root().digest(),
+            DurablePayloadReference::None,
+            parent_replay.authority,
+            DurableContinuation::successor(
+                DurableContinuationEdge::SignTimeoutToBroadcast,
+                child_ordinal,
+            ),
+        ) else {
+            return false;
+        };
+        let Ok(child) = LifecycleLedgerRecordV1::new(
+            child_replay.key,
+            old_owner,
+            child_ordinal,
+            LifecycleWorkClass::Broadcast,
+            child_replay.stage,
+            None,
+            old_owner.causal_root().digest(),
+            DurablePayloadReference::None,
+            child_replay.authority,
+            DurableContinuation::None,
+        ) else {
+            return false;
+        };
+        records.extend([parent, child]);
+        let Some(next_ordinal) = child_ordinal.checked_add(1) else {
+            return false;
+        };
+        ordinal = next_ordinal;
+    }
+    let high_water = if incumbent_current {
+        let mut current = current.clone();
+        current.owner_first_ordinal = ordinal;
+        current.ordinal = ordinal;
+        records.push(current);
+        ordinal
+    } else {
+        ordinal.saturating_sub(1)
+    };
+    let Ok(incident) = LifecycleLedgerV1::new(context, high_water, records, BTreeMap::new()) else {
+        return false;
+    };
+    store.persist(&incident).is_ok()
+}
+
+/// Install a live non-timeout Broadcast lineage beside an incumbent control Sign.
+#[cfg(all(test, feature = "bls"))]
+pub(crate) fn install_non_timeout_broadcast_before_current_control_for_test(
+    root: &Path,
+    context: LifecycleContext,
+) -> bool {
+    let Ok((store, ledger)) = LifecycleLedgerStoreV1::open(root, context) else {
+        return false;
+    };
+    let [current] = ledger.records.as_slice() else {
+        return false;
+    };
+    let parent_replay =
+        super::replay_authority::exact_record_fixture(context, LifecycleStageKind::SignProposal, 0);
+    let child_replay = super::replay_authority::exact_record_fixture(
+        context,
+        LifecycleStageKind::BroadcastProposal,
+        0,
+    );
+    let owner = OwnerId::new(CausalRoot::new(LifecycleDigest::new([0xD9; 32])), 1);
+    let Ok(parent) = LifecycleLedgerRecordV1::new(
+        parent_replay.key,
+        owner,
+        1,
+        LifecycleWorkClass::SignProposal,
+        parent_replay.stage,
+        Some(TerminalOutcome::Advanced),
+        owner.causal_root().digest(),
+        DurablePayloadReference::None,
+        parent_replay.authority,
+        DurableContinuation::successor(DurableContinuationEdge::SignProposalToBroadcast, 2),
+    ) else {
+        return false;
+    };
+    let Ok(child) = LifecycleLedgerRecordV1::new(
+        child_replay.key,
+        owner,
+        2,
+        LifecycleWorkClass::Broadcast,
+        child_replay.stage,
+        None,
+        owner.causal_root().digest(),
+        DurablePayloadReference::None,
+        child_replay.authority,
+        DurableContinuation::None,
+    ) else {
+        return false;
+    };
+    let mut current = current.clone();
+    current.owner_first_ordinal = 3;
+    current.ordinal = 3;
+    let Ok(incident) =
+        LifecycleLedgerV1::new(context, 3, vec![parent, child, current], BTreeMap::new())
+    else {
+        return false;
+    };
+    store.persist(&incident).is_ok()
+}
+
+/// Return the closed scalar census for an obsolete-timeout/current-control test frame.
+#[cfg(all(test, feature = "bls"))]
+pub(crate) fn control_timeout_supersession_summary_for_test(
+    root: &Path,
+    context: LifecycleContext,
+) -> Option<(u128, usize, usize)> {
+    let (_store, ledger) = LifecycleLedgerStoreV1::open(root, context).ok()?;
+    let cancelled_timeout_broadcasts = ledger
+        .records
+        .iter()
+        .filter(|record| {
+            record.work_class() == Some(LifecycleWorkClass::Broadcast)
+                && record
+                    .stage()
+                    .is_some_and(|stage| stage.kind() == LifecycleStageKind::BroadcastTimeoutVote)
+                && record.terminal() == Some(Some(TerminalOutcome::Cancelled))
+        })
+        .count();
+    let live_controls = ledger
+        .records
+        .iter()
+        .filter(|record| {
+            matches!(
+                record.work_class(),
+                Some(LifecycleWorkClass::SignProposal | LifecycleWorkClass::SignTimeout)
+            ) && record.terminal() == Some(None)
+        })
+        .count();
+    Some((
+        ledger.high_water(),
+        cancelled_timeout_broadcasts,
+        live_controls,
+    ))
+}
+
+/// Inject a publication failure after the exact supersession successor is staged.
+#[cfg(all(test, feature = "bls"))]
+pub(in crate::sumeragi) fn control_timeout_supersession_persistence_failure_for_test(
+    root: &Path,
+    context: LifecycleContext,
+    verified: &VerifiedHeightContext,
+    projection: &AuthenticatedRecoveredWalControlProjection,
+) -> bool {
+    let Ok((store, opened)) = LifecycleLedgerStoreV1::open(root, context) else {
+        return false;
+    };
+    let Ok((reconciled, true)) =
+        opened.reconcile_superseded_timeout_broadcast(verified, projection)
+    else {
+        return false;
+    };
+    let Ok((successor, _, _)) = reconciled.stage_authenticated_wal_control_sign(projection) else {
+        return false;
+    };
+    let path = root.join(LEDGER_FILE);
+    let temporary = path.with_extension("norito.tmp");
+    let Ok(original) = fs::read(&path) else {
+        return false;
+    };
+    if fs::create_dir(&temporary).is_err() {
+        return false;
+    }
+    let failed = store.persist_exact_successor(&opened, &successor).is_err();
+    let restored = fs::remove_dir(&temporary).is_ok();
+    failed
+        && restored
+        && fs::read(&path).ok().as_ref() == Some(&original)
+        && store.load().ok().as_ref() == Some(&opened)
+}

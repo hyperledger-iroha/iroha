@@ -1005,6 +1005,22 @@ impl AuthenticatedRecoveredWalControlProjection {
         self.candidate.key.context() == context.id()
             && self.candidate.key.round().height() == context.height()
     }
+
+    /// Refine a verified historical timeout Broadcast into strict supersession authority.
+    ///
+    /// Equal/future views and foreign contexts return no authority. The current
+    /// WAL projection remains fully sealed and must itself pass every replay,
+    /// locator, pending, candidate, and verified-height check.
+    pub(super) fn supersede_older_timeout_broadcast(
+        &self,
+        verified: &VerifiedHeightContext,
+        timeout: super::replay_authority::AuthenticatedRecoveredTimeoutBroadcastV1,
+    ) -> Option<super::replay_authority::ObsoleteRecoveredTimeoutBroadcastV1> {
+        if !self.is_exact(verified) {
+            return None;
+        }
+        timeout.superseded_by(self.candidate.key)
+    }
     /// Whether a durable row has this projection's exact semantic key.
     pub(super) fn names_record(&self, record: &super::ledger::LifecycleLedgerRecordV1) -> bool {
         record.key() == Some(self.candidate.key)

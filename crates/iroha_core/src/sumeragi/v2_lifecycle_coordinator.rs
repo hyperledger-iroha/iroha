@@ -149,6 +149,13 @@ pub(crate) use ledger::{
     substitute_recovered_decision_fetch_owner_for_test,
     substitute_recovered_decision_fetch_replay_authority_for_test,
 };
+#[cfg(all(test, feature = "bls"))]
+pub(in crate::sumeragi) use ledger::{
+    control_timeout_supersession_persistence_failure_for_test,
+    control_timeout_supersession_summary_for_test,
+    install_non_timeout_broadcast_before_current_control_for_test,
+    install_timeout_broadcasts_before_current_control_for_test,
+};
 pub(super) use open::TerminalValidateNoSuccessorClaim;
 #[allow(unused_imports, reason = "release-bound lifecycle error seam")]
 pub(crate) use open::{AuthenticatedLifecycleRecoveryCut, LifecycleOpenError};

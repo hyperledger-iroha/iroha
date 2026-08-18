@@ -2180,14 +2180,36 @@ impl ProductionLifecycleStartupErrorV1 {
 #[must_use = "failed recovered control startup requires process restart"]
 pub(in crate::sumeragi) struct ProductionRecoveredWalControlStartupErrorV1 {
     reason: &'static str,
+    assembly_detail: Option<String>,
 }
 impl ProductionRecoveredWalControlStartupErrorV1 {
     const fn new(reason: &'static str) -> Self {
-        Self { reason }
+        Self {
+            reason,
+            assembly_detail: None,
+        }
+    }
+    /// Preserve the typed, non-authorizing storage-census discriminator.
+    pub(super) fn from_assembly(error: LifecycleRecoveryAssemblyError) -> Self {
+        let assembly_detail = error.kind().to_string();
+        iroha_logger::error!(
+            detail = %assembly_detail,
+            "recovered control storage census assembly failed"
+        );
+        Self {
+            reason: "recovered control storage census assembly failed",
+            assembly_detail: Some(assembly_detail),
+        }
     }
     /// Return the stable non-authorizing failure classification.
     pub(in crate::sumeragi) const fn reason(&self) -> &'static str {
         self.reason
+    }
+
+    /// Borrow the typed assembler discriminator without exposing authority.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::sumeragi) fn assembly_detail(&self) -> Option<&str> {
+        self.assembly_detail.as_deref()
     }
 }
 /// Startup-fatal failure from exact recovered Decision-Fetch storage repair.
@@ -2507,8 +2529,12 @@ impl ProductionLifecycleOwnerV1 {
     ///
     /// Projection exactness is checked before this method opens LedgerV1.
     /// Absence publishes only the deterministic checked successor; an exact
-    /// existing row is left byte-for-byte untouched while its volatile carrier
-    /// is reconstructed. All other row shapes fail closed.
+    /// existing row normally remains byte-for-byte untouched while its volatile
+    /// carrier is reconstructed. The sole exception atomically terminalizes one
+    /// roster-authenticated, strict-lower-view timeout Broadcast before the
+    /// current Sign is staged. Every other live row remains unchanged and owned
+    /// by the closed storage census; when no exact supersession or Sign staging
+    /// is eligible, its rejection performs no lifecycle publication.
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn open_recovered_control_startup(
         verified: VerifiedHeightContext,
@@ -2834,14 +2860,21 @@ impl ProductionLifecycleOwnerV1 {
             adapter_startup: ProductionLifecycleAdapterStartupV1,
         ) -> Result<ProductionLifecycleOwnerV1, ProductionRecoveredWalControlStartupErrorV1>
         {
-            let (repaired, ordinal, changed) = opened
+            let (reconciled, superseded) = opened
+                .reconcile_superseded_timeout_broadcast(&verified, &projection)
+                .map_err(|_error| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(
+                        "recovered control timeout supersession invariant failed",
+                    )
+                })?;
+            let (repaired, ordinal, staged) = reconciled
                 .stage_authenticated_wal_control_sign(&projection)
                 .map_err(|_error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(
                         "recovered control durable row is absent-or-exact invariant failed",
                     )
                 })?;
-            if changed {
+            if superseded || staged {
                 ledger_store
                     .persist_exact_successor(&opened, &repaired)
                     .map_err(|_error| {
@@ -2872,11 +2905,7 @@ impl ProductionLifecycleOwnerV1 {
                 &projection,
                 fetches,
             )
-            .map_err(|_error| {
-                ProductionRecoveredWalControlStartupErrorV1::new(
-                    "recovered control storage census assembly failed",
-                )
-            })?;
+            .map_err(ProductionRecoveredWalControlStartupErrorV1::from_assembly)?;
             let mut registry = LifecycleWorkRegistryHolder::empty();
             let mut installed = registry
                 .registry_mut()

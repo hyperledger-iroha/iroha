@@ -399,26 +399,36 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                     }
                     super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressTurnV1::Ordinary(
                         ordinary,
-                    ) => match activated.consume_prepared_ordinary_ingress_turn(
-                        runner,
-                        ordinary,
-                        lane_work,
-                        kura,
-                        local_key,
-                        block_sync_server,
-                        block_sync,
-                        block_sync_request,
-                        npos_vrf,
-                    )? {
-                        ProductionPreparedOrdinaryIngressConsumptionV1::Continue => {}
-                        ProductionPreparedOrdinaryIngressConsumptionV1::StopBatch => {
-                            return Ok(
-                                LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                                    producer_claim,
-                                ),
-                            );
+                    ) => {
+                        let consumed = activated.consume_prepared_ordinary_ingress_turn(
+                            runner,
+                            ordinary,
+                            lane_work,
+                            kura,
+                            local_key,
+                            block_sync_server,
+                            block_sync,
+                            block_sync_request,
+                            npos_vrf,
+                        );
+                        match consumed {
+                            Ok(ProductionPreparedOrdinaryIngressConsumptionV1::Continue) => {}
+                            Ok(ProductionPreparedOrdinaryIngressConsumptionV1::StopBatch) => {
+                                return Ok(
+                                    LifecycleV2IngressDrainDispositionV1::retry_before_producer(
+                                        producer_claim,
+                                    ),
+                                );
+                            }
+                            Err(error) => {
+                                iroha_logger::error!(
+                                    %error,
+                                    "Sumeragi v2 ordinary ingress consumption failed closed"
+                                );
+                                return Err(error);
+                            }
                         }
-                    },
+                    }
                     super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressTurnV1::Selected(
                         selected,
                     ) => {

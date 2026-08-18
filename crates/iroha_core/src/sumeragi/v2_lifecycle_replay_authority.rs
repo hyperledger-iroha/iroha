@@ -2632,6 +2632,8 @@ pub(super) struct SignedBroadcastReplayEvidenceV1 {
 /// parent binding and verified roster must reconstruct the exact candidate.
 pub(super) struct DurableRecoveredSignedBroadcastChildV1 {
     effect: AdapterEffect,
+    key: LifecycleKey,
+    owner: OwnerId,
 }
 impl DurableRecoveredSignedBroadcastChildV1 {
     /// Release the canonical signed effect only to its recovered-WAL parent.
@@ -2640,6 +2642,65 @@ impl DurableRecoveredSignedBroadcastChildV1 {
         _permit: super::wal_recovery::RecoveredLifecycleSignBroadcastProjectionPermitV1,
     ) -> AdapterEffect {
         self.effect
+    }
+
+    /// Roster-authenticate one exact timeout Broadcast without minting execution authority.
+    pub(super) fn authenticate_timeout_broadcast(
+        self,
+        verified: &VerifiedHeightContext,
+    ) -> Option<AuthenticatedRecoveredTimeoutBroadcastV1> {
+        let AdapterEffect::Broadcast(message) = &self.effect else {
+            return None;
+        };
+        if !matches!(
+            &message.payload,
+            wire::ConsensusMessageV2Payload::TimeoutVote(_)
+        ) || verified.verify_consensus_message(message).is_err()
+        {
+            return None;
+        }
+        Some(AuthenticatedRecoveredTimeoutBroadcastV1 {
+            key: self.key,
+            owner: self.owner,
+        })
+    }
+}
+
+/// Roster-authenticated identity of one inert recovered timeout Broadcast.
+///
+/// The signed envelope remains sealed. Only a strictly newer authenticated WAL
+/// control projection may refine this into obsolete-row authority.
+#[must_use = "an authenticated timeout Broadcast must be rejected or refined exactly once"]
+pub(super) struct AuthenticatedRecoveredTimeoutBroadcastV1 {
+    key: LifecycleKey,
+    owner: OwnerId,
+}
+impl AuthenticatedRecoveredTimeoutBroadcastV1 {
+    /// Refine this exact authenticated row only under a strictly newer same-height key.
+    pub(super) fn superseded_by(
+        self,
+        current: LifecycleKey,
+    ) -> Option<ObsoleteRecoveredTimeoutBroadcastV1> {
+        (current.context() == self.key.context()
+            && current.round().height() == self.key.round().height()
+            && current.round().view() > self.key.round().view())
+        .then_some(ObsoleteRecoveredTimeoutBroadcastV1 {
+            key: self.key,
+            owner: self.owner,
+        })
+    }
+}
+
+/// Closed authority to terminalize one exact obsolete timeout Broadcast row.
+#[must_use = "obsolete timeout authority must authorize its exact durable row"]
+pub(super) struct ObsoleteRecoveredTimeoutBroadcastV1 {
+    key: LifecycleKey,
+    owner: OwnerId,
+}
+impl ObsoleteRecoveredTimeoutBroadcastV1 {
+    /// Consume the sealed authority for one already-selected durable row.
+    pub(super) fn authorizes_exact_row(self, key: LifecycleKey, owner: OwnerId) -> bool {
+        self.key == key && self.owner == owner
     }
 }
 /// Authenticate the durable envelope shape without granting execution authority.
@@ -2666,7 +2727,7 @@ pub(super) fn project_durable_recovered_signed_broadcast_child(
         && continuation == super::schema::DurableContinuation::None
         && authority.structurally_matches_record(context, key, work_class, stage, payload)
         && exact_signed_broadcast_authority(&effect).as_ref() == Some(authority))
-    .then_some(DurableRecoveredSignedBroadcastChildV1 { effect })
+    .then_some(DurableRecoveredSignedBroadcastChildV1 { effect, key, owner })
 }
 impl SignedBroadcastReplayEvidenceV1 {
     /// Seal one exact runtime-bound signed broadcast into canonical evidence.
@@ -4481,5 +4542,5 @@ pub(super) use tests::{
     exact_durable_certified_fetch_record_fixture, exact_local_body_record_fixture,
     exact_pending_certified_fetch_candidate_fixture, exact_record_fixture,
     exact_recovered_decision_terminal_family_fixture, exact_replay_authority_for_payload_fixture,
-    foreign_certified_serve_family_authority_fixture,
+    exact_timeout_sign_broadcast_fixture, foreign_certified_serve_family_authority_fixture,
 };

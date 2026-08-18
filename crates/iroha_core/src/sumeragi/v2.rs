@@ -25,6 +25,13 @@ use super::v2_lifecycle_coordinator::{
     substitute_recovered_decision_fetch_owner_for_test,
     substitute_recovered_decision_fetch_replay_authority_for_test,
 };
+#[cfg(all(test, feature = "bls"))]
+use super::v2_lifecycle_coordinator::{
+    control_timeout_supersession_persistence_failure_for_test,
+    control_timeout_supersession_summary_for_test,
+    install_non_timeout_broadcast_before_current_control_for_test,
+    install_timeout_broadcasts_before_current_control_for_test,
+};
 use super::{
     safety_wal::{
         RecoveredRecord, SafetyWal, SafetyWalAppendReceipt, SafetyWalError,

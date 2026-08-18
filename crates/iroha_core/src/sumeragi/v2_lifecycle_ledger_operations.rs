@@ -932,6 +932,130 @@ impl LifecycleLedgerV1 {
             vote: vote.clone(),
         })
     }
+    /// Terminalize the sole roster-authenticated timeout Broadcast superseded
+    /// by the current recovered WAL control round.
+    ///
+    /// This is a narrow pre-assembly reconciliation, not a classifier escape.
+    /// Ledger validation first proves the canonical unsigned-to-signed timeout
+    /// continuation. The verified height authenticates the signed child, the
+    /// recovered WAL projection proves a strictly newer view in the same
+    /// context, and the two-row owner census excludes partial lineage claims.
+    /// Zero matching rows stutter; multiple eligible rows fail closed.
+    pub(super) fn reconcile_superseded_timeout_broadcast(
+        &self,
+        verified: &VerifiedHeightContext,
+        projection: &AuthenticatedRecoveredWalControlProjection,
+    ) -> Result<(Self, bool), LifecycleLedgerError> {
+        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        if !projection.is_exact(verified) || !projection.belongs_to_context(self.context()) {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered control supersession belongs to another verified context".to_owned(),
+            ));
+        }
+        let mut eligible = Vec::new();
+        for parent in &self.records {
+            let Some((edge, child_ordinal)) = parent
+                .continuation()
+                .and_then(DurableContinuation::successor_parts)
+            else {
+                continue;
+            };
+            if edge != DurableContinuationEdge::SignTimeoutToBroadcast
+                || parent.work_class() != Some(LifecycleWorkClass::SignTimeout)
+                || parent.stage()
+                    != Some(LifecycleStage::new(
+                        LifecycleStageKind::SignTimeoutVote,
+                        PredecessorScope::Independent,
+                    ))
+                || parent.terminal() != Some(Some(TerminalOutcome::Advanced))
+                || parent.owner().first_admission_ordinal() != parent.ordinal()
+            {
+                continue;
+            }
+            let child = self
+                .records
+                .binary_search_by_key(&child_ordinal, LifecycleLedgerRecordV1::ordinal)
+                .ok()
+                .and_then(|index| self.records.get(index))
+                .ok_or_else(|| {
+                    LifecycleLedgerError::InvalidLedger(
+                        "advanced timeout Sign lost its Broadcast child".to_owned(),
+                    )
+                })?;
+            let child_key = child.key().ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "timeout Broadcast child lost its semantic key".to_owned(),
+                )
+            })?;
+            if child.terminal() != Some(None) {
+                continue;
+            }
+            if child.owner() != parent.owner()
+                || child.work_class() != Some(LifecycleWorkClass::Broadcast)
+                || child.stage()
+                    != Some(LifecycleStage::new(
+                        LifecycleStageKind::BroadcastTimeoutVote,
+                        PredecessorScope::Independent,
+                    ))
+                || child_key.phase() != LifecyclePhase::BroadcastTimeoutVote
+                || child.reconstruction_source() != parent.reconstruction_source()
+                || child.durable_payload() != Some(DurablePayloadReference::None)
+                || child.continuation() != Some(DurableContinuation::None)
+                || self
+                    .records
+                    .iter()
+                    .filter(|record| record.owner() == parent.owner())
+                    .count()
+                    != 2
+            {
+                continue;
+            }
+            let Some(timeout) = child
+                .project_recovered_signed_broadcast_child(self.context())
+                .and_then(|child| child.authenticate_timeout_broadcast(verified))
+            else {
+                continue;
+            };
+            let Some(obsolete) = projection.supersede_older_timeout_broadcast(verified, timeout)
+            else {
+                continue;
+            };
+            eligible.push((child_ordinal, obsolete));
+        }
+        if eligible.len() > 1 {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "recovered control supersession matched multiple timeout Broadcast rows".to_owned(),
+            ));
+        }
+        let Some((child_ordinal, obsolete)) = eligible.pop() else {
+            return Ok((self.clone(), false));
+        };
+        let mut reconciled = self.clone();
+        let Some(child) = reconciled
+            .records
+            .binary_search_by_key(&child_ordinal, LifecycleLedgerRecordV1::ordinal)
+            .ok()
+            .and_then(|index| reconciled.records.get_mut(index))
+        else {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "timeout Broadcast supersession lost its selected row".to_owned(),
+            ));
+        };
+        let Some(child_key) = child.key() else {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "timeout Broadcast supersession lost its selected key".to_owned(),
+            ));
+        };
+        if !obsolete.authorizes_exact_row(child_key, child.owner()) {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "timeout Broadcast supersession changed its sealed row".to_owned(),
+            ));
+        }
+        child.terminal = Some(PersistedTerminalV1::from_schema(TerminalOutcome::Cancelled));
+        reconciled.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        Ok((reconciled, true))
+    }
+
     /// Stage exactly one standalone Proposal/Timeout control Sign row.
     ///
     /// An exact existing row stutters without rewriting it. Absence appends

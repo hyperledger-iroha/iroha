@@ -188,6 +188,7 @@ impl PreparedDequeuedV2IngressV1 {
     }
 
     /// Close the retained output owner before an outer wrapper releases fields.
+    #[track_caller]
     pub(in crate::sumeragi) fn close_output_for_restart(&self) {
         self.output_guard.close_admission_for_restart();
     }

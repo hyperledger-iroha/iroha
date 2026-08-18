@@ -107,10 +107,11 @@ required|control_authority|ReplayWalRoleV1::TIMEOUT_INTENT|missing exact control
 required|control_authority|LifecycleStageKind::SignTimeoutVote|missing exact control mapping: LifecycleStageKind::SignTimeoutVote
 region|durable|ledger|after|pub(in crate::sumeragi) fn open_recovered_control_startup(|before|/// Bind one paired recovered-WAL open
 required|durable|stage_authenticated_wal_control_sign|locate recovered control durable staging
+required|durable|reconcile_superseded_timeout_broadcast|locate exact obsolete-timeout reconciliation
 required|durable|persist_exact_successor|locate recovered control durable publication
 required|durable|LifecycleWorkRegistryHolder::empty|locate recovered control registry construction
-required|durable|if changed|recovered control storage transaction must persist only changed state
-order|durable|3|stage_authenticated_wal_control_sign|persist_exact_successor|LifecycleWorkRegistryHolder::empty|control staging and durable publication precede volatile registry construction
+required|durable|if superseded \p\p staged|recovered control storage transaction must persist only changed state
+order|durable|4|reconcile_superseded_timeout_broadcast|stage_authenticated_wal_control_sign|persist_exact_successor|LifecycleWorkRegistryHolder::empty|obsolete-timeout reconciliation, control staging, and durable publication precede volatile registry construction
 forbidden|durable|RuntimeLifecycleOrdinalSource|recovered control storage transaction must not expose RuntimeLifecycleOrdinalSource
 forbidden|durable|publish_recovered_adapter_status|recovered control storage transaction must not publish adapter status
 region|decision_durable|ledger|after|pub(in crate::sumeragi) fn open_recovered_decision_fetch_startup(|before|/// Bind one paired recovered-WAL open

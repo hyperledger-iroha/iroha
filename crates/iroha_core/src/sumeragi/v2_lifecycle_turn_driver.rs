@@ -787,7 +787,11 @@ fn dequeue_prepared_ordinary_ingress<'cursor>(
             drop(runner);
             ProductionLifecycleIngressTurnV1::Ordinary(turn)
         }
-        Err((_error, retained)) => {
+        Err((error, retained)) => {
+            iroha_logger::error!(
+                ?error,
+                "Sumeragi v2 ordinary ingress exact dequeue failed closed"
+            );
             drop(operation);
             drop(retained);
             drop(runner);
@@ -837,6 +841,9 @@ impl LaunchedProductionLifecycleV1 {
         if self.recovered_lifecycle_sign_completion.is_some()
             && self.recovered_decision_fetch_body_completion.is_some()
         {
+            iroha_logger::error!(
+                "Sumeragi v2 lifecycle Completion retained mutually exclusive Sign and Fetch owners"
+            );
             self.close_output_for_restart();
             return ProductionLifecycleCompletionPreGateV1::Selected(
                 ProductionLifecycleCompletionSelectionV1::RestartRequired,
@@ -875,7 +882,11 @@ impl LaunchedProductionLifecycleV1 {
                         self.recovered_decision_apply_deferred = Some(deferred);
                         ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyCompletionDeferred
                     }
-                    Err(_) => {
+                    Err(reason) => {
+                        iroha_logger::error!(
+                            %reason,
+                            "recovered Decision Apply completion settlement failed closed"
+                        );
                         self.close_output_for_restart();
                         ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyCompletionRestartRequired
                     }
@@ -924,7 +935,11 @@ impl LaunchedProductionLifecycleV1 {
                 return ProductionLifecycleCompletionPreGateV1::Selected(selected);
             }
             Ok(RecoveredLifecycleCompletionTakeV1::None) => {}
-            Err(_) => {
+            Err(reason) => {
+                iroha_logger::error!(
+                    %reason,
+                    "Sumeragi v2 lifecycle Completion physical-head classification failed closed"
+                );
                 self.close_output_for_restart();
                 return ProductionLifecycleCompletionPreGateV1::Selected(
                     ProductionLifecycleCompletionSelectionV1::RestartRequired,
@@ -949,6 +964,7 @@ impl LaunchedProductionLifecycleV1 {
                 return ProductionLifecycleCompletionTurnV1::PassThrough(runner);
             }
             super::super::ProductionCompletionReadyWorkV1::Invalid => {
+                iroha_logger::error!("Sumeragi v2 lifecycle Completion Ready census failed closed");
                 self.close_output_for_restart();
                 ProductionLifecycleCompletionSelectionV1::RestartRequired
             }
@@ -1094,7 +1110,11 @@ impl LaunchedProductionLifecycleV1 {
 
         let terminal_subject = match self.executor.lifecycle_terminal_subject() {
             Ok(subject) => subject,
-            Err(_) => {
+            Err(error) => {
+                iroha_logger::error!(
+                    %error,
+                    "Sumeragi v2 ingress terminal-subject projection failed closed"
+                );
                 self.close_output_for_restart();
                 drop(runner);
                 return ProductionLifecycleIngressTurnV1::Selected(
@@ -1115,7 +1135,11 @@ impl LaunchedProductionLifecycleV1 {
         };
         let Some(cut) = (match cut {
             Ok(cut) => cut,
-            Err(_) => {
+            Err(error) => {
+                iroha_logger::error!(
+                    ?error,
+                    "Sumeragi v2 fair-ingress turn-cut capture failed closed"
+                );
                 self.close_output_for_restart();
                 drop(runner);
                 return ProductionLifecycleIngressTurnV1::Selected(
@@ -1422,6 +1446,7 @@ impl LaunchedProductionLifecycleV1 {
             && runner.context_id() == context.id()
     }
 
+    #[track_caller]
     fn close_output_for_restart(&self) {
         self.services
             .lifecycle_output_guard()
