@@ -1,4 +1,77 @@
 impl RuntimeEffectOwnership {
+    /// Rebind an exact duplicate CommitQC Apply under the live candidate owner.
+    ///
+    /// Candidate identity and both durable-Decision bindings must match before
+    /// this projection retains the sole physical Apply owner. Only the new
+    /// macro-step positions are copied; a different decision cannot cross the
+    /// boundary.
+    pub(crate) fn adopt_incumbent_apply_for_exact_retry(
+        &self,
+        incoming: &Self,
+        effect: &AdapterEffect,
+    ) -> Result<Self, String> {
+        let AdapterEffect::Apply {
+            subject,
+            certificate,
+            ..
+        } = effect
+        else {
+            return Err("Sumeragi v2 exact candidate retry was not Apply".to_owned());
+        };
+        if !self.validate_bound_exact()
+            || !incoming.validate_bound_exact()
+            || !incoming.exactly_binds_adapter_effect(effect)
+            || self.candidate_semantic_identity().is_none()
+            || self.candidate_semantic_identity() != incoming.candidate_semantic_identity()
+            || !self.binds_durable_decision_authority(
+                certificate.round,
+                certificate.proposal_round,
+                *subject,
+                certificate.execution_commitment,
+            )
+            || !incoming.binds_durable_decision_authority(
+                certificate.round,
+                certificate.proposal_round,
+                *subject,
+                certificate.execution_commitment,
+            )
+        {
+            return Err(
+                "Sumeragi v2 exact Apply retry changed its durable decision".to_owned(),
+            );
+        }
+        let incoming_binding = incoming
+            .binding
+            .as_ref()
+            .expect("validated bound ownership has one positional binding");
+        let candidate = production_adapter_effect_candidate_binding(
+            effect,
+            self.candidate_semantic_statement().as_ref(),
+        )?
+        .ok_or_else(|| "Sumeragi v2 Apply retry lost its candidate binding".to_owned())?;
+        let ownership = match self.causality {
+            RuntimeEffectCausality::Inherit => RuntimeEffectOwnership::inherited(self.owner.clone()),
+            RuntimeEffectCausality::Fresh(kind) => {
+                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
+            }
+        };
+        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
+            .then(|| ownership.owner.clone());
+        ownership
+            .bind_runtime_effect(
+                parent.as_ref(),
+                production_adapter_effect_kind(effect),
+                &production_adapter_effect_semantic_identity(effect),
+                Some(&candidate),
+                incoming_binding.effect_position,
+                incoming_binding.effect_count,
+                incoming_binding.candidate_position,
+                incoming_binding.candidate_count,
+            )
+            .map_err(|_| {
+                "Sumeragi v2 exact Apply retry could not retain its incumbent owner".to_owned()
+            })
+    }
     /// Replace the positional binding while retaining the same lifecycle root.
     /// This is used only when one completed local async stage atomically creates
     /// its next exact stage without returning through the serialized reducer.

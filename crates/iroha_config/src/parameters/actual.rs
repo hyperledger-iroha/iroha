@@ -79,6 +79,8 @@ use std::{
     str::FromStr,
     time::Duration,
 };
+#[path = "actual_soranet_handshake_debug.rs"]
+mod actual_soranet_handshake_debug;
 #[path = "actual_sorafs_reputation.rs"]
 mod sorafs_reputation;
 use crate::{
@@ -1259,6 +1261,13 @@ pub struct SoranetPow {
     pub min_ticket_ttl: Duration,
     /// Target lifetime used when minting tickets locally.
     pub ticket_ttl: Duration,
+    /// Maximum concurrent local Argon2 ticket mints.
+    pub outbound_mint_capacity: NonZeroUsize,
+    /// Maximum concurrent remote Argon2 ticket verifications.
+    ///
+    /// At most `(outbound_mint_capacity + inbound_verify_capacity) * memory_kib`
+    /// KiB is owned by active puzzle jobs in a production process.
+    pub inbound_verify_capacity: NonZeroUsize,
     /// Maximum revoked ticket entries to retain on disk.
     pub revocation_store_capacity: usize,
     /// Maximum TTL enforced for revoked entries.
@@ -1304,6 +1313,8 @@ impl Default for SoranetPuzzle {
     }
 }
 impl SoranetPow {
+    /// Hard ceiling for either direction's puzzle-work capacity.
+    pub const MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION: usize = 8;
     /// Construct a PoW policy with explicit parameters.
     #[allow(clippy::too_many_arguments)]
     pub const fn new(
@@ -1323,6 +1334,8 @@ impl SoranetPow {
             max_future_skew,
             min_ticket_ttl,
             ticket_ttl,
+            outbound_mint_capacity: NonZeroUsize::new(1).unwrap(),
+            inbound_verify_capacity: NonZeroUsize::new(1).unwrap(),
             revocation_store_capacity,
             revocation_max_ttl,
             revocation_store_path,
@@ -1337,7 +1350,9 @@ impl SoranetPow {
             difficulty: iroha_crypto::soranet::puzzle::DEFAULT_DIFFICULTY,
             max_future_skew: Duration::from_secs(300),
             min_ticket_ttl: Duration::from_secs(30),
-            ticket_ttl: Duration::from_secs(60),
+            ticket_ttl: Duration::from_secs(300),
+            outbound_mint_capacity: NonZeroUsize::new(1).unwrap(),
+            inbound_verify_capacity: NonZeroUsize::new(1).unwrap(),
             revocation_store_capacity: 8_192,
             revocation_max_ttl: Duration::from_secs(900),
             revocation_store_path: Cow::Borrowed("./storage/soranet/ticket_revocations.norito"),
@@ -1355,65 +1370,6 @@ impl SoranetPow {
 impl Default for SoranetPow {
     fn default() -> Self {
         Self::default_const()
-    }
-}
-struct HexWithOrigin<'a>(&'a WithOrigin<Vec<u8>>);
-impl fmt::Debug for HexWithOrigin<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WithOrigin")
-            .field("value_hex", &hex::encode(self.0.value()))
-            .field("origin", self.0.origin())
-            .finish()
-    }
-}
-impl fmt::Debug for SoranetHandshake {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let signed_ticket_key = self.pow.signed_ticket_public_key.as_ref().map_or_else(
-            || "None".to_string(),
-            |key| format!("Some(len={})", key.len()),
-        );
-        f.debug_struct("SoranetHandshake")
-            .field("descriptor_commit", &HexWithOrigin(&self.descriptor_commit))
-            .field(
-                "client_capabilities",
-                &HexWithOrigin(&self.client_capabilities),
-            )
-            .field(
-                "relay_capabilities",
-                &HexWithOrigin(&self.relay_capabilities),
-            )
-            .field("trust_gossip", &self.trust_gossip)
-            .field("kem_id", &self.kem_id)
-            .field("sig_id", &self.sig_id)
-            .field("resume_hash", &self.resume_hash.as_ref().map(HexWithOrigin))
-            .field(
-                "pow",
-                &format_args!(
-                "SoranetPow {{ required: {}, difficulty: {}, max_future_skew_secs: {}, min_ticket_ttl_secs: {}, ticket_ttl_secs: {}, revocation_store_capacity: {}, revocation_max_ttl_secs: {}, revocation_store_path: {}, puzzle: {}, signed_ticket_public_key: {} }}",
-                self.pow.required,
-                self.pow.difficulty,
-                self.pow.max_future_skew.as_secs(),
-                    self.pow.min_ticket_ttl.as_secs(),
-                    self.pow.ticket_ttl.as_secs(),
-                    self.pow.revocation_store_capacity,
-                    self.pow.revocation_max_ttl.as_secs(),
-                    self.pow.revocation_store_path,
-                    self.pow
-                        .puzzle
-                        .as_ref()
-                        .map_or_else(
-                            || "None".to_string(),
-                            |puzzle| format!(
-                            "Some {{ memory_kib: {}, time_cost: {}, lanes: {} }}",
-                            puzzle.memory_kib.get(),
-                            puzzle.time_cost.get(),
-                            puzzle.lanes.get()
-                        ),
-                        ),
-                    signed_ticket_key,
-                ),
-            )
-            .finish()
     }
 }
 impl Default for SoranetHandshake {

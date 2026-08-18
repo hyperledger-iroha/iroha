@@ -16,10 +16,19 @@ impl<'a> SnapshotJsonField<'a> {
             #[cfg(test)]
             Self::Owned(value) => json::value::from_value(value),
             Self::Borrowed(raw) => {
-                let value = json::from_str::<T>(raw)?;
+                let value = json::from_str::<T>(raw).map_err(|error| {
+                    json::Error::InvalidField {
+                        field: field.to_owned(),
+                        message: error.to_string(),
+                    }
+                })?;
                 // TODO: Teach Norito JSON serialization to target a comparison sink so
                 // canonical verification does not need one field-sized temporary String.
-                let canonical = json::to_json(&value)?;
+                let canonical =
+                    json::to_json(&value).map_err(|error| json::Error::InvalidField {
+                        field: field.to_owned(),
+                        message: error.to_string(),
+                    })?;
                 if canonical.as_bytes() != raw.as_bytes() {
                     return Err(json::Error::InvalidField {
                         field: field.to_owned(),
@@ -1394,7 +1403,23 @@ fn take_topology_cell(
     map: &mut SnapshotJsonMap<'_>,
     key: &str,
 ) -> Result<Cell<Vec<PeerId>>, json::Error> {
-    take_required(map, key)
+    let value = map
+        .remove(key)
+        .ok_or_else(|| json::Error::missing_field(key))?;
+    match value {
+        SnapshotJsonField::Borrowed(raw) if raw.as_bytes().first() == Some(&b'[') => {
+            SnapshotJsonField::Borrowed(raw)
+                .decode_canonical(key)
+                .map(Cell::new)
+        }
+        #[cfg(test)]
+        SnapshotJsonField::Owned(json::Value::Array(values)) => {
+            SnapshotJsonField::Owned(json::Value::Array(values))
+                .decode_canonical(key)
+                .map(Cell::new)
+        }
+        other => other.decode_canonical(key),
+    }
 }
 fn reject_legacy_musubi_state(
     smart_contract_state: &Storage<StatePath, Vec<u8>>,

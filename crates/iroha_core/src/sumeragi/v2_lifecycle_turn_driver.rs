@@ -1417,7 +1417,7 @@ mod ordinary_ingress_token_tests {
     #[test]
     fn armed_token_closes_output_before_releasing_dequeued_carrier_and_serve_result() {
         let peer = PeerId::from(KeyPair::random().public_key().clone());
-        let ingress = Arc::new(FairV2Ingress::new(4, 1024 * 1024, 512 * 1024, 0, 0));
+        let ingress = Arc::new(FairV2Ingress::new(7, 1024 * 1024, 512 * 1024, 0, 0));
         ingress
             .configure_roster([peer.clone()])
             .expect("configure one exact validator lane");

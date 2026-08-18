@@ -1109,7 +1109,10 @@ forbidden|prefix|producer_debts:|registry acquired forbidden scheduler authority
 forbidden|prefix|fn plan(|registry acquired forbidden scheduler authority: {forbidden}
 forbidden|prefix|fn settle_turn(|registry acquired forbidden scheduler authority: {forbidden}
 forbidden|prefix|reserve_one|registry acquired forbidden scheduler authority: {forbidden}
-count|coordinator|work_registry::|5|only the narrow opaque registry authority types may cross the module boundary
+count|coordinator|work_registry::|6|only the six reviewed opaque registry authority import groups may cross the module boundary
+required|coordinator|LiveValidateSignRegistryReservation|coordinator registry imports lost the opaque live Validate reservation
+required|coordinator|LiveValidateSignWorkProjectionPermit|coordinator registry imports lost the sealed live Validate projection permit
+required|coordinator|PreparedLiveValidateSignRegistryWork|coordinator registry imports lost the prepared live Validate work carrier
 required|export|PreparedReadyDurableValidateExecution|coordinator registry export lost Ready Validate execution
 required|export|ReadyDurableValidateOutcomeKind|coordinator registry export lost Ready Validate outcome
 required|export|ReadyValidatedAdapterAuthority|coordinator registry export lost validated adapter authority
@@ -1263,7 +1266,7 @@ region|common_work|registry|after|impl ConcreteLifecycleWork {|before|pub(super)
 region|live_sign_work|registry|after|pub(in crate::sumeragi) struct PreparedLiveValidateSignRegistryWork {|before|/// Closed pre-mutation failure inventory for certified-Fetch conversion.
 region|preparation|registry_recovery_impl|after|pub(super) fn prepare_durable_validate_execution(|before|pub(super) fn classify_ready_validate_carrier(
 region|execution_impl|registry_recovery|after|impl<'a> PreparedDurableValidateExecution<'a>|before|impl<'a> PreparedValidatedBodyCompletion<'a>
-region|completion|registry_recovery|after|pub(super) struct PreparedValidatedBodyCompletion<'a>|before|/// Closed live-WAL replay preflight retained until future exact admission.
+region|completion|registry_recovery|after|pub(super) struct PreparedValidatedBodyCompletion<'a>|before|pub(super) struct PreparedLiveWalReplayPreAdmission<'a>
 region|completion_impl|registry_recovery|after|impl<'a> PreparedValidatedBodyCompletion<'a>|end|-
 region|validate_successor|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'a>|before|pub(super) struct PreparedCertifiedFetchStoreSuccessor<'a>
 region|callers|selector|begin|-|end|-
@@ -1291,9 +1294,11 @@ forbidden|validation|fn new(|durable Validate carrier acquired a raw authority s
 forbidden|validation|for_test|durable Validate carrier acquired a raw authority seam: {forbidden}
 forbidden|validation|derive(Clone|durable Validate carrier acquired a raw authority seam: {forbidden}
 forbidden|validation|fn commit(|durable Validate carrier acquired a raw authority seam: {forbidden}
-count|common_work|ConcreteLifecycleWorkKind::DurableValidateBody|5|Validate carrier must remain exhaustive in validation, address, effect, pending, and generic-adapter rejection paths
-count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalSign|5|recovered Sign must remain exhaustive in validation, address, causal-root, effect-borrow, and generic-adapter rejection paths
-count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch|5|recovered Decision Fetch must remain exhaustive in validation, address, causal-root, effect-borrow, and generic-adapter rejection paths
+count|common_work|ConcreteLifecycleWorkKind::DurableValidateBody|4|Validate carrier must remain exhaustive in validation, address, causal-root, and effect-borrow paths
+count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalSign|4|recovered Sign must remain exhaustive in validation, address, causal-root, and effect-borrow paths
+count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch|4|recovered Decision Fetch must remain exhaustive in validation, address, causal-root, and typed-effect rejection paths
+required|common_work|let ConcreteLifecycleWorkKind::PendingAdapter {|generic adapter recovery must reject every closed carrier through exhaustive destructuring
+required|common_work|closed lifecycle work requires its future typed consumer|generic adapter recovery lost its fail-stop rejection for closed carriers
 required|production|pub(super) struct ConcreteLifecycleWork {|concrete lifecycle work lost its registry-private declaration
 forbidden|production|pub(in crate::sumeragi) struct ConcreteLifecycleWork {|concrete lifecycle work escaped registry-private visibility
 required|live_sign_work|work: ConcreteLifecycleWork|opaque live Sign work omitted {required}
@@ -2309,6 +2314,7 @@ count|ledger_production|.persist_exact_successor(|6|the same staged transaction 
 end
 case|production_scheduler_factory_has_no_raw_rank_mint
 region|scheduler|scheduler_inputs|begin|-|end|-
+region|scheduler_production|scheduler_inputs|after|pub(crate) struct AuthenticatedSchedulerInputsFactory {|before|\n#[cfg(test)]\n#[allow(dead_code)]
 region|schema|schema|begin|-|end|-
 region|registry|registry|begin|-|end|-
 region|concrete|concrete_admission|begin|-|end|-
@@ -2326,7 +2332,7 @@ count|scheduler|SchedulerReadyInputs::from_authenticated_waiting_fetch(|1|authen
 count|schema|pub(super) fn from_authenticated_waiting_fetch(|1|schema waiting-Fetch constructor count drifted
 count|selector|pub(super) fn matches_waiting_record(|1|selector waiting-record oracle count drifted
 count|scheduler|SchedulerInputs::from_authenticated(|1|authenticated scheduler-input factory count drifted
-count|scheduler|AuthenticatedSchedulerInputsFactory::new()|9|authenticated scheduler factory mint count drifted
+count|scheduler_production|AuthenticatedSchedulerInputsFactory::new()|9|authenticated production scheduler factory mint count drifted
 required|schema|_factory: &AuthenticatedSchedulerInputsFactory|schema lost borrowed authenticated scheduler factory
 required|schema|_factory: AuthenticatedSchedulerInputsFactory|schema lost owned authenticated scheduler factory
 required|schema|/// Construct one test row without exposing a production rank mint.\n    #[cfg(test)]\n    pub(super) fn new(|raw scheduler row constructor escaped its test gate

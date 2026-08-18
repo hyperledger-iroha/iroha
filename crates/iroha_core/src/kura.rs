@@ -7712,8 +7712,16 @@ impl Kura {
             || u64::try_from(bytes.len())? != metadata.file.len()
             || !Self::sidecar_file_metadata_unchanged(&metadata.file, &opened_after)
             || !path_after.as_ref().is_some_and(|after| {
-                Self::stable_sidecar_metadata_unchanged(&metadata, after)
-                    && Self::sidecar_metadata_same_object(&directory_before, &after.directory)
+                metadata.canonical_path == after.canonical_path
+                    && Self::sidecar_file_metadata_unchanged(&metadata.file, &after.file)
+                    && Self::sidecar_directory_binding_unchanged(
+                        &metadata.directory,
+                        &after.directory,
+                    )
+                    && Self::sidecar_directory_binding_unchanged(
+                        &directory_before,
+                        &after.directory,
+                    )
             })
         {
             return Err(Error::IO(
@@ -42779,6 +42787,29 @@ pub(crate) mod tests {
                 .expect("inspect grown sidecar")
                 .len(),
             9
+        );
+    }
+
+    #[test]
+    fn stable_bounded_sidecar_read_tolerates_sibling_publication() {
+        let root = tempfile::tempdir().expect("create bounded-read root");
+        let path = root.path().join("bounded.norito");
+        let bytes = [7_u8; 8];
+        std::fs::write(&path, bytes).expect("write admitted sidecar");
+        let sibling = root.path().join("concurrent-sibling.norito");
+        let read = super::Kura::read_regular_sidecar_snapshot_for_with_admission_hook(
+            root.path(),
+            &path,
+            root.path(),
+            bytes.len(),
+            || std::fs::write(&sibling, [9_u8; 4]).expect("publish sibling sidecar"),
+        )
+        .expect("sibling publication must not invalidate the bounded target read")
+        .expect("bounded target remains present");
+        assert_eq!(read.bytes, bytes);
+        assert_eq!(
+            std::fs::read(&sibling).expect("read published sibling"),
+            [9_u8; 4]
         );
     }
     // Textual includes preserve every test in the existing `kura::tests` namespace.

@@ -65,10 +65,10 @@ mod recovery_tests {
             execution_policy_hash: Hash::new(b"storage-only recovery execution policy"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 1_048_576,
+                chunk_size_bytes: wire::MAX_DA_CHUNK_SIZE_BYTES,
                 data_shards: 1,
                 parity_shards: 1,
-                max_payload_size_bytes: 1_048_576,
+                max_payload_size_bytes: u64::from(wire::MAX_DA_CHUNK_SIZE_BYTES),
                 max_chunk_count: 2,
             },
             leader_seed: [0xC5; 32],
@@ -865,7 +865,6 @@ mod recovery_tests {
             stage_kind,
             u8::try_from(ordinal).expect("small classifier view"),
         );
-        assert_eq!(replay.work_class, work_class);
         let causal_root = CausalRoot::new(LifecycleDigest::new(
             [u8::try_from(ordinal).expect("small classifier marker"); 32],
         ));
@@ -873,7 +872,7 @@ mod recovery_tests {
             replay.key,
             OwnerId::new(causal_root, ordinal),
             ordinal,
-            work_class,
+            replay.work_class,
             replay.stage,
             terminal,
             causal_root.digest(),
@@ -882,6 +881,7 @@ mod recovery_tests {
             continuation,
         )
         .expect("construct classifier-only durable record")
+        .with_work_class_for_test(work_class)
     }
     fn ordinary_stage_inventory() -> [(LifecycleWorkClass, LifecycleStageKind); 20] {
         [
@@ -1070,7 +1070,9 @@ mod recovery_tests {
         assert_eq!(ordinal, 7);
         assert_eq!(stage.kind(), LifecycleStageKind::ValidateBody);
     }
-    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(storage_only_assembler_source_is_sealed_and_exhaustive);
+    crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+        storage_only_assembler_source_is_sealed_and_exhaustive
+    );
     fn terminal_validate_no_successor_ledger()
     -> (LifecycleLedgerV1, AuthenticatedValidateNoSuccessorRecovery) {
         let context = LifecycleContext::new(LifecycleDigest::new([0x81; 32]), 9);

@@ -992,6 +992,12 @@ impl LifecycleLedgerRecordV1 {
             continuation,
         )
     }
+    /// Corrupt only the persisted work-class code for a storage-classifier test.
+    #[cfg(test)]
+    pub(super) fn with_work_class_for_test(mut self, work_class: LifecycleWorkClass) -> Self {
+        self.work_class_code = work_class_code(work_class);
+        self
+    }
     /// Decode the stable semantic key.
     pub(super) fn key(&self) -> Option<LifecycleKey> {
         self.key.to_schema()

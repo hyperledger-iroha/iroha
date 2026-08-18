@@ -646,6 +646,99 @@ fn terminal_ignored_ingress_is_recorded_before_duplicate_coalescing() {
     );
     assert!(admission.is_none());
 }
+
+#[test]
+fn future_view_proposal_waits_for_matching_timeout_certificate() {
+    let directory = TempDir::new().expect("temporary future-view proposal directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let current_round = wire::ConsensusRound {
+        context_id: adapter.wire_context.id(),
+        height: adapter.wire_context.height,
+        view: 0,
+    };
+    let timeout_certificate = wire::TimeoutCertificate {
+        round: current_round,
+        groups: vec![wire::TimeoutVoteGroup {
+            highest_prepare_qc: None,
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0xD4; 96],
+        }],
+    };
+    let proposal_round = wire::ConsensusRound {
+        view: current_round.view + 1,
+        ..current_round
+    };
+    let proposal_body = b"future-view-proposal";
+    let mut proposal_subject = subject(0xD4);
+    proposal_subject.payload_hash = Hash::new(proposal_body);
+    let proposal_manifest = encode_payload(
+        &adapter.wire_context,
+        proposal_round,
+        proposal_subject,
+        proposal_body,
+    )
+    .expect("encode future-view proposal payload")
+    .manifest()
+    .clone();
+    let future_proposal = wire::ConsensusMessageV2Payload::Proposal(wire::Proposal {
+        round: proposal_round,
+        proposer: adapter.wire_context.leader(proposal_round.view),
+        subject: proposal_subject,
+        manifest: proposal_manifest,
+        justification: wire::ProposalJustification::Timeout(wire::TimeoutJustification {
+            timeout_certificate: timeout_certificate.clone(),
+            highest_prepare_qc: None,
+        }),
+        signature: vec![0xD4; 96],
+    });
+
+    let (early, admission) = adapter
+        .admit_authenticated_payload(&future_proposal)
+        .expect("classify an authenticated proposal before its TC");
+    let early = early.expect("the future-view proposal waits without semantic admission");
+    assert_eq!(
+        early.disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+    );
+    assert!(early.requires_runtime_retry());
+    assert!(admission.is_none());
+    assert!(adapter.ingress_equivocations.is_empty());
+    assert!(adapter.ingress_deliveries.is_empty());
+
+    let enter_view = adapter
+        .receive_verified(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
+        ))
+        .expect("install the proposal's matching timeout certificate");
+    assert!(enter_view.effects().iter().any(|effect| matches!(
+        effect,
+        AdapterEffect::EnterView { tag, .. } if tag.view() == proposal_round.view
+    )));
+    assert_eq!(adapter.current_tag().view(), proposal_round.view);
+
+    let (ready, admission) = adapter
+        .admit_authenticated_payload(&future_proposal)
+        .expect("readmit the retained proposal after entering its view");
+    assert!(ready.is_none());
+    assert!(admission.is_some());
+
+    let old_proposal = proposal(
+        &adapter.wire_context,
+        adapter.wire_context.leader(0),
+        subject(0xD5),
+    );
+    let (old, admission) = adapter
+        .admit_authenticated_payload(&old_proposal.payload)
+        .expect("classify an obsolete proposal");
+    assert_eq!(
+        old.expect("the old-view proposal is terminally irrelevant")
+            .disposition(),
+        reducer::StepDisposition::Ignored(reducer::IgnoreReason::IrrelevantView)
+    );
+    assert!(admission.is_none());
+}
+
 #[test]
 fn deferred_zero_ordinal_is_exact_single_use_and_never_reminted() {
     let source = DeferredAdmissionOrdinalSource::new(0);

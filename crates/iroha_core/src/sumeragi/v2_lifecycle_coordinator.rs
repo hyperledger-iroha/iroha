@@ -70,12 +70,9 @@ mod work_registry;
 use authority::AuthenticatedEpisodeAuthority;
 #[cfg(test)]
 pub(crate) use authority::RolloverSnapshot;
+use body_pipeline_transition::durable_validate_payload_is_exact;
 pub(in crate::sumeragi) use body_pipeline_transition::{
     SealedInvalidBodyReportProjectionPermit, SealedValidateSignProjectionPermit,
-};
-use body_pipeline_transition::{
-    durable_continuation_payload_is_exact, durable_continuation_successor_is_exact,
-    durable_validate_payload_is_exact,
 };
 pub(crate) use concrete_admission::LifecycleWorkRegistryHolder;
 #[cfg(test)]
@@ -117,7 +114,6 @@ pub(in crate::sumeragi) use ledger::{
     LaunchedRecoveredCompleteTipSuccessorLifecycleV1, LifecycleLedgerV1,
     RetiredRecoveredCompleteTipActivationAuthorityV1, open_complete_tip_predecessor_storage,
 };
-use replay_authority::recovered_decision_body_continuation_is_exact;
 #[cfg(all(test, feature = "bls"))]
 /// Run the two release-bound CompleteTip disk-retirement regressions.
 pub(crate) fn run_complete_tip_retirement_release_regressions() {
@@ -236,8 +232,8 @@ pub(crate) use schema::{
 use schema::{
     CapacityAdmissionWait, CapacityGeometry, DurableContinuation, DurablePayloadReference,
     DurableRecordMetadata, DurableServeNegativeOutcome, LeaseCapacityReservation,
-    MAX_PHYSICAL_SLOTS_PER_RECORD, RecoveredLifecycleRecord, RecoverySnapshot, SchedulerEpisode,
-    SchedulerReadyInputs, first_capacity_wait, frozen_predecessors, has_lifecycle_record_capacity,
+    RecoveredLifecycleRecord, RecoverySnapshot, SchedulerEpisode, SchedulerReadyInputs,
+    first_capacity_wait, frozen_predecessors, has_lifecycle_record_capacity,
     lower_enter_view_ordinals, serve_and_producer_keys_match,
 };
 #[cfg(test)]
@@ -530,7 +526,29 @@ impl LifecycleCoordinator {
         {
             return AdmissionDecision::Rejected(AdmissionRejection::ForeignContext);
         }
+        let pending_wait = self.admission_waits.get(&candidate.key).cloned();
+        let mut pending_unlocked = false;
+        if let Some(waiting) = pending_wait.as_ref() {
+            if waiting.candidate.causal_root != candidate.causal_root {
+                return AdmissionDecision::Rejected(AdmissionRejection::ForeignOwner);
+            }
+            let WaitSource::Capacity(class) = waiting.wait_token.source else {
+                unreachable!("admission waits are capacity-fenced")
+            };
+            pending_unlocked =
+                self.capacity_generation[&class] > waiting.wait_token.observed_generation;
+            if pending_unlocked {
+                // Once the named generation advances, the old fence cannot
+                // survive a changed, superseded, or otherwise invalid retry.
+                self.admission_waits.remove(&candidate.key);
+            }
+        }
         if !candidate.replay_authority_is_exact(self.active_context) {
+            return AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata);
+        }
+        if candidate.work_class == LifecycleWorkClass::CertifiedServe
+            && candidate.reconstruction_source != candidate.causal_root.digest()
+        {
             return AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata);
         }
         if let Some(ordinal) = self.key_index.get(&candidate.key).copied() {
@@ -582,23 +600,6 @@ impl LifecycleCoordinator {
                     }
                 }
             };
-        }
-        let pending_wait = self.admission_waits.get(&candidate.key).cloned();
-        let mut pending_unlocked = false;
-        if let Some(waiting) = pending_wait.as_ref() {
-            if waiting.candidate.causal_root != candidate.causal_root {
-                return AdmissionDecision::Rejected(AdmissionRejection::ForeignOwner);
-            }
-            let WaitSource::Capacity(class) = waiting.wait_token.source else {
-                unreachable!("admission waits are capacity-fenced")
-            };
-            pending_unlocked =
-                self.capacity_generation[&class] > waiting.wait_token.observed_generation;
-            if pending_unlocked {
-                // Once the named generation advances, the old fence cannot
-                // survive a changed, superseded, or otherwise invalid retry.
-                self.admission_waits.remove(&candidate.key);
-            }
         }
         if let Some(conflict) = self.admission_waits.values().find(|waiting| {
             waiting
@@ -1209,334 +1210,7 @@ impl LifecycleCoordinator {
     }
     /// Rebuild records after seeding the ordinal high-water mark.
     fn reconcile_restart(&mut self, snapshot: RecoverySnapshot) {
-        let pristine = self.fault.is_none()
-            && self.ledger_store.is_none()
-            && self.active_lease.is_none()
-            && self.records.is_empty()
-            && self.key_index.is_empty()
-            && self.owner_index.is_empty()
-            && self.ready_index.is_empty()
-            && self.admission_waits.is_empty()
-            && self.durable_records.is_empty()
-            && self.producer_debts.is_empty()
-            && self.observed_generation.is_empty()
-            && self.capacity_used.values().all(|used| *used == 0)
-            && self.high_water == snapshot.high_water;
-        if !pristine {
-            if self.fault.is_none() {
-                self.fault = Some(CoordinatorFault::RecoveryRejected);
-            }
-            return;
-        }
-        let mut rebuilt = Self::new_with_authority(self.episode_authority.clone(), self.high_water);
-        let mut rejected = snapshot.context != self.active_context
-            || !has_lifecycle_record_capacity(0, snapshot.records.len());
-        for recovered in snapshot.records {
-            rejected |= recovered.key.context != snapshot.context.id
-                || recovered.key.round.height != snapshot.context.height
-                || recovered
-                    .key
-                    .proposal_round
-                    .is_some_and(|round| round.height != snapshot.context.height)
-                || recovered.ordinal == 0
-                || recovered.ordinal > snapshot.high_water
-                || recovered.owner.first_admission_ordinal == 0
-                || recovered.owner.first_admission_ordinal > recovered.ordinal
-                || !recovered
-                    .work_class
-                    .accepts_stage(recovered.key.phase, recovered.stage)
-                || !recovered
-                    .payload
-                    .matches_terminal(recovered.work_class, recovered.terminal)
-                || !recovered.replay_authority_is_exact(snapshot.context)
-                || (recovered.work_class == LifecycleWorkClass::CertifiedServe
-                    && recovered.key.subject.is_none())
-                || rebuilt.key_index.contains_key(&recovered.key)
-                || rebuilt.records.contains_key(&recovered.ordinal)
-                || recovered.physical_slot_universe.len() > MAX_PHYSICAL_SLOTS_PER_RECORD
-                || !rebuilt.episode_authority.admits_slots(
-                    recovered.work_class.capacity_class(),
-                    &recovered.physical_slot_universe,
-                );
-            let episode_universe = rebuilt.episode_authority.universe_for(recovered.key);
-            rejected |= episode_universe.is_none();
-            if rejected {
-                break;
-            }
-            if let Some(known) = rebuilt.owner_index.get(&recovered.owner.causal_root) {
-                rejected |= *known != recovered.owner;
-            } else {
-                rebuilt
-                    .owner_index
-                    .insert(recovered.owner.causal_root, recovered.owner);
-            }
-            let state = if let Some(outcome) = recovered.terminal {
-                LifecycleState::Terminal(outcome)
-            } else if recovered.work_class == LifecycleWorkClass::ProducerTurn {
-                let serve_ordinal = snapshot
-                    .producer_debts
-                    .iter()
-                    .find_map(|(serve, producer)| {
-                        (*producer == recovered.ordinal).then_some(*serve)
-                    });
-                let Some(serve_ordinal) = serve_ordinal else {
-                    rejected = true;
-                    break;
-                };
-                LifecycleState::Waiting(WaitToken::new(WaitSource::ProducerTurn(serve_ordinal), 0))
-            } else {
-                LifecycleState::Waiting(WaitToken::new(
-                    WaitSource::Recovery(recovered.reconstruction_source),
-                    0,
-                ))
-            };
-            if !matches!(state, LifecycleState::Terminal(_)) {
-                let class = recovered.work_class.capacity_class();
-                let delta = BTreeMap::from([(class, 1)]);
-                if rebuilt.first_capacity_wait(&delta).is_some() {
-                    rejected = true;
-                    break;
-                }
-                rebuilt.apply_capacity_delta(&delta);
-            }
-            rebuilt.durable_records.insert(
-                recovered.ordinal,
-                DurableRecordMetadata::from_recovered(&recovered),
-            );
-            rebuilt.insert_record(LifecycleRecord {
-                key: recovered.key,
-                owner: recovered.owner,
-                ordinal: recovered.ordinal,
-                work_class: recovered.work_class,
-                stage: recovered.stage,
-                state,
-                physical_slots: BTreeMap::new(),
-                episode: SchedulerEpisode {
-                    universe: episode_universe.expect("validated recovery universe exists"),
-                    slot_universe: recovered.physical_slot_universe,
-                    consumed_slots: BTreeSet::new(),
-                    frozen_predecessors: BTreeSet::new(),
-                },
-            });
-        }
-        let recovered_nonterminal: BTreeSet<_> = rebuilt
-            .records
-            .iter()
-            .filter_map(|(ordinal, record)| {
-                (!matches!(record.state, LifecycleState::Terminal(_))).then_some(*ordinal)
-            })
-            .collect();
-        for record in rebuilt.records.values_mut() {
-            if !matches!(
-                record.stage.predecessor_scope,
-                PredecessorScope::Independent
-            ) {
-                record.episode.frozen_predecessors = recovered_nonterminal
-                    .range(..record.ordinal)
-                    .copied()
-                    .collect();
-            }
-        }
-        rebuilt.producer_debts = snapshot.producer_debts;
-        let mut continuation_successors = BTreeSet::new();
-        rejected |= rebuilt.records.values().any(|record| {
-            let metadata = &rebuilt.durable_records[&record.ordinal];
-            let terminal = match record.state {
-                LifecycleState::Terminal(outcome) => Some(outcome),
-                LifecycleState::Waiting(_) | LifecycleState::Ready | LifecycleState::Claimed(_) => {
-                    None
-                }
-            };
-            if record.work_class == LifecycleWorkClass::Validate
-                && !durable_validate_payload_is_exact(record.key, metadata.payload)
-            {
-                return true;
-            }
-            if !metadata.continuation.matches_record(
-                record.work_class,
-                terminal,
-                record.ordinal,
-                rebuilt.high_water,
-            ) {
-                return true;
-            }
-            let Some((edge, successor)) = metadata.continuation.successor_parts() else {
-                return metadata.continuation == DurableContinuation::AdvancedNoSuccessor
-                    && (metadata.reconstruction_source != record.owner.causal_root().digest()
-                        || !durable_validate_payload_is_exact(record.key, metadata.payload));
-            };
-            metadata.reconstruction_source != record.owner.causal_root().digest()
-                || !continuation_successors.insert(successor)
-                || rebuilt.records.get(&successor).is_none_or(|child| {
-                    let child_metadata = &rebuilt.durable_records[&successor];
-                    let payload_and_replay_are_exact =
-                        recovered_decision_body_continuation_is_exact(
-                            edge,
-                            &metadata.replay_authority,
-                            metadata.payload,
-                            &child_metadata.replay_authority,
-                            child_metadata.payload,
-                        )
-                        .unwrap_or_else(|| {
-                            durable_continuation_payload_is_exact(
-                                edge,
-                                metadata.payload,
-                                child_metadata.payload,
-                            )
-                        });
-                    child.owner != record.owner
-                        || child_metadata.reconstruction_source != metadata.reconstruction_source
-                        || !payload_and_replay_are_exact
-                        || !durable_continuation_successor_is_exact(
-                            edge,
-                            record.work_class,
-                            record.key,
-                            record.stage,
-                            child.work_class,
-                            child.key,
-                            child.stage,
-                        )
-                })
-        });
-        rejected |= rebuilt.owner_index.values().any(|owner| {
-            rebuilt
-                .records
-                .get(&owner.first_admission_ordinal)
-                .is_none_or(|record| record.owner != *owner)
-        });
-        let unique_producers: BTreeSet<_> = rebuilt.producer_debts.values().copied().collect();
-        rejected |= unique_producers.len() != rebuilt.producer_debts.len();
-        rejected |= rebuilt.producer_debts.iter().any(|(serve, producer)| {
-            let (Some(serve_record), Some(producer_record)) =
-                (rebuilt.records.get(serve), rebuilt.records.get(producer))
-            else {
-                return true;
-            };
-            serve.checked_add(1) != Some(*producer)
-                || serve_record.work_class != LifecycleWorkClass::CertifiedServe
-                || serve_record.stage.kind != LifecycleStageKind::CertifiedServe
-                || producer_record.work_class != LifecycleWorkClass::ProducerTurn
-                || producer_record.stage.kind != LifecycleStageKind::ProducerTurn
-                || !serve_and_producer_keys_match(serve_record.key, producer_record.key)
-                || serve_record.owner != producer_record.owner
-                || rebuilt
-                    .durable_records
-                    .get(serve)
-                    .is_none_or(|serve_metadata| {
-                        rebuilt
-                            .durable_records
-                            .get(producer)
-                            .is_none_or(|producer_metadata| {
-                                producer_metadata.reconstruction_source
-                                    != serve_metadata.reconstruction_source
-                                    || !producer_metadata
-                                        .replay_authority
-                                        .same_persisted_family(&serve_metadata.replay_authority)
-                            })
-                    })
-                || matches!(producer_record.state, LifecycleState::Terminal(_))
-        });
-        rejected |= rebuilt
-            .records
-            .values()
-            .any(|record| match record.work_class {
-                LifecycleWorkClass::CertifiedServe => record
-                    .ordinal
-                    .checked_add(1)
-                    .and_then(|producer| rebuilt.records.get(&producer))
-                    .is_none_or(|producer| {
-                        producer.work_class != LifecycleWorkClass::ProducerTurn
-                            || producer.stage.kind != LifecycleStageKind::ProducerTurn
-                            || !serve_and_producer_keys_match(record.key, producer.key)
-                            || producer.owner != record.owner
-                            || rebuilt.durable_records[&producer.ordinal].reconstruction_source
-                                != rebuilt.durable_records[&record.ordinal].reconstruction_source
-                            || !rebuilt.durable_records[&producer.ordinal]
-                                .replay_authority
-                                .same_persisted_family(
-                                    &rebuilt.durable_records[&record.ordinal].replay_authority,
-                                )
-                            || (record.state
-                                == LifecycleState::Terminal(TerminalOutcome::Cancelled)
-                                && producer.state
-                                    != LifecycleState::Terminal(TerminalOutcome::Cancelled))
-                    }),
-                LifecycleWorkClass::ProducerTurn => record
-                    .ordinal
-                    .checked_sub(1)
-                    .and_then(|serve| rebuilt.records.get(&serve))
-                    .is_none_or(|serve| {
-                        serve.work_class != LifecycleWorkClass::CertifiedServe
-                            || serve.stage.kind != LifecycleStageKind::CertifiedServe
-                            || !serve_and_producer_keys_match(serve.key, record.key)
-                            || serve.owner != record.owner
-                            || rebuilt.durable_records[&serve.ordinal].reconstruction_source
-                                != rebuilt.durable_records[&record.ordinal].reconstruction_source
-                            || !rebuilt.durable_records[&serve.ordinal]
-                                .replay_authority
-                                .same_persisted_family(
-                                    &rebuilt.durable_records[&record.ordinal].replay_authority,
-                                )
-                    }),
-                _ => false,
-            });
-        rejected |= rebuilt.records.values().any(|record| {
-            let live = !matches!(record.state, LifecycleState::Terminal(_));
-            match record.work_class {
-                LifecycleWorkClass::CertifiedServe => {
-                    live && !rebuilt.producer_debts.contains_key(&record.ordinal)
-                }
-                LifecycleWorkClass::ProducerTurn => {
-                    let has_debt = rebuilt
-                        .producer_debts
-                        .values()
-                        .any(|producer| *producer == record.ordinal);
-                    has_debt != live
-                }
-                _ => false,
-            }
-        });
-        let debts: Vec<_> = rebuilt
-            .producer_debts
-            .iter()
-            .map(|(serve, producer)| (*serve, *producer))
-            .collect();
-        for (serve, producer) in debts {
-            if rejected
-                || rebuilt
-                    .records
-                    .get(&producer)
-                    .is_some_and(|record| matches!(record.state, LifecycleState::Terminal(_)))
-            {
-                rejected = true;
-                break;
-            }
-            match rebuilt.records[&serve].state {
-                LifecycleState::Terminal(TerminalOutcome::Cancelled) => {
-                    // Ledger snapshots persist Serve cancellation and producer
-                    // cancellation atomically, without an outstanding debt.
-                    rejected = true;
-                    break;
-                }
-                LifecycleState::Terminal(_) => rebuilt.make_ready(producer),
-                LifecycleState::Waiting(_) | LifecycleState::Ready | LifecycleState::Claimed(_) => {
-                }
-            }
-        }
-        if rejected {
-            rebuilt.records.clear();
-            rebuilt.key_index.clear();
-            rebuilt.owner_index.clear();
-            rebuilt.ready_index.clear();
-            rebuilt.durable_records.clear();
-            rebuilt.producer_debts.clear();
-            rebuilt
-                .capacity_used
-                .values_mut()
-                .for_each(|used| *used = 0);
-            rebuilt.fault = Some(CoordinatorFault::RecoveryRejected);
-        }
-        *self = rebuilt;
+        self.reconcile_restart_inner(snapshot);
     }
     fn retry_companion_matches(
         &self,
@@ -2047,13 +1721,7 @@ mod tests {
         let source = WaitSource::External(digest(14));
         let wait = WaitToken::new(source, 0);
         let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
-        admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
-            14,
-            LifecycleWorkClass::Fetch,
-            LifecyclePhase::Fetch,
-            InitialLifecycleState::Waiting(wait),
-            PredecessorScope::Independent,
-        ))));
+        admit_waiting_fetch(&mut coordinator, 14, wait, PredecessorScope::Independent);
         assert_eq!(coordinator.records[&1].state, LifecycleState::Waiting(wait));
         assert!(coordinator.ready_index.is_empty());
         let record = &coordinator.records[&1];
@@ -2402,7 +2070,7 @@ mod tests {
         let kind = stage_kind_for_phase(phase);
         let replay = super::replay_authority::exact_record_fixture(context(), kind, seed);
         assert_eq!((replay.work_class, replay.key.phase()), (work_class, phase));
-        CandidateAdmission::new(
+        let mut candidate = CandidateAdmission::new(
             replay.key,
             CausalRoot::new(digest(seed.wrapping_add(128))),
             work_class,
@@ -2413,7 +2081,11 @@ mod tests {
             replay.authority,
             geometry(seed, work_class.capacity_class()),
             None,
-        )
+        );
+        if work_class == LifecycleWorkClass::CertifiedServe {
+            candidate.causal_root = CausalRoot::new(candidate.reconstruction_source);
+        }
+        candidate
     }
     fn serve_candidate(seed: u8, initial_state: InitialLifecycleState) -> CandidateAdmission {
         let mut serve = candidate(
@@ -2423,6 +2095,7 @@ mod tests {
             initial_state,
             PredecessorScope::ReadyOrdinalPrefix,
         );
+        serve.causal_root = CausalRoot::new(serve.reconstruction_source);
         let replay = super::replay_authority::exact_record_fixture(
             context(),
             LifecycleStageKind::ProducerTurn,
@@ -2452,6 +2125,29 @@ mod tests {
             panic!("expected admission, found {decision:?}");
         };
         (owner, ordinal, producer_turn_ordinal)
+    }
+    fn admit_waiting_fetch(
+        coordinator: &mut LifecycleCoordinator,
+        seed: u8,
+        wait: WaitToken,
+        predecessor_scope: PredecessorScope,
+    ) -> (OwnerId, u128, Option<u128>) {
+        let admitted = admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+            seed,
+            LifecycleWorkClass::Fetch,
+            LifecyclePhase::Fetch,
+            InitialLifecycleState::Ready,
+            predecessor_scope,
+        ))));
+        let ordinal = admitted.1;
+        assert!(coordinator.ready_index.remove(&ordinal));
+        coordinator
+            .records
+            .get_mut(&ordinal)
+            .expect("Fetch record")
+            .state = LifecycleState::Waiting(wait);
+        coordinator.advance_observed_generation(wait.source, wait.observed_generation);
+        admitted
     }
     fn execute(plan: TurnPlan) -> TurnLease {
         let TurnPlan::Execute(lease) = plan else {
@@ -2523,21 +2219,27 @@ mod tests {
     ) {
         if lease.work_class == LifecycleWorkClass::CertifiedServe
             && let TurnOutcome::Terminal(terminal) = outcome
-            && let Some(producer_ordinal) = coordinator.producer_debts.get(&lease.ordinal).copied()
-            && let Some(replay) =
-                super::replay_authority::CertifiedServeTerminalReplayAuthorityPairV1::from_test_terminal_outcome(
-                    coordinator.active_context,
-                    &coordinator.records[&lease.ordinal],
-                    &coordinator.durable_records[&lease.ordinal],
-                    &coordinator.records[&producer_ordinal],
-                    &coordinator.durable_records[&producer_ordinal],
-                    terminal,
-                )
+            && let Some(replay) = test_serve_terminal_replay(coordinator, &lease, terminal)
         {
             coordinator.settle_turn_with_durable_serve_terminal(lease, replay);
         } else {
             coordinator.settle_turn(lease, outcome);
         }
+    }
+    fn test_serve_terminal_replay(
+        coordinator: &LifecycleCoordinator,
+        lease: &TurnLease,
+        terminal: TerminalOutcome,
+    ) -> Option<super::replay_authority::CertifiedServeTerminalReplayAuthorityPairV1> {
+        let producer_ordinal = coordinator.producer_debts.get(&lease.ordinal).copied()?;
+        super::replay_authority::CertifiedServeTerminalReplayAuthorityPairV1::from_test_terminal_outcome(
+            coordinator.active_context,
+            &coordinator.records[&lease.ordinal],
+            &coordinator.durable_records[&lease.ordinal],
+            &coordinator.records[&producer_ordinal],
+            &coordinator.durable_records[&producer_ordinal],
+            terminal,
+        )
     }
     fn scheduler_inputs(
         coordinator: &LifecycleCoordinator,
@@ -2757,7 +2459,7 @@ mod tests {
         *request = digest(255);
         assert_eq!(
             coordinator.admit(AdmissionRequest::Candidate(drifted_request)),
-            AdmissionDecision::Rejected(AdmissionRejection::SemanticDrift)
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata)
         );
         let mut drifted_producer = serve.clone();
         drifted_producer
@@ -2768,7 +2470,7 @@ mod tests {
             .subject = Some(digest(1));
         assert_eq!(
             coordinator.admit(AdmissionRequest::Candidate(drifted_producer)),
-            AdmissionDecision::Rejected(AdmissionRejection::SemanticDrift)
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata)
         );
         let mut missing_producer = serve;
         missing_producer.producer_turn = None;
@@ -2899,15 +2601,17 @@ mod tests {
             InitialLifecycleState::Ready,
             PredecessorScope::Independent,
         ))));
+        let mut wrong_broadcast_class = candidate(
+            125,
+            LifecycleWorkClass::SignVote,
+            LifecyclePhase::Commit,
+            InitialLifecycleState::Ready,
+            PredecessorScope::Independent,
+        );
+        wrong_broadcast_class.work_class = LifecycleWorkClass::Broadcast;
         assert_eq!(
-            coordinator.admit(AdmissionRequest::Candidate(candidate(
-                125,
-                LifecycleWorkClass::Broadcast,
-                LifecyclePhase::Commit,
-                InitialLifecycleState::Ready,
-                PredecessorScope::Independent,
-            ))),
-            AdmissionDecision::Rejected(AdmissionRejection::InvalidWorkShape)
+            coordinator.admit(AdmissionRequest::Candidate(wrong_broadcast_class)),
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata)
         );
         let mut wrong_execution_stage = candidate(
             126,
@@ -2919,7 +2623,7 @@ mod tests {
         wrong_execution_stage.stage.kind = LifecycleStageKind::StoreBody;
         assert_eq!(
             coordinator.admit(AdmissionRequest::Candidate(wrong_execution_stage)),
-            AdmissionDecision::Rejected(AdmissionRejection::InvalidWorkShape)
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata)
         );
     }
     #[test]
@@ -2930,8 +2634,8 @@ mod tests {
             coordinator.admit(AdmissionRequest::Candidate(capacity_matched(
                 candidate(
                     92,
-                    LifecycleWorkClass::SignProposal,
-                    LifecyclePhase::Proposal,
+                    LifecycleWorkClass::Apply,
+                    LifecyclePhase::Apply,
                     InitialLifecycleState::Ready,
                     PredecessorScope::Independent,
                 ),
@@ -2993,8 +2697,8 @@ mod tests {
             coordinator.admit(AdmissionRequest::Candidate(capacity_matched(
                 candidate(
                     92,
-                    LifecycleWorkClass::SignProposal,
-                    LifecyclePhase::Proposal,
+                    LifecycleWorkClass::Apply,
+                    LifecyclePhase::Apply,
                     InitialLifecycleState::Ready,
                     PredecessorScope::Independent,
                 ),
@@ -3005,8 +2709,8 @@ mod tests {
             coordinator.admit(AdmissionRequest::Candidate(capacity_matched(
                 candidate(
                     94,
-                    LifecycleWorkClass::SignProposal,
-                    LifecyclePhase::Proposal,
+                    LifecycleWorkClass::Apply,
+                    LifecyclePhase::Apply,
                     InitialLifecycleState::Ready,
                     PredecessorScope::Independent,
                 ),
@@ -3051,7 +2755,7 @@ mod tests {
         pending.stage.kind = LifecycleStageKind::CertifiedServe;
         assert_eq!(
             coordinator.admit(AdmissionRequest::Candidate(pending)),
-            AdmissionDecision::Rejected(AdmissionRejection::InvalidWorkShape)
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata)
         );
         assert!(coordinator.admission_waits.is_empty());
     }
@@ -3077,7 +2781,7 @@ mod tests {
             plan_turn(&mut coordinator, []),
             TurnPlan::Waiting(BTreeSet::from([wait]))
         );
-        let mut drifted = serve;
+        let mut drifted = serve.clone();
         drifted
             .producer_turn
             .as_mut()
@@ -3086,8 +2790,9 @@ mod tests {
             .subject = Some(digest(205));
         assert_eq!(
             coordinator.admit(AdmissionRequest::Candidate(drifted)),
-            AdmissionDecision::Rejected(AdmissionRejection::SemanticDrift)
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata)
         );
+        assert_eq!(coordinator.admission_waits[&serve.key].candidate, serve);
     }
     #[test]
     fn pending_serve_companion_key_is_exclusive_before_physical_refinement() {
@@ -3114,12 +2819,12 @@ mod tests {
         foreign.producer_turn.as_mut().expect("Serve companion").key = reserved_key;
         assert_eq!(
             coordinator.admit(AdmissionRequest::Candidate(foreign.clone())),
-            AdmissionDecision::Rejected(AdmissionRejection::ForeignOwner)
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata)
         );
         foreign.causal_root = first.causal_root;
         assert_eq!(
             coordinator.admit(AdmissionRequest::Candidate(foreign)),
-            AdmissionDecision::Rejected(AdmissionRejection::InvalidProducerTurn)
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata)
         );
         let mut colliding = candidate(
             104,
@@ -3131,7 +2836,7 @@ mod tests {
         colliding.key = reserved_key;
         assert_eq!(
             coordinator.admit(AdmissionRequest::Candidate(colliding)),
-            AdmissionDecision::Rejected(AdmissionRejection::ForeignOwner)
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata)
         );
         assert_eq!(coordinator.admission_waits.len(), 1);
     }
@@ -3164,7 +2869,7 @@ mod tests {
     }
     #[test]
     fn capacity_arithmetic_overflow_waits_instead_of_wrapping() {
-        let geometry = CapacityGeometry::new([(CapacityClass::Effect, usize::MAX)]);
+        let geometry = capacities(8);
         let mut coordinator = LifecycleCoordinator::new(context(), 0, geometry.clone());
         coordinator
             .capacity_used
@@ -3240,7 +2945,7 @@ mod tests {
         conflicting.key.subject = Some(digest(201));
         assert_eq!(
             coordinator.admit(AdmissionRequest::Candidate(conflicting)),
-            AdmissionDecision::Rejected(AdmissionRejection::EnterViewConflict)
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata)
         );
         let higher = candidate(
             2,
@@ -3291,8 +2996,8 @@ mod tests {
             coordinator.admit(AdmissionRequest::Candidate(capacity_matched(
                 candidate(
                     50,
-                    LifecycleWorkClass::SignProposal,
-                    LifecyclePhase::Proposal,
+                    LifecycleWorkClass::Broadcast,
+                    LifecyclePhase::BroadcastProposal,
                     InitialLifecycleState::Ready,
                     PredecessorScope::Independent,
                 ),
@@ -3354,13 +3059,7 @@ mod tests {
     fn waiting_records_do_not_block_ready_work_but_ready_prefixes_precede_serve() {
         let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
         let wait = WaitToken::new(WaitSource::External(digest(99)), 0);
-        admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
-            3,
-            LifecycleWorkClass::Fetch,
-            LifecyclePhase::Fetch,
-            InitialLifecycleState::Waiting(wait),
-            PredecessorScope::Independent,
-        ))));
+        admit_waiting_fetch(&mut coordinator, 3, wait, PredecessorScope::Independent);
         let (_, serve, producer) = admitted(coordinator.admit(AdmissionRequest::Candidate(
             serve_candidate(5, InitialLifecycleState::Ready),
         )));
@@ -3401,13 +3100,12 @@ mod tests {
     fn a_frozen_waiting_predecessor_blocks_only_after_it_becomes_ready() {
         let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
         let source = WaitSource::External(digest(98));
-        admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+        admit_waiting_fetch(
+            &mut coordinator,
             3,
-            LifecycleWorkClass::Fetch,
-            LifecyclePhase::Fetch,
-            InitialLifecycleState::Waiting(WaitToken::new(source, 0)),
+            WaitToken::new(source, 0),
             PredecessorScope::Independent,
-        ))));
+        );
         admitted(
             coordinator.admit(AdmissionRequest::Candidate(serve_candidate(
                 5,
@@ -3507,14 +3205,12 @@ mod tests {
         let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
         let source = WaitSource::External(digest(0xD1));
         let initial_wait = WaitToken::new(source, 4);
-        let (owner, ordinal, _) =
-            admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
-                0xD2,
-                LifecycleWorkClass::Fetch,
-                LifecyclePhase::Fetch,
-                InitialLifecycleState::Waiting(initial_wait),
-                PredecessorScope::Independent,
-            ))));
+        let (owner, ordinal, _) = admit_waiting_fetch(
+            &mut coordinator,
+            0xD2,
+            initial_wait,
+            PredecessorScope::Independent,
+        );
         let inputs = scheduler_inputs(&coordinator, [(source, 5)]);
         let lease = execute(coordinator.plan_turn(inputs));
         assert_eq!(lease.ordinal(), ordinal);
@@ -3536,13 +3232,12 @@ mod tests {
         let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
         let source = WaitSource::External(digest(201));
         for seed in [90, 91] {
-            admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+            admit_waiting_fetch(
+                &mut coordinator,
                 seed,
-                LifecycleWorkClass::Fetch,
-                LifecyclePhase::Fetch,
-                InitialLifecycleState::Waiting(WaitToken::new(source, 0)),
+                WaitToken::new(source, 0),
                 PredecessorScope::Independent,
-            ))));
+            );
         }
         assert!(coordinator.ready_index.is_empty());
         let selected = execute(plan_turn(&mut coordinator, [(source, 1)]));
@@ -3559,13 +3254,12 @@ mod tests {
     fn blocking_at_a_new_generation_atomically_wakes_older_waiters() {
         let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
         let source = WaitSource::External(digest(202));
-        admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+        admit_waiting_fetch(
+            &mut coordinator,
             92,
-            LifecycleWorkClass::Fetch,
-            LifecyclePhase::Fetch,
-            InitialLifecycleState::Waiting(WaitToken::new(source, 0)),
+            WaitToken::new(source, 0),
             PredecessorScope::Independent,
-        ))));
+        );
         admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
             93,
             LifecycleWorkClass::Store,
@@ -3613,8 +3307,8 @@ mod tests {
         assert_eq!(
             coordinator.admit(AdmissionRequest::Candidate(candidate(
                 106,
-                LifecycleWorkClass::Fetch,
-                LifecyclePhase::Fetch,
+                LifecycleWorkClass::Store,
+                LifecyclePhase::Store,
                 InitialLifecycleState::Waiting(WaitToken::new(source, u64::MAX)),
                 PredecessorScope::Independent,
             ))),
@@ -3635,14 +3329,12 @@ mod tests {
         assert_eq!(coordinator.active_lease, Some(lease));
         assert_eq!(coordinator.fault, Some(CoordinatorFault::InvalidReadyEvent));
         let mut publication = LifecycleCoordinator::new(context(), 0, capacities(8));
-        let (owner, ordinal, _) =
-            admitted(publication.admit(AdmissionRequest::Candidate(candidate(
-                108,
-                LifecycleWorkClass::Fetch,
-                LifecyclePhase::Fetch,
-                InitialLifecycleState::Waiting(WaitToken::new(source, u64::MAX - 1)),
-                PredecessorScope::Independent,
-            ))));
+        let (owner, ordinal, _) = admit_waiting_fetch(
+            &mut publication,
+            108,
+            WaitToken::new(source, u64::MAX - 1),
+            PredecessorScope::Independent,
+        );
         publication.records.get_mut(&ordinal).expect("record").state =
             LifecycleState::Waiting(WaitToken::new(source, u64::MAX));
         publication.publish_ready(ReadyEvent::new(
@@ -3767,8 +3459,13 @@ mod tests {
             PredecessorScope::Independent,
         );
         let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
+        let expected_universe = coordinator
+            .episode_authority
+            .universe_for(admitted_candidate.key)
+            .expect("sealed height authority covers the admitted key");
         admitted(coordinator.admit(AdmissionRequest::Candidate(admitted_candidate)));
-        assert_eq!(coordinator.records[&1].episode.universe.target, digest(101));
+        assert_eq!(coordinator.records[&1].episode.universe, expected_universe);
+        let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
         let mut invalid_slot = candidate(
             102,
             LifecycleWorkClass::Fetch,
@@ -3843,8 +3540,8 @@ mod tests {
         assert_eq!(expected.leader, digest(4));
         assert_eq!(expected.context, context().id);
         assert_eq!(expected.phase, LifecyclePhase::Store);
-        assert_eq!(expected.subject, Some(digest(106)));
-        assert_eq!(expected.target, digest(106));
+        assert_eq!(expected.subject, successor_key.subject());
+        assert_eq!(expected.target, successor_key.scheduler_target());
         assert_eq!(
             expected.capacity_geometry,
             coordinator.capacity_geometry.limits
@@ -3920,7 +3617,7 @@ mod tests {
             .reconstruction_source = digest(250);
         assert_eq!(
             coordinator.admit(AdmissionRequest::Candidate(serve)),
-            AdmissionDecision::Rejected(AdmissionRejection::InvalidProducerTurn)
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata)
         );
         assert!(coordinator.records.is_empty());
         assert!(coordinator.durable_records.is_empty());
@@ -3933,9 +3630,15 @@ mod tests {
             .subject = Some(digest(250));
         assert_eq!(
             coordinator.admit(AdmissionRequest::Candidate(drifted_key)),
-            AdmissionDecision::Rejected(AdmissionRejection::InvalidProducerTurn)
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata)
         );
         assert!(coordinator.records.is_empty());
+        let mut foreign_root = serve_candidate(17, InitialLifecycleState::Ready);
+        foreign_root.causal_root = CausalRoot::new(digest(251));
+        assert_eq!(
+            coordinator.admit(AdmissionRequest::Candidate(foreign_root)),
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata)
+        );
     }
     #[test]
     fn durable_ledger_is_projected_from_the_coordinator_record_bijection() {
@@ -4098,33 +3801,46 @@ mod tests {
     }
     #[test]
     fn body_advanced_requires_a_typed_composite_even_without_a_ledger_store() {
-        for outcome in [
-            TurnOutcome::Advanced,
-            TurnOutcome::Terminal(TerminalOutcome::Advanced),
+        for (seed, work_class, phase) in [
+            (20, LifecycleWorkClass::Fetch, LifecyclePhase::Fetch),
+            (21, LifecycleWorkClass::Store, LifecyclePhase::Store),
+            (22, LifecycleWorkClass::Validate, LifecyclePhase::Validate),
+            (
+                23,
+                LifecycleWorkClass::SignProposal,
+                LifecyclePhase::Proposal,
+            ),
+            (24, LifecycleWorkClass::SignVote, LifecyclePhase::Prepare),
+            (25, LifecycleWorkClass::SignTimeout, LifecyclePhase::Timeout),
         ] {
-            let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
-            admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
-                20,
-                LifecycleWorkClass::Validate,
-                LifecyclePhase::Validate,
-                InitialLifecycleState::Ready,
-                PredecessorScope::Independent,
-            ))));
-            let lease = execute(plan_turn(&mut coordinator, []));
-            coordinator.settle_turn(lease.clone(), outcome);
-            assert_eq!(
-                coordinator.fault,
-                Some(CoordinatorFault::InvalidTerminalOutcome)
-            );
-            assert_eq!(coordinator.active_lease, Some(lease.clone()));
-            assert_eq!(
-                coordinator.records[&lease.ordinal].state,
-                LifecycleState::Claimed(lease.id)
-            );
-            assert_eq!(
-                coordinator.durable_records[&lease.ordinal].continuation,
-                DurableContinuation::None
-            );
+            for outcome in [
+                TurnOutcome::Advanced,
+                TurnOutcome::Terminal(TerminalOutcome::Advanced),
+            ] {
+                let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
+                admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+                    seed,
+                    work_class,
+                    phase,
+                    InitialLifecycleState::Ready,
+                    PredecessorScope::Independent,
+                ))));
+                let lease = execute(plan_turn(&mut coordinator, []));
+                coordinator.settle_turn(lease.clone(), outcome);
+                assert_eq!(
+                    coordinator.fault,
+                    Some(CoordinatorFault::InvalidTerminalOutcome)
+                );
+                assert_eq!(coordinator.active_lease, Some(lease.clone()));
+                assert_eq!(
+                    coordinator.records[&lease.ordinal].state,
+                    LifecycleState::Claimed(lease.id)
+                );
+                assert_eq!(
+                    coordinator.durable_records[&lease.ordinal].continuation,
+                    DurableContinuation::None
+                );
+            }
         }
     }
     #[test]
@@ -4137,8 +3853,14 @@ mod tests {
             ))),
         );
         let lease = execute(plan_turn(&mut coordinator, []));
+        let replay = test_serve_terminal_replay(
+            &coordinator,
+            &lease,
+            TerminalOutcome::Completed(Some(digest(232))),
+        )
+        .expect("exact pending Serve pair mints one terminal replay receipt");
         coordinator.producer_debts.clear();
-        settle_with_test_serve_receipt(&mut coordinator, lease.clone(), completed_serve(232));
+        coordinator.settle_turn_with_durable_serve_terminal(lease.clone(), replay);
         assert_eq!(coordinator.active_lease, Some(lease));
         assert_eq!(
             coordinator.fault,
@@ -4616,7 +4338,8 @@ mod tests {
             if let LifecycleState::Terminal(outcome) = record.state {
                 assert_eq!(
                     after.records.get(ordinal).map(|record| record.state),
-                    Some(LifecycleState::Terminal(outcome))
+                    Some(LifecycleState::Terminal(outcome)),
+                    "terminal state disappeared across explorer transition:\nBEFORE={before:#?}\nAFTER={after:#?}"
                 );
             }
         }

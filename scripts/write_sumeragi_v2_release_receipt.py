@@ -50,7 +50,6 @@ finally:
     sys.dont_write_bytecode = _PREVIOUS_DONT_WRITE_BYTECODE
 LocalnetManifestError = _LOCALNET_MANIFEST_MODULE.LocalnetManifestError
 canonical_localnet_manifest = _LOCALNET_MANIFEST_MODULE.canonical_localnet_manifest
-
 _RELEASE_RECEIPT_COMPONENT_FILES = (
     "write_sumeragi_v2_release_receipt_formal_artifacts.py",
     "write_sumeragi_v2_release_receipt_corridor_log.py",
@@ -71,7 +70,6 @@ _RELEASE_RECEIPT_COMPONENT_SHA256 = {
         "4f351ac1711c88465e76f804c714a8d43ee0fc8d0133739b717f6e31dcf79ae6"
     ),
 }
-
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _SSH_FINGERPRINT_RE = re.compile(r"SHA256:[A-Za-z0-9+/]{43}")
@@ -590,7 +588,7 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        43,
+        42,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-state-governance-unlock-audit", "state::tests", 1),
@@ -616,13 +614,18 @@ _PRODUCTION_MODULES = (
         "sumeragi::serviced_candidate_store::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 47),
+    ("production-v2-adapter", "sumeragi::v2::tests", 48),
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
+    (
+        "production-v2-certified-serve-payload-store",
+        "sumeragi::v2_certified_serve_payload_store::tests",
+        11,
+    ),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 72),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 71),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 65),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     (
@@ -630,8 +633,18 @@ _PRODUCTION_MODULES = (
         "sumeragi::v2_lifecycle_recovery::tests",
         5,
     ),
+    (
+        "production-v2-lifecycle-coordinator",
+        "sumeragi::v2_lifecycle_coordinator",
+        39,
+    ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 135),
+    (
+        "production-v2-lifecycle-height-driver",
+        "sumeragi::v2_runner::lifecycle_height_driver::tests",
+        1,
+    ),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 88),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",

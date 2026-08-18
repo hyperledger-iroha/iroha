@@ -6247,6 +6247,10 @@ pub struct SoranetHandshakePow {
     min_ticket_ttl_secs: u64,
     #[config(default = "Self::default_ticket_ttl()")]
     ticket_ttl_secs: u64,
+    #[config(default = "Self::default_puzzle_work_capacity()")]
+    outbound_mint_capacity: NonZeroUsize,
+    #[config(default = "Self::default_puzzle_work_capacity()")]
+    inbound_verify_capacity: NonZeroUsize,
     #[config(default = "Self::default_revocation_store_capacity()")]
     revocation_store_capacity: u64,
     #[config(default = "Self::default_revocation_store_ttl()")]
@@ -6270,7 +6274,18 @@ impl SoranetHandshakePow {
         30
     }
     const fn default_ticket_ttl() -> u64 {
-        60
+        Self::default_max_future_skew()
+    }
+    const fn default_puzzle_work_capacity() -> NonZeroUsize {
+        nonzero!(1usize)
+    }
+    fn bound_puzzle_work_capacity(capacity: NonZeroUsize) -> NonZeroUsize {
+        NonZeroUsize::new(
+            capacity
+                .get()
+                .min(actual::SoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION),
+        )
+        .expect("bounded SoraNet puzzle-work capacity is non-zero")
     }
     const fn default_revocation_store_capacity() -> u64 {
         8_192
@@ -6287,6 +6302,8 @@ impl SoranetHandshakePow {
             max_future_skew_secs,
             min_ticket_ttl_secs,
             ticket_ttl_secs,
+            outbound_mint_capacity,
+            inbound_verify_capacity,
             revocation_store_capacity,
             revocation_store_ttl_secs,
             revocation_store_path,
@@ -6315,6 +6332,8 @@ impl SoranetHandshakePow {
             max_future_skew,
             min_ticket_ttl,
             ticket_ttl,
+            outbound_mint_capacity: Self::bound_puzzle_work_capacity(outbound_mint_capacity),
+            inbound_verify_capacity: Self::bound_puzzle_work_capacity(inbound_verify_capacity),
             revocation_store_capacity,
             revocation_max_ttl,
             revocation_store_path: revocation_store_path.to_string_lossy().into_owned().into(),
@@ -6369,37 +6388,7 @@ impl SoranetHandshakePuzzle {
 }
 #[cfg(test)]
 mod soranet_handshake_puzzle_tests {
-    use super::*;
-    #[test]
-    fn parse_bounds_argon2_resource_costs() {
-        let upper = SoranetHandshakePuzzle {
-            memory_kib: u32::MAX,
-            time_cost: u32::MAX,
-            lanes: u32::MAX,
-        }
-        .parse();
-        assert_eq!(
-            upper.memory_kib.get(),
-            iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB
-        );
-        assert_eq!(
-            upper.time_cost.get(),
-            iroha_crypto::soranet::puzzle::MAX_TIME_COST
-        );
-        assert_eq!(upper.lanes.get(), iroha_crypto::soranet::puzzle::MAX_LANES);
-        let lower = SoranetHandshakePuzzle {
-            memory_kib: 0,
-            time_cost: 0,
-            lanes: 0,
-        }
-        .parse();
-        assert_eq!(
-            lower.memory_kib.get(),
-            iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB
-        );
-        assert_eq!(lower.time_cost.get(), 1);
-        assert_eq!(lower.lanes.get(), 1);
-    }
+    include!("user_soranet_handshake_tests.rs");
 }
 /// User-level configuration container for SoraNet privacy telemetry.
 #[derive(Debug, Clone, Copy, ReadConfig)]

@@ -3,6 +3,7 @@ use iroha_crypto::{Hash, HashOf};
 use tempfile::TempDir;
 
 use super::*;
+use crate::BlockMessage;
 use crate::sumeragi::v2_lifecycle_coordinator::reviewed_lifecycle_ledger_source_for_test;
 
 fn source_region<'a>(source: &'a str, start: &str, end: &str) -> &'a str {
@@ -317,6 +318,147 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
     ingress
         .unbind_leader_wire_lifecycle_gate(&incumbent_gate)
         .expect("clean up the incumbent binding");
+}
+
+#[test]
+fn production_leader_wire_binding_retires_queued_carriers_through_runtime_ownership() {
+    const HEIGHT: wire::Height = 9;
+    let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+        b"production-leader-wire-queued-retirement",
+    )));
+    let validator = PeerId::new(KeyPair::random().public_key().clone());
+    let directory = TempDir::new().expect("temporary queued-retirement directory");
+    let wal_path = directory.path().join("queued-retirement.wal");
+    let ingress = Arc::new(FairV2Ingress::new(16, 4 << 20, 1 << 20, 1 << 18, 1 << 18));
+    ingress
+        .configure_roster([validator.clone()])
+        .expect("one-validator queued-retirement geometry");
+    ingress.require_leader_wire_lifecycle_gate();
+    ingress.state.lock().leader_wire_max_chunk_count = 2;
+
+    let owner = [0xB7; 32];
+    let capacity = LeaderWireLifecycleStoreGate::derived_capacity(1, 2)
+        .expect("finite queued-retirement leader-wire capacity");
+    let recovery_authority =
+        crate::sumeragi::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            context_id,
+            HEIGHT,
+            owner,
+            0,
+            false,
+        );
+    let (gate, restore) = LeaderWireLifecycleStoreGate::open(
+        &wal_path,
+        context_id,
+        HEIGHT,
+        owner,
+        [validator.clone()].into_iter().collect(),
+        capacity,
+        2,
+        recovery_authority,
+        &[],
+        &[],
+    )
+    .expect("open queued-retirement leader-wire gate");
+    let mut binding = ProductionLeaderWireIngressBindingV1::bind(
+        Arc::clone(&ingress),
+        Arc::clone(&gate),
+        restore,
+        RuntimeLifecycleOrdinalSource::after_high_watermark(0),
+        context_id,
+        HEIGHT,
+    )
+    .expect("bind queued-retirement leader-wire gate");
+    ingress.open().expect("open queued-retirement ingress");
+
+    let timeout_vote = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::TimeoutVote(
+        wire::TimeoutVote {
+            round: wire::ConsensusRound {
+                context_id,
+                height: HEIGHT,
+                view: 0,
+            },
+            highest_prepare_qc: None,
+            signer: 0,
+            signature: vec![0x5A],
+        },
+    ));
+    ingress
+        .try_push(InboundBlockMessage::new(
+            BlockMessage::V2(timeout_vote),
+            Some(validator.clone()),
+        ))
+        .expect("queue one durable productive carrier");
+    let unbound_chunk = wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
+            manifest_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"queued-retirement-unbound-manifest",
+            )),
+            index: 0,
+            bytes: vec![0xA5],
+            sender: 0,
+            signature: vec![0xC3],
+        }),
+    );
+    ingress
+        .try_push(InboundBlockMessage::new(
+            BlockMessage::V2(unbound_chunk),
+            Some(validator.clone()),
+        ))
+        .expect("queue one proofless producer carrier");
+    assert_eq!(ingress.snapshot_at(Instant::now()).depth, 2);
+
+    binding
+        .retire()
+        .expect("retire every queued carrier before unbinding");
+    assert_eq!(ingress.snapshot_at(Instant::now()).depth, 0);
+    assert!(ingress.state.lock().leader_wire_lifecycle_gate.is_none());
+    let retained = gate
+        .restore()
+        .expect("read queued-retirement durable projection");
+    assert_eq!(retained.records().len(), 1);
+    assert_eq!(
+        retained.records()[0].status(),
+        crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStatus::VolatileTerminal
+    );
+    assert!(retained.records()[0].runtime_owner().is_some());
+
+    drop(binding);
+    drop(gate);
+    let recovery_authority =
+        crate::sumeragi::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            context_id,
+            HEIGHT,
+            owner,
+            0,
+            false,
+        );
+    let (reopened, restore) = LeaderWireLifecycleStoreGate::open(
+        &wal_path,
+        context_id,
+        HEIGHT,
+        owner,
+        [validator].into_iter().collect(),
+        capacity,
+        2,
+        recovery_authority,
+        &[],
+        &[],
+    )
+    .expect("reopen queued-retirement leader-wire gate");
+    assert_eq!(restore.records().len(), 1);
+    assert_eq!(
+        restore.records()[0].status(),
+        crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStatus::Dormant,
+        "volatile retirement must reopen under the exact durable retry owner"
+    );
+    assert!(restore.records()[0].runtime_owner().is_some());
+    assert_eq!(
+        reopened
+            .earliest_ingress_scheduler_ordinal()
+            .expect("read replay-dormant queued-retirement selector"),
+        None
+    );
 }
 
 #[test]
@@ -700,9 +842,16 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         leader_wire_drop,
         &[
             "self.ingress.close()",
-            "self.ingress.unbind_leader_wire_lifecycle_gate(gate)?",
+            ".retire_queued_for_leader_wire_unbind(&gate)?",
+            "if let Err(error) = self.ingress.unbind_leader_wire_lifecycle_gate(&gate)",
         ],
     );
+    let leader_wire_drop_impl = source_region(
+        &source,
+        "impl Drop for ProductionLeaderWireIngressBindingV1",
+        "/// Opaque running stack produced by the sole consuming lifecycle launch.",
+    );
+    assert!(leader_wire_drop_impl.contains("self.retire()"));
     assert!(source.contains("impl Drop for ProductionV2CompletionObserverActivationPermitSealV1"));
     let worker_start = source_region(
         worker_source,
@@ -1613,13 +1762,14 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     let registry_source = include_str!("v2_lifecycle_work_registry.rs");
     let coordinator_source = include_str!("v2_lifecycle_coordinator.rs");
     let worker_source = include_str!("v2_worker.rs");
+    let worker_tests_source = include_str!("tests/v2_worker_recovered_lifecycle_output_cases.rs");
     let launch_source = include_str!("v2_lifecycle_launch.rs");
-    let effects_source = include_str!("v2_effects.rs");
+    let effects_tests_source = include_str!("tests/v2_effects_main_04.rs");
 
     let dispatch = source_region(
         scheduler_source,
         "fn dispatch_recovered_lifecycle_sign_with_runner_debt(",
-        "/// Refanout one durable recovered signed Broadcast at the live Completion cursor.",
+        "pub(super) fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
     );
     assert_source_tokens_in_order(
         dispatch,
@@ -1758,9 +1908,9 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     let capacity = source_region(
         worker_source,
         "fn capture_recovered_lifecycle_sign_capacity<'a>(",
-        "pub(crate) fn restore_lifecycle_ordinal_source(",
+        "/// Project worker capacity for one recovered candidate without changing the queue cut.",
     );
-    assert_source_token_count(capacity, "operation.complete()", 5);
+    assert_source_token_count(capacity, "operation.complete()", 4);
     assert_forbidden_source_tokens(capacity, &["drop(operation)"]);
 
     let rollback = source_region(
@@ -1784,16 +1934,18 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
         "fn unpublished_turn_rollback_restores_ready_and_clears_the_active_lease()",
     ] {
         assert!(
-            worker_source.contains(regression) || coordinator_source.contains(regression),
+            worker_source.contains(regression)
+                || worker_tests_source.contains(regression)
+                || coordinator_source.contains(regression),
             "recovered Sign prerequisite omitted behavior regression {regression}"
         );
     }
-    assert!(effects_source.contains("owner.dispatch_recovered_lifecycle_sign("));
-    assert!(effects_source.contains(
+    assert!(launch_source.contains(".dispatch_recovered_lifecycle_sign("));
+    assert!(scheduler_source.contains(
         "Err(ProductionRecoveredLifecycleSignDispatchErrorV1::ForeignRunnerObservation)"
     ));
     assert!(
-        effects_source.contains(
+        effects_tests_source.contains(
             "a non-Completion runner cursor cannot claim or mutate a recovered Sign owner"
         )
     );
@@ -1967,7 +2119,7 @@ fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart
     let settlement = source_region(
         source,
         "pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
-        "/// Refanout one durable recovered signed Broadcast",
+        "/// Drive and retry one exact missing-sidecar recovered Apply owner.",
     );
     assert_source_tokens_in_order(
         settlement,
@@ -2058,7 +2210,7 @@ fn recovered_decision_fetch_queue_parks_generic_drain_and_uses_unified_completio
         .split_once("fn take_next_recovered_lifecycle_completion(")
         .expect("unified recovered lifecycle classifier exists")
         .1
-        .split_once("/// Drain only the oldest lifecycle-owned recovered Sign completion.")
+        .split_once("pub(in crate::sumeragi) fn drain_recovered_lifecycle_sign_completion(")
         .expect("unified classifier stays bounded")
         .0;
     assert!(classifier.contains("V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded)"));
@@ -2218,9 +2370,17 @@ fn recovered_decision_fetch_store_settlement_is_restart_closed_and_tail_infallib
         .expect("restart guard is disarmed after index removal");
     assert!(index < disarm);
 
-    let ledger = include_str!("v2_lifecycle_ledger.rs");
+    let ledger = [
+        include_str!("v2_lifecycle_ledger.rs"),
+        include_str!("v2_lifecycle_ledger_operations.rs"),
+    ]
+    .concat();
     let open = include_str!("v2_lifecycle_open.rs");
-    let registry_source = include_str!("v2_lifecycle_work_registry_validate_recovery.rs");
+    let registry_source = [
+        include_str!("v2_lifecycle_work_registry_validate_recovery.rs"),
+        include_str!("v2_lifecycle_work_registry_validate_recovery_registry_impl.rs"),
+    ]
+    .concat();
     for required in [
         "authenticate_recovered_decision_fetch_store",
         "open_recovered_decision_store_startup",

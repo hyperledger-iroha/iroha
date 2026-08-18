@@ -752,7 +752,11 @@ fn live_wal_apply_join_rejects_foreign_receipt_and_root_before_exact_retry() {
             .expect("retained Validate projects exact Apply pending");
         let foreign_owner = bind_adapter_effect_batch_ownership(
             core::slice::from_ref(&validate.effect),
-            vec![RuntimeEffectOwnership::fresh_for_test(*tag, 9_700)],
+            vec![RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                *tag,
+                9_700,
+                b"foreign live-WAL Validate owner",
+            )],
         )
         .expect("bind same effect under foreign causal root")
         .pop()
@@ -1141,27 +1145,34 @@ fn durable_validate_detached_rejection_and_sidecar_deferral_remain_bound() {
     drop(rejected);
     assert_eq!(format!("{:?}", fixture.registry), before);
 
-    let reference = detached_validation_merge_reference(&durable);
-    let deferred = fixture
+    let (mut deferred_fixture, _deferred_directory, mut deferred_store, deferred_durable) =
+        durable_validate_store_fixture(0xA6);
+    let deferred_before = format!("{:?}", deferred_fixture.registry);
+    let reference = detached_validation_merge_reference(&deferred_durable);
+    let deferred = deferred_fixture
         .registry
-        .prepare_durable_validate_execution(&fixture.lease, fixture.slot, &fixture.verified)
+        .prepare_durable_validate_execution(
+            &deferred_fixture.lease,
+            deferred_fixture.slot,
+            &deferred_fixture.verified,
+        )
         .expect("prepare deferred detached Validate")
         .detach()
-        .execute(&mut store, |_| {
+        .execute(&mut deferred_store, |_| {
             Err::<wire::ExecutionCommitment, _>(DetachedValidationError::MissingMergeSidecar(
                 reference.clone(),
             ))
         })
         .expect("execute typed sidecar deferral");
-    assert_eq!(deferred.outcome().durable_body(), &durable);
+    assert_eq!(deferred.outcome().durable_body(), &deferred_durable);
     assert_eq!(deferred.outcome().missing_merge_sidecar(), Some(&reference));
-    let deferred = fixture
+    let deferred = deferred_fixture
         .registry
         .reattach_durable_validate_execution(deferred)
         .expect("reattach exact sidecar deferral");
     assert_eq!(deferred.outcome().missing_merge_sidecar(), Some(&reference));
     drop(deferred);
-    assert_eq!(format!("{:?}", fixture.registry), before);
+    assert_eq!(format!("{:?}", deferred_fixture.registry), deferred_before);
 }
 
 #[cfg(feature = "bls")]

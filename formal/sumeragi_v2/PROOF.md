@@ -1602,9 +1602,9 @@ canonical-carrier completion regressions produced that historical 864-test,
 yields the historical 856-test, 40-module checkpoint. The exact retired-attempt
 accessor, mixed-carrier successor, two-link cold-restart hydration, and
 noncanonical autonomous-output retirement regressions yield the
-current 860-test, 40-module inventory. The complete source-sealed
+current 860-test, 43-module inventory. The complete source-sealed
 pre-network corridor
-contains 88 legs. Six source-
+contains 91 legs. Six source-
 sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
@@ -1674,7 +1674,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329`.
+`b6457553bc8d41f74ebc708ea3d4e6187117f0f008da2c2dea697b0771741b44`.
 The separate source-sealed G-UNIT inventory contains 527 focused tests,
 including 321 `iroha_core` tests. Its 528-line
 canonical TSV has SHA-256

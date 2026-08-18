@@ -1222,6 +1222,7 @@ fn decision_body_stage_retry_rejects_same_root_ordinary_binding_without_mutation
             None,
             None,
             None,
+            false,
         ),
         Err(EffectExecutorError::Contract(reason))
             if reason.contains("proposal or quorum authority")

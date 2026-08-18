@@ -12,6 +12,11 @@ impl TransactionBuilder {
             }
             _ => {}
         }
+        if matches!(construction, TransactionConstruction::Genesis)
+            && payload.admission_intent() != TransactionAdmissionIntent::Ordinary
+        {
+            return Err(TransactionSignatureError::GenesisAdmissionIntentRequired);
+        }
         if payload.time_to_live_ms.is_none() {
             return Err(TransactionSignatureError::MissingTimeToLive);
         }

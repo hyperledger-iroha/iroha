@@ -53,6 +53,18 @@ use thiserror::Error;
 /// [`crate::parameter::TransactionParameters::max_time_to_live_ms`]. This
 /// default matches the default client transaction lifetime.
 pub const DEFAULT_TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(100);
+/// Signature-bound metadata marker selecting globally certified QueuePlan admission.
+///
+/// Its absence preserves the canonical V1 transaction layout and means ordinary
+/// admission. Presence selects QueuePlan admission; the marker value is ignored
+/// so relays cannot downgrade intent by rewriting a value without invalidating
+/// the transaction signature.
+pub const TRANSACTION_ADMISSION_INTENT_METADATA_KEY: &str =
+    "iroha_transaction_admission_queue_plan_synced";
+static TRANSACTION_ADMISSION_INTENT_METADATA_NAME: LazyLock<Name> = LazyLock::new(|| {
+    Name::from_str(TRANSACTION_ADMISSION_INTENT_METADATA_KEY)
+        .expect("QueuePlan admission intent metadata key is valid")
+});
 fn verify_typed_signature_for_signer<T: Encode>(
     signature: &SignatureOf<T>,
     signer: &PublicKey,
@@ -175,6 +187,27 @@ mod model {
         Network(NetworkId),
         /// Genesis-only marker used to avoid a genesis-hash self-reference.
         Genesis,
+    }
+    /// Signature-bound admission protocol required before a transaction may execute.
+    ///
+    /// Relays and proposers cannot downgrade this value without invalidating the
+    /// transaction signature and changing its canonical entrypoint identity.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(
+        tag = "intent",
+        content = "value",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )]
+    pub enum TransactionAdmissionIntent {
+        /// Ordinary queue admission without a globally certified QueuePlan owner.
+        Ordinary,
+        /// Require an exact quorum-certified QueuePlan registry owner before execution.
+        QueuePlanSynced,
     }
     /// Canonical unsigned transaction draft used by quote, signing, and verification APIs.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -663,6 +696,9 @@ pub enum TransactionSignatureError {
     /// A genesis-only builder carried an ordinary network security domain.
     #[error("explicit genesis construction requires the genesis transaction domain")]
     GenesisDomainRequired,
+    /// Genesis transactions cannot depend on a post-genesis admission certificate.
+    #[error("genesis transactions require ordinary admission intent")]
+    GenesisAdmissionIntentRequired,
     /// Collected multisig signatures do not satisfy the policy threshold.
     #[error("insufficient multisig weight: collected {collected}, required {required}")]
     InsufficientMultisigWeight {
@@ -1272,6 +1308,18 @@ impl TransactionPayload {
     pub const fn domain(&self) -> &TransactionDomain {
         &self.domain
     }
+    /// Return the signature-bound admission protocol.
+    #[inline]
+    pub fn admission_intent(&self) -> TransactionAdmissionIntent {
+        if self
+            .metadata
+            .contains(&*TRANSACTION_ADMISSION_INTENT_METADATA_NAME)
+        {
+            TransactionAdmissionIntent::QueuePlanSynced
+        } else {
+            TransactionAdmissionIntent::Ordinary
+        }
+    }
     /// Return the exact network identity for an ordinary transaction.
     ///
     /// Genesis payloads return `None` because their explicit marker avoids a
@@ -1317,6 +1365,11 @@ impl SignedTransaction {
     /// Transaction payload. Used for tests
     pub fn payload(&self) -> &TransactionPayload {
         &self.payload
+    }
+    /// Return the signature-bound admission protocol.
+    #[inline]
+    pub fn admission_intent(&self) -> TransactionAdmissionIntent {
+        self.payload.admission_intent()
     }
     /// Return transaction instructions
     #[inline]
@@ -2230,7 +2283,32 @@ impl TransactionBuilder {
     }
     /// Adds metadata to this transaction
     pub fn with_metadata(mut self, metadata: Metadata) -> Self {
+        let admission_intent = self.payload.admission_intent();
         self.payload.metadata = metadata;
+        if admission_intent == TransactionAdmissionIntent::QueuePlanSynced {
+            self.payload.metadata.insert(
+                TRANSACTION_ADMISSION_INTENT_METADATA_NAME.clone(),
+                Json::new(true),
+            );
+        }
+        self
+    }
+    /// Select the signature-bound admission protocol for this transaction.
+    #[must_use]
+    pub fn with_admission_intent(mut self, intent: TransactionAdmissionIntent) -> Self {
+        match intent {
+            TransactionAdmissionIntent::Ordinary => {
+                self.payload
+                    .metadata
+                    .remove_internal(&TRANSACTION_ADMISSION_INTENT_METADATA_NAME);
+            }
+            TransactionAdmissionIntent::QueuePlanSynced => {
+                self.payload.metadata.insert(
+                    TRANSACTION_ADMISSION_INTENT_METADATA_NAME.clone(),
+                    Json::new(true),
+                );
+            }
+        }
         self
     }
     /// Set the required signature-bound fee payer and charge limits.
@@ -2410,6 +2488,18 @@ mod tests;
 mod ttl_tests;
 include!("signed/attachments_tests.rs");
 impl TransactionEntrypoint {
+    /// Signature-bound admission protocol for this entrypoint.
+    #[inline]
+    pub fn admission_intent(&self) -> TransactionAdmissionIntent {
+        match self {
+            TransactionEntrypoint::External(entrypoint) => entrypoint.admission_intent(),
+            TransactionEntrypoint::SealedCommitment(_) => TransactionAdmissionIntent::Ordinary,
+            TransactionEntrypoint::SealedReveal(entrypoint) => {
+                entrypoint.signed_transaction().admission_intent()
+            }
+            TransactionEntrypoint::Time(_) => TransactionAdmissionIntent::Ordinary,
+        }
+    }
     /// Account authorized to initiate this transaction when one exists.
     #[inline]
     pub fn authority_opt(&self) -> Option<&AccountId> {

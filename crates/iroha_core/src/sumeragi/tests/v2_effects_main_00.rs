@@ -938,9 +938,6 @@ impl EffectRuntime for FakeRuntime {
         let Some(incumbent) = self.terminal_body_candidate_owners.get(&identity) else {
             return Ok(None);
         };
-        if incumbent.owner() != ownership.owner() {
-            return Err("fake runtime terminal query rejected exact owner replacement".to_owned());
-        }
         incumbent
             .adopt_incumbent_body_stage_for_retry_or_authority(ownership, effect)
             .map(Some)

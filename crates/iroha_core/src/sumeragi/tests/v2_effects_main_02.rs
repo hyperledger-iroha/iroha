@@ -466,13 +466,18 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
     );
     let foreign_owner = foreign[1].owner().clone();
     assert_ne!(foreign[1].owner(), incumbent.owner());
-    assert!(matches!(
-        fetch_executor.retain_effect_batch(retry_effects, foreign),
-        Err(EffectExecutorError::Contract(reason))
-            if reason.contains("owner replacement")
-    ));
+    fetch_executor
+        .retain_effect_batch(retry_effects, foreign)
+        .expect("exact duplicate Fetch adopts the incumbent task owner");
+    assert_eq!(
+        fetch_executor
+            .drain_retained_effect_batch(&mut fetch_services, false)
+            .expect("redispatch the exact incumbent Fetch task"),
+        2,
+        "the unrelated broadcast and coalesced Fetch each dispatch once"
+    );
     assert_eq!(fetch_executor.pending_fetches.len(), 1);
-    assert_eq!(fetch_services.fetch_tasks.len(), 1);
+    assert_eq!(fetch_services.fetch_tasks.len(), 2);
     let retained_fetch = fetch_executor
         .pending_fetches
         .values()
@@ -489,7 +494,7 @@ fn exact_candidate_retry_coalesces_under_the_incumbent_owner() {
     assert!(fetch_executor.retained_effect_batch.is_none());
     let external = fetch_executor
         .external_lifecycle_owners()
-        .expect("inspect external lifecycle ownership after rejecting replacement");
+        .expect("inspect external lifecycle ownership after coalescing the retry");
     assert!(
         external.iter().all(|owner| owner != incumbent.owner()),
         "passive network Fetch ownership is deliberately not runnable clock work"
@@ -569,12 +574,22 @@ fn runtime_terminal_body_candidate_stutters_before_cached_redispatch() {
         .pop()
         .expect("one foreign body-stage owner");
         assert_ne!(foreign, bound);
-        assert!(matches!(
-            executor.retain_effect_batch(vec![effect], vec![foreign]),
-            Err(EffectExecutorError::Runtime(reason))
-                if reason.contains("owner replacement")
-        ));
+        executor
+            .retain_effect_batch(vec![effect], vec![foreign])
+            .expect("an exact foreign carrier stutters under the terminal owner");
+        assert_eq!(executor.runtime.terminal_body_candidate_commits, 2);
+        assert_eq!(
+            executor.runtime.terminal_body_candidate_owners[&identity],
+            bound,
+            "candidate-specific terminal ownership remains unchanged"
+        );
+        assert!(executor.pending_stores.is_empty());
+        assert!(executor.pending_validations.is_empty());
+        assert!(services.store_tasks.is_empty());
+        assert!(services.validation_tasks.is_empty());
+        assert!(executor.runtime.completions.is_empty());
         assert!(executor.retained_effect_batch.is_none());
+        assert!(!executor.status().fail_closed);
     }
 }
 #[test]
@@ -698,7 +713,19 @@ fn authority_transition_reuses_one_physical_store_and_validation_task() {
     };
     let (ordinary_store, ordinary_validate) = stage_owners(&ordinary_fetch, 7_001);
     let (decision_store, decision_validate) = stage_owners(&decision_fetch, 7_002);
+    let (duplicate_store, duplicate_validate) = stage_owners(&ordinary_fetch, 7_003);
     assert_ne!(ordinary_store.owner(), decision_store.owner());
+    assert_ne!(ordinary_store.owner(), duplicate_store.owner());
+    assert_eq!(
+        ordinary_store.candidate_semantic_identity(),
+        duplicate_store.candidate_semantic_identity(),
+        "an exact duplicate carrier has the same route-neutral Store identity"
+    );
+    assert_eq!(
+        ordinary_validate.candidate_semantic_identity(),
+        duplicate_validate.candidate_semantic_identity(),
+        "an exact duplicate carrier has the same route-neutral Validate identity"
+    );
     assert_ne!(
         ordinary_store.candidate_semantic_identity(),
         decision_store.candidate_semantic_identity(),
@@ -723,6 +750,16 @@ fn authority_transition_reuses_one_physical_store_and_validation_task() {
         .expect("start ordinary physical Store task");
     let store_id = store_services.store_tasks[0].id();
     let next_work_id = store_executor.next_work_id;
+    store_executor
+        .retain_effect_batch(vec![store.clone()], vec![duplicate_store])
+        .expect("exact duplicate Store adopts the ordinary task owner");
+    assert_eq!(
+        store_executor
+            .drain_retained_effect_batch(&mut store_services, false)
+            .expect("redispatch the exact incumbent Store task"),
+        1
+    );
+    assert_eq!(store_executor.next_work_id, next_work_id);
     store_executor
         .retain_effect_batch(vec![store.clone()], vec![decision_store])
         .expect("Decision Store adopts the ordinary task owner");
@@ -779,6 +816,16 @@ fn authority_transition_reuses_one_physical_store_and_validation_task() {
         .ownership()
         .clone();
     let next_work_id = validation_executor.next_work_id;
+    validation_executor
+        .retain_effect_batch(vec![validate.clone()], vec![duplicate_validate])
+        .expect("exact duplicate Validate adopts the ordinary task owner");
+    assert_eq!(
+        validation_executor
+            .drain_retained_effect_batch(&mut validation_services, false)
+            .expect("redispatch the exact incumbent validation task"),
+        1
+    );
+    assert_eq!(validation_executor.next_work_id, next_work_id);
     validation_executor
         .retain_effect_batch(vec![validate.clone()], vec![decision_validate.clone()])
         .expect("Decision Validate adopts the in-flight ordinary task owner");
@@ -844,7 +891,7 @@ fn authority_transition_reuses_one_physical_store_and_validation_task() {
         certified_sources: Vec::new(),
         certificate: Some(conflicting_decision),
     };
-    let (_, conflicting_validate) = stage_owners(&conflicting_fetch, 7_003);
+    let (_, conflicting_validate) = stage_owners(&conflicting_fetch, 7_004);
     assert!(
         decision_validate
             .adopt_incumbent_body_stage_for_retry_or_authority(&conflicting_validate, &validate,)

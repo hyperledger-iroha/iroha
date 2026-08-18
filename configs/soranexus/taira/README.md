@@ -3019,7 +3019,7 @@ From `../iroha2-block-explorer-web`:
      while retaining 6 MiB for canonical block framing and context attachments;
      smaller transactions can still share the block. The per-source queue
      rounds the exact ordinary/completion/timeout minimum up to 33 MiB. Keep
-     `[network] max_frame_bytes_tx_gossip = 11534336` (11 MiB plaintext),
+     `[network] max_frame_bytes_tx_gossip = 13631488` (13 MiB plaintext),
      `[network] max_frame_bytes_block_sync = 23068672` (22 MiB plaintext) and
      `max_frame_bytes = 23068700` (the same ceiling plus 28 AEAD bytes) with
      those values.

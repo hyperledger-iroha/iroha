@@ -68,6 +68,14 @@ fn rollover_finalized_height_outputs(
     )?;
     let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
     lane_work.persist_anchored_sessions()?;
+    if !lane_work
+        .durable_completion_matches_finality(artifact)
+        .map_err(V2RunnerError::Service)?
+    {
+        return Err(V2RunnerError::Service(
+            "finalized output rollover requires complete durable lane evidence".to_owned(),
+        ));
+    }
     lane_work.prepare_canonical_lane_rollover(artifact)?;
     let durable_lane_authority = lane_work
         .durable_lane_rollover_authority(artifact)?

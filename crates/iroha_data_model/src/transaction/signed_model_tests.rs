@@ -48,6 +48,58 @@ fn sample_signed_transaction() -> SignedTransaction {
     .with_instructions([Log::new(Level::INFO, "exact slice".into())])
     .sign(&private_key)
 }
+#[test]
+fn queue_plan_admission_intent_is_signature_bound_without_changing_ordinary_v1_layout() {
+    let ordinary = sample_signed_transaction();
+    assert_eq!(
+        ordinary.admission_intent(),
+        TransactionAdmissionIntent::Ordinary
+    );
+    let private_key: iroha_crypto::PrivateKey =
+        "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+            .parse()
+            .expect("fixture private key");
+    let queue_plan = TransactionBuilder::from_payload(ordinary.payload().clone())
+        .expect("ordinary payload is reconstructible")
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+        .sign(&private_key);
+    assert_eq!(
+        queue_plan.admission_intent(),
+        TransactionAdmissionIntent::QueuePlanSynced
+    );
+    assert_ne!(ordinary.hash(), queue_plan.hash());
+    assert_ne!(
+        ordinary
+            .encode_wire_v1()
+            .expect("encode ordinary transaction"),
+        queue_plan
+            .encode_wire_v1()
+            .expect("encode QueuePlan transaction")
+    );
+    queue_plan
+        .verify_signature()
+        .expect("QueuePlan metadata marker is covered by the transaction signature");
+
+    let mut stripped = queue_plan.clone();
+    stripped
+        .payload
+        .metadata
+        .remove_internal(&TRANSACTION_ADMISSION_INTENT_METADATA_NAME);
+    assert_eq!(
+        stripped.admission_intent(),
+        TransactionAdmissionIntent::Ordinary
+    );
+    stripped
+        .verify_signature()
+        .expect_err("a relay cannot strip QueuePlan intent without invalidating the signature");
+
+    let restored = TransactionBuilder::from_payload(queue_plan.payload().clone())
+        .expect("QueuePlan payload is reconstructible")
+        .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+        .into_payload()
+        .expect("explicit ordinary intent is valid");
+    assert_eq!(restored, ordinary.payload().clone());
+}
 #[cfg(feature = "json")]
 fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
     let legacy = norito::json::to_json(value).expect("serialize legacy JSON");

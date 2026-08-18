@@ -80,7 +80,12 @@ impl LifecycleCoordinator {
         }
         if matches!(
             lease.work_class,
-            LifecycleWorkClass::Fetch | LifecycleWorkClass::Store | LifecycleWorkClass::Validate
+            LifecycleWorkClass::Fetch
+                | LifecycleWorkClass::Store
+                | LifecycleWorkClass::Validate
+                | LifecycleWorkClass::SignProposal
+                | LifecycleWorkClass::SignVote
+                | LifecycleWorkClass::SignTimeout
         ) && matches!(
             outcome,
             TurnOutcome::Advanced | TurnOutcome::Terminal(TerminalOutcome::Advanced)
@@ -95,7 +100,7 @@ impl LifecycleCoordinator {
                 }
                 let Some(producer_ordinal) = self.producer_debts.get(&lease.ordinal).copied()
                 else {
-                    return self.latch_settlement_fault(CoordinatorFault::InvalidTerminalOutcome);
+                    return self.latch_settlement_fault(CoordinatorFault::CapacityAccounting);
                 };
                 let Some(serve_record) = self.records.get(&lease.ordinal) else {
                     return self.latch_settlement_fault(CoordinatorFault::InvalidTerminalOutcome);

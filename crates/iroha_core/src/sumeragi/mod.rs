@@ -4861,6 +4861,79 @@ impl FairV2Ingress {
         self.debug_assert_consistent(&state);
         Ok(retiring.len())
     }
+    /// Drain a closed height's volatile carriers before detaching its durable owner.
+    ///
+    /// Productive carriers cross the normal checked `Ingress -> Runtime`
+    /// dequeue and are then durably marked `VolatileTerminal`. A restart can
+    /// therefore reopen their exact immutable token as `Dormant`; finalized
+    /// rollover may instead retire the complete height store. Nonproductive
+    /// carriers have no durable lifecycle to transfer and are discarded only
+    /// after the checked dequeue validates and releases their bounded queue
+    /// accounting. The ordinary empty-on-unbind invariant remains intact.
+    pub(crate) fn retire_queued_for_leader_wire_unbind(
+        &self,
+        gate: &Arc<serviced_candidate_store::LeaderWireLifecycleStoreGate>,
+    ) -> Result<usize, String> {
+        {
+            let state = self.state.lock();
+            if state.open {
+                return Err(
+                    "leader-wire queued-carrier retirement requires closed ingress".to_owned(),
+                );
+            }
+            let bound = state.leader_wire_lifecycle_gate.as_ref().ok_or_else(|| {
+                "leader-wire queued-carrier retirement crossed an unbound lifecycle gate".to_owned()
+            })?;
+            if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(bound, gate) {
+                return Err(
+                    "leader-wire queued-carrier retirement changed per-height ownership".to_owned(),
+                );
+            }
+        }
+
+        let mut retired = 0usize;
+        while let Some(inbound) = self.try_recv_if_checked(|_| true)? {
+            let ownership = inbound.ingress_ownership().ok_or_else(|| {
+                "retired fair-ingress carrier lost its checked ownership evidence".to_owned()
+            })?;
+            match (
+                ownership.leader_wire_token(),
+                ownership.leader_wire_runtime_receipt(),
+            ) {
+                (Some(token), Some(runtime)) if runtime.token() == token => {
+                    self.mark_leader_wire_volatile_terminal(runtime)?;
+                }
+                (None, None) => {}
+                _ => {
+                    return Err(
+                        "retired fair-ingress carrier changed its leader-wire handoff ownership"
+                            .to_owned(),
+                    );
+                }
+            }
+            retired = retired
+                .checked_add(1)
+                .ok_or_else(|| "leader-wire queued-carrier retirement overflowed".to_owned())?;
+        }
+
+        let state = self.state.lock();
+        if state.open || state.len != 0 {
+            return Err(format!(
+                "leader-wire queued-carrier retirement left {} owned ingress entries",
+                state.len
+            ));
+        }
+        let bound = state.leader_wire_lifecycle_gate.as_ref().ok_or_else(|| {
+            "leader-wire queued-carrier retirement lost its lifecycle gate".to_owned()
+        })?;
+        if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(bound, gate) {
+            return Err(
+                "leader-wire queued-carrier retirement changed per-height ownership".to_owned(),
+            );
+        }
+        self.debug_assert_consistent(&state);
+        Ok(retired)
+    }
     /// Detach a closed height's durable productive-wire owner.
     pub(crate) fn unbind_leader_wire_lifecycle_gate(
         &self,

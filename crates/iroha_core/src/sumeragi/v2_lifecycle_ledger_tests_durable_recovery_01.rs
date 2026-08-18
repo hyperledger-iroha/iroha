@@ -1396,19 +1396,20 @@ fn complete_tip_terminal_join_rejects_foreign_apply_reconstruction_source() {
     let complete_tip = complete_tip_for_terminal_decision(&fixture, &projection);
     let mut records = ledger.records.clone();
     records[3].reconstruction_source = [0xFA; 32];
-    let foreign_source = LifecycleLedgerV1::new(
-        ledger.context(),
-        ledger.high_water(),
-        records,
-        BTreeMap::new(),
-    )
-    .expect("terminal Apply source drift remains structurally decodable");
-
-    assert!(
-        foreign_source
+    assert!(matches!(
+        LifecycleLedgerV1::new(
+            ledger.context(),
+            ledger.high_water(),
+            records,
+            BTreeMap::new(),
+        ),
+        Err(LifecycleLedgerError::InvalidLedger(_))
+    ));
+    assert_eq!(
+        ledger
             .authenticate_complete_tip_terminal_apply(&complete_tip)
-            .is_err(),
-        "terminal Apply must retain the exact body-family reconstruction owner"
+            .expect("the untouched terminal Apply retains the exact CompleteTip join"),
+        4
     );
 }
 

@@ -1,5 +1,102 @@
 #[test]
-fn globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection() {
+fn globally_bound_absent_registry_blocks_selection_and_preserves_exact_fifo() {
+    let fixture = globally_bound_guard_fixture();
+    let hash = fixture.transaction.hash();
+    let follower_hash = fixture.follower_transaction.hash();
+    fixture
+        .queue
+        .push_with_lane_with_state(fixture.follower_transaction.clone(), &fixture.state)
+        .expect("enqueue FIFO follower");
+    let mut expired = Vec::new();
+    assert!(
+        fixture
+            .queue
+            .pop_from_queue(&fixture.state.view(), &mut expired)
+            .is_none()
+            && expired.is_empty(),
+        "a globally bound transaction must wait for its exact registry marker"
+    );
+    fixture.assert_restored_fifo_owner_with_order(&[hash, follower_hash]);
+    let two = NonZeroUsize::new(2).expect("non-zero scan bound");
+    let (pending, lease) = fixture
+        .queue
+        .bounded_pending_snapshot(&fixture.state.view(), two)
+        .expect("absent marker is a healthy selection wait");
+    assert!(pending.is_empty(), "the FIFO follower must not overtake");
+    drop(lease);
+    install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+    let (pending, lease) = fixture
+        .queue
+        .bounded_pending_snapshot(&fixture.state.view(), two)
+        .expect("exact marker enables selection");
+    assert_eq!(
+        pending
+            .iter()
+            .map(AcceptedTransaction::hash)
+            .collect::<Vec<_>>(),
+        vec![hash, follower_hash]
+    );
+    drop(lease);
+}
+
+#[test]
+fn globally_bound_gossip_waits_for_certificate_and_retains_it_after_exact_marker() {
+    let fixture = globally_bound_guard_fixture();
+    let hash = fixture.transaction.hash();
+    let awaiting = fixture.queue.gossip_batch_with_state(1, &fixture.state);
+    assert_eq!(awaiting.len(), 1);
+    assert!(matches!(
+        awaiting[0].queue_plan_admission,
+        QueuePlanGossipAdmission::AwaitingCertificate
+    ));
+
+    let validator_key = iroha_crypto::KeyPair::from_seed(
+        vec![0xB9; 32],
+        iroha_crypto::Algorithm::Ed25519,
+    );
+    let binding_hash = fixture.binding.canonical_hash();
+    let preimage = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v2(
+        binding_hash,
+        0,
+    )
+    .expect("build exact QueuePlan attestation preimage");
+    let certificate = crate::torii_proxy::QueuePlanAdmissionCertificateV2 {
+        version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
+        binding: fixture.binding.clone(),
+        attestations: vec![crate::torii_proxy::QueuePlanAdmissionAttestationV2 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
+            validator_index: 0,
+            signature: iroha_crypto::Signature::try_new(validator_key.private_key(), &preimage)
+                .expect("sign exact QueuePlan attestation"),
+        }],
+    };
+    let certificate = norito::encode_canonical(&certificate).expect("encode QueuePlan certificate");
+    fixture
+        .state
+        .kura()
+        .persist_pending_queue_plan_admission_certificate(&certificate)
+        .expect("persist QueuePlan gossip certificate");
+
+    fixture.queue.requeue_gossip_hashes([hash]);
+    let certified = fixture.queue.gossip_batch_with_state(1, &fixture.state);
+    assert_eq!(certified.len(), 1);
+    assert!(matches!(
+        &certified[0].queue_plan_admission,
+        QueuePlanGossipAdmission::Certified(bytes) if bytes.as_slice() == certificate
+    ));
+
+    install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+    fixture.queue.requeue_gossip_hashes([hash]);
+    let exact_pending = fixture.queue.gossip_batch_with_state(1, &fixture.state);
+    assert_eq!(exact_pending.len(), 1);
+    assert!(matches!(
+        &exact_pending[0].queue_plan_admission,
+        QueuePlanGossipAdmission::Certified(bytes) if bytes.as_slice() == certificate
+    ));
+}
+
+#[test]
+fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
     let poison_expired_global_identity = |fixture: &GloballyBoundGuardFixture| {
         fixture
             .time_handle
@@ -139,9 +236,6 @@ fn globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection() {
     assert_faulted_owner_retained(&revalidation_fixture);
     let fixture = globally_bound_guard_fixture();
     let hash = fixture.transaction.hash();
-    let guard = fixture.pop_guard();
-    drop(guard);
-    fixture.assert_restored_fifo_owner();
     let routing_plan = fixture
         .binding
         .routing_plan()
@@ -170,21 +264,21 @@ fn globally_bound_guard_drop_preserves_claim_for_later_conflict_rejection() {
             .expect("read conflicting global guard registry"),
         QueuePlanAdmissionRegistryMatch::Conflict
     );
-    fixture
-        .time_handle
-        .advance(fixture.transaction_time_to_live + Duration::from_millis(1));
-    let mut expired = Vec::new();
+    let (pending, _lease) = fixture
+        .queue
+        .bounded_pending_snapshot(&fixture.state.view(), nonzero!(1_usize))
+        .expect("conflicting marker is durably rejected without a selection fault");
     assert!(
-        fixture
-            .queue
-            .pop_from_queue(&fixture.state.view(), &mut expired)
-            .is_none(),
+        pending.is_empty(),
         "the conflicting globally admitted owner must be rejected, not selected"
     );
-    assert!(expired.is_empty());
     assert!(
-        fixture.queue.removed_hashes.contains_key(&hash),
-        "exact conflict rejection must leave a stale-FIFO removal marker"
+        fixture.queue.global_selection_owners.lock().is_empty(),
+        "conflict rejection must not publish a candidate lease"
+    );
+    assert!(
+        !fixture.queue.removed_hashes.contains_key(&hash),
+        "bounded conflict rejection must synchronously remove its FIFO cell"
     );
     fixture.assert_terminally_removed();
 }

@@ -1368,10 +1368,43 @@ fn malformed_owner_and_producer_debt_are_rejected() {
 }
 #[test]
 fn completed_and_cancelled_atomic_pairs_are_valid_without_debt() {
-    let (mut serve, producer) = serve_pair();
-    serve.terminal = None;
-    serve.payload_reference =
-        LifecyclePayloadReferenceV1::certified_serve_pending(digest(2), digest(21), digest(22));
+    let pending = super::super::replay_authority::exact_record_fixture(
+        context(),
+        LifecycleStageKind::CertifiedServe,
+        2,
+    )
+    .payload;
+    let DurablePayloadReference::CertifiedServePending {
+        request,
+        certificate,
+    } = pending
+    else {
+        unreachable!("canonical Serve fixture has pending durable material")
+    };
+    let serve = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+        key(2, LifecyclePhase::Serve),
+        owner(1),
+        1,
+        LifecycleWorkClass::CertifiedServe,
+        stage(LifecycleStageKind::CertifiedServe),
+        None,
+        digest(20),
+        pending,
+        DurableContinuation::None,
+    )
+    .expect("live Serve row retains exact pending replay authority");
+    let producer = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+        key(2, LifecyclePhase::ProducerTurn),
+        owner(1),
+        2,
+        LifecycleWorkClass::ProducerTurn,
+        stage(LifecycleStageKind::ProducerTurn),
+        None,
+        digest(20),
+        DurablePayloadReference::None,
+        DurableContinuation::None,
+    )
+    .expect("live ProducerTurn row retains exact replay authority");
     LifecycleLedgerV1::new(
         context(),
         2,
@@ -1379,19 +1412,50 @@ fn completed_and_cancelled_atomic_pairs_are_valid_without_debt() {
         BTreeMap::from([(1, 2)]),
     )
     .expect("live atomic pair");
-    let (serve, mut producer) = serve_pair();
-    producer.terminal = Some(PersistedTerminalV1::from_schema(TerminalOutcome::Advanced));
+    let (serve, _) = serve_pair();
+    let producer = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+        key(2, LifecyclePhase::ProducerTurn),
+        owner(1),
+        2,
+        LifecycleWorkClass::ProducerTurn,
+        stage(LifecycleStageKind::ProducerTurn),
+        Some(TerminalOutcome::Advanced),
+        digest(20),
+        DurablePayloadReference::None,
+        DurableContinuation::None,
+    )
+    .expect("completed ProducerTurn row retains exact replay authority");
     LifecycleLedgerV1::new(context(), 2, vec![serve, producer], BTreeMap::new())
         .expect("completed atomic pair");
-    let (mut serve, mut producer) = serve_pair();
-    serve.terminal = Some(PersistedTerminalV1::from_schema(TerminalOutcome::Cancelled));
-    serve.payload_reference = LifecyclePayloadReferenceV1::certified_serve_negative(
-        digest(2),
-        digest(21),
-        digest(22),
-        DurableServeNegativeOutcome::Cancelled,
-    );
-    producer.terminal = Some(PersistedTerminalV1::from_schema(TerminalOutcome::Cancelled));
+    let cancelled_payload = DurablePayloadReference::CertifiedServeNegative {
+        request,
+        certificate,
+        outcome: DurableServeNegativeOutcome::Cancelled,
+    };
+    let serve = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+        key(2, LifecyclePhase::Serve),
+        owner(1),
+        1,
+        LifecycleWorkClass::CertifiedServe,
+        stage(LifecycleStageKind::CertifiedServe),
+        Some(TerminalOutcome::Cancelled),
+        digest(20),
+        cancelled_payload,
+        DurableContinuation::None,
+    )
+    .expect("cancelled Serve row retains exact negative replay authority");
+    let producer = LifecycleLedgerRecordV1::new_exact_replay_fixture(
+        key(2, LifecyclePhase::ProducerTurn),
+        owner(1),
+        2,
+        LifecycleWorkClass::ProducerTurn,
+        stage(LifecycleStageKind::ProducerTurn),
+        Some(TerminalOutcome::Cancelled),
+        digest(20),
+        DurablePayloadReference::None,
+        DurableContinuation::None,
+    )
+    .expect("cancelled ProducerTurn row retains exact replay authority");
     LifecycleLedgerV1::new(context(), 2, vec![serve, producer], BTreeMap::new())
         .expect("cancelled atomic pair");
 }

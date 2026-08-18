@@ -32834,6 +32834,65 @@ impl State {
         };
         Ok((admission, disposition))
     }
+    /// Index authenticated QueuePlan certificates which are waiting for their
+    /// canonical registry marker by exact binding hash.
+    ///
+    /// Transaction gossip uses this bounded snapshot to carry the transaction
+    /// body only together with its quorum certificate. Future, stale,
+    /// conflicting, and already-applied certificates are deliberately omitted.
+    pub(crate) fn pending_queue_plan_admission_gossip_certificates(
+        &self,
+    ) -> Result<BTreeMap<Hash, Arc<Vec<u8>>>, MergeLedgerCommitError> {
+        let carrier_height = u64::try_from(self.committed_height())
+            .map_err(|_| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "committed height does not fit QueuePlan gossip classification".to_owned(),
+                )
+            })?
+            .checked_add(1)
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "QueuePlan gossip carrier height overflowed".to_owned(),
+                )
+            })?;
+        let pending = self
+            .kura
+            .pending_queue_plan_admission_certificates_bounded(
+                self.kura.pending_queue_plan_admission_capacity(),
+            )
+            .map_err(MergeLedgerCommitError::Persistence)?;
+        let mut certificates = BTreeMap::new();
+        for (_, bytes) in pending {
+            let (admission, disposition) =
+                self.classify_pending_queue_plan_admission(&bytes, carrier_height)?;
+            let exact_pending = disposition == PendingQueuePlanAdmissionDisposition::Exact
+                && Self::queue_plan_admission_application_state(&self.view(), &admission)?
+                    == QueuePlanAdmissionApplicationState::Pending;
+            if disposition == PendingQueuePlanAdmissionDisposition::EligibleAbsent || exact_pending
+            {
+                certificates
+                    .entry(admission.certificate.binding.canonical_hash())
+                    .or_insert_with(|| Arc::new(bytes));
+            }
+        }
+        Ok(certificates)
+    }
+    /// Return whether an exact QueuePlan certificate's transaction has been
+    /// canonically applied and no longer needs body-handoff evidence.
+    pub(crate) fn queue_plan_admission_certificate_transaction_applied(
+        &self,
+        bytes: &[u8],
+    ) -> Result<bool, MergeLedgerCommitError> {
+        let (admission, registry_match) =
+            self.pending_queue_plan_admission_registry_lookup(bytes)?;
+        if registry_match != QueuePlanAdmissionRegistryMatch::Exact {
+            return Ok(false);
+        }
+        Ok(
+            Self::queue_plan_admission_application_state(&self.view(), &admission)?
+                == QueuePlanAdmissionApplicationState::Applied,
+        )
+    }
     fn validate_merge_candidate_round_binding(
         &self,
         candidate: &crate::merge::MergeLedgerCandidate,
@@ -35724,6 +35783,86 @@ impl State {
             );
         }
         Ok(true)
+    }
+    /// Return the exact active QueuePlan binding which still owns application
+    /// of one entrypoint.
+    ///
+    /// `None` means no immutable owner exists, or the exact owner was already
+    /// applied. Malformed, stale, or partially replicated marker state fails
+    /// closed.
+    pub(crate) fn queue_plan_pending_binding_for_entrypoint(
+        &self,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {
+        Self::queue_plan_pending_binding_in_view(&self.view(), entrypoint_hash)
+    }
+    fn queue_plan_pending_binding_in_view(
+        state_view: &impl StateReadOnlyWithTransactions,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {
+        if entrypoint_hash.as_ref().iter().all(|byte| *byte == 0) {
+            return Err(
+                "QueuePlan pending-binding lookup contains a zero entrypoint identity".to_owned(),
+            );
+        }
+        let network_id_digest =
+            crate::torii_proxy::queue_plan_admission_network_id_digest(state_view.network_id());
+        let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
+            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+            network_id_digest,
+            entrypoint_hash: entrypoint_hash.clone(),
+        };
+        let marker_key = Self::queue_plan_admission_registry_marker_key(&registry_key)
+            .map_err(|error| error.to_string())?;
+        let obligation_key = Self::queue_plan_pending_obligation_marker_key(
+            network_id_digest,
+            entrypoint_hash.clone(),
+        )
+        .map_err(|error| error.to_string())?;
+        let storage = state_view.world().smart_contract_state();
+        let Some(marker_payload) = storage.get(&marker_key) else {
+            if storage.get(&obligation_key).is_some() {
+                return Err(
+                    "QueuePlan pending obligation exists without an immutable registry owner"
+                        .to_owned(),
+                );
+            }
+            return Ok(None);
+        };
+        let registry_value =
+            Self::decode_exact_queue_plan_admission_registry_marker(&marker_key, marker_payload)
+                .map_err(|error| error.to_string())?;
+        match Self::queue_plan_registry_owner_application_state_in_view(
+            state_view,
+            network_id_digest,
+            entrypoint_hash,
+            registry_value.binding_hash,
+        )
+        .map_err(|error| error.to_string())?
+        {
+            QueuePlanAdmissionApplicationState::Applied => Ok(None),
+            QueuePlanAdmissionApplicationState::PendingStale => Err(
+                "QueuePlan pending binding names a retired or recreated lane incarnation"
+                    .to_owned(),
+            ),
+            QueuePlanAdmissionApplicationState::Pending => {
+                let obligation_payload = storage.get(&obligation_key).ok_or_else(|| {
+                    "QueuePlan registry owner lost its pending application obligation".to_owned()
+                })?;
+                let obligation = Self::decode_exact_queue_plan_pending_obligation_marker(
+                    &obligation_key,
+                    obligation_payload,
+                )
+                .map_err(|error| error.to_string())?;
+                if obligation.binding_hash != registry_value.binding_hash {
+                    return Err(
+                        "QueuePlan pending binding differs from its immutable registry owner"
+                            .to_owned(),
+                    );
+                }
+                Ok(Some(obligation.binding))
+            }
+        }
     }
     /// Compare one structurally valid, exact-network-bound QueuePlan admission binding
     /// with its immutable WSV registry projection.
@@ -48744,23 +48883,6 @@ impl<'state> StateBlock<'state> {
         markers.apply();
         Ok(())
     }
-    fn resolve_queue_plan_pending_obligations_for_entrypoints(
-        &mut self,
-        entrypoint_hashes: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
-    ) -> Result<(), MergeLedgerCommitError> {
-        let network_id_digest =
-            crate::torii_proxy::queue_plan_admission_network_id_digest(&self.network_id);
-        let mut markers = self.world.smart_contract_state.transaction();
-        for entrypoint_hash in entrypoint_hashes {
-            State::resolve_queue_plan_pending_obligation_in_storage(
-                &mut markers,
-                network_id_digest,
-                entrypoint_hash,
-            )?;
-        }
-        markers.apply();
-        Ok(())
-    }
     fn resolve_required_queue_plan_pending_obligations(
         &mut self,
         pending_obligations: impl IntoIterator<Item = (HashOf<TransactionEntrypoint>, Hash)>,
@@ -48798,15 +48920,99 @@ impl<'state> StateBlock<'state> {
         markers.apply();
         Ok(())
     }
+    #[cfg(test)]
+    fn resolve_queue_plan_pending_obligations_for_entrypoints(
+        &mut self,
+        entrypoint_hashes: impl IntoIterator<Item = HashOf<TransactionEntrypoint>>,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let network_id_digest =
+            crate::torii_proxy::queue_plan_admission_network_id_digest(&self.network_id);
+        let mut markers = self.world.smart_contract_state.transaction();
+        for entrypoint_hash in entrypoint_hashes {
+            State::resolve_queue_plan_pending_obligation_in_storage(
+                &mut markers,
+                network_id_digest,
+                entrypoint_hash,
+            )?;
+        }
+        markers.apply();
+        Ok(())
+    }
+    fn required_queue_plan_pending_obligations_for_entrypoints(
+        &self,
+        entrypoints: impl IntoIterator<Item = TransactionEntrypoint>,
+    ) -> Result<Vec<(HashOf<TransactionEntrypoint>, Hash)>, MergeLedgerCommitError> {
+        let network_id_digest =
+            crate::torii_proxy::queue_plan_admission_network_id_digest(&self.network_id);
+        let markers = &self.world.smart_contract_state;
+        let mut required = Vec::new();
+        for entrypoint in entrypoints {
+            if entrypoint.admission_intent()
+                != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+            {
+                continue;
+            }
+            let entrypoint_hash = entrypoint.hash();
+            let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV2 {
+                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
+                network_id_digest,
+                entrypoint_hash: entrypoint_hash.clone(),
+            };
+            let marker_key = State::queue_plan_admission_registry_marker_key(&registry_key)?;
+            let marker_payload = markers.get(&marker_key).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan-synchronized entrypoint has no immutable admission owner: `{marker_key}`"
+                ))
+            })?;
+            let registry_value = State::decode_exact_queue_plan_admission_registry_marker(
+                &marker_key,
+                marker_payload,
+            )?;
+            let obligation_key = State::queue_plan_pending_obligation_marker_key(
+                network_id_digest,
+                entrypoint_hash.clone(),
+            )?;
+            let obligation_payload = markers.get(&obligation_key).ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan-synchronized entrypoint has no pending application obligation: `{obligation_key}`"
+                ))
+            })?;
+            let obligation = State::decode_exact_queue_plan_pending_obligation_marker(
+                &obligation_key,
+                obligation_payload,
+            )?;
+            if obligation.binding_hash != registry_value.binding_hash {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan pending obligation differs from immutable admission owner: `{obligation_key}`"
+                )));
+            }
+            required.push((entrypoint_hash, registry_value.binding_hash));
+        }
+        Ok(required)
+    }
+    pub(crate) fn queue_plan_pending_binding_for_entrypoint(
+        &self,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionBindingV2>, String> {
+        State::queue_plan_pending_binding_in_view(self, entrypoint_hash)
+    }
+    pub(crate) fn require_queue_plan_admission_intents_from_block(
+        &self,
+        block: &SignedBlock,
+    ) -> Result<(), MergeLedgerCommitError> {
+        self.required_queue_plan_pending_obligations_for_entrypoints(
+            block.external_entrypoints_cloned(),
+        )
+        .map(|_| ())
+    }
     pub(crate) fn resolve_queue_plan_pending_obligations_from_block(
         &mut self,
         block: &SignedBlock,
     ) -> Result<(), MergeLedgerCommitError> {
-        self.resolve_queue_plan_pending_obligations_for_entrypoints(
-            block
-                .external_entrypoints_cloned()
-                .map(|entrypoint| entrypoint.hash()),
-        )
+        let required = self.required_queue_plan_pending_obligations_for_entrypoints(
+            block.external_entrypoints_cloned(),
+        )?;
+        self.resolve_required_queue_plan_pending_obligations(required)
     }
     fn stage_merge_execution_markers(
         &mut self,

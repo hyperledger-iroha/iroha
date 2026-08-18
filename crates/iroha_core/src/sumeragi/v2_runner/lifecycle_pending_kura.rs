@@ -441,6 +441,8 @@ fn run_pending_active_height(
     retransmit_interval: Duration,
 ) -> Result<Option<(PreparedPendingKuraSuccessorV1, RetainedMergeSidecars)>, V2RunnerError> {
     let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval);
+    let mut finalized_canonical_lane_body_recovered = false;
+    let mut reported_finalized_lane_wait = false;
     loop {
         activated.with_runner_runtime(&mut active_runner, |_executor, _services, lane_work| {
             committed_lane_status_publisher.publish_if_changed(lane_work)
@@ -559,7 +561,35 @@ fn run_pending_active_height(
         activated.with_runner_runtime(&mut active_runner, |_executor, _services, lane_work| {
             committed_lane_status_publisher.publish_if_changed(lane_work)
         });
-        if !ready {
+        let rollover_ready = if ready {
+            activated.with_runner_runtime(&mut active_runner, |executor, services, lane_work| {
+                super::lifecycle_run_inner::finalized_lane_output_is_durable(
+                    executor,
+                    services,
+                    lane_work,
+                    &mut finalized_canonical_lane_body_recovered,
+                )
+            })?
+        } else {
+            false
+        };
+        if !rollover_ready && ready && !reported_finalized_lane_wait {
+            iroha_logger::info!(
+                height = context.height,
+                "holding recovered finalized height until lane certificate and application receipt are durable"
+            );
+            reported_finalized_lane_wait = true;
+        } else if rollover_ready && reported_finalized_lane_wait {
+            iroha_logger::info!(
+                height = context.height,
+                "recovered finalized lane durability completed; releasing successor activation"
+            );
+            reported_finalized_lane_wait = false;
+        }
+        activated.with_runner_runtime(&mut active_runner, |_executor, _services, lane_work| {
+            committed_lane_status_publisher.publish_if_changed(lane_work)
+        });
+        if !rollover_ready {
             let _ = wake_rx.recv_timeout(IDLE_POLL);
             continue;
         }

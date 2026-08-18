@@ -1967,6 +1967,14 @@ fn apply_retransmissions_reuse_one_work_slot() {
     assert_eq!(services.apply_tasks.len(), 9);
     assert_eq!(services.apply_tasks[8].certificate(), &certificate);
     assert!(!executor.status().fail_closed);
+    executor.runtime.effect_owners.clear();
+    executor
+        .consume_effects(vec![effect], &mut services)
+        .expect("an exact duplicate decision carrier retains the live Apply owner");
+    assert_eq!(services.apply_tasks.len(), 10);
+    assert_eq!(services.apply_tasks[9].id(), id);
+    assert_eq!(services.apply_tasks[9].lifecycle_ordinal(), lifecycle_ordinal);
+    assert!(!executor.status().fail_closed);
     let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
     conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
         Hash::new(b"conflicting terminal parent state"),
@@ -1988,7 +1996,7 @@ fn apply_retransmissions_reuse_one_work_slot() {
         Err(EffectExecutorError::Contract(reason))
             if reason == "conflicting Apply retransmission for one height"
     ));
-    assert_eq!(services.apply_tasks.len(), 9);
+    assert_eq!(services.apply_tasks.len(), 10);
     assert!(executor.status().fail_closed);
 }
 #[test]
@@ -2035,7 +2043,13 @@ fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write(
     // the production timer/CommitQC race which rediscovered Apply first.
     // The runtime retains its authoritative incarnation after finality;
     // the durable completion itself remains the exact retry tombstone.
-    for _ in 0..8 {
+    executor.runtime.effect_owners.clear();
+    executor
+        .consume_effects(vec![effect.clone()], &mut services)
+        .expect("coalesce a foreign-owner exact Apply after durable finality");
+    assert_eq!(services.apply_tasks.len(), 1);
+    assert_eq!(executor.runtime.completions, completions_before);
+    for _ in 0..7 {
         executor
             .consume_effects(vec![effect.clone()], &mut services)
             .expect("coalesce post-finality Apply retransmission");
@@ -2292,6 +2306,7 @@ fn tc_body_rebind_uses_the_effective_local_lock_when_the_tc_omits_or_lowers_it()
         .expect("begin local-lock fetch");
     let work_id = services.fetch_tasks[0].id();
     let omitted = timeout_at_view(&fixture, 1);
+    executor.runtime.round_tag = Some(consumer_tag(2));
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {
@@ -2304,6 +2319,7 @@ fn tc_body_rebind_uses_the_effective_local_lock_when_the_tc_omits_or_lowers_it()
         .expect("an omitted TC high cannot lower the effective local lock");
     let mut lowered = timeout_at_view(&fixture, 2);
     lowered.groups[0].highest_prepare_qc = Some(fixture.qc(wire::GlobalPhase::Prepare));
+    executor.runtime.round_tag = Some(consumer_tag(3));
     executor
         .consume_effects(
             vec![AdapterEffect::EnterView {
@@ -2338,6 +2354,7 @@ fn enter_view_rejects_a_tc_high_without_an_effective_protected_lock() {
     let mut services = fixture.services();
     let mut timeout = timeout_at_view(&fixture, 0);
     timeout.groups[0].highest_prepare_qc = Some(fixture.qc(wire::GlobalPhase::Prepare));
+    executor.runtime.round_tag = Some(tag(1));
     assert!(matches!(
         executor.consume_effects(
             vec![AdapterEffect::EnterView {
@@ -2368,6 +2385,7 @@ fn enter_view_rejects_a_protected_lock_with_a_conflicting_execution_commitment()
         1,
         Hash::new(b"conflicting EnterView executed block"),
     );
+    executor.runtime.round_tag = Some(tag(1));
 
     assert!(matches!(
         executor.consume_effects(

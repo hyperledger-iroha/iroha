@@ -3240,7 +3240,10 @@ mod tests {
     use super::*;
     use iroha_crypto::Hash;
     fn digest(seed: u8) -> LifecycleDigest {
-        LifecycleDigest::new([seed; 32])
+        let hash = Hash::new([seed]);
+        let mut bytes = [0_u8; 32];
+        bytes.copy_from_slice(hash.as_ref());
+        LifecycleDigest::new(bytes)
     }
     fn context(seed: u8) -> LifecycleContext {
         LifecycleContext::new(digest(seed), 7)
@@ -3249,10 +3252,8 @@ mod tests {
         HashOf::from_untyped_unchecked(Hash::new([seed]))
     }
     fn fetch_key(context: LifecycleContext, seed: u8) -> LifecycleKey {
-        super::super::replay_authority::exact_record_fixture(
-            context,
-            LifecycleStageKind::FetchBody,
-            seed,
+        super::super::replay_authority::durable_certified_fetch_waiting_record_fixture(
+            context, seed,
         )
         .key
     }
@@ -3269,9 +3270,8 @@ mod tests {
         let source = certified_fetch_wait_source(request_hash);
         let wait = WaitToken::new(source, generation);
         let slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
-        let replay = super::super::replay_authority::exact_record_fixture(
+        let replay = super::super::replay_authority::durable_certified_fetch_waiting_record_fixture(
             context,
-            LifecycleStageKind::FetchBody,
             u8::try_from(key.round().view()).expect("fixture Fetch view fits u8"),
         );
         assert_eq!(replay.key, key);
@@ -3782,11 +3782,9 @@ mod tests {
         );
         let other_key = fetch_key(context, 0x42);
         let other_root = CausalRoot::new(digest(0x43));
-        let other_slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 1);
-        let replay = super::super::replay_authority::exact_record_fixture(
-            context,
-            LifecycleStageKind::FetchBody,
-            0x42,
+        let other_slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
+        let replay = super::super::replay_authority::durable_certified_fetch_waiting_record_fixture(
+            context, 0x42,
         );
         assert_eq!(replay.key, other_key);
         let other = CandidateAdmission::new(
@@ -3794,17 +3792,26 @@ mod tests {
             other_root,
             LifecycleWorkClass::Fetch,
             LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent),
-            InitialLifecycleState::Waiting(WaitToken::new(authority.wait_source(), 6)),
+            InitialLifecycleState::Ready,
             other_root.digest(),
             DurablePayloadReference::None,
             replay.authority,
             PhysicalGeometry::new([PhysicalSlot::new(other_slot, digest(0x44))], [other_slot]),
             None,
         );
-        assert!(matches!(
-            coordinator.admit(AdmissionRequest::Candidate(other)),
-            AdmissionDecision::Admitted { .. }
-        ));
+        let AdmissionDecision::Admitted {
+            ordinal: other_ordinal,
+            ..
+        } = coordinator.admit(AdmissionRequest::Candidate(other))
+        else {
+            panic!("second sealed certified-Fetch fixture must admit")
+        };
+        coordinator.ready_index.remove(&other_ordinal);
+        coordinator
+            .records
+            .get_mut(&other_ordinal)
+            .expect("second admitted Fetch row")
+            .state = LifecycleState::Waiting(WaitToken::new(authority.wait_source(), 6));
         let before = coordinator.clone();
         assert_eq!(
             coordinator.publish_certified_fetch_ready_authority(authority),

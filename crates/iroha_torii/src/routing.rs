@@ -11754,6 +11754,18 @@ fn push_accepted_transaction_for_ingress_with_durability(
     accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
     routing: IngressRouting,
 ) -> Result<RoutingDecision> {
+    if accepted_tx.entrypoint().admission_intent()
+        == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    {
+        return Err(Error::PushIntoQueue {
+            source: Box::new(iroha_core::queue::Error::UnresolvedRoute {
+                reason:
+                    "QueuePlanSynced transaction requires the globally certified admission path"
+                        .to_owned(),
+            }),
+            backpressure: queue.current_backpressure(),
+        });
+    }
     let pressure = {
         let block_time = state.sumeragi_block_cadence();
         queue.refresh_pressure_budget_from_block_time(block_time)
@@ -11830,6 +11842,18 @@ pub(crate) fn push_accepted_transactions_for_ingress_with_routing_plans(
 ) -> Result<usize> {
     if accepted.is_empty() {
         return Ok(0);
+    }
+    if accepted.iter().any(|(transaction, _)| {
+        transaction.entrypoint().admission_intent()
+            == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    }) {
+        return Err(Error::PushIntoQueue {
+            source: Box::new(iroha_core::queue::Error::UnresolvedRoute {
+                reason: "QueuePlanSynced transaction batch requires per-entry globally certified admission"
+                    .to_owned(),
+            }),
+            backpressure: queue.current_backpressure(),
+        });
     }
     let pressure = {
         let block_time = state.sumeragi_block_cadence();

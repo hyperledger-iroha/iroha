@@ -624,6 +624,41 @@ fn service_retained_certified_response(
     Ok(true)
 }
 
+/// Keep the finalized height live until every lane result named by its block
+/// has crossed the certificate and application-receipt fsync boundaries.
+///
+/// The executor's WAL and current-height exact-output service remain owned
+/// while this returns `false`, so lane votes can continue normally and a crash
+/// reopens the same height instead of misclassifying it as a complete tip.
+pub(super) fn finalized_lane_output_is_durable(
+    executor: &V2EffectExecutor<SerializedV2Runtime>,
+    services: &ProductionV2Services,
+    lane_work: &mut V2LaneWorkAdapter,
+    canonical_body_recovered: &mut bool,
+) -> Result<bool, V2RunnerError> {
+    if !executor.ready_to_finish() {
+        return Ok(false);
+    }
+    if !services.matches_lifecycle_lane_work(lane_work) {
+        return Err(V2RunnerError::Service(
+            "finalized lane durability belongs to another lifecycle service owner".to_owned(),
+        ));
+    }
+    let (receipt, artifact) = executor.durable_finality().ok_or_else(|| {
+        V2RunnerError::Service(
+            "ready Sumeragi v2 executor has no durable finality artifact".to_owned(),
+        )
+    })?;
+    if !*canonical_body_recovered {
+        let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
+        *canonical_body_recovered = true;
+    }
+    lane_work.persist_anchored_sessions()?;
+    lane_work
+        .durable_completion_matches_finality(artifact)
+        .map_err(V2RunnerError::Service)
+}
+
 /// Consume one ready lifecycle height through exact output handoff, store
 /// retirement, and worker cleanup around a caller-authenticated successor.
 pub(in crate::sumeragi) fn finalize_lifecycle_height<T>(
@@ -703,6 +738,8 @@ fn run_lifecycle_active_height(
     let mut next_npos_vrf_retransmit = deadline_after(height_started_at, retransmit_interval);
     let mut block_sync_request = None;
     let mut admitted_discovered_commit_qc = false;
+    let mut finalized_canonical_lane_body_recovered = false;
+    let mut reported_finalized_lane_wait = false;
 
     loop {
         committed_lane_status_publisher.publish_if_changed(&lane_work);
@@ -1003,7 +1040,36 @@ fn run_lifecycle_active_height(
             }
         }
 
-        if ready_to_finish {
+        let rollover_ready = if ready_to_finish {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, services, _local_proposal| {
+                    finalized_lane_output_is_durable(
+                        executor,
+                        services,
+                        &mut lane_work,
+                        &mut finalized_canonical_lane_body_recovered,
+                    )
+                },
+            )?
+        } else {
+            false
+        };
+        if !rollover_ready && ready_to_finish && !reported_finalized_lane_wait {
+            iroha_logger::info!(
+                height = context.height,
+                "holding finalized height until lane certificate and application receipt are durable"
+            );
+            reported_finalized_lane_wait = true;
+        } else if rollover_ready && reported_finalized_lane_wait {
+            iroha_logger::info!(
+                height = context.height,
+                "finalized lane durability completed; releasing successor activation"
+            );
+            reported_finalized_lane_wait = false;
+        }
+
+        if rollover_ready {
             let (prepared_successor, retained_merge_sidecars, cleanup) = finalize_lifecycle_height(
                 activated,
                 &mut active_runner,

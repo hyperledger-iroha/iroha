@@ -1320,7 +1320,7 @@ deferred-canonical-carrier completion regressions produced the historical
 rows brings the historical 856-test, 40-module checkpoint. The exact retired-
 attempt accessor, mixed-carrier successor, two-link cold-restart hydration, and
 noncanonical autonomous-output retirement regressions bring the current
-source-bound inventory to 860 exact tests across 40 modules and 88 pre-network
+source-bound inventory to 860 exact tests across 43 modules and 91 pre-network
 legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1329,7 +1329,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329`.
+`b6457553bc8d41f74ebc708ea3d4e6187117f0f008da2c2dea697b0771741b44`.
 Nine of those legs execute the separate 527-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 528 TSV lines and has SHA-256
 `5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d`.
@@ -2215,7 +2215,7 @@ respectively; the canonical ordered IDs are recorded in the
 [multilane rehearsal runbook](runbooks/nexus_multilane_rehearsal.md#protected-release-approval-contract)
 and source-bound by `sumeragi_v2_release_approval_contract.py`. The canonical
 ordered operation-record SHA-256 values, in the same class order, are
-`4124c633d52744528f04a732149adce9d4e94b83437a6b121bf7087b03c95262`,
+`aba5987e1a69dba70c8ef47478ecbf748165f13c3131045594473d47a5a9e95f`,
 `eb9f0283898f09d23970f1d6511d250b17107a0ad80fc65e1adbe1ef0b1b19bb`,
 `e922b8afbfe4848e8b2b5f858654477a28d710c3afcf7698a77276a8294681cf`,
 and `76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd`.
