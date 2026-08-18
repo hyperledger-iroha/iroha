@@ -700,10 +700,12 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert_source_tokens_in_order(
         leader_wire_drop,
         &[
-            "self.ingress.close()",
-            "self.ingress.unbind_leader_wire_lifecycle_gate(&gate)",
+            "let Some(gate) = self.gate.as_ref().cloned()",
+            "self.ingress.retire_leader_wire_lifecycle_gate(&gate)?",
+            "self.gate = None",
         ],
     );
+    assert!(!leader_wire_drop.contains("self.gate.take()"));
     assert!(source.contains("impl Drop for ProductionV2CompletionObserverActivationPermitSealV1"));
     let worker_start = source_region(
         worker_source,

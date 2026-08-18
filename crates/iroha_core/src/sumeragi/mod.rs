@@ -4885,6 +4885,107 @@ impl FairV2Ingress {
         self.debug_assert_consistent(&state);
         Ok(())
     }
+    /// Seal one height, durably park its queued productive carriers, and detach.
+    ///
+    /// `service_lock` excludes a consumer whose predicate snapshot temporarily
+    /// lives outside the state mutex. Closing under the state mutex then excludes
+    /// every producer. Productive carriers are returned to Dormant before any
+    /// volatile queue bytes disappear; auxiliary and future packets own no
+    /// height lifecycle and may be retransmitted into the successor ingress.
+    pub(crate) fn retire_leader_wire_lifecycle_gate(
+        &self,
+        gate: &Arc<serviced_candidate_store::LeaderWireLifecycleStoreGate>,
+    ) -> Result<(), String> {
+        let _service_guard = self.service_lock.lock();
+        let mut state = self.state.lock();
+        state.open = false;
+        let bound = state
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "leader-wire lifecycle gate was already unbound".to_owned())?;
+        if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(&bound, gate) {
+            return Err("leader-wire lifecycle gate changed per-height ownership".to_owned());
+        }
+        let (context_id, height) = state
+            .leader_wire_context
+            .ok_or_else(|| "leader-wire lifecycle gate lost its height context".to_owned())?;
+        let mut carriers = BTreeMap::new();
+        for entry in state
+            .lanes
+            .values()
+            .flat_map(|lane| lane.entries.iter())
+        {
+            let Some(inbound_ownership) = entry.inbound.ingress_ownership() else {
+                return Err(
+                    "sealed leader-wire ingress lost queued ownership evidence".to_owned(),
+                );
+            };
+            if !inbound_ownership.validate_exact()
+                || !entry.ownership_snapshot.validate_exact()
+                || entry.leader_wire_token.as_ref()
+                    != inbound_ownership.leader_wire_token()
+                || entry.leader_wire_token.as_ref()
+                    != entry.ownership_snapshot.leader_wire_token()
+            {
+                return Err(
+                    "sealed leader-wire ingress changed a queued ownership projection".to_owned(),
+                );
+            }
+            let Some(token) = entry.leader_wire_token.as_ref() else {
+                continue;
+            };
+            if token.identity.context_id != context_id
+                || token.identity.height != height
+                || carriers.insert(token.slot.clone(), token.clone()).is_some()
+            {
+                return Err(
+                    "sealed leader-wire ingress changed its exact retiring carrier set".to_owned(),
+                );
+            }
+        }
+        let mirrored_ingress = state
+            .leader_wire_lifecycles
+            .iter()
+            .filter_map(|(slot, record)| {
+                (record.status == FairV2IngressLeaderWireStatus::Ingress)
+                    .then(|| (slot.clone(), record.token.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        if carriers != mirrored_ingress {
+            return Err(
+                "sealed leader-wire ingress disagreed with live carrier ownership".to_owned(),
+            );
+        }
+        let retirement = bound.park_sealed_ingress(carriers.clone())?;
+
+        let mut empty_lanes = state
+            .roster
+            .iter()
+            .cloned()
+            .map(|peer| {
+                (
+                    FairV2IngressSource::Validator(peer),
+                    FairV2IngressLane::default(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        empty_lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
+        state.lanes = empty_lanes;
+        state.pending_wire_owners.clear();
+        state.ready.clear();
+        state.len = 0;
+        state.bytes = 0;
+        state.nonempty_since = None;
+        state.last_service_attempt_at = None;
+        state.leader_wire_lifecycles.clear();
+        state.leader_wire_lifecycle_gate = None;
+        state.leader_wire_lifecycle_ordinals = None;
+        state.leader_wire_context = None;
+        self.debug_assert_consistent(&state);
+        retirement.complete();
+        Ok(())
+    }
     /// Open admission for the already-configured immutable height.
     pub(crate) fn open(&self) -> Result<(), FairV2IngressCapacityError> {
         let mut state = self.state.lock();

@@ -186,13 +186,11 @@ impl ProductionLeaderWireIngressBindingV1 {
         })
     }
     fn retire(&mut self) -> Result<(), String> {
-        let Some(gate) = self.gate.take() else {
+        let Some(gate) = self.gate.as_ref().cloned() else {
             return Ok(());
         };
-        self.ingress.close();
-        if let Err(error) = self.ingress.unbind_leader_wire_lifecycle_gate(&gate) {
-            return Err(error);
-        }
+        self.ingress.retire_leader_wire_lifecycle_gate(&gate)?;
+        self.gate = None;
         Ok(())
     }
 }

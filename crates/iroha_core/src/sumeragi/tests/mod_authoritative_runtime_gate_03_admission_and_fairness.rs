@@ -456,6 +456,466 @@ fn full_ingress_does_not_persist_a_carrierless_leader_wire_barrier() {
     );
 }
 #[test]
+fn sealed_height_retirement_parks_late_productive_ingress_before_volatile_release() {
+    let ingress = Arc::new(super::FairV2Ingress::new(64, 1 << 20, 1 << 18, 0, 0));
+    let validator = PeerId::new(KeyPair::random().public_key().clone());
+    let proposal_message = v2_maximum_structural_proposal_wire(minimal_rs16_layout(), 1);
+    let BlockMessage::V2(proposal_envelope) = &proposal_message else {
+        unreachable!("proposal fixture is a v2 envelope");
+    };
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = &proposal_envelope.payload else {
+        unreachable!("proposal fixture carries Proposal");
+    };
+    let round = proposal.round;
+    let directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::new(
+            v2_commit_certificate_request(0, &validator),
+            Some(validator.clone()),
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::new(
+            proposal_message,
+            Some(validator.clone()),
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let (gate, token) = {
+        let state = ingress.state.lock();
+        assert_eq!(state.len, 2, "the rollover race retains both raw carriers");
+        let gate = state
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .cloned()
+            .expect("the exact height gate remains bound");
+        let token = state
+            .leader_wire_lifecycles
+            .values()
+            .find(|record| record.status == super::FairV2IngressLeaderWireStatus::Ingress)
+            .expect("the productive carrier owns one durable Ingress lifecycle")
+            .token
+            .clone();
+        (gate, token)
+    };
+
+    ingress
+        .retire_leader_wire_lifecycle_gate(&gate)
+        .expect("sealed rollover parks the admitted productive carrier");
+    {
+        let state = ingress.state.lock();
+        assert!(!state.open);
+        assert_eq!(state.len, 0);
+        assert_eq!(state.bytes, 0);
+        assert!(state.ready.is_empty());
+        assert!(state.pending_wire_owners.is_empty());
+        assert!(state.leader_wire_lifecycles.is_empty());
+        assert!(state.leader_wire_lifecycle_gate.is_none());
+    }
+    assert_eq!(
+        gate.earliest_ingress_scheduler_ordinal()
+            .expect("inspect sealed selector ownership"),
+        None,
+        "a parked carrier cannot survive as an active cold-start selector owner"
+    );
+    drop(gate);
+    drop(ingress);
+
+    let owner = [0xA6; 32];
+    let roster = [validator].into_iter().collect();
+    let capacity =
+        super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(1, 2)
+            .expect("finite leader-wire geometry");
+    let recovery_authority =
+        super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            round.context_id,
+            round.height,
+            owner,
+            0,
+            false,
+        );
+    let (reopened, restore) = super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+        &directory.path().join("safety.wal"),
+        round.context_id,
+        round.height,
+        owner,
+        roster,
+        capacity,
+        2,
+        recovery_authority,
+        &[],
+        &[],
+    )
+    .expect("cold-open the gate after sealed rollover");
+    assert_eq!(restore.records().len(), 1);
+    assert_eq!(restore.records()[0].token(), &token);
+    assert_eq!(
+        restore.records()[0].status(),
+        super::serviced_candidate_store::LeaderWireLifecycleStatus::Dormant
+    );
+    assert_eq!(restore.last_admission_ordinal(), token.admission_ordinal());
+    assert_eq!(
+        restore.scheduler_ordinal_high_watermark(),
+        token.scheduler_ordinal()
+    );
+    assert_eq!(
+        reopened
+            .earliest_ingress_scheduler_ordinal()
+            .expect("inspect cold selector ownership"),
+        None,
+        "a parked sidecar carrier cannot reopen as active ingress ownership"
+    );
+}
+
+#[test]
+fn sealed_height_retirement_crash_after_dormant_fsync_reopens_without_a_carrier() {
+    let ingress = Arc::new(super::FairV2Ingress::new(64, 1 << 20, 1 << 18, 0, 0));
+    let validator = PeerId::new(KeyPair::random().public_key().clone());
+    let proposal_message = v2_maximum_structural_proposal_wire(minimal_rs16_layout(), 1);
+    let BlockMessage::V2(proposal_envelope) = &proposal_message else {
+        unreachable!("proposal fixture is a v2 envelope");
+    };
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = &proposal_envelope.payload else {
+        unreachable!("proposal fixture carries Proposal");
+    };
+    let round = proposal.round;
+    let directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::new(
+            proposal_message,
+            Some(validator.clone()),
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let (gate, carriers, token) = {
+        let state = ingress.state.lock();
+        let gate = state
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .cloned()
+            .expect("the exact height gate remains bound");
+        let carriers = state
+            .lanes
+            .values()
+            .flat_map(|lane| lane.entries.iter())
+            .filter_map(|entry| entry.leader_wire_token.as_ref())
+            .map(|token| (token.slot.clone(), token.clone()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let token = carriers
+            .values()
+            .next()
+            .expect("the productive proposal retains one physical carrier")
+            .clone();
+        (gate, carriers, token)
+    };
+    let retirement = gate
+        .park_sealed_ingress(carriers.clone())
+        .expect("publish the Dormant cut before the injected crash");
+    assert!(retirement.exactly_matches(&gate, &carriers));
+    // Inject the process cut before the infallible volatile-clear tail. Both the
+    // fair queue and its in-memory mirror disappear with the process owner.
+    retirement.abandon_at_crash_cut();
+    drop(ingress);
+    drop(gate);
+
+    let owner = [0xA6; 32];
+    let roster = [validator].into_iter().collect();
+    let capacity =
+        super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(1, 2)
+            .expect("finite leader-wire geometry");
+    let recovery_authority =
+        super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            round.context_id,
+            round.height,
+            owner,
+            0,
+            false,
+        );
+    let (reopened, restore) = super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
+        &directory.path().join("safety.wal"),
+        round.context_id,
+        round.height,
+        owner,
+        roster,
+        capacity,
+        2,
+        recovery_authority,
+        &[],
+        &[],
+    )
+    .expect("cold-open the post-fsync crash cut");
+    assert_eq!(restore.records().len(), 1);
+    assert_eq!(restore.records()[0].token(), &token);
+    assert_eq!(
+        restore.records()[0].status(),
+        super::serviced_candidate_store::LeaderWireLifecycleStatus::Dormant
+    );
+    assert_eq!(
+        reopened
+            .earliest_ingress_scheduler_ordinal()
+            .expect("inspect post-crash selector ownership"),
+        None
+    );
+}
+
+#[test]
+fn sealed_height_retirement_persistence_failure_keeps_the_exact_carrier_bound() {
+    let ingress = Arc::new(super::FairV2Ingress::new(64, 1 << 20, 1 << 18, 0, 0));
+    let validator = PeerId::new(KeyPair::random().public_key().clone());
+    let proposal_message = v2_maximum_structural_proposal_wire(minimal_rs16_layout(), 1);
+    let BlockMessage::V2(proposal_envelope) = &proposal_message else {
+        unreachable!("proposal fixture is a v2 envelope");
+    };
+    let wire::ConsensusMessageV2Payload::Proposal(proposal) = &proposal_envelope.payload else {
+        unreachable!("proposal fixture carries Proposal");
+    };
+    let directory = bind_test_leader_wire_gate(&ingress, &validator, proposal.round, 2);
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::new(proposal_message, Some(validator),)),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let (gate, token) = {
+        let state = ingress.state.lock();
+        let record = state
+            .leader_wire_lifecycles
+            .values()
+            .next()
+            .expect("the admitted proposal owns its exact lifecycle");
+        (
+            state
+                .leader_wire_lifecycle_gate
+                .as_ref()
+                .cloned()
+                .expect("the exact gate remains bound"),
+            record.token.clone(),
+        )
+    };
+    let snapshot = directory.path().join("safety.wal.leader-wire-lifecycles");
+    std::fs::remove_file(&snapshot).expect("remove the test snapshot");
+    std::fs::create_dir(&snapshot).expect("block atomic snapshot replacement");
+    assert!(
+        ingress.retire_leader_wire_lifecycle_gate(&gate).is_err(),
+        "the volatile carrier cannot clear before Dormant fsync"
+    );
+    {
+        let state = ingress.state.lock();
+        assert!(!state.open, "persistence failure must remain fail closed");
+        assert_eq!(state.len, 1);
+        assert!(
+            state
+                .leader_wire_lifecycle_gate
+                .as_ref()
+                .is_some_and(|bound| {
+                    super::serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(
+                        bound, &gate,
+                    )
+                })
+        );
+        assert_eq!(
+            state.leader_wire_lifecycles[&token.slot].status,
+            super::FairV2IngressLeaderWireStatus::Ingress
+        );
+        assert!(
+            state
+                .lanes
+                .values()
+                .flat_map(|lane| lane.entries.iter())
+                .any(|entry| entry.leader_wire_token.as_ref() == Some(&token))
+        );
+    }
+    assert_eq!(
+        gate.restore().expect("inspect rolled-back gate").records()[0].status(),
+        super::serviced_candidate_store::LeaderWireLifecycleStatus::Ingress
+    );
+    std::fs::remove_dir(&snapshot).expect("restore the test publication target");
+    ingress
+        .retire_leader_wire_lifecycle_gate(&gate)
+        .expect("the retained authority retries the exact retirement");
+}
+
+#[test]
+fn sealed_height_retirement_parks_ingress_without_consuming_runtime_owners() {
+    let ingress = Arc::new(super::FairV2Ingress::new(64, 1 << 20, 1 << 18, 0, 0));
+    let validator = PeerId::new(KeyPair::random().public_key().clone());
+    let proposal = v2_maximum_structural_proposal_wire(minimal_rs16_layout(), 1);
+    let BlockMessage::V2(proposal_envelope) = &proposal else {
+        unreachable!("proposal fixture is a v2 envelope");
+    };
+    let wire::ConsensusMessageV2Payload::Proposal(proposal_payload) = &proposal_envelope.payload
+    else {
+        unreachable!("proposal fixture carries Proposal");
+    };
+    let round = proposal_payload.round;
+    let _directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
+    let mut timeout = v2_timeout_vote();
+    let BlockMessage::V2(timeout_envelope) = &mut timeout else {
+        unreachable!("timeout fixture is a v2 envelope");
+    };
+    let wire::ConsensusMessageV2Payload::TimeoutVote(timeout_vote) = &mut timeout_envelope.payload
+    else {
+        unreachable!("timeout fixture carries TimeoutVote");
+    };
+    timeout_vote.round = round;
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::new(
+            proposal,
+            Some(validator.clone()),
+        )),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let selected = ingress
+        .try_recv_if(|inbound| {
+            matches!(
+                inbound.message(),
+                BlockMessage::V2(wire::ConsensusMessageV2 {
+                    payload: wire::ConsensusMessageV2Payload::Proposal(_),
+                    ..
+                })
+            )
+        })
+        .expect("the proposal crosses into exact Runtime ownership");
+    assert!(
+        selected
+            .ingress_ownership()
+            .is_some_and(|ownership| ownership.leader_wire_runtime_receipt().is_some())
+    );
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::new(timeout, Some(validator))),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let gate = ingress
+        .state
+        .lock()
+        .leader_wire_lifecycle_gate
+        .as_ref()
+        .cloned()
+        .expect("the mixed Runtime and Ingress owners retain their gate");
+
+    ingress
+        .retire_leader_wire_lifecycle_gate(&gate)
+        .expect("retirement parks only the physical Ingress owner");
+    let restore = gate.restore().expect("inspect the exact mixed durable cut");
+    assert_eq!(restore.records().len(), 2);
+    assert_eq!(
+        restore
+            .records()
+            .iter()
+            .filter(|record| {
+                record.status()
+                    == super::serviced_candidate_store::LeaderWireLifecycleStatus::Dormant
+            })
+            .count(),
+        1,
+        "only the queued timeout returns to Dormant"
+    );
+    assert_eq!(
+        restore
+            .records()
+            .iter()
+            .filter(|record| {
+                record.status()
+                    == super::serviced_candidate_store::LeaderWireLifecycleStatus::Runtime
+            })
+            .count(),
+        1,
+        "the unrelated downstream Runtime owner remains untouched"
+    );
+}
+
+#[test]
+fn sealed_height_retirement_requires_all_three_queued_token_projections() {
+    let ingress = Arc::new(super::FairV2Ingress::new(64, 1 << 20, 1 << 18, 0, 0));
+    let validator = PeerId::new(KeyPair::random().public_key().clone());
+    let proposal = v2_maximum_structural_proposal_wire(minimal_rs16_layout(), 1);
+    let BlockMessage::V2(proposal_envelope) = &proposal else {
+        unreachable!("proposal fixture is a v2 envelope");
+    };
+    let wire::ConsensusMessageV2Payload::Proposal(proposal_payload) = &proposal_envelope.payload
+    else {
+        unreachable!("proposal fixture carries Proposal");
+    };
+    let _directory = bind_test_leader_wire_gate(&ingress, &validator, proposal_payload.round, 2);
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::new(proposal, Some(validator))),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let (gate, token) = {
+        let mut state = ingress.state.lock();
+        let gate = state
+            .leader_wire_lifecycle_gate
+            .as_ref()
+            .cloned()
+            .expect("the exact gate remains bound");
+        let entry = state
+            .lanes
+            .values_mut()
+            .flat_map(|lane| lane.entries.iter_mut())
+            .next()
+            .expect("one productive entry remains queued");
+        let token = entry
+            .leader_wire_token
+            .take()
+            .expect("the side field owns the productive token");
+        (gate, token)
+    };
+    assert!(
+        ingress.retire_leader_wire_lifecycle_gate(&gate).is_err(),
+        "the side-field token cannot disagree with the two sealed evidence carriers"
+    );
+    {
+        let mut state = ingress.state.lock();
+        let entry = state
+            .lanes
+            .values_mut()
+            .flat_map(|lane| lane.entries.iter_mut())
+            .next()
+            .expect("the rejected retirement retains the entry");
+        entry.leader_wire_token = Some(token.clone());
+        Arc::make_mut(&mut entry.inbound)
+            .ingress_ownership
+            .as_mut()
+            .expect("the inbound envelope retains its evidence")
+            .leader_wire_token = None;
+    }
+    assert!(
+        ingress.retire_leader_wire_lifecycle_gate(&gate).is_err(),
+        "the inbound token cannot disagree with the side field and immutable snapshot"
+    );
+    {
+        let mut state = ingress.state.lock();
+        let entry = state
+            .lanes
+            .values_mut()
+            .flat_map(|lane| lane.entries.iter_mut())
+            .next()
+            .expect("the second rejected retirement retains the entry");
+        Arc::make_mut(&mut entry.inbound)
+            .ingress_ownership
+            .as_mut()
+            .expect("the inbound envelope retains its evidence")
+            .leader_wire_token = Some(token.clone());
+        Arc::make_mut(&mut entry.ownership_snapshot).leader_wire_token = None;
+    }
+    assert!(
+        ingress.retire_leader_wire_lifecycle_gate(&gate).is_err(),
+        "the immutable snapshot cannot disagree with both physical projections"
+    );
+    {
+        let mut state = ingress.state.lock();
+        let entry = state
+            .lanes
+            .values_mut()
+            .flat_map(|lane| lane.entries.iter_mut())
+            .next()
+            .expect("the third rejected retirement retains the entry");
+        Arc::make_mut(&mut entry.ownership_snapshot).leader_wire_token = Some(token);
+    }
+    ingress
+        .retire_leader_wire_lifecycle_gate(&gate)
+        .expect("three exact token projections permit the sealed retirement");
+}
+#[test]
 fn delayed_proposal_keeps_first_chunk_lossless_without_a_global_orphan_barrier() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
     ingress.close();
@@ -1193,13 +1653,13 @@ fn saturated_lane_ingress_returns_the_exact_owned_message_for_retry() {
 }
 #[test]
 fn sidecar_allocations_defer_historical_roster_proof_to_bounded_lane_owner() {
-    use std::num::NonZeroU64;
     use crate::merge_sidecar::{
         CERTIFIED_MERGE_SIDECAR_VERSION_V1, CertifiedMergeSidecarCloseV1,
         CertifiedMergeSidecarMessage, CertifiedMergeSidecarRequestV1,
         CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
         CertifiedMergeSidecarStreamEpochV1,
     };
+    use std::num::NonZeroU64;
     let ingress_capacity = super::fair_v2_ingress_required_capacity(1, None)
         .expect("one-validator ingress geometry is representable");
     assert_eq!(ingress_capacity, 7);
