@@ -3408,15 +3408,10 @@ fn fair_v2_ingress_required_capacity(
             .checked_mul(5)
             .and_then(|required| required.checked_add(2));
     };
-    let anonymous_slots = if roster_len == 0 { 1 } else { 2 };
-    roster_len
-        .checked_mul(5)
-        .and_then(|required| {
-            authenticated_non_validator_source_capacity
-                .checked_mul(3)
-                .and_then(|authenticated_sources| required.checked_add(authenticated_sources))
-        })
-        .and_then(|required| required.checked_add(anonymous_slots))
+    iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_message_capacity(
+        roster_len,
+        authenticated_non_validator_source_capacity,
+    )
 }
 fn fair_v2_ingress_reserve_ordinary_lifecycle_ordinal(
     state: &FairV2IngressState,
@@ -3481,10 +3476,11 @@ fn fair_v2_ingress_required_byte_capacity(
     authenticated_non_validator_source_capacity: Option<usize>,
     source_byte_capacity: usize,
 ) -> Option<usize> {
-    roster_len
-        .checked_add(authenticated_non_validator_source_capacity.unwrap_or(0))
-        .and_then(|source_count| source_count.checked_add(1))
-        .and_then(|source_count| source_count.checked_mul(source_byte_capacity))
+    iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
+        roster_len,
+        authenticated_non_validator_source_capacity.unwrap_or(0),
+        source_byte_capacity,
+    )
 }
 fn fair_v2_ingress_compact_len_prefix_bytes(value: usize) -> Option<usize> {
     let value = u64::try_from(value).ok()?;
@@ -9173,6 +9169,31 @@ mod authoritative_runtime_gate_tests {
         assert_eq!(first_owner.runtime_physical_cut(), Some(2));
     }
     include!("tests/mod_authoritative_runtime_gate_09_snapshot_and_source_lanes.rs");
+    #[test]
+    fn fair_v2_ingress_production_message_capacity_delegates_to_config_geometry() {
+        for (roster_len, authenticated_sources) in [(0, 0), (4, 2), (5, 2), (31, 2)] {
+            assert_eq!(
+                super::fair_v2_ingress_required_capacity(
+                    roster_len,
+                    Some(authenticated_sources),
+                ),
+                iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_message_capacity(
+                    roster_len,
+                    authenticated_sources,
+                ),
+            );
+        }
+        assert_eq!(
+            super::fair_v2_ingress_required_capacity(0, None),
+            Some(1),
+            "the test-only anonymous geometry remains unchanged",
+        );
+        assert_eq!(
+            super::fair_v2_ingress_required_capacity(4, None),
+            Some(22),
+            "the test-only roster geometry remains unchanged",
+        );
+    }
     #[test]
     fn v2_ingress_rejects_capacity_without_per_validator_progress_reservations() {
         let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(21);

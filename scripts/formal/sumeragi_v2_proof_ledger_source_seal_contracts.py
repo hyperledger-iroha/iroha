@@ -4270,6 +4270,144 @@ public_address = "{network_public_address}"{taira_network_frame_overrides}
                 f"{paths['taira_renderer']}: {renderer_description} must have "
                 "one exact semantic assignment in _scaled_sumeragi_body_bytes"
             )
+        scale_body = functions[0].body if len(functions) == 1 else []
+        source_count_assignments = [
+            statement
+            for statement in scale_body
+            if isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and statement.targets[0].id == "source_count"
+        ]
+        expected_source_count = ast.parse(
+            "source_count = validator_count + authenticated_non_validator_sources + 1"
+        ).body[0]
+        if (
+            len(source_count_assignments) != 1
+            or not isinstance(expected_source_count, ast.Assign)
+            or ast.dump(source_count_assignments[0].value, include_attributes=False)
+            != ast.dump(expected_source_count.value, include_attributes=False)
+        ):
+            errors.append(
+                f"{paths['taira_renderer']}: Taira renderer must derive one exact "
+                "N+H+1 source count before checked aggregate-byte multiplication"
+            )
+        guard_tests = [
+            statement.test for statement in scale_body if isinstance(statement, ast.If)
+        ]
+        expected_guards = [
+            ast.parse("source_count > TOML_I64_MAX", mode="eval").body,
+            ast.parse("source_bytes > TOML_I64_MAX // source_count", mode="eval").body,
+        ]
+        dumped_guards = {
+            ast.dump(test, include_attributes=False) for test in guard_tests
+        }
+        if any(
+            ast.dump(expected_guard, include_attributes=False) not in dumped_guards
+            for expected_guard in expected_guards
+        ):
+            errors.append(
+                f"{paths['taira_renderer']}: Taira renderer must guard both "
+                "source-count addition and aggregate-byte multiplication at the TOML i64 boundary"
+            )
+        integer_helpers = [
+            node
+            for node in renderer_tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_require_positive_integer"
+        ]
+        helper_guard_tests = (
+            [
+                statement.test
+                for statement in integer_helpers[0].body
+                if isinstance(statement, ast.If)
+            ]
+            if len(integer_helpers) == 1
+            else []
+        )
+        expected_helper_guard = ast.parse("value > TOML_I64_MAX", mode="eval").body
+        if ast.dump(expected_helper_guard, include_attributes=False) not in {
+            ast.dump(test, include_attributes=False) for test in helper_guard_tests
+        }:
+            errors.append(
+                f"{paths['taira_renderer']}: Taira renderer positive integers "
+                "must be bounded by the Rust/TOML signed 64-bit maximum"
+            )
+        bodies_functions = [
+            node
+            for node in renderer_tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_scaled_sumeragi_bodies"
+        ]
+        bodies_body = bodies_functions[0].body if len(bodies_functions) == 1 else []
+        bodies_minimum = [
+            statement
+            for statement in bodies_body
+            if isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and statement.targets[0].id == "minimum"
+        ]
+        expected_bodies_minimum = ast.parse(
+            "minimum = 5 * validator_count + 3 * "
+            "authenticated_non_validator_sources + "
+            "(1 if validator_count == 0 else 2)"
+        ).body[0]
+        if (
+            len(bodies_minimum) != 1
+            or not isinstance(expected_bodies_minimum, ast.Assign)
+            or ast.dump(bodies_minimum[0].value, include_attributes=False)
+            != ast.dump(expected_bodies_minimum.value, include_attributes=False)
+        ):
+            errors.append(
+                f"{paths['taira_renderer']}: Taira renderer must derive one "
+                "exact roster-aware 5N+3H+(N==0?1:2) body-message minimum"
+            )
+        bodies_guard_tests = {
+            ast.dump(statement.test, include_attributes=False)
+            for statement in bodies_body
+            if isinstance(statement, ast.If)
+        }
+        expected_bodies_guards = (
+            "validator_count > TOML_I64_MAX // 5",
+            "authenticated_non_validator_sources > "
+            "(TOML_I64_MAX - validator_slots) // 3",
+            "validator_slots + authenticated_slots > "
+            "TOML_I64_MAX - anonymous_slots",
+        )
+        if any(
+            ast.dump(ast.parse(guard, mode="eval").body, include_attributes=False)
+            not in bodies_guard_tests
+            for guard in expected_bodies_guards
+        ):
+            errors.append(
+                f"{paths['taira_renderer']}: Taira renderer must guard every "
+                "roster-aware body-message multiplication and addition at the TOML i64 boundary"
+            )
+        render_functions = [
+            node
+            for node in renderer_tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "render_validator_config"
+        ]
+        render_function = render_functions[0] if len(render_functions) == 1 else None
+        expected_bodies_render = ast.parse(
+            'rendered.append(f"bodies = {sumeragi_bodies}")'
+        ).body[0]
+        renders_bodies = render_function is not None and any(
+            ast.dump(node, include_attributes=False)
+            == ast.dump(expected_bodies_render, include_attributes=False)
+            for node in ast.walk(render_function)
+        )
+        has_bodies_parameter = render_function is not None and any(
+            argument.arg == "sumeragi_bodies"
+            for argument in render_function.args.args
+        )
+        if not renders_bodies or not has_bodies_parameter:
+            errors.append(
+                f"{paths['taira_renderer']}: per-validator rendering must "
+                "install the derived roster-aware sumeragi.queues.bodies capacity"
+            )
 
     config_contracts = (
         (

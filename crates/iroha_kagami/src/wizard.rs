@@ -3,6 +3,7 @@ use crate::{Outcome, RunArgs, tui};
 use clap::{Args as ClapArgs, ValueEnum};
 use color_eyre::eyre::{Context as _, Result, eyre};
 use inquire::{Select, Text};
+use iroha_config::parameters::{actual, defaults};
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, KeyPair, PublicKey, bls_normal_pop_prove, bls_normal_pop_verify,
 };
@@ -671,6 +672,7 @@ fn apply_overrides(
     }
     set_array(config, "trusted_peers", peers);
     set_trusted_peers_pop(config, trusted_pops);
+    ensure_sumeragi_body_ingress(config, trusted_pops.len())?;
     let mut network = table(config, "network");
     let network_template = network
         .get("address")
@@ -816,6 +818,95 @@ fn trusted_peers_pop_value(pops: &BTreeMap<PublicKey, Vec<u8>>) -> TomlValue {
         })
         .collect();
     TomlValue::Array(entries)
+}
+fn ensure_sumeragi_body_ingress(config: &mut TomlValue, validator_roster_len: usize) -> Result<()> {
+    let mut queues = table(config, "sumeragi.queues");
+    let authenticated_non_validator_sources = sumeragi_queue_capacity(
+        &queues,
+        "authenticated_non_validator_sources",
+        defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
+    )?;
+    let body_source_bytes = sumeragi_queue_capacity(
+        &queues,
+        "body_source_bytes",
+        defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+    )?;
+    let configured_bodies = sumeragi_queue_capacity(
+        &queues,
+        "bodies",
+        defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
+    )?;
+    let configured_body_bytes = sumeragi_queue_capacity(
+        &queues,
+        "body_bytes",
+        defaults::sumeragi::QUEUE_BODY_BYTES.get(),
+    )?;
+    let required_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
+        validator_roster_len,
+        authenticated_non_validator_sources,
+    )
+    .ok_or_else(|| {
+        eyre!(
+            "wizard Sumeragi body-message capacity overflowed for {validator_roster_len} validators and {authenticated_non_validator_sources} authenticated non-validator sources"
+        )
+    })?;
+    let required_body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+        validator_roster_len,
+        authenticated_non_validator_sources,
+        body_source_bytes,
+    )
+    .ok_or_else(|| {
+        eyre!(
+            "wizard Sumeragi body-byte capacity overflowed for {validator_roster_len} validators, {authenticated_non_validator_sources} authenticated non-validator sources, and {body_source_bytes} bytes per source"
+        )
+    })?;
+    let mut changed = false;
+    if required_bodies > configured_bodies {
+        queues.insert(
+            "bodies".into(),
+            TomlValue::Integer(i64::try_from(required_bodies).map_err(|_| {
+                eyre!(
+                    "wizard Sumeragi body-message capacity {required_bodies} exceeds the TOML integer range"
+                )
+            })?),
+        );
+        changed = true;
+    }
+    if required_body_bytes > configured_body_bytes {
+        queues.insert(
+            "body_bytes".into(),
+            TomlValue::Integer(i64::try_from(required_body_bytes).map_err(|_| {
+                eyre!(
+                    "wizard Sumeragi body-byte capacity {required_body_bytes} exceeds the TOML integer range"
+                )
+            })?),
+        );
+        changed = true;
+    }
+    if changed {
+        set_table(config, "sumeragi.queues", queues);
+    }
+    Ok(())
+}
+fn sumeragi_queue_capacity(
+    queues: &TomlTable,
+    field: &'static str,
+    default: usize,
+) -> Result<usize> {
+    let Some(value) = queues.get(field) else {
+        return Ok(default);
+    };
+    let value = value
+        .as_integer()
+        .ok_or_else(|| eyre!("wizard template sumeragi.queues.{field} must be an integer"))?;
+    let value = usize::try_from(value)
+        .map_err(|_| eyre!("wizard template sumeragi.queues.{field} must be greater than zero"))?;
+    if value == 0 {
+        return Err(eyre!(
+            "wizard template sumeragi.queues.{field} must be greater than zero"
+        ));
+    }
+    Ok(value)
 }
 fn table(config: &TomlValue, path: &str) -> TomlTable {
     let mut table = TomlTable::new();
@@ -1089,6 +1180,121 @@ mod tests {
             )
         );
         assert_ne!(transport_kp.public_key(), kp.public_key());
+    }
+    #[test]
+    fn wizard_scales_body_ingress_for_seven_validators_without_shrinking_authored_capacity() {
+        let mut local_keypair = None;
+        let mut peers = Vec::new();
+        let mut pops = BTreeMap::new();
+        for index in 0_u8..7 {
+            let keypair =
+                KeyPair::try_from_seed(vec![0xa0_u8.wrapping_add(index); 32], Algorithm::BlsNormal)
+                    .expect("derive deterministic wizard validator fixture");
+            let public_key = keypair.public_key().clone();
+            pops.insert(
+                public_key.clone(),
+                bls_normal_pop_prove(keypair.private_key()).expect("derive validator PoP"),
+            );
+            peers.push(format!(
+                "{public_key}@127.0.0.1:{}",
+                1337_u16 + u16::from(index)
+            ));
+            if index == 0 {
+                local_keypair = Some(keypair);
+            }
+        }
+        let keypair = local_keypair.expect("fixture includes the local validator");
+        let transport_keypair = checked_wizard_transport_keypair();
+        let mut config = build_vanilla_config(
+            "chain-x",
+            &keypair,
+            &transport_keypair,
+            "127.0.0.1",
+            1337,
+            "127.0.0.1",
+            8080,
+            &peers,
+            &pops,
+        );
+        let authenticated_non_validator_sources = 5_usize;
+        let body_source_bytes = defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
+        let mut queues = TomlTable::new();
+        queues.insert(
+            "authenticated_non_validator_sources".into(),
+            TomlValue::Integer(
+                i64::try_from(authenticated_non_validator_sources).expect("fixture fits TOML"),
+            ),
+        );
+        queues.insert(
+            "body_source_bytes".into(),
+            TomlValue::Integer(i64::try_from(body_source_bytes).expect("fixture fits TOML")),
+        );
+        queues.insert("bodies".into(), TomlValue::Integer(1));
+        queues.insert("body_bytes".into(), TomlValue::Integer(1));
+        set_table(&mut config, "sumeragi.queues", queues);
+        let answers = Answers {
+            profile: Profile::Iroha2,
+            chain: "chain-x".to_owned(),
+            p2p_host: "127.0.0.1".to_owned(),
+            p2p_port: 1337,
+            torii_host: "127.0.0.1".to_owned(),
+            torii_port: 8080,
+            trusted_peers: peers,
+            relay_mode: RelayMode::Disabled,
+            relay_hub_addresses: Vec::new(),
+            output_dir: PathBuf::from("out"),
+        };
+        apply_overrides(&mut config, &answers, &keypair, &transport_keypair, &pops)
+            .expect("scale wizard queue capacity");
+        let required = actual::sumeragi_v2_body_ingress_required_byte_capacity(
+            7,
+            authenticated_non_validator_sources,
+            body_source_bytes,
+        )
+        .expect("fixture capacity is representable");
+        let required_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
+            7,
+            authenticated_non_validator_sources,
+        )
+        .expect("fixture message capacity is representable");
+        assert_eq!(
+            table(&config, "sumeragi.queues")
+                .get("bodies")
+                .and_then(TomlValue::as_integer),
+            Some(i64::try_from(required_bodies).expect("fixture fits TOML")),
+        );
+        assert_eq!(
+            table(&config, "sumeragi.queues")
+                .get("body_bytes")
+                .and_then(TomlValue::as_integer),
+            Some(i64::try_from(required).expect("fixture fits TOML")),
+        );
+        let authored = required + body_source_bytes;
+        let authored_bodies = required_bodies + 7;
+        let mut queues = table(&config, "sumeragi.queues");
+        queues.insert(
+            "bodies".into(),
+            TomlValue::Integer(i64::try_from(authored_bodies).expect("fixture fits TOML")),
+        );
+        queues.insert(
+            "body_bytes".into(),
+            TomlValue::Integer(i64::try_from(authored).expect("fixture fits TOML")),
+        );
+        set_table(&mut config, "sumeragi.queues", queues);
+        apply_overrides(&mut config, &answers, &keypair, &transport_keypair, &pops)
+            .expect("preserve larger authored queue capacity");
+        assert_eq!(
+            table(&config, "sumeragi.queues")
+                .get("bodies")
+                .and_then(TomlValue::as_integer),
+            Some(i64::try_from(authored_bodies).expect("fixture fits TOML")),
+        );
+        assert_eq!(
+            table(&config, "sumeragi.queues")
+                .get("body_bytes")
+                .and_then(TomlValue::as_integer),
+            Some(i64::try_from(authored).expect("fixture fits TOML")),
+        );
     }
     #[test]
     fn genesis_chain_is_patched() {

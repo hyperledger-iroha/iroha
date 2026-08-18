@@ -41,6 +41,13 @@ KAGEMUSHA_MANAGED_CONFIG_KEYS = (
 MIN_VALIDATORS = 4
 # Mirrors `iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT`.
 MAX_VALIDATORS = 31
+# Rust's TOML representation and the canonical config parser admit signed
+# 64-bit integers only.
+TOML_I64_MAX = (1 << 63) - 1
+# Mirrors the Rust default, which reserves five positions per protocol-maximum
+# validator, three per default authenticated non-validator source, and two for
+# anonymous traffic.
+SUMERAGI_DEFAULT_BODY_CAPACITY = 5 * MAX_VALIDATORS + 3 * 2 + 2
 # A syntactically valid, marker-bearing Iroha hash used only by the private
 # pre-signing render. The external signer replaces it with the signed genesis
 # hash before any runtime bundle is published.
@@ -364,6 +371,11 @@ def _require_positive_integer(payload: dict[str, Any], key: str, context: str) -
     value = payload.get(key)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{context} field `{key}` must be a positive integer")
+    if value > TOML_I64_MAX:
+        raise ValueError(
+            f"{context} field `{key}` must not exceed {TOML_I64_MAX}, "
+            "the Rust/TOML signed 64-bit integer maximum"
+        )
     return value
 
 
@@ -433,7 +445,72 @@ def _scaled_sumeragi_body_bytes(template: dict[str, Any], validator_count: int) 
             f"{TAIRA_AEAD_FRAME_OVERHEAD_BYTES} AEAD bytes beyond "
             "`max_frame_bytes_block_sync`"
         )
+    source_count = validator_count + authenticated_non_validator_sources + 1
+    if source_count > TOML_I64_MAX:
+        raise ValueError(
+            "derived Sumeragi body source partition count "
+            f"{source_count} exceeds the Rust/TOML signed 64-bit integer maximum "
+            f"of {TOML_I64_MAX}"
+        )
+    if source_bytes > TOML_I64_MAX // source_count:
+        raise ValueError(
+            "derived `sumeragi.queues.body_bytes` exceeds the Rust/TOML signed "
+            f"64-bit integer maximum of {TOML_I64_MAX}; reduce "
+            "`authenticated_non_validator_sources` or `body_source_bytes`"
+        )
     minimum = (validator_count + authenticated_non_validator_sources + 1) * source_bytes
+    return max(configured, minimum)
+
+
+def _scaled_sumeragi_bodies(template: dict[str, Any], validator_count: int) -> int:
+    """Return a roster-aware canonical body-message queue capacity."""
+
+    if (
+        isinstance(validator_count, bool)
+        or not isinstance(validator_count, int)
+        or validator_count < 0
+    ):
+        raise ValueError("validator count must be a non-negative integer")
+    sumeragi = template.get("sumeragi")
+    if not isinstance(sumeragi, dict):
+        raise ValueError("config template must define a `[sumeragi]` table")
+    queues = sumeragi.get("queues")
+    if not isinstance(queues, dict):
+        raise ValueError("config template must define a `[sumeragi.queues]` table")
+    context = "config template `[sumeragi.queues]`"
+    configured = (
+        SUMERAGI_DEFAULT_BODY_CAPACITY
+        if "bodies" not in queues
+        else _require_positive_integer(queues, "bodies", context)
+    )
+    authenticated_non_validator_sources = _require_positive_integer(
+        queues, "authenticated_non_validator_sources", context
+    )
+    anonymous_slots = 1 if validator_count == 0 else 2
+    if validator_count > TOML_I64_MAX // 5:
+        raise ValueError(
+            "derived `sumeragi.queues.bodies` exceeds the Rust/TOML signed "
+            f"64-bit integer maximum of {TOML_I64_MAX}; reduce the validator roster"
+        )
+    validator_slots = validator_count * 5
+    if authenticated_non_validator_sources > (TOML_I64_MAX - validator_slots) // 3:
+        raise ValueError(
+            "derived `sumeragi.queues.bodies` exceeds the Rust/TOML signed "
+            f"64-bit integer maximum of {TOML_I64_MAX}; reduce the validator "
+            "roster or `authenticated_non_validator_sources`"
+        )
+    authenticated_slots = authenticated_non_validator_sources * 3
+    if validator_slots + authenticated_slots > TOML_I64_MAX - anonymous_slots:
+        raise ValueError(
+            "derived `sumeragi.queues.bodies` exceeds the Rust/TOML signed "
+            f"64-bit integer maximum of {TOML_I64_MAX}; reduce the validator "
+            "roster or `authenticated_non_validator_sources`"
+        )
+    minimum = (
+        5 * validator_count
+        + 3 * authenticated_non_validator_sources
+        + (1 if validator_count == 0 else 2)
+    )
     return max(configured, minimum)
 
 
@@ -2010,6 +2087,7 @@ def render_validator_config(
     kagemusha_release_policy_path: Path | None = None,
     kagemusha_artifact_dir: Path | None = None,
     kagemusha_catalog_qualification_seal_path: Path | None = None,
+    sumeragi_bodies: int | None = None,
     sumeragi_body_bytes: int | None = None,
     genesis_expected_hash: str | None = None,
     genesis_file: Path | None = None,
@@ -2019,6 +2097,7 @@ def render_validator_config(
 
     current_section: str | None = None
     skipping_array: str | None = None
+    bodies_rewritten = False
     body_bytes_rewritten = False
     genesis_expected_hash_rewritten = False
     genesis_file_rewritten = False
@@ -2051,6 +2130,9 @@ def render_validator_config(
         if stripped.startswith("[[") or stripped.startswith("["):
             current_section = stripped
             rendered.append(raw_line)
+            if current_section == "[sumeragi.queues]" and sumeragi_bodies is not None:
+                rendered.append(f"bodies = {sumeragi_bodies}")
+                bodies_rewritten = True
             if current_section == "[torii]":
                 if (
                     validator.receipt_public_key is None
@@ -2186,6 +2268,12 @@ def render_validator_config(
             continue
         if current_section == "[network]" and stripped.startswith("public_address = "):
             rendered.append(f"public_address = {_quote_toml(validator.public_address)}")
+            continue
+        if (
+            current_section == "[sumeragi.queues]"
+            and stripped.partition("=")[0].strip() == "bodies"
+            and sumeragi_bodies is not None
+        ):
             continue
         if (
             current_section == "[sumeragi.queues]"
@@ -2402,6 +2490,11 @@ def render_validator_config(
     rendered_text = "\n".join(rendered)
     if not rendered_text.endswith("\n"):
         rendered_text += "\n"
+    if sumeragi_bodies is not None and not bodies_rewritten:
+        raise ValueError(
+            f"rendered config for `{validator.slug}` could not rewrite the "
+            "`[sumeragi.queues] bodies` assignment"
+        )
     if sumeragi_body_bytes is not None and not body_bytes_rewritten:
         raise ValueError(
             f"rendered config for `{validator.slug}` could not rewrite the "
@@ -2483,10 +2576,11 @@ def render_bundle(
         raise ValueError(
             "base config contains managed Kagemusha release paths without "
             f"--kagemusha-release-root: {listed}"
-        )
+    )
     _validate_privacy_issuer_template(template, validators)
     _validate_receipt_signer_template(template)
     sumeragi_body_bytes = _scaled_sumeragi_body_bytes(template, len(validators))
+    sumeragi_bodies = _scaled_sumeragi_bodies(template, len(validators))
     template_text = base_config_path.read_text(encoding="utf-8")
     path_root = bundle_root if bundle_root is not None else install_root
     install_root_text = str(path_root)
@@ -2662,6 +2756,7 @@ def render_bundle(
                     and include_kagemusha_qualification_seal
                     else None
                 ),
+                sumeragi_bodies=sumeragi_bodies,
                 sumeragi_body_bytes=sumeragi_body_bytes,
                 genesis_expected_hash=genesis_expected_hash,
                 genesis_file=genesis_file,

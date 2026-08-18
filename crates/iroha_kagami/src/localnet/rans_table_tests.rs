@@ -64,6 +64,13 @@ fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
         };
         generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
             .unwrap_or_else(|error| panic!("generate {label} localnet: {error:#}"));
+        let start_script =
+            fs::read_to_string(out_dir.join("start.sh")).expect("read generated start script");
+        assert_eq!(
+            start_script.contains("IROHA_SORA_MODE=\"1\""),
+            sora_profile.is_some(),
+            "{label} startup mode must follow explicit Sora profile selection"
+        );
         let canonical_out_dir =
             fs::canonicalize(&out_dir).expect("canonical generated output directory");
         let expected_path =
@@ -100,6 +107,40 @@ fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
                 configured_path, expected_path,
                 "{label} peer {peer_index} must bind its own generated rANS table"
             );
+            let sorafs_storage = peer_config
+                .get("sorafs")
+                .and_then(toml::Value::as_table)
+                .and_then(|sorafs| sorafs.get("storage"))
+                .and_then(toml::Value::as_table);
+            if sora_profile.is_some() {
+                let sorafs_storage = sorafs_storage
+                    .expect("an explicit Sora profile must preserve its storage override");
+                assert_eq!(
+                    sorafs_storage
+                        .get("enabled")
+                        .and_then(toml::Value::as_bool),
+                    Some(false),
+                    "{label} must opt out of unprovisioned embedded SoraFS storage"
+                );
+                assert_eq!(
+                    sorafs_storage
+                        .get("data_dir")
+                        .and_then(toml::Value::as_str)
+                        .map(PathBuf::from),
+                    Some(
+                        canonical_out_dir
+                            .join("state")
+                            .join(format!("peer{peer_index}"))
+                            .join("sorafs")
+                    ),
+                    "{label} peer {peer_index} must reserve its own SoraFS data root"
+                );
+            } else {
+                assert!(
+                    sorafs_storage.is_none(),
+                    "{label} must not emit a Sora-only storage override"
+                );
+            }
         }
         assert!(
             generated_paths.insert(expected_path),

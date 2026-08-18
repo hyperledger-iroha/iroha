@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised on Python 3.9/3.10
+    import tomli as tomllib
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -54,21 +60,98 @@ class RenderTairaLocalnetContainerBundleTest(unittest.TestCase):
             )
             (self.bundle_dir / f"peer{peer_index}.toml").write_text(peer_config, encoding="utf-8")
         self.output_dir = self.root / "rendered"
+        self.install_runtime_pop_rosters(self.runtime_roster(4))
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
 
-    def run_script(self, *extra_args: str) -> subprocess.CompletedProcess[str]:
+    def install_runtime_pop_rosters(
+        self,
+        entries: list[tuple[str, str]],
+        *,
+        peer_overrides: dict[int, list[tuple[str, str]]] | None = None,
+    ) -> None:
+        """Promote the synthetic fixtures to runtime-shaped roster configs."""
+
+        peer_overrides = peer_overrides or {}
+        for peer_index in range(4):
+            config_path = self.bundle_dir / f"peer{peer_index}.toml"
+            content = config_path.read_text(encoding="utf-8")
+            content = re.sub(
+                r"^trusted_peers_pop = \[\n.*?^\]\n",
+                "",
+                content,
+                count=1,
+                flags=re.MULTILINE | re.DOTALL,
+            )
+            if not re.search(r'^trusted_peers = \["placeholder"\]$', content, re.MULTILINE):
+                raise AssertionError("fixture must retain one trusted_peers assignment")
+            network_marker = (
+                '[network]\n'
+                f'address = "addr:0.0.0.0:{1337 + peer_index}#net{peer_index}"\n'
+                f'public_address = "addr:127.0.0.1:{1337 + peer_index}#pub{peer_index}"\n'
+                'trusted_peers = ["placeholder"]\n'
+            )
+            if network_marker in content:
+                content = content.replace(
+                    network_marker,
+                    network_marker.removesuffix('trusted_peers = ["placeholder"]\n'),
+                    1,
+                )
+                content = content.replace(
+                    f'public_key = "peer{peer_index}-pub"\n',
+                    f'public_key = "peer{peer_index}-pub"\n'
+                    'trusted_peers = ["placeholder"]\n',
+                    1,
+                )
+            roster = peer_overrides.get(peer_index, entries)
+            rendered_roster = ",\n".join(
+                "  { public_key = "
+                f'"{public_key}", pop_hex = "{pop_hex}" }}'
+                for public_key, pop_hex in roster
+            )
+            top_level_roster = "trusted_peers_pop = [\n" f"{rendered_roster}\n" "]\n"
+            content = content.replace(
+                'trusted_peers = ["placeholder"]\n',
+                'trusted_peers = ["placeholder"]\n' + top_level_roster,
+                1,
+            )
+            config_path.write_text(content, encoding="utf-8")
+
+    def remove_runtime_pop_rosters(self) -> None:
+        for peer_index in range(4):
+            config_path = self.bundle_dir / f"peer{peer_index}.toml"
+            content = re.sub(
+                r"^trusted_peers_pop = \[\n.*?^\]\n",
+                "",
+                config_path.read_text(encoding="utf-8"),
+                count=1,
+                flags=re.MULTILINE | re.DOTALL,
+            )
+            config_path.write_text(content, encoding="utf-8")
+
+    @staticmethod
+    def runtime_roster(size: int) -> list[tuple[str, str]]:
+        return [
+            (f"peer{index}-pub", f"{index + 1:02x}" * 96)
+            for index in range(size)
+        ]
+
+    def run_script(
+        self,
+        *extra_args: str,
+    ) -> subprocess.CompletedProcess[str]:
+        command = [
+            "python3",
+            str(SCRIPT_PATH),
+            "--bundle-dir",
+            str(self.bundle_dir),
+            "--output-dir",
+            str(self.output_dir),
+        ]
+        command.extend(extra_args)
         return subprocess.run(
-            [
-                "python3",
-                str(SCRIPT_PATH),
-                "--bundle-dir",
-                str(self.bundle_dir),
-                "--output-dir",
-                str(self.output_dir),
-                *extra_args,
-            ],
+            command,
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
@@ -118,6 +201,76 @@ class RenderTairaLocalnetContainerBundleTest(unittest.TestCase):
         self.assertIn("TAIRA_TORII_PORT=28080", rendered_env)
         self.assertIn("TAIRA_DOCKER_NETWORK=taira-localnet", rendered_env)
         self.assertIn("TAIRA_SIGNED_GENESIS_PATH=", rendered_env)
+
+    def test_runtime_renderer_preserves_exact_four_peer_roster(self) -> None:
+        roster = self.runtime_roster(4)
+        self.install_runtime_pop_rosters(roster)
+
+        result = self.run_script()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        expected_public_keys = [public_key for public_key, _pop_hex in roster]
+        for peer_index in range(4):
+            rendered_path = self.output_dir / f"peer{peer_index}" / "config.toml"
+            with rendered_path.open("rb") as handle:
+                rendered = tomllib.load(handle)
+            self.assertEqual(
+                [entry.partition("@")[0] for entry in rendered["trusted_peers"]],
+                expected_public_keys,
+            )
+            self.assertEqual(
+                {
+                    entry["public_key"]: entry["pop_hex"]
+                    for entry in rendered["trusted_peers_pop"]
+                },
+                dict(roster),
+            )
+
+    def test_runtime_renderer_rejects_seven_to_four_roster_truncation(self) -> None:
+        self.install_runtime_pop_rosters(self.runtime_roster(7))
+
+        result = self.run_script()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "trusted_peers_pop` public-key set must exactly match discovered peer config public keys",
+            result.stderr,
+        )
+        self.assertIn("peer4-pub", result.stderr)
+
+    def test_runtime_renderer_rejects_missing_and_duplicate_pop_entries(self) -> None:
+        cases = {
+            "missing": (self.runtime_roster(3), "missing=['peer3-pub']"),
+            "duplicate": (
+                self.runtime_roster(4) + [self.runtime_roster(4)[0]],
+                "contains duplicate public key `peer0-pub`",
+            ),
+        }
+        for label, (roster, expected) in cases.items():
+            with self.subTest(label=label):
+                self.install_runtime_pop_rosters(roster)
+                result = self.run_script()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
+
+    def test_runtime_renderer_rejects_divergent_pop_rosters(self) -> None:
+        roster = self.runtime_roster(4)
+        divergent = list(roster)
+        divergent[0] = (divergent[0][0], "ff" * 96)
+        self.install_runtime_pop_rosters(roster, peer_overrides={3: divergent})
+
+        result = self.run_script()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must carry an identical `trusted_peers_pop` roster", result.stderr)
+
+    def test_runtime_renderer_requires_pop_roster_without_test_flag(self) -> None:
+        self.remove_runtime_pop_rosters()
+
+        result = self.run_script()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("runtime localnet peer configs must define", result.stderr)
 
     def test_renderer_requires_four_peers(self) -> None:
         (self.bundle_dir / "peer3.toml").unlink()

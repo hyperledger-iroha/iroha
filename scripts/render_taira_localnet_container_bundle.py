@@ -33,13 +33,14 @@ class PeerConfig:
     network_address: str
     public_address: str
     torii_address: str
+    trusted_peers_pop: tuple[tuple[str, str], ...] | None
     genesis_path: str
     kura_store_dir: str
     cold_store_root: str
     da_store_root: str
 
 
-def _load_toml(path: Path) -> dict[str, Any]:
+def _parse_toml(content: str, context: str) -> dict[str, Any]:
     try:
         import tomllib
     except ModuleNotFoundError:
@@ -50,11 +51,14 @@ def _load_toml(path: Path) -> dict[str, Any]:
                 "python3 must provide tomllib (Python 3.11+) or tomli to load peer configs"
             ) from error
 
-    with path.open("rb") as handle:
-        payload = tomllib.load(handle)
+    payload = tomllib.loads(content)
     if not isinstance(payload, dict):
-        raise ValueError(f"{path} must contain a top-level TOML table")
+        raise ValueError(f"{context} must contain a top-level TOML table")
     return payload
+
+
+def _load_toml(path: Path) -> dict[str, Any]:
+    return _parse_toml(path.read_text(encoding="utf-8"), str(path))
 
 
 def _require_string(payload: dict[str, Any], key: str, context: str) -> str:
@@ -62,6 +66,33 @@ def _require_string(payload: dict[str, Any], key: str, context: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{context} field `{key}` must be a non-empty string")
     return value.strip()
+
+
+def _trusted_peers_pop(
+    payload: dict[str, Any], context: str
+) -> tuple[tuple[str, str], ...] | None:
+    value = payload.get("trusted_peers_pop")
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError(f"{context} field `trusted_peers_pop` must be an array")
+
+    entries: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(value):
+        entry_context = f"{context} `trusted_peers_pop[{index}]`"
+        if not isinstance(entry, dict):
+            raise ValueError(f"{entry_context} must be an inline table")
+        public_key = _require_string(entry, "public_key", entry_context)
+        pop_hex = _require_string(entry, "pop_hex", entry_context)
+        if public_key in seen:
+            raise ValueError(
+                f"{context} `trusted_peers_pop` contains duplicate public key "
+                f"`{public_key}`"
+            )
+        seen.add(public_key)
+        entries.append((public_key, pop_hex))
+    return tuple(sorted(entries))
 
 
 def _replace_addr_host_port(value: str, host: str, port: int) -> str:
@@ -97,13 +128,83 @@ def _replace_setting(content: str, key: str, old_value: str, new_value: str) -> 
 
 def _replace_single_line(content: str, key: str, rendered_value: str) -> str:
     pattern = rf"^{re.escape(key)} = \[.*\]$"
-    updated, count = re.subn(pattern, f"{key} = [{rendered_value}]", content, count=1, flags=re.MULTILINE)
-    if count != 1:
+    if len(re.findall(pattern, content, flags=re.MULTILINE)) != 1:
         raise ValueError(f"expected a single `{key} = [...]` line in localnet config")
-    return updated
+    return re.sub(
+        pattern,
+        f"{key} = [{rendered_value}]",
+        content,
+        count=1,
+        flags=re.MULTILINE,
+    )
 
 
-def _discover_peers(bundle_dir: Path) -> list[PeerConfig]:
+def _validate_discovered_peer_rosters(
+    peers: list[PeerConfig],
+) -> tuple[tuple[str, str], ...]:
+    public_keys = [peer.public_key for peer in peers]
+    duplicate_public_keys = sorted(
+        public_key
+        for public_key in set(public_keys)
+        if public_keys.count(public_key) > 1
+    )
+    if duplicate_public_keys:
+        raise ValueError(
+            "peer configs must define unique top-level `public_key` values; "
+            f"duplicates: {duplicate_public_keys}"
+        )
+
+    roster_peers = [peer for peer in peers if peer.trusted_peers_pop is not None]
+    if not roster_peers:
+        raise ValueError(
+            "runtime localnet peer configs must define top-level "
+            "`trusted_peers_pop` rosters matching every discovered peer config"
+        )
+    if len(roster_peers) != len(peers):
+        missing = [
+            str(peer.config_path)
+            for peer in peers
+            if peer.trusted_peers_pop is None
+        ]
+        raise ValueError(
+            "every peer config must carry the same top-level "
+            f"`trusted_peers_pop` roster; missing from: {missing}"
+        )
+
+    expected_public_keys = set(public_keys)
+    reference = roster_peers[0].trusted_peers_pop
+    assert reference is not None
+    reference_map = dict(reference)
+    for peer in roster_peers:
+        roster = peer.trusted_peers_pop
+        assert roster is not None
+        roster_map = dict(roster)
+        roster_keys = set(roster_map)
+        missing = sorted(expected_public_keys - roster_keys)
+        extra = sorted(roster_keys - expected_public_keys)
+        if missing or extra:
+            raise ValueError(
+                f"{peer.config_path} `trusted_peers_pop` public-key set must "
+                "exactly match discovered peer config public keys; "
+                f"missing={missing}, extra={extra}"
+            )
+        if roster_map != reference_map:
+            differing = sorted(
+                public_key
+                for public_key in expected_public_keys
+                if roster_map.get(public_key) != reference_map.get(public_key)
+            )
+            raise ValueError(
+                "every peer config must carry an identical "
+                f"`trusted_peers_pop` roster; {peer.config_path} differs from "
+                f"{roster_peers[0].config_path} for public keys {differing}"
+            )
+    return reference
+
+
+def _discover_peers(
+    bundle_dir: Path,
+) -> tuple[list[PeerConfig], tuple[tuple[str, str], ...]]:
     peers: list[PeerConfig] = []
     for path in sorted(bundle_dir.glob("peer*.toml")):
         match = re.fullmatch(r"peer(\d+)", path.stem)
@@ -134,6 +235,7 @@ def _discover_peers(bundle_dir: Path) -> list[PeerConfig]:
                 network_address=_require_string(network, "address", f"{path} [network]"),
                 public_address=_require_string(network, "public_address", f"{path} [network]"),
                 torii_address=_require_string(torii, "address", f"{path} [torii]"),
+                trusted_peers_pop=_trusted_peers_pop(payload, str(path)),
                 genesis_path=_require_string(genesis, "file", f"{path} [genesis]"),
                 kura_store_dir=_require_string(kura, "store_dir", f"{path} [kura]"),
                 cold_store_root=_require_string(
@@ -156,7 +258,8 @@ def _discover_peers(bundle_dir: Path) -> list[PeerConfig]:
             "localnet peer indices must be contiguous and start at zero; "
             f"expected {expected_indices}, found {indices}"
         )
-    return peers
+    roster = _validate_discovered_peer_rosters(peers)
+    return peers, roster
 
 
 def _rewrite_config(content: str, peer: PeerConfig, peers: list[PeerConfig], hostnames: list[str]) -> str:
@@ -201,6 +304,48 @@ def _rewrite_config(content: str, peer: PeerConfig, peers: list[PeerConfig], hos
     )
     content = _replace_single_line(content, "peer_telemetry_urls", telemetry_urls)
     return content
+
+
+def _validate_rendered_roster(
+    content: str,
+    peer: PeerConfig,
+    peers: list[PeerConfig],
+    expected_roster: tuple[tuple[str, str], ...],
+) -> None:
+    payload = _parse_toml(content, f"rendered config for {peer.config_path}")
+    trusted_peers = payload.get("trusted_peers")
+    if not isinstance(trusted_peers, list) or not all(
+        isinstance(entry, str) for entry in trusted_peers
+    ):
+        raise ValueError(
+            f"rendered config for {peer.config_path} must define a top-level "
+            "`trusted_peers` string array"
+        )
+    rendered_public_keys = []
+    for entry in trusted_peers:
+        public_key, separator, _address = entry.partition("@")
+        if not separator or not public_key:
+            raise ValueError(
+                f"rendered config for {peer.config_path} has malformed "
+                f"`trusted_peers` entry `{entry}`"
+            )
+        rendered_public_keys.append(public_key)
+    expected_public_keys = [other.public_key for other in peers]
+    if rendered_public_keys != expected_public_keys:
+        raise ValueError(
+            f"rendered config for {peer.config_path} changed consensus peer "
+            f"membership; expected {expected_public_keys}, found "
+            f"{rendered_public_keys}"
+        )
+
+    rendered_roster = _trusted_peers_pop(
+        payload, f"rendered config for {peer.config_path}"
+    )
+    if rendered_roster != expected_roster:
+        raise ValueError(
+            f"rendered config for {peer.config_path} changed the signed "
+            "`trusted_peers_pop` roster"
+        )
 
 
 def _write_env_file(
@@ -258,7 +403,7 @@ def render_bundle(args: argparse.Namespace) -> list[Path]:
     if not genesis_signed.is_file():
         raise ValueError(f"missing signed genesis at {genesis_signed}")
 
-    peers = _discover_peers(bundle_dir)
+    peers, trusted_peers_pop = _discover_peers(bundle_dir)
     highest_peer_index = peers[-1].index
     for label, base_port in (
         ("base P2P port", args.base_p2p_port),
@@ -297,8 +442,11 @@ def render_bundle(args: argparse.Namespace) -> list[Path]:
         env_path = output_dir / f"{peer.stem}.env"
         storage_path.mkdir(parents=True, exist_ok=True)
 
-        content = peer.config_path.read_text(encoding="utf-8")
-        config_path.write_text(_rewrite_config(content, peer, peers, hostnames), encoding="utf-8")
+        content = _rewrite_config(
+            peer.config_path.read_text(encoding="utf-8"), peer, peers, hostnames
+        )
+        _validate_rendered_roster(content, peer, peers, trusted_peers_pop)
+        config_path.write_text(content, encoding="utf-8")
         _write_env_file(
             env_path,
             container_name=hostname,

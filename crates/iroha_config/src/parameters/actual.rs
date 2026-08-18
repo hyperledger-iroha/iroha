@@ -6385,12 +6385,14 @@ impl Sumeragi {
             "sumeragi.queues.authenticated_non_validator_sources",
             self.queues.authenticated_non_validator_sources.get(),
         )?;
-        let minimum_body_queue_capacity = authenticated_non_validator_source_capacity
-            .checked_mul(3)
-            .and_then(|hubs| hubs.checked_add(7))
-            .ok_or(SumeragiV2ConfigError::LimitOverflow(
-                "Sumeragi v2 authenticated non-validator outer-ingress message minimum",
-            ))?;
+        let minimum_body_queue_capacity = sumeragi_v2_body_ingress_required_message_capacity(
+            1,
+            self.queues.authenticated_non_validator_sources.get(),
+        )
+        .and_then(|minimum| u64::try_from(minimum).ok())
+        .ok_or(SumeragiV2ConfigError::LimitOverflow(
+            "Sumeragi v2 authenticated non-validator outer-ingress message minimum",
+        ))?;
         if body_queue_capacity < minimum_body_queue_capacity {
             return Err(SumeragiV2ConfigError::BodyQueueTooSmall {
                 actual: body_queue_capacity,
@@ -7176,6 +7178,42 @@ pub fn sumeragi_v2_lifecycle_capacity_geometry(
         producer,
         total,
     })
+}
+/// Derive the outer-ingress message capacity required for a validator roster.
+///
+/// Every validator owns five protected positions, every configured
+/// authenticated non-validator source owns three, and anonymous traffic owns
+/// one position without a validator roster or two positions once validators
+/// are configured.
+#[must_use]
+pub fn sumeragi_v2_body_ingress_required_message_capacity(
+    validator_roster_len: usize,
+    authenticated_non_validator_source_capacity: usize,
+) -> Option<usize> {
+    let anonymous_slots = if validator_roster_len == 0 { 1 } else { 2 };
+    validator_roster_len
+        .checked_mul(5)
+        .and_then(|required| {
+            authenticated_non_validator_source_capacity
+                .checked_mul(3)
+                .and_then(|authenticated_sources| required.checked_add(authenticated_sources))
+        })
+        .and_then(|required| required.checked_add(anonymous_slots))
+}
+/// Derive the aggregate outer-ingress byte capacity for a validator roster.
+///
+/// Every validator, configured authenticated non-validator source, and the
+/// anonymous source owns one isolated `body_source_bytes` partition.
+#[must_use]
+pub fn sumeragi_v2_body_ingress_required_byte_capacity(
+    validator_roster_len: usize,
+    authenticated_non_validator_source_capacity: usize,
+    body_source_bytes: usize,
+) -> Option<usize> {
+    validator_roster_len
+        .checked_add(authenticated_non_validator_source_capacity)
+        .and_then(|source_count| source_count.checked_add(1))
+        .and_then(|source_count| source_count.checked_mul(body_source_bytes))
 }
 /// Invalid or non-canonical Sumeragi v2 runtime configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]

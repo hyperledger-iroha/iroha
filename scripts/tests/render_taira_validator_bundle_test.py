@@ -841,6 +841,7 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert 'address = "addr:0.0.0.0:18080#2F16"' in config
     assert '"peer-4-public@addr:taira-validator-4.sora.org:1337#E168"' in config
     assert '{ public_key = "peer-2-public", pop_hex = "peer-2-pop" }' in config
+    assert f"bodies = {MODULE.SUMERAGI_DEFAULT_BODY_CAPACITY}" in config
     assert 'authority = "bootstrap-authority"' in config
     assert 'authority = "faucet-authority"' in config
     assert (
@@ -1981,6 +1982,229 @@ def test_render_bundle_rejects_non_positive_queue_template_values(
                 raise AssertionError(
                     f"render_bundle accepted malformed {key} value {value}"
                 )
+
+
+@pytest.mark.parametrize(
+    ("key", "current"),
+    [
+        ("authenticated_non_validator_sources", "2"),
+        ("bodies", None),
+        ("body_bytes", "242221056"),
+        ("body_source_bytes", "34603008"),
+    ],
+)
+def test_render_bundle_rejects_queue_values_above_toml_i64(
+    tmp_path: Path,
+    key: str,
+    current: str | None,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path)
+    base_config_path = tmp_path / f"config-{key}.toml"
+    template = BASE_CONFIG
+    if current is None:
+        template = template.replace(
+            "[sumeragi.queues]\n",
+            "[sumeragi.queues]\n"
+            f"{key} = {MODULE.TOML_I64_MAX + 1}\n",
+            1,
+        )
+    else:
+        template = template.replace(
+            f"{key} = {current}",
+            f"{key} = {MODULE.TOML_I64_MAX + 1}",
+        )
+    base_config_path.write_text(
+        template,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=rf"field `{key}` must not exceed {MODULE.TOML_I64_MAX}",
+    ):
+        MODULE.render_bundle(base_config_path, roster_path, tmp_path / "out")
+
+
+def test_scaled_sumeragi_bodies_raises_only_underbudget_capacity(
+    tmp_path: Path,
+) -> None:
+    base_config_path = tmp_path / "config.toml"
+    base_config_path.write_text(BASE_CONFIG, encoding="utf-8")
+    defaulted = MODULE._load_toml(base_config_path)
+    assert (
+        MODULE._scaled_sumeragi_bodies(defaulted, 7)
+        == MODULE.SUMERAGI_DEFAULT_BODY_CAPACITY
+    )
+
+    base_config_path.write_text(
+        BASE_CONFIG.replace("[sumeragi.queues]\n", "[sumeragi.queues]\nbodies = 1\n"),
+        encoding="utf-8",
+    )
+    underbudget = MODULE._load_toml(base_config_path)
+    assert MODULE._scaled_sumeragi_bodies(underbudget, 7) == 43
+
+    base_config_path.write_text(
+        BASE_CONFIG.replace(
+            "[sumeragi.queues]\n", "[sumeragi.queues]\nbodies = 211\n"
+        ),
+        encoding="utf-8",
+    )
+    authored = MODULE._load_toml(base_config_path)
+    assert MODULE._scaled_sumeragi_bodies(authored, 7) == 211
+
+
+def test_scaled_sumeragi_bodies_accepts_exact_toml_i64_boundaries(
+    tmp_path: Path,
+) -> None:
+    base_config_path = tmp_path / "config.toml"
+    base_config_path.write_text(
+        BASE_CONFIG.replace(
+            "[sumeragi.queues]\n",
+            f"[sumeragi.queues]\nbodies = {MODULE.TOML_I64_MAX}\n",
+        ),
+        encoding="utf-8",
+    )
+    configured_boundary = MODULE._load_toml(base_config_path)
+    assert (
+        MODULE._scaled_sumeragi_bodies(configured_boundary, 7)
+        == MODULE.TOML_I64_MAX
+    )
+
+    exact_authenticated_sources = (MODULE.TOML_I64_MAX - 1) // 3
+    assert 3 * exact_authenticated_sources + 1 == MODULE.TOML_I64_MAX
+    base_config_path.write_text(
+        BASE_CONFIG.replace(
+            "[sumeragi.queues]\nauthenticated_non_validator_sources = 2",
+            "[sumeragi.queues]\n"
+            "bodies = 1\n"
+            f"authenticated_non_validator_sources = {exact_authenticated_sources}",
+        ),
+        encoding="utf-8",
+    )
+    derived_boundary = MODULE._load_toml(base_config_path)
+    assert (
+        MODULE._scaled_sumeragi_bodies(derived_boundary, 0)
+        == MODULE.TOML_I64_MAX
+    )
+
+
+@pytest.mark.parametrize(
+    ("validator_count", "authenticated_non_validator_sources"),
+    [
+        (0, (MODULE.TOML_I64_MAX - 1) // 3 + 1),
+        (MODULE.TOML_I64_MAX // 5 + 1, 2),
+    ],
+)
+def test_scaled_sumeragi_bodies_rejects_derived_toml_i64_overflow(
+    tmp_path: Path,
+    validator_count: int,
+    authenticated_non_validator_sources: int,
+) -> None:
+    base_config_path = tmp_path / "config.toml"
+    base_config_path.write_text(
+        BASE_CONFIG.replace(
+            "[sumeragi.queues]\nauthenticated_non_validator_sources = 2",
+            "[sumeragi.queues]\n"
+            "bodies = 1\n"
+            "authenticated_non_validator_sources = "
+            f"{authenticated_non_validator_sources}",
+        ),
+        encoding="utf-8",
+    )
+    template = MODULE._load_toml(base_config_path)
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "derived `sumeragi.queues.bodies` exceeds the Rust/TOML signed "
+            "64-bit integer maximum"
+        ),
+    ):
+        MODULE._scaled_sumeragi_bodies(template, validator_count)
+
+
+def test_scaled_sumeragi_body_bytes_accepts_exact_toml_i64_boundaries(
+    tmp_path: Path,
+) -> None:
+    base_config_path = tmp_path / "config.toml"
+
+    base_config_path.write_text(
+        BASE_CONFIG.replace(
+            "body_bytes = 242221056",
+            f"body_bytes = {MODULE.TOML_I64_MAX}",
+        ),
+        encoding="utf-8",
+    )
+    configured_boundary = MODULE._load_toml(base_config_path)
+    assert (
+        MODULE._scaled_sumeragi_body_bytes(configured_boundary, 4)
+        == MODULE.TOML_I64_MAX
+    )
+
+    assert MODULE.TOML_I64_MAX % 7 == 0
+    source_bytes = MODULE.TOML_I64_MAX // 7
+    base_config_path.write_text(
+        BASE_CONFIG.replace(
+            "body_source_bytes = 34603008",
+            f"body_source_bytes = {source_bytes}",
+        ),
+        encoding="utf-8",
+    )
+    derived_boundary = MODULE._load_toml(base_config_path)
+    assert (
+        MODULE._scaled_sumeragi_body_bytes(derived_boundary, 4)
+        == MODULE.TOML_I64_MAX
+    )
+
+
+def test_render_bundle_rejects_derived_body_product_above_toml_i64(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    base_config_path = tmp_path / "config.toml"
+    _write_roster(roster_path)
+    overflowing_source_bytes = MODULE.TOML_I64_MAX // 7 + 1
+    base_config_path.write_text(
+        BASE_CONFIG.replace(
+            "body_source_bytes = 34603008",
+            f"body_source_bytes = {overflowing_source_bytes}",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "derived `sumeragi.queues.body_bytes` exceeds the Rust/TOML signed "
+            "64-bit integer maximum"
+        ),
+    ):
+        MODULE.render_bundle(base_config_path, roster_path, tmp_path / "out")
+
+
+def test_render_bundle_rejects_derived_source_count_above_toml_i64(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    base_config_path = tmp_path / "config.toml"
+    _write_roster(roster_path)
+    base_config_path.write_text(
+        BASE_CONFIG.replace(
+            "authenticated_non_validator_sources = 2",
+            f"authenticated_non_validator_sources = {MODULE.TOML_I64_MAX}",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "derived Sumeragi body source partition count .* exceeds the "
+            "Rust/TOML signed 64-bit integer maximum"
+        ),
+    ):
+        MODULE.render_bundle(base_config_path, roster_path, tmp_path / "out")
 
 
 @pytest.mark.parametrize(

@@ -38,7 +38,8 @@ async fn register_new_peer() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
             .with_block_cadence(std::time::Duration::from_secs(2))
-            .with_peers(4),
+            .with_peers(4)
+            .with_max_validator_capacity(5),
         stringify!(register_new_peer),
     )
     .await?
@@ -72,7 +73,11 @@ async fn register_new_peer() -> Result<()> {
         return Ok(());
     }
     let genesis = network.genesis();
-    peer.start(network.config_layers(), Some(&genesis)).await?;
+    peer.start(
+        network.config_layers_with_additional_peers([&peer]),
+        Some(&genesis),
+    )
+    .await?;
     if sandbox::handle_result(
         timeout(peer_sync_timeout, peer.once_block(2))
             .await

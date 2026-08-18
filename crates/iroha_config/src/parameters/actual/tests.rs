@@ -526,6 +526,52 @@ mod tests {
         );
     }
     #[test]
+    fn sumeragi_v2_body_ingress_message_capacity_is_checked_and_roster_scaled() {
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_message_capacity(0, 0),
+            Some(1)
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_message_capacity(4, 2),
+            Some(28)
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_message_capacity(5, 2),
+            Some(33)
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_message_capacity(31, 2),
+            Some(163)
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_message_capacity(usize::MAX, 0),
+            None,
+            "validator-slot multiplication must fail closed on overflow"
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_message_capacity(0, usize::MAX),
+            None,
+            "authenticated-source multiplication must fail closed on overflow"
+        );
+    }
+    #[test]
+    fn sumeragi_v2_body_ingress_byte_capacity_is_checked_and_roster_scaled() {
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_byte_capacity(4, 2, 33),
+            Some(7 * 33)
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_byte_capacity(0, 0, usize::MAX),
+            Some(usize::MAX),
+            "the anonymous-only exact maximum remains representable"
+        );
+        assert_eq!(
+            sumeragi_v2_body_ingress_required_byte_capacity(1, 0, usize::MAX),
+            None,
+            "multiplying two source partitions must fail closed on overflow"
+        );
+    }
+    #[test]
     fn sumeragi_v2_shared_config_defaults_are_finite_and_deterministic() {
         let config = default_v2_sumeragi();
         let shared = config
