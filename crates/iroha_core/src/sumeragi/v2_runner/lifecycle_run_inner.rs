@@ -738,6 +738,7 @@ fn run_lifecycle_active_height(
     let mut block_sync_request = None;
     let mut admitted_discovered_commit_qc = false;
     let mut producer_claim = LifecycleProducerClaimDispositionV1::initial();
+    let mut canonical_lane_body_recovered = false;
 
     loop {
         committed_lane_status_publisher.publish_if_changed(&lane_work);
@@ -1052,7 +1053,32 @@ fn run_lifecycle_active_height(
             }
         }
 
-        if ready_to_finish {
+        let rollover_ready = if ready_to_finish {
+            activated.with_runner_runtime(
+                &mut active_runner,
+                |_owner, executor, services, _local_proposal| {
+                    if !services.matches_lifecycle_lane_work(&lane_work) {
+                        return Err(V2RunnerError::Service(
+                            "finalized lifecycle borrowed a foreign lane-work adapter".to_owned(),
+                        ));
+                    }
+                    super::preflight_finalized_lane_rollover(
+                        executor,
+                        &mut lane_work,
+                        &mut canonical_lane_body_recovered,
+                    )
+                },
+            )?
+        } else {
+            false
+        };
+        if ready_to_finish && !rollover_ready {
+            committed_lane_status_publisher.publish_if_changed(&lane_work);
+            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            continue;
+        }
+
+        if rollover_ready {
             let (prepared_successor, retained_merge_sidecars, cleanup) = finalize_lifecycle_height(
                 activated,
                 &mut active_runner,

@@ -441,6 +441,7 @@ fn run_pending_active_height(
     retransmit_interval: Duration,
 ) -> Result<Option<(PreparedPendingKuraSuccessorV1, RetainedMergeSidecars)>, V2RunnerError> {
     let mut next_lane_retransmit = deadline_after(Instant::now(), retransmit_interval);
+    let mut canonical_lane_body_recovered = false;
     loop {
         activated.with_runner_runtime(&mut active_runner, |_executor, _services, lane_work| {
             committed_lane_status_publisher.publish_if_changed(lane_work)
@@ -560,6 +561,24 @@ fn run_pending_active_height(
             committed_lane_status_publisher.publish_if_changed(lane_work)
         });
         if !ready {
+            let _ = wake_rx.recv_timeout(IDLE_POLL);
+            continue;
+        }
+
+        let rollover_ready = activated.with_runner_runtime(
+            &mut active_runner,
+            |executor, _services, lane_work| {
+                super::preflight_finalized_lane_rollover(
+                    executor,
+                    lane_work,
+                    &mut canonical_lane_body_recovered,
+                )
+            },
+        )?;
+        if !rollover_ready {
+            activated.with_runner_runtime(&mut active_runner, |_executor, _services, lane_work| {
+                committed_lane_status_publisher.publish_if_changed(lane_work)
+            });
             let _ = wake_rx.recv_timeout(IDLE_POLL);
             continue;
         }

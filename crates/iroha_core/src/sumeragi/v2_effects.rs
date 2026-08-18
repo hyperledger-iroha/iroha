@@ -9677,7 +9677,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             && self.pending_applications.contains_key(&work_id)
     }
     /// Borrow the durable finality values returned by Kura after application.
-    #[cfg(test)]
     pub(crate) fn durable_finality(
         &self,
     ) -> Option<(&KuraV2CommitReceipt, &wire::finality::V2FinalityArtifact)> {

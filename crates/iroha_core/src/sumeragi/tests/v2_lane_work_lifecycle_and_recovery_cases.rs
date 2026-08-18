@@ -645,7 +645,6 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
         &keys,
         &proposal,
         entrypoint,
-        AutonomousAuthorRule::Autonomous,
         b"autonomous-ingress-queue-plan-admission-binding",
         b"autonomous-ingress-reservation-owner",
         "deterministic autonomous producer",
