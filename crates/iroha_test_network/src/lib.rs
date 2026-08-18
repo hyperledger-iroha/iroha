@@ -5493,11 +5493,11 @@ fn generated_sumeragi_capacity_layer(
         validator_count,
         effect_work_capacity,
         bodies,
-        max_total_connections,
+        authenticated_non_validator_sources,
     )
     .wrap_err_with(|| {
         format!(
-            "generated test-network Sumeragi lifecycle geometry is inadmissible for {validator_count} validators"
+            "generated test-network Sumeragi lifecycle geometry is inadmissible for {validator_count} validators and {authenticated_non_validator_sources} authenticated non-validator sources"
         )
     })?;
     let shared_ownership_capacity =
@@ -5638,11 +5638,11 @@ fn validate_planned_validator_capacity(
         max_validator_capacity,
         effect_work_capacity,
         queues.bodies.get(),
-        reply_source_capacity,
+        authenticated_non_validator_sources,
     )
     .wrap_err_with(|| {
         format!(
-            "planned test-network lifecycle geometry is inadmissible for {max_validator_capacity} validators, {reply_source_capacity} reply sources, and {} certified-request slots",
+            "planned test-network lifecycle geometry is inadmissible for {max_validator_capacity} validators, {authenticated_non_validator_sources} authenticated non-validator sources, and {} certified-request slots",
             queues.bodies
         )
     })?;
@@ -12990,10 +12990,13 @@ exit 0
                         max_validator_capacity_rejects_bootstrap_only_body_message_capacity
                     ))
                     .with_config_layer(move |layer| {
-                        layer.write(
-                            ["sumeragi", "queues", "bodies"],
-                            i64::try_from(bootstrap_bodies).expect("fixture capacity fits TOML"),
-                        );
+                        layer
+                            .write(
+                                ["sumeragi", "queues", "bodies"],
+                                i64::try_from(bootstrap_bodies)
+                                    .expect("fixture capacity fits TOML"),
+                            )
+                            .write(["network", "max_total_connections"], 4i64);
                     }),
             );
         })
@@ -13017,10 +13020,12 @@ exit 0
                     max_validator_capacity_accepts_exact_planned_body_message_capacity
                 ))
                 .with_config_layer(move |layer| {
-                    layer.write(
-                        ["sumeragi", "queues", "bodies"],
-                        i64::try_from(planned_bodies).expect("fixture capacity fits TOML"),
-                    );
+                    layer
+                        .write(
+                            ["sumeragi", "queues", "bodies"],
+                            i64::try_from(planned_bodies).expect("fixture capacity fits TOML"),
+                        )
+                        .write(["network", "max_total_connections"], 4i64);
                 }),
         );
         let layers = network
@@ -13854,7 +13859,7 @@ exit 0
                 validator_count,
                 effect_work_capacity,
                 bodies,
-                max_total_connections,
+                authenticated_non_validator_sources,
             )
             .expect("generated lifecycle capacity geometry must be admissible");
             let shared = iroha_config::parameters::actual::sumeragi_v2_exact_output_shared_ownership_capacity(
@@ -13920,7 +13925,7 @@ exit 0
                         final_generated_network_config_fails_closed_on_invalid_geometry
                     ))
                     .with_config_layer(|layer| {
-                        layer.write(["sumeragi", "queues", "bodies"], 512i64);
+                        layer.write(["sumeragi", "queues", "bodies"], 8_192i64);
                     }),
             );
         })

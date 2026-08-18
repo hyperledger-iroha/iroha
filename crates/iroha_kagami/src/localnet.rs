@@ -1046,12 +1046,17 @@ struct LocalnetPeerStoragePaths {
     streaming_soravpn_spool: PathBuf,
     soranet_ticket_revocations: PathBuf,
     torii: PathBuf,
+    torii_da_replay_cache: PathBuf,
+    torii_da_manifests: PathBuf,
     sorafs: PathBuf,
+    sorafs_por: PathBuf,
 }
 impl LocalnetPeerStoragePaths {
     fn new(out_dir: &Path, peer_index: usize) -> Self {
         let state = out_dir.join("state").join(format!("peer{peer_index}"));
         let streaming = state.join("streaming");
+        let torii = state.join("torii");
+        let sorafs = state.join("sorafs");
         Self {
             kura: out_dir.join("storage").join(format!("peer{peer_index}")),
             soracloud_runtime: state.join("soracloud_runtime"),
@@ -1061,8 +1066,11 @@ impl LocalnetPeerStoragePaths {
             streaming_soranet_spool: streaming.join("soranet_routes"),
             streaming_soravpn_spool: state.join("streaming").join("soravpn_routes"),
             soranet_ticket_revocations: state.join("soranet").join("ticket_revocations.norito"),
-            torii: state.join("torii"),
-            sorafs: state.join("sorafs"),
+            torii_da_replay_cache: torii.join("da_replay"),
+            torii_da_manifests: torii.join("da_manifests"),
+            torii,
+            sorafs_por: sorafs.join("por"),
+            sorafs,
             state,
         }
     }
@@ -2648,20 +2656,28 @@ fn render_peer_config(
     );
     streaming.insert("codec".into(), Value::Table(streaming_codec));
     root.insert("streaming".into(), Value::Table(streaming));
+    let mut sorafs_storage = Table::new();
     if sora_profile.is_some() {
-        let mut sorafs_storage = Table::new();
         // `iroha3d --sora` enables embedded storage after ordinary TOML parsing unless the
         // operator explicitly selected a storage value. Localnets do not provision the governed
         // compliance controller or native signer providers, so keep storage disabled explicitly.
         sorafs_storage.insert("enabled".into(), Value::Boolean(false));
-        sorafs_storage.insert(
-            "data_dir".into(),
-            Value::String(storage_paths.sorafs.to_string_lossy().into_owned()),
-        );
-        let mut sorafs = Table::new();
-        sorafs.insert("storage".into(), Value::Table(sorafs_storage));
-        root.insert("sorafs".into(), Value::Table(sorafs));
     }
+    // Validator durability queues beneath the SoraFS root remain active even when provider
+    // storage workers are disabled, so every generated peer must own a disjoint root.
+    sorafs_storage.insert(
+        "data_dir".into(),
+        Value::String(storage_paths.sorafs.to_string_lossy().into_owned()),
+    );
+    let mut sorafs = Table::new();
+    sorafs.insert("storage".into(), Value::Table(sorafs_storage));
+    let mut sorafs_por = Table::new();
+    sorafs_por.insert(
+        "state_dir".into(),
+        Value::String(storage_paths.sorafs_por.to_string_lossy().into_owned()),
+    );
+    sorafs.insert("por".into(), Value::Table(sorafs_por));
+    root.insert("sorafs".into(), Value::Table(sorafs));
     if let Some(chain_discriminant) = chain_discriminant {
         let mut governance = Table::new();
         let citizenship_escrow_account = account_id_runtime_literal(
@@ -2910,6 +2926,26 @@ fn render_peer_config(
         "data_dir".into(),
         Value::String(storage_paths.torii.to_string_lossy().into_owned()),
     );
+    let mut da_ingest = Table::new();
+    da_ingest.insert(
+        "replay_cache_store_dir".into(),
+        Value::String(
+            storage_paths
+                .torii_da_replay_cache
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    da_ingest.insert(
+        "manifest_store_dir".into(),
+        Value::String(
+            storage_paths
+                .torii_da_manifests
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    torii.insert("da_ingest".into(), Value::Table(da_ingest));
     torii.insert(
         "peer_telemetry_urls".into(),
         Value::Array(

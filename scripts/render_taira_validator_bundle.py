@@ -96,9 +96,10 @@ TAIRA_BODY_SOURCE_MIN_BYTES = (
 TAIRA_BODY_SOURCE_BYTES = ((TAIRA_BODY_SOURCE_MIN_BYTES + MIB - 1) // MIB) * MIB
 # Exact completion/P2P geometry is checked by the node at height activation.
 # The deployment rounds its maximum block-sync plaintext frame to the next MiB
-# and its maximum 10 MiB transaction frame to the next MiB. The global cap adds
-# the first-release ChaCha20-Poly1305 nonce/tag to the block-sync ceiling.
-TAIRA_TX_GOSSIP_PLAINTEXT_FRAME_BYTES = 11 * MIB
+# and its reviewed maximum transaction envelope plus QueuePlan/routing headroom
+# to 13 MiB. The global cap adds the first-release ChaCha20-Poly1305 nonce/tag
+# to the block-sync ceiling.
+TAIRA_TX_GOSSIP_PLAINTEXT_FRAME_BYTES = 13 * MIB
 TAIRA_BLOCK_SYNC_PLAINTEXT_FRAME_BYTES = 22 * MIB
 TAIRA_AEAD_FRAME_OVERHEAD_BYTES = 12 + 16
 TAIRA_MAX_FRAME_BYTES = (

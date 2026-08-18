@@ -10311,6 +10311,7 @@ async fn start_telemetry(
                     .attach(MSG_SUBSCRIBE)?;
                 let handle = iroha_telemetry::dev::start_file_output(
                     out_file.resolve_relative_path(),
+                    config.telemetry_integrity.clone(),
                     receiver,
                 )
                 .await

@@ -1822,7 +1822,20 @@ fn rewrite_joiner_mutable_paths(root: &mut Table, storage_root: &Path) -> Result
             "provision_spool_dir".into(),
             path_value("streaming/soravpn_routes"),
         );
-    get_subtable_mut(root, "torii")?.insert("data_dir".into(), path_value("torii"));
+    let torii = get_subtable_mut(root, "torii")?;
+    torii.insert("data_dir".into(), path_value("torii"));
+    let da_ingest = torii
+        .get_mut("da_ingest")
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[torii.da_ingest]`"))?;
+    da_ingest.insert(
+        "replay_cache_store_dir".into(),
+        path_value("torii/da_replay"),
+    );
+    da_ingest.insert(
+        "manifest_store_dir".into(),
+        path_value("torii/da_manifests"),
+    );
     get_subtable_mut(root, "network")?
         .get_mut("soranet_handshake")
         .and_then(TomlValue::as_table_mut)
@@ -1833,11 +1846,17 @@ fn rewrite_joiner_mutable_paths(root: &mut Table, storage_root: &Path) -> Result
             "revocation_store_path".into(),
             path_value("soranet/ticket_revocations.norito"),
         );
-    get_subtable_mut(root, "sorafs")?
+    let sorafs = get_subtable_mut(root, "sorafs")?;
+    sorafs
         .get_mut("storage")
         .and_then(TomlValue::as_table_mut)
         .ok_or_else(|| eyre!("template peer config must define `[sorafs.storage]`"))?
         .insert("data_dir".into(), path_value("sorafs"));
+    sorafs
+        .get_mut("por")
+        .and_then(TomlValue::as_table_mut)
+        .ok_or_else(|| eyre!("template peer config must define `[sorafs.por]`"))?
+        .insert("state_dir".into(), path_value("sorafs/por"));
     Ok(())
 }
 fn append_joiner_validator_and_scale_body_ingress(
@@ -3564,6 +3583,21 @@ fn joiner_mutable_paths_are_rewritten_below_one_disjoint_root() {
     network.insert("soranet_handshake".into(), TomlValue::Table(handshake));
     let mut sorafs = Table::new();
     sorafs.insert("storage".into(), TomlValue::Table(path_table("data_dir")));
+    sorafs.insert("por".into(), TomlValue::Table(path_table("state_dir")));
+    let mut torii = path_table("data_dir");
+    torii.insert(
+        "da_ingest".into(),
+        TomlValue::Table(Table::from_iter([
+            (
+                "replay_cache_store_dir".to_owned(),
+                TomlValue::String("/incumbent/shared-state".to_owned()),
+            ),
+            (
+                "manifest_store_dir".to_owned(),
+                TomlValue::String("/incumbent/shared-state".to_owned()),
+            ),
+        ])),
+    );
     let mut root = Table::from_iter([
         ("kura".to_owned(), TomlValue::Table(path_table("store_dir"))),
         (
@@ -3584,7 +3618,7 @@ fn joiner_mutable_paths_are_rewritten_below_one_disjoint_root() {
             ])),
         ),
         ("streaming".to_owned(), TomlValue::Table(streaming)),
-        ("torii".to_owned(), TomlValue::Table(path_table("data_dir"))),
+        ("torii".to_owned(), TomlValue::Table(torii)),
         ("network".to_owned(), TomlValue::Table(network)),
         ("sorafs".to_owned(), TomlValue::Table(sorafs)),
     ]);
@@ -3613,6 +3647,8 @@ fn joiner_mutable_paths_are_rewritten_below_one_disjoint_root() {
         lookup(&["streaming", "soranet", "provision_spool_dir"]),
         lookup(&["streaming", "soravpn", "provision_spool_dir"]),
         lookup(&["torii", "data_dir"]),
+        lookup(&["torii", "da_ingest", "replay_cache_store_dir"]),
+        lookup(&["torii", "da_ingest", "manifest_store_dir"]),
         lookup(&[
             "network",
             "soranet_handshake",
@@ -3620,6 +3656,7 @@ fn joiner_mutable_paths_are_rewritten_below_one_disjoint_root() {
             "revocation_store_path",
         ]),
         lookup(&["sorafs", "storage", "data_dir"]),
+        lookup(&["sorafs", "por", "state_dir"]),
     ];
     assert!(
         paths
@@ -3706,6 +3743,7 @@ fn five_validator_joiner_config_scales_body_ingress_and_passes_actual_admission(
         "public_address".into(),
         TomlValue::String(canonical_loopback_addr(13_337)),
     );
+    network.insert("max_total_connections".into(), TomlValue::Integer(32));
     let mut torii = Table::new();
     torii.insert(
         "address".into(),

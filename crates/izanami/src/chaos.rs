@@ -2264,7 +2264,7 @@ fn izanami_sumeragi_body_bytes(validator_count: usize) -> Result<usize> {
         validator_count,
         effect_work_capacity,
         IZANAMI_SUMERAGI_QUEUE_BODIES,
-        IZANAMI_MAX_TOTAL_CONNECTIONS,
+        IZANAMI_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
     )
     .wrap_err_with(|| {
         format!(

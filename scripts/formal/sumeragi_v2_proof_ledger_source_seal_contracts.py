@@ -4480,7 +4480,7 @@ self.validator_dial_scheduler.note_session_established(
             "Kagami Taira block-sync frame ceiling",
         ),
         (
-            "const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 11_534_336;",
+            "const TAIRA_MAX_FRAME_BYTES_TX_GOSSIP: usize = 13_631_488;",
             "Kagami Taira transaction-gossip frame ceiling",
         ),
     ):
@@ -4725,7 +4725,7 @@ public_address = "{network_public_address}"{taira_network_frame_overrides}
             "taira_default",
             ("network",),
             (("max_frame_bytes", 23_068_700), ("max_frame_bytes_block_sync", 23_068_672),
-             ("max_frame_bytes_tx_gossip", 11_534_336)),
+             ("max_frame_bytes_tx_gossip", 13_631_488)),
             "default Taira profile carries maximum privacy transaction and block-sync frames",
         ),
         (
@@ -4746,7 +4746,7 @@ public_address = "{network_public_address}"{taira_network_frame_overrides}
             "taira_config",
             ("network",),
             (("max_frame_bytes", 23_068_700), ("max_frame_bytes_block_sync", 23_068_672),
-             ("max_frame_bytes_tx_gossip", 11_534_336)),
+             ("max_frame_bytes_tx_gossip", 13_631_488)),
             "production Taira profile carries maximum privacy transaction and block-sync frames",
         ),
     )

@@ -164,6 +164,36 @@
                 .and_then(|torii| torii.get("data_dir"))
                 .and_then(toml::Value::as_str)
                 .expect("Torii data directory");
+            let torii_da = peer_config
+                .get("torii")
+                .and_then(toml::Value::as_table)
+                .and_then(|torii| torii.get("da_ingest"))
+                .and_then(toml::Value::as_table)
+                .expect("Torii DA ingest table");
+            let torii_da_replay = torii_da
+                .get("replay_cache_store_dir")
+                .and_then(toml::Value::as_str)
+                .expect("Torii DA replay-cache directory");
+            let torii_da_manifests = torii_da
+                .get("manifest_store_dir")
+                .and_then(toml::Value::as_str)
+                .expect("Torii DA manifest directory");
+            let sorafs_data = peer_config
+                .get("sorafs")
+                .and_then(toml::Value::as_table)
+                .and_then(|sorafs| sorafs.get("storage"))
+                .and_then(toml::Value::as_table)
+                .and_then(|storage| storage.get("data_dir"))
+                .and_then(toml::Value::as_str)
+                .expect("SoraFS data directory");
+            let sorafs_por_state = peer_config
+                .get("sorafs")
+                .and_then(toml::Value::as_table)
+                .and_then(|sorafs| sorafs.get("por"))
+                .and_then(toml::Value::as_table)
+                .and_then(|por| por.get("state_dir"))
+                .and_then(toml::Value::as_str)
+                .expect("SoraFS PoR state directory");
             let soranet_ticket_revocations = peer_config
                 .get("network")
                 .and_then(toml::Value::as_table)
@@ -184,6 +214,19 @@
                 expected_state.join("streaming").join("soravpn_routes")
             );
             assert_eq!(Path::new(torii_data), expected_state.join("torii"));
+            assert_eq!(
+                Path::new(torii_da_replay),
+                expected_state.join("torii").join("da_replay")
+            );
+            assert_eq!(
+                Path::new(torii_da_manifests),
+                expected_state.join("torii").join("da_manifests")
+            );
+            assert_eq!(Path::new(sorafs_data), expected_state.join("sorafs"));
+            assert_eq!(
+                Path::new(sorafs_por_state),
+                expected_state.join("sorafs").join("por")
+            );
             assert_eq!(
                 Path::new(soranet_ticket_revocations),
                 expected_state

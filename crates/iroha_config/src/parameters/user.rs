@@ -33751,7 +33751,7 @@ publish_delay_seconds = 17
         .expect("fixture message geometry is representable");
         assert_eq!(required, 28, "fixture must pin the production geometry");
 
-        let set_bodies = |table: &mut Table, bodies: usize| {
+        let set_bodies_with_exact_fanout = |table: &mut Table, bodies: usize| {
             table
                 .entry("sumeragi")
                 .or_insert_with(|| Value::Table(Table::new()))
@@ -33765,16 +33765,21 @@ publish_delay_seconds = 17
                     "bodies".into(),
                     Value::Integer(i64::try_from(bodies).expect("fixture capacity fits TOML")),
                 );
+            table
+                .get_mut("network")
+                .and_then(Value::as_table_mut)
+                .expect("network table")
+                .insert("max_total_connections".into(), Value::Integer(3));
         };
 
         let mut exact = four_validator_roster_table();
-        set_bodies(&mut exact, required);
+        set_bodies_with_exact_fanout(&mut exact, required);
         let admitted = load_root(exact);
         assert_eq!(admitted.sumeragi.queues.bodies.get(), required);
 
         let underbudget = required - 1;
         let mut table = four_validator_roster_table();
-        set_bodies(&mut table, underbudget);
+        set_bodies_with_exact_fanout(&mut table, underbudget);
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("one fewer protected message slot cannot serve the four-validator roster");
         let report = format!("{error:?}");

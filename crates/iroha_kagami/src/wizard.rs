@@ -14,6 +14,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt, fs,
     io::{BufWriter, Write},
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     str::FromStr,
 };
@@ -821,6 +822,11 @@ fn trusted_peers_pop_value(pops: &BTreeMap<PublicKey, Vec<u8>>) -> TomlValue {
 }
 fn ensure_sumeragi_body_ingress(config: &mut TomlValue, validator_roster_len: usize) -> Result<()> {
     let mut queues = table(config, "sumeragi.queues");
+    let command_capacity = sumeragi_queue_capacity(
+        &queues,
+        "commands",
+        defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get(),
+    )?;
     let authenticated_non_validator_sources = sumeragi_queue_capacity(
         &queues,
         "authenticated_non_validator_sources",
@@ -841,7 +847,7 @@ fn ensure_sumeragi_body_ingress(config: &mut TomlValue, validator_roster_len: us
         "body_bytes",
         defaults::sumeragi::QUEUE_BODY_BYTES.get(),
     )?;
-    let required_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
+    let ingress_required_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
         validator_roster_len,
         authenticated_non_validator_sources,
     )
@@ -850,6 +856,33 @@ fn ensure_sumeragi_body_ingress(config: &mut TomlValue, validator_roster_len: us
             "wizard Sumeragi body-message capacity overflowed for {validator_roster_len} validators and {authenticated_non_validator_sources} authenticated non-validator sources"
         )
     })?;
+    let reply_source_capacity = wizard_reply_source_capacity(config)?;
+    if authenticated_non_validator_sources > reply_source_capacity {
+        return Err(eyre!(
+            "wizard Sumeragi authenticated non-validator source capacity {authenticated_non_validator_sources} exceeds the effective network reply-source capacity {reply_source_capacity}"
+        ));
+    }
+    let remote_trusted_peer_count = wizard_remote_trusted_peer_count(config)?;
+    if remote_trusted_peer_count > reply_source_capacity {
+        return Err(eyre!(
+            "wizard trusted-peer full fanout requires {remote_trusted_peer_count} remote connections, above the effective network connection capacity {reply_source_capacity}"
+        ));
+    }
+    let effect_work_capacity =
+        (command_capacity / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR).max(1);
+    let exact_output_required_ownership = reply_source_capacity
+        .checked_mul(defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT)
+        .ok_or_else(|| {
+            eyre!(
+                "wizard Sumeragi exact-output ownership capacity overflowed for {reply_source_capacity} reply sources"
+            )
+        })?;
+    let fixed_exact_output_ownership = effect_work_capacity
+        .checked_add(defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP)
+        .ok_or_else(|| eyre!("wizard Sumeragi exact-output fixed ownership capacity overflowed"))?;
+    let exact_output_required_bodies =
+        exact_output_required_ownership.saturating_sub(fixed_exact_output_ownership);
+    let required_bodies = ingress_required_bodies.max(exact_output_required_bodies);
     let required_body_bytes = actual::sumeragi_v2_body_ingress_required_byte_capacity(
         validator_roster_len,
         authenticated_non_validator_sources,
@@ -860,6 +893,21 @@ fn ensure_sumeragi_body_ingress(config: &mut TomlValue, validator_roster_len: us
             "wizard Sumeragi body-byte capacity overflowed for {validator_roster_len} validators, {authenticated_non_validator_sources} authenticated non-validator sources, and {body_source_bytes} bytes per source"
         )
     })?;
+    let effective_bodies = configured_bodies.max(required_bodies);
+    let shared_ownership = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
+        effect_work_capacity,
+        effective_bodies,
+    )
+    .map_err(|error| eyre!("wizard Sumeragi exact-output geometry is invalid: {error}"))?;
+    actual::validate_sumeragi_v2_exact_output_geometry(shared_ownership, reply_source_capacity)
+        .map_err(|error| eyre!("wizard Sumeragi exact-output geometry is invalid: {error}"))?;
+    actual::sumeragi_v2_lifecycle_capacity_geometry(
+        validator_roster_len,
+        effect_work_capacity,
+        effective_bodies,
+        authenticated_non_validator_sources,
+    )
+    .map_err(|error| eyre!("wizard Sumeragi lifecycle capacity geometry is invalid: {error}"))?;
     let mut changed = false;
     if required_bodies > configured_bodies {
         queues.insert(
@@ -887,6 +935,60 @@ fn ensure_sumeragi_body_ingress(config: &mut TomlValue, validator_roster_len: us
         set_table(config, "sumeragi.queues", queues);
     }
     Ok(())
+}
+fn wizard_reply_source_capacity(config: &TomlValue) -> Result<usize> {
+    let network = table(config, "network");
+    if let Some(value) = network.get("max_total_connections") {
+        let value = value.as_integer().ok_or_else(|| {
+            eyre!("wizard template network.max_total_connections must be an integer")
+        })?;
+        return usize::try_from(value)
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| {
+                eyre!("wizard template network.max_total_connections must be greater than zero")
+            });
+    }
+    let lane_profile = network
+        .get("lane_profile")
+        .and_then(TomlValue::as_str)
+        .unwrap_or(defaults::network::lane_profile::DEFAULT);
+    let lane_profile = actual::LaneProfile::from_label(lane_profile);
+    Ok(lane_profile
+        .derived_limits()
+        .max_total_connections
+        .map_or_else(
+            || lane_profile.defaults().max_total_connections,
+            NonZeroUsize::get,
+        ))
+}
+fn wizard_remote_trusted_peer_count(config: &TomlValue) -> Result<usize> {
+    let root = config
+        .as_table()
+        .ok_or_else(|| eyre!("wizard template root must be a table"))?;
+    let local_public_key = root
+        .get("public_key")
+        .and_then(TomlValue::as_str)
+        .ok_or_else(|| eyre!("wizard template public_key must be a string"))?;
+    let trusted_peers = root
+        .get("trusted_peers")
+        .and_then(TomlValue::as_array)
+        .ok_or_else(|| eyre!("wizard template trusted_peers must be an array"))?;
+    trusted_peers.iter().try_fold(0_usize, |count, peer| {
+        let peer = peer
+            .as_str()
+            .ok_or_else(|| eyre!("wizard template trusted_peers entries must be strings"))?;
+        let (public_key, _) = peer.split_once('@').ok_or_else(|| {
+            eyre!("wizard template trusted peer `{peer}` must use public_key@address syntax")
+        })?;
+        if public_key == local_public_key {
+            Ok(count)
+        } else {
+            count
+                .checked_add(1)
+                .ok_or_else(|| eyre!("wizard trusted-peer remote connection count overflowed"))
+        }
+    })
 }
 fn sumeragi_queue_capacity(
     queues: &TomlTable,
@@ -1089,6 +1191,7 @@ fn sanitize_trusted_peers(peers: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_config::base::toml::TomlSource;
     fn checked_wizard_bls_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .expect("wizard BLS fixture key generation should succeed")
@@ -1252,11 +1355,24 @@ mod tests {
             body_source_bytes,
         )
         .expect("fixture capacity is representable");
-        let required_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
+        let ingress_required_bodies = actual::sumeragi_v2_body_ingress_required_message_capacity(
             7,
             authenticated_non_validator_sources,
         )
         .expect("fixture message capacity is representable");
+        let reply_source_capacity = wizard_reply_source_capacity(&config)
+            .expect("fixture network reply-source capacity is representable");
+        let effect_work_capacity = (defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get()
+            / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
+            .max(1);
+        let exact_output_required_bodies = reply_source_capacity
+            .checked_mul(defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT)
+            .and_then(|capacity| {
+                capacity
+                    .checked_sub(effect_work_capacity + defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP)
+            })
+            .expect("fixture exact-output capacity is representable");
+        let required_bodies = ingress_required_bodies.max(exact_output_required_bodies);
         assert_eq!(
             table(&config, "sumeragi.queues")
                 .get("bodies")
@@ -1269,6 +1385,20 @@ mod tests {
                 .and_then(TomlValue::as_integer),
             Some(i64::try_from(required).expect("fixture fits TOML")),
         );
+        let shared_ownership = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
+            effect_work_capacity,
+            required_bodies,
+        )
+        .expect("fixture shared ownership is representable");
+        actual::validate_sumeragi_v2_exact_output_geometry(shared_ownership, reply_source_capacity)
+            .expect("wizard output must satisfy exact-output geometry");
+        actual::sumeragi_v2_lifecycle_capacity_geometry(
+            7,
+            effect_work_capacity,
+            required_bodies,
+            authenticated_non_validator_sources,
+        )
+        .expect("wizard output must satisfy lifecycle geometry");
         let authored = required + body_source_bytes;
         let authored_bodies = required_bodies + 7;
         let mut queues = table(&config, "sumeragi.queues");
@@ -1295,6 +1425,20 @@ mod tests {
                 .and_then(TomlValue::as_integer),
             Some(i64::try_from(authored).expect("fixture fits TOML")),
         );
+        let mut parse_table = config.as_table().expect("wizard config table").clone();
+        parse_table
+            .get_mut("genesis")
+            .and_then(TomlValue::as_table_mut)
+            .expect("wizard genesis table")
+            .insert(
+                "expected_hash".into(),
+                TomlValue::String(
+                    "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                        .to_owned(),
+                ),
+            );
+        actual::Root::from_toml_source(TomlSource::inline(parse_table))
+            .expect("wizard queue scaling must pass canonical config admission");
     }
     #[test]
     fn genesis_chain_is_patched() {

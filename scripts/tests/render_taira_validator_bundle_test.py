@@ -654,7 +654,7 @@ address = "0.0.0.0:1337"
 public_address = "taira-validator-1.sora.org:1337"
 max_frame_bytes = 23068700
 max_frame_bytes_block_sync = 23068672
-max_frame_bytes_tx_gossip = 11534336
+max_frame_bytes_tx_gossip = 13631488
 
 [sumeragi.block]
 max_payload_bytes = 16777216
@@ -2235,9 +2235,9 @@ def test_render_bundle_rejects_derived_source_count_above_toml_i64(
         ),
         (
             "max_frame_bytes_tx_gossip",
-            "11534336",
+            "13631488",
             str(MODULE.TAIRA_TX_GOSSIP_PLAINTEXT_FRAME_BYTES - 1),
-            "must be at least 11534336 bytes",
+            "must be at least 13631488 bytes",
         ),
         (
             "max_frame_bytes",
