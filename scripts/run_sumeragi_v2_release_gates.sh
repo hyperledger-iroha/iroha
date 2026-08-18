@@ -2,7 +2,6 @@
 # Execute the source-bound Sumeragi v2 PR or production-release corridor.
 set -euo pipefail
 umask 077
-
 profile="${1:---pr}"
 if [[ $# -gt 1 ]] || [[ "$profile" != "--pr" && "$profile" != "--release" ]]; then
   echo "usage: $0 [--pr|--release]" >&2
@@ -2530,7 +2529,7 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::exact_output_retry_rejects_a_different_message_identity
   sumeragi::v2_worker::tests::full_exact_output_corridor_does_not_disguise_non_progress_routes_as_backpressure
   sumeragi::v2_worker::tests::applied_height_handoff_retires_all_sidecar_flush_states_without_blocking_successor
-  sumeragi::v2_worker::tests::applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only
+  sumeragi::v2_worker::tests::applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically
   sumeragi::v2_worker::tests::applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically
   sumeragi::v2_worker::tests::applied_height_handoff_rejects_output_without_reconstruction
   sumeragi::v2_worker::tests::applied_height_handoff_rejects_unbound_lane_output_atomically
@@ -3607,7 +3606,6 @@ if ((corridor_enabled)); then
     exit 1
   fi
 fi
-
 # These are the real-network four-peer acceptance gates. Keep their exact
 # harness/name inventory source-bound and non-ignored even though ordinary
 # developer runs may opt out inside the test body.
@@ -3654,7 +3652,6 @@ for required_test_spec in \
     exit 1
   fi
 done
-
 # The source-binding checker derives this same ordered corpus from the formal
 # ledger. Keep an independent fixed release count and terminal contract marker
 # so the runner and ledger cannot silently agree to drop a mutation together.
@@ -3674,7 +3671,6 @@ if ! grep -Fqx -- \
   echo "multilane mutation runner lacks the exact 106-mutation completion contract" >&2
   exit 1
 fi
-
 readonly expected_typed_rollover_formal_mutation_count=45
 observed_typed_rollover_formal_mutation_count="$(
   grep -Ec '^  "[a-z0-9-]+\|typed_rollover_handoff_[a-z0-9_]+_bug[.]cfg\|(12|13)\|\$\{(INVARIANT|TEMPORAL)_MARKER\}"$|^run_case repeated-handoff-after-restart-restore \\$' \
@@ -3691,7 +3687,6 @@ if ! grep -Fqx -- \
   echo "typed rollover mutation runner lacks the exact 45-mutation completion contract" >&2
   exit 1
 fi
-
 production_liveness_modules=(
   kura::tests
   kura::lane_geometry::tests
@@ -3707,6 +3702,7 @@ production_liveness_modules=(
   sumeragi::serviced_candidate_store::tests
   sumeragi::v2::tests
   sumeragi::v2_body_store::tests
+  sumeragi::v2_certified_serve_payload_store::tests
   sumeragi::v2_block_sync::tests
   sumeragi::v2_apply::tests
   sumeragi::v2_effects::tests
@@ -3715,7 +3711,9 @@ production_liveness_modules=(
   sumeragi::v2_transport::tests
   sumeragi::v2_recovery::tests
   sumeragi::v2_lifecycle_recovery::tests
+  sumeragi::v2_lifecycle_coordinator
   sumeragi::v2_runner::tests
+  sumeragi::v2_runner::lifecycle_height_driver::tests
   sumeragi::v2_worker::tests
   sumeragi::status::v2_liveness_watchdog_tests
   zk::kagemusha_finality::tests
@@ -3749,6 +3747,7 @@ production_liveness_leg_ids=(
   production-v2-leader-wire-lifecycle-store
   production-v2-adapter
   production-v2-body-store
+  production-v2-certified-serve-payload-store
   production-v2-block-sync
   production-v2-apply
   production-v2-effects
@@ -3757,7 +3756,9 @@ production_liveness_leg_ids=(
   production-v2-transport
   production-v2-recovery
   production-v2-lifecycle-recovery
+  production-v2-lifecycle-coordinator
   production-v2-runner
+  production-v2-lifecycle-height-driver
   production-v2-worker
   production-v2-watchdog
   production-kagemusha-finality
@@ -4517,10 +4518,10 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 40 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
+  # 43 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
   # command + 6 Taira + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped
-  # SDK + 6 diagnostics + 11 pytest legs = 88.
-  readonly expected_corridor_leg_count=88
+  # SDK + 6 diagnostics + 11 pytest legs = 91.
+  readonly expected_corridor_leg_count=91
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1

@@ -4,10 +4,10 @@ use eyre::{Result, WrapErr, ensure, eyre};
 use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::{
-    client::Client,
+    client::{Client, QueryError},
     crypto::{Algorithm, Hash, HashOf, KeyPair},
     data_model::{
-        Identifiable, Level, NetworkId,
+        Identifiable, Level, NetworkId, ValidationFail,
         account::{Account, AccountId},
         block::{
             BlockHeader,
@@ -26,7 +26,9 @@ use iroha::{
         peer::PeerId,
         prelude::FindAccountById,
         query::{
-            account::prelude::FindAccounts, block::prelude::FindBlocks, prelude::QueryBuilderExt,
+            block::prelude::FindBlocks,
+            error::{FindError, QueryExecutionFail},
+            prelude::QueryBuilderExt,
         },
         transaction::Executable,
     },
@@ -4795,17 +4797,34 @@ async fn wait_for_held_quorum_evidence(
 }
 async fn assert_accounts_absent(peers: &[NetworkPeer], accounts: &[AccountId]) -> Result<()> {
     for peer in peers {
-        let client = peer.client();
-        let peer_name = peer.mnemonic().to_owned();
-        let stored = task::spawn_blocking(move || client.query(FindAccounts).execute_all())
+        for account in accounts {
+            let client = peer.client();
+            let account = account.clone();
+            let expected = account.clone();
+            let expected_label = expected.to_string();
+            let peer_name = peer.mnemonic().to_owned();
+            let found = task::spawn_blocking(move || -> Result<bool> {
+                match client.query_single(FindAccountById::new(account)) {
+                    Ok(stored) if stored.id() == &expected => Ok(true),
+                    Ok(stored) => Err(eyre!(
+                        "account query for {expected} returned unexpected account {}",
+                        stored.id()
+                    )),
+                    Err(QueryError::Validation(ValidationFail::QueryFailed(
+                        QueryExecutionFail::Find(FindError::Account(_))
+                        | QueryExecutionFail::NotFound,
+                    ))) => Ok(false),
+                    Err(error) => Err(eyre!(error)),
+                }
+            })
             .await
             .wrap_err_with(|| format!("fresh-genesis account query panicked for {peer_name}"))?
-            .wrap_err_with(|| format!("query fresh-genesis accounts from {peer_name}"))?;
-        for account in accounts {
-            let found = stored.iter().any(|stored| stored.id() == account);
+            .wrap_err_with(|| {
+                format!("fresh-genesis account query failed on {peer_name} for {expected_label}")
+            })?;
             ensure!(
                 !found,
-                "fresh genesis unexpectedly contained test account {account} on {peer_name}"
+                "fresh genesis unexpectedly contained test account {expected_label} on {peer_name}"
             );
         }
     }
@@ -4827,13 +4846,25 @@ async fn wait_for_accounts_visible(
                 let expected = account.clone();
                 let expected_label = expected.to_string();
                 let peer_name = peer.mnemonic().to_owned();
-                let visible = task::spawn_blocking(move || {
-                    client
-                        .query_single(FindAccountById::new(account))
-                        .is_ok_and(|stored| stored.id() == &expected)
+                let visible = task::spawn_blocking(move || -> Result<bool> {
+                    match client.query_single(FindAccountById::new(account)) {
+                        Ok(stored) if stored.id() == &expected => Ok(true),
+                        Ok(stored) => Err(eyre!(
+                            "account query for {expected} returned unexpected account {}",
+                            stored.id()
+                        )),
+                        Err(QueryError::Validation(ValidationFail::QueryFailed(
+                            QueryExecutionFail::Find(FindError::Account(_))
+                            | QueryExecutionFail::NotFound,
+                        ))) => Ok(false),
+                        Err(error) => Err(eyre!(error)),
+                    }
                 })
                 .await
-                .wrap_err_with(|| format!("account visibility query panicked for {peer_name}"))?;
+                .wrap_err_with(|| format!("account visibility query panicked for {peer_name}"))?
+                .wrap_err_with(|| {
+                    format!("account visibility query failed on {peer_name} for {expected_label}")
+                })?;
                 if !visible {
                     last_missing.push(format!("{expected_label} on {peer_name}"));
                 }

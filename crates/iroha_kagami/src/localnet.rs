@@ -388,8 +388,8 @@ const LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES: usize =
 /// Total P2P connection bound for generated localnets.
 ///
 /// This admits the other thirty validators in the maximum legal committee plus
-/// two authenticated non-validator sources while keeping the expanded localnet
-/// command queue inside the canonical height-local lifecycle ledger.
+/// two authenticated non-validator sources. Lifecycle ownership is bounded
+/// separately by the configured fair-ingress source population.
 const LOCALNET_MAX_TOTAL_CONNECTIONS: usize =
     MAX_VALIDATORS_PER_HEIGHT - 1 + LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES;
 /// Per-source canonical outer-ingress wire bytes for generated localnets.
@@ -437,7 +437,7 @@ fn localnet_sumeragi_body_bytes(validator_count: usize) -> Result<usize> {
         validator_count,
         effect_work_capacity,
         LOCALNET_SUMERAGI_QUEUE_BODIES,
-        LOCALNET_MAX_TOTAL_CONNECTIONS,
+        LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
     )
     .wrap_err("localnet Sumeragi lifecycle capacity geometry is inadmissible")?;
     let shared_ownership_capacity = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
@@ -7056,7 +7056,7 @@ mod tests {
             usize::from(opts.peers.get()),
             effect_work_capacity,
             LOCALNET_SUMERAGI_QUEUE_BODIES,
-            max_total_connections,
+            LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
         )
         .expect("generated localnet lifecycle geometry must remain admissible");
         let keys = sumeragi

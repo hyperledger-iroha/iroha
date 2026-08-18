@@ -1261,7 +1261,7 @@ public final class IrohaSDK: @unchecked Sendable {
     }
 
     /// Verify the planner commitment and exact frames, then locally sign one
-    /// indivisible ordinary transaction containing the complete setup vector.
+    /// indivisible public transaction containing the complete setup vector.
     public func buildAliasSetupPlan(
         _ request: AliasSetupPlanRequestV1,
         networkId: NetworkId,

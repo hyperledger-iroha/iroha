@@ -29,6 +29,275 @@ def _retired_sidecar_gate_ttl_source_errors(
         f"{role} seam"
     ]
 
+def _require_leader_wire_height_ingress_retirement(
+    height_ingress_path: Path,
+    ingress_path: Path,
+    ingress_source: str,
+    leader_wire_store_path: Path,
+    leader_wire_store_source: str,
+    errors: list[str],
+) -> None:
+    """Bind atomic ingress retirement and its exact durable carrier handoff."""
+
+    height_ingress_source = height_ingress_path.read_text(encoding="utf-8")
+    # Production retirement is owned by queue-level close and the atomic
+    # leader-wire lifecycle retirement. Retired Certified-Serve and joint
+    # height-ingress gate wrappers are not first-release seams.
+    height_ingress_binding_items: dict[str, RustItem | None] = {
+        "runner::close_ingress_for_rollover": (
+            _require_rust_item(
+                height_ingress_path,
+                height_ingress_source,
+                "close_ingress_for_rollover",
+                errors,
+            )
+        )
+    }
+    for item_name in (
+        "retire_leader_wire_lifecycle_gate",
+        "close",
+    ):
+        height_ingress_binding_items[f"ingress::{item_name}"] = (
+            _require_qualified_rust_item(
+                ingress_path,
+                ingress_source,
+                "FairV2Ingress",
+                item_name,
+                errors,
+                f"leader-wire height-ingress transaction FairV2Ingress::{item_name}",
+            )
+        )
+    height_ingress_binding_items["leader_wire_store::park_sealed_ingress"] = (
+        _require_qualified_rust_item(
+            leader_wire_store_path,
+            leader_wire_store_source,
+            "LeaderWireLifecycleStoreGate",
+            "park_sealed_ingress",
+            errors,
+            "leader-wire durable retirement LeaderWireLifecycleStoreGate::park_sealed_ingress",
+        )
+    )
+    expected_height_ingress_binding_keys = {
+        "runner::close_ingress_for_rollover",
+        "ingress::retire_leader_wire_lifecycle_gate",
+        "leader_wire_store::park_sealed_ingress",
+        "ingress::close",
+    }
+    observed_height_ingress_binding_keys = set(
+        _PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256
+    )
+    if observed_height_ingress_binding_keys != expected_height_ingress_binding_keys:
+        errors.append(
+            f"{height_ingress_path}: leader-wire height-ingress token-seal inventory mismatch: "
+            f"missing={sorted(expected_height_ingress_binding_keys - observed_height_ingress_binding_keys)}, "
+            f"extra={sorted(observed_height_ingress_binding_keys - expected_height_ingress_binding_keys)}"
+        )
+    for qualified_name, expected_sha256 in (
+        _PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256.items()
+    ):
+        if qualified_name.startswith("ingress::"):
+            path = ingress_path
+        elif qualified_name.startswith("leader_wire_store::"):
+            path = leader_wire_store_path
+        else:
+            path = height_ingress_path
+        _require_rust_item_token_sha256(
+            path,
+            height_ingress_binding_items.get(qualified_name),
+            expected_sha256,
+            f"leader-wire height-ingress ownership {qualified_name}",
+            errors,
+        )
+
+    _require_exact_rust_tokens(
+        height_ingress_path,
+        height_ingress_binding_items["runner::close_ingress_for_rollover"],
+        """
+fn close_ingress_for_rollover(ingress_ready: &AtomicBool, block_ingress: &FairV2Ingress) {
+    ingress_ready.store(false, Ordering::Release);
+    block_ingress.close();
+}
+""",
+        "rollover close must publish not-ready before closing fair-ingress admission",
+        errors,
+    )
+    _require_exact_rust_tokens(
+        ingress_path,
+        height_ingress_binding_items["ingress::close"],
+        """
+pub(crate) fn close(&self) {
+    self.state.lock().open = false;
+}
+""",
+        "fair ingress close must make admission unavailable under the queue lock",
+        errors,
+    )
+    atomic_retirement_item = height_ingress_binding_items[
+        "ingress::retire_leader_wire_lifecycle_gate"
+    ]
+    atomic_retirement_description = (
+        "atomic leader-wire retirement must exclude consumers and producers, "
+        "park the exact carrier set durably, and clear volatile ownership only afterward"
+    )
+    for expected_source in (
+        """
+let _service_guard = self.service_lock.lock();
+let mut state = self.state.lock();
+state.open = false;
+let bound = state
+    .leader_wire_lifecycle_gate
+    .as_ref()
+    .cloned()
+    .ok_or_else(|| "leader-wire lifecycle gate was already unbound".to_owned())?;
+if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(&bound, gate) {
+    return Err("leader-wire lifecycle gate changed per-height ownership".to_owned());
+}
+""",
+        """
+if !inbound_ownership.validate_exact()
+    || !entry.ownership_snapshot.validate_exact()
+    || entry.leader_wire_token.as_ref() != inbound_ownership.leader_wire_token()
+    || entry.leader_wire_token.as_ref() != entry.ownership_snapshot.leader_wire_token()
+{
+    return Err(
+        "sealed leader-wire ingress changed a queued ownership projection".to_owned(),
+    );
+}
+""",
+        """
+let Some(token) = entry.leader_wire_token.as_ref() else {
+    continue;
+};
+if token.identity.context_id != context_id
+    || token.identity.height != height
+    || carriers.insert(token.slot.clone(), token.clone()).is_some()
+{
+    return Err(
+        "sealed leader-wire ingress changed its exact retiring carrier set".to_owned(),
+    );
+}
+""",
+        """
+let mirrored_ingress = state
+    .leader_wire_lifecycles
+    .iter()
+    .filter_map(|(slot, record)| {
+        (record.status == FairV2IngressLeaderWireStatus::Ingress)
+            .then(|| (slot.clone(), record.token.clone()))
+    })
+    .collect::<BTreeMap<_, _>>();
+if carriers != mirrored_ingress {
+    return Err(
+        "sealed leader-wire ingress disagreed with live carrier ownership".to_owned(),
+    );
+}
+let retirement = bound.park_sealed_ingress(carriers)?;
+""",
+        """
+let retirement = bound.park_sealed_ingress(carriers)?;
+let mut empty_lanes = state
+    .roster
+    .iter()
+    .cloned()
+    .map(|peer| {
+        (
+            FairV2IngressSource::Validator(peer),
+            FairV2IngressLane::default(),
+        )
+    })
+    .collect::<BTreeMap<_, _>>();
+empty_lanes.insert(FairV2IngressSource::Anonymous, FairV2IngressLane::default());
+state.lanes = empty_lanes;
+""",
+        """
+state.lanes = empty_lanes;
+state.pending_wire_owners.clear();
+state.ready.clear();
+state.len = 0;
+state.bytes = 0;
+state.nonempty_since = None;
+state.last_service_attempt_at = None;
+state.leader_wire_lifecycles.clear();
+state.leader_wire_lifecycle_gate = None;
+state.leader_wire_lifecycle_ordinals = None;
+state.leader_wire_context = None;
+self.debug_assert_consistent(&state);
+retirement.complete();
+Ok(())
+""",
+    ):
+        _require_rust_token_sequence(
+            ingress_path,
+            atomic_retirement_item,
+            expected_source,
+            atomic_retirement_description,
+            errors,
+        )
+
+    durable_retirement_item = height_ingress_binding_items[
+        "leader_wire_store::park_sealed_ingress"
+    ]
+    durable_retirement_description = (
+        "durable leader-wire retirement must validate the exact Ingress set, "
+        "roll back failed persistence, and mint its receipt only after fsync"
+    )
+    for expected_source in (
+        """
+if carriers.iter().any(|(slot, token)| {
+    slot != &token.slot
+        || !token.validate_exact(
+            self.context_id,
+            self.height,
+            &self.roster,
+            self.max_chunk_count,
+        )
+}) {
+    return Err("sealed leader-wire ingress changed immutable geometry".to_owned());
+}
+""",
+        """
+if durable_ingress != carriers
+    || carriers
+        .keys()
+        .any(|slot| state.replay_dormant.contains(slot))
+    || carriers.iter().any(|(slot, token)| {
+        state.records.get(slot).is_none_or(|record| {
+            record.token != *token
+                || record.status != LeaderWireLifecycleStatus::Ingress
+                || record.runtime_owner.is_some()
+                || record.terminal_evidence.is_some()
+        })
+    })
+{
+    return Err(
+        "sealed leader-wire ingress disagreed with durable carrier ownership".to_owned(),
+    );
+}
+""",
+        """
+record.status = LeaderWireLifecycleStatus::Dormant;
+let inserted = state.replay_dormant.insert(slot.clone());
+debug_assert!(inserted);
+""",
+        """
+if !carriers.is_empty()
+    && let Err(error) = self.persist_locked(&state)
+{
+    *state = previous;
+    return Err(error);
+}
+Ok(SealedLeaderWireIngressRetirementV1 { _private: () })
+""",
+    ):
+        _require_rust_token_sequence(
+            leader_wire_store_path,
+            durable_retirement_item,
+            expected_source,
+            durable_retirement_description,
+            errors,
+        )
+
+
 def _require_exact_output_startup_and_successor_rollover_seams(
     lane_path: Path,
     lane_ack_items: dict[str, RustItem | None],
@@ -341,6 +610,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_config/src/parameters/user.rs': (
         'user/kura.rs',
+        'user_soranet_handshake_tests.rs',
         'user/torii_peer_geo.rs',
         'user/torii_soranet_privacy_ingest.rs',
         'user/torii_tx_history.rs',
@@ -694,6 +964,12 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_adapter_04_wal_recovery.rs',
         'v2_adapter_04b_lifecycle_startup.rs',
         'v2_adapter_05_direct_lifecycle.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs': (
+        'v2_adapter_04_wal_recovery_decision_classifier_cases.rs',
+    ),
+    'crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs': (
+        'v2_adapter_04b_lifecycle_startup_tail.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_adapter_main_04.rs': (
         'v2_adapter_01_replay_and_registry.rs',
@@ -2085,12 +2361,12 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 }
 
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 860
-_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 88
+_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 91
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329"
+    "b6457553bc8d41f74ebc708ea3d4e6187117f0f008da2c2dea697b0771741b44"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "83f3882be5bfa84240715deb95806d12a7838fe42eb52a6de0711d8fcf71b9fe"
+    "c77850a207fe21dd98cc58e27ec87c6aa8a9140bcfb890e879f4d495ef12902a"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2104,7 +2380,7 @@ _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
 _PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 527
 _PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 528
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "4dd855f85b071369ec2457dfa75caacc8f597ce17390b406de8f190dd52c6c18"
+    "db96b6b781b450c4b04dbe1f6d4068a4a2a4f13cea3f0fbd868f50dbce4baabb"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -2180,7 +2456,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        43,
+        42,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-state-governance-unlock-audit", "state::tests", 1),
@@ -2206,13 +2482,18 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::serviced_candidate_store::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 47),
+    ("production-v2-adapter", "sumeragi::v2::tests", 48),
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
+    (
+        "production-v2-certified-serve-payload-store",
+        "sumeragi::v2_certified_serve_payload_store::tests",
+        11,
+    ),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 72),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 71),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 65),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     (
@@ -2220,8 +2501,18 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::v2_lifecycle_recovery::tests",
         5,
     ),
+    (
+        "production-v2-lifecycle-coordinator",
+        "sumeragi::v2_lifecycle_coordinator",
+        39,
+    ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 135),
+    (
+        "production-v2-lifecycle-height-driver",
+        "sumeragi::v2_runner::lifecycle_height_driver::tests",
+        1,
+    ),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 88),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -2332,8 +2623,8 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_runtime::tests::drained_internal_ignore_uses_exact_durable_tombstone_before_readmission",
     "sumeragi::v2_runtime::tests::queued_body_completion_coalesces_only_its_incumbent_owner",
     "sumeragi::v2_runtime::tests::stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordinal",
-    "sumeragi::v2_runtime::tests::restored_serve_high_watermark_precedes_startup_runtime_owner",
-    "sumeragi::v2_runtime::tests::full_runtime_churn_cannot_cross_an_exact_serve_ordinal",
+    "sumeragi::v2_lifecycle_coordinator::tests::restart_seeds_high_water_and_rollover_preserves_it",
+    "sumeragi::v2_lifecycle_coordinator::tests::producer_handoff_blocks_later_work_without_making_serve_a_global_barrier",
     "sumeragi::v2_runtime::tests::decision_retirement_releases_queued_leader_wire_runtime_owner",
     "sumeragi::v2_runtime::tests::lock_retirement_releases_busy_deferred_leader_wire_runtime_owner",
     "sumeragi::v2_runtime::tests::production_authenticated_preflight_is_never_semantic_only_coalesce",
@@ -2431,11 +2722,11 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_runner::tests::runner_dispatch_rejects_durable_response_without_reply_routes",
     "sumeragi::v2_worker::tests::actor_backpressure_retains_exact_final_lane_commit_qc_post",
     "sumeragi::v2_worker::tests::actor_backpressure_retains_complete_merge_share_fanout",
-    "sumeragi::v2_worker::tests::certified_serve_receiver_close_rolls_back_pending_capacity_replacement",
-    "sumeragi::v2_worker::tests::certified_serve_receiver_close_rolls_back_materialized_unclaimed_replacement",
-    "sumeragi::v2_worker::tests::certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement",
-    "sumeragi::v2_worker::tests::certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fifo",
-    "sumeragi::v2_worker::tests::certified_serve_terminal_replay_source_retains_retired_route_and_reconnects",
+    "sumeragi::v2_lifecycle_coordinator::tests::serve_retirement_activates_reserved_producer_before_later_admission",
+    "sumeragi::v2_worker::tests::receiver_teardown_preserves_completion_pending_lifecycle_serve",
+    "sumeragi::v2_worker::tests::receiver_teardown_rejects_queued_or_active_lifecycle_serve",
+    "sumeragi::v2::tests::production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
+    "sumeragi::v2_runner::lifecycle_height_driver::tests::completed_certified_serve_yields_before_the_next_outer_turn",
     "sumeragi::v2_worker::tests::same_tenure_updates_and_reconnect_preserve_current_item",
     "sumeragi::v2_worker::tests::closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressures",
     "sumeragi::v2_worker::tests::completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge",
@@ -2721,45 +3012,45 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_runner::tests::relayed_generation_hint_preserves_reply_route_from_lane_through_worker",
     "sumeragi::v2_worker::tests::generation_hint_requires_exact_reply_route_ownership",
     "network_relay_tests::certified_merge_sidecar_messages_preserve_ingress_reply_route",
-    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_required_serve_gate_precedes_open",
+    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::turn_cut_dequeues_exact_winner_once_and_preserves_ready_rotation",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_churn",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes",
     "sumeragi::authoritative_runtime_gate_tests::restored_productive_retry_stays_behind_an_earlier_certified_request_carrier",
-    "sumeragi::v2_worker::tests::exact_serve_predecessor_admission_services_older_local_without_admitting_later_io",
-    "sumeragi::v2_worker::tests::dropping_exact_serve_predecessor_admission_closes_transient_aperture",
-    "sumeragi::v2_worker::tests::exact_serve_predecessor_admission_is_transient_and_barrier_bound",
-    "sumeragi::v2_worker::tests::repeated_exact_serve_admissions_close_all_older_sources_before_later_io",
-    "sumeragi::v2_worker::tests::exact_serve_admission_waits_out_full_control_prefix_before_older_causal_work",
-    "sumeragi::v2_worker::tests::fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers",
-    "sumeragi::v2_worker::tests::drained_exact_retransmission_gets_fresh_scheduler_ordinal",
-    "sumeragi::v2_worker::tests::fair_ingress_gate_overflow_closes_without_partial_admission",
-    "sumeragi::v2_worker::tests::fair_ingress_classifies_current_historical_future_and_unauthenticated_requests",
-    "sumeragi::v2_worker::tests::fair_ingress_rollover_retires_ticket_before_old_service_teardown",
-    "sumeragi::v2_worker::tests::fair_ingress_producer_episode_wins_or_yields_without_partial_exact_admission",
-    "sumeragi::v2_worker::tests::fair_ingress_full_prefix_materializes_exact_serve_before_later_churn",
-    "sumeragi::v2_worker::tests::fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack",
-    "sumeragi::v2_worker::tests::fair_ingress_terminal_retry_replays_without_lifecycle_resurrection",
-    "sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission",
-    "sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_locally_completes_without_retry",
-    "sumeragi::v2_worker::tests::durable_coalesced_retransmission_restart_locally_completes_without_retry",
-    "sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source",
-    "sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_into_local_completion",
-    "sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay",
-    "sumeragi::v2_worker::tests::durable_serve_seal_survives_post_before_physical_ack",
-    "sumeragi::v2_worker::tests::durable_serve_corruption_fails_closed_without_highwater_reset",
-    "sumeragi::v2_worker::tests::durable_serve_frame_bound_covers_max_layout_manifest_hashes",
-    "sumeragi::v2_worker::tests::durable_higher_view_abort_republishes_displaced_terminal_before_restart",
-    "sumeragi::v2_worker::tests::durable_higher_view_admission_crash_locally_completes_successor_union",
-    "sumeragi::v2_worker::tests::durable_serve_restore_rejects_capacity_owner_swap_across_replacement",
-    "sumeragi::v2_worker::tests::durable_serve_state_is_pruned_only_with_successor_rollover_root",
-    "sumeragi::v2_worker::tests::certified_serve_future_slot_blocks_control_and_consensus_replenishment",
-    "sumeragi::v2_worker::tests::certified_serve_cross_relay_retry_replays_one_terminal_tombstone",
-    "sumeragi::v2_worker::tests::certified_serve_terminal_rejects_mismatched_response_hash_without_releasing_owner",
-    "sumeragi::v2_worker::tests::certified_serve_observer_owner_contains_prepare_and_commit_subfamilies",
-    "sumeragi::v2_worker::tests::certified_serve_higher_view_abort_restores_terminal_high_watermark",
-    "sumeragi::v2_worker::tests::certified_serve_receiver_close_aborts_reserved_replacement_without_orphan",
-    "sumeragi::v2_worker::tests::certified_serve_delayed_lower_view_cross_relay_cannot_resurrect",
+    "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_a_later_valid_payload_from_a_second_store_owner",
+    "sumeragi::v2_certified_serve_payload_store::tests::capacity_is_checked_before_a_second_file_is_published",
+    "sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_certified_responder_authority",
+    "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_store_directory_symlink_replacement",
+    "sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_durable_body_receipt_and_bytes",
+    "sumeragi::v2_certified_serve_payload_store::tests::negative_terminal_is_idempotent_and_cannot_be_replaced",
+    "sumeragi::v2_certified_serve_payload_store::tests::only_the_call_that_created_pending_owns_preledger_abort_authority",
+    "sumeragi::v2_certified_serve_payload_store::tests::pending_receipt_requires_verified_qc_and_local_retention_authority",
+    "sumeragi::v2_certified_serve_payload_store::tests::recovery_cut_reauthenticates_request_qc_and_typed_negative",
+    "sumeragi::v2_certified_serve_payload_store::tests::recovery_cut_reconstructs_and_authenticates_completed_response",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::frame_roundtrip_is_canonical_and_preserves_high_water",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::one_signed_serve_request_cannot_own_two_lifecycle_pairs",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::orphan_serve_or_producer_records_are_rejected",
+    "sumeragi::v2_lifecycle_coordinator::projection::tests::cancelled_certified_serve_tombstone_replays_with_its_terminal_producer_pair",
+    "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_completion_settles_from_the_post_fsync_response_receipt",
+    "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_negative_settlement_requires_the_exact_post_fsync_receipt",
+    "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_rejects_a_receipt_for_another_signed_request",
+    "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_terminal_family_mismatch_fails_without_state_mutation",
+    "sumeragi::v2_lifecycle_coordinator::projection::tests::pending_certified_serve_admits_one_ready_serve_and_adjacent_dormant_producer",
+    "sumeragi::v2_lifecycle_coordinator::replay_authority::tests::certified_serve_pending_replay_pair_binds_exact_fsync_origin_and_records",
+    "sumeragi::v2_lifecycle_coordinator::replay_authority::tests::recovered_serve_states_reconstruct_one_common_source_per_replay_pair",
+    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::post_cut_append_preserves_geometry_but_pre_cut_mutation_fails_cas",
+    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::prepared_commit_preserves_unrelated_post_cut_append",
+    "sumeragi::v2_lifecycle_coordinator::launch::turn_driver::ordinary_ingress_token_tests::armed_token_closes_output_before_releasing_dequeued_carrier_and_serve_result",
+    "sumeragi::v2_lifecycle_coordinator::open::recovery_tests::complete_tip_serve_reconciliation_binds_the_exact_source_frame",
+    "sumeragi::v2_lifecycle_coordinator::open::recovery_tests::complete_tip_serve_reconciliation_rejects_missing_final_cut_coverage",
+    "sumeragi::v2_lifecycle_coordinator::scheduler_inputs::certified_serve_scheduler_tests::certified_serve_claim_rolls_back_when_its_exact_carrier_drifted",
+    "sumeragi::v2_lifecycle_coordinator::scheduler_inputs::certified_serve_scheduler_tests::certified_serve_scheduler_creates_exactly_one_live_claim",
+    "sumeragi::v2_lifecycle_coordinator::tests::capacity_fence_freezes_the_complete_serve_companion",
+    "sumeragi::v2_lifecycle_coordinator::tests::durable_rollover_rejects_live_serve_without_payload_cancellation_receipt",
+    "sumeragi::v2_lifecycle_coordinator::tests::recovery_requires_a_bijective_atomic_serve_producer_pair",
+    "sumeragi::v2_lifecycle_coordinator::tests::restart_derives_ready_producer_debt_from_terminal_serve",
+    "sumeragi::v2_lifecycle_coordinator::tests::serve_and_producer_share_one_reconstruction_source",
+    "sumeragi::v2_lifecycle_coordinator::tests::serve_and_producer_terminalization_fail_closed_without_the_atomic_debt",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_checked_dequeue_freezes_one_physical_cut_per_occurrence",
     "sumeragi::v2::tests::deferred_occurrence_capability_binds_direct_authenticated_provenance",
     "sumeragi::v2_runtime::tests::runtime_rejects_driver_selection_outside_eligible_deferred_owner_set",
@@ -2768,13 +3059,13 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_runtime::tests::post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target",
     "sumeragi::v2_runtime::tests::pre_dequeue_probe_validates_unfrozen_leader_wire_identity",
     "sumeragi::v2_runtime::tests::busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation",
-    "sumeragi::v2_worker::tests::invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::fresh_certified_serve_rejects_foreign_target_and_rolls_back_capacity_wait",
     "sumeragi::v2_effects::tests::fetch_retransmissions_reuse_one_work_slot_and_one_signed_request",
     "sumeragi::v2_effects::tests::apply_retransmissions_reuse_one_work_slot",
     "sumeragi::v2_runtime::tests::distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner",
     "sumeragi::v2_worker::tests::durable_reconstructed_body_terminalizes_late_chunk_across_arrival_order",
     "sumeragi::v2_worker::tests::productive_retry_after_proofless_reconstruction_does_not_become_orphan",
-    "sumeragi::v2_effects::tests::late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps",
+    "sumeragi::v2_lifecycle_coordinator::launch::tests::recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit",
     "sumeragi::v2_lane_work::tests::native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order",
     "sumeragi::v2_lane_work::tests::native_amx_merge_projection_excludes_coordinator_only_receipts",
     "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_same_route_identity_conflict",
@@ -2785,7 +3076,7 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "kura::tests::exact_retired_autonomous_attempt_accessor_uses_proposal_height_namespace",
     "sumeragi::v2_lane_work::tests::decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag",
     "sumeragi::v2_lane_work::tests::cold_restart_hydrates_two_link_raw_lane_chain_without_receipts",
-    "sumeragi::v2_worker::tests::applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only",
+    "sumeragi::v2_worker::tests::applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically",
 )
 _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
     test_name
@@ -2897,8 +3188,8 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
 }
 
 _AUTONOMOUS_RETIREMENT_HANDOFF_TEST_SHA256 = {
-    "applied_height_handoff_retires_exact_noncanonical_autonomous_outputs_only": (
-        "a5d1b6452466c325c8b019b45b249e755c8529e55ee3e3a3abf3036ac473bc32"
+    "applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically": (
+        "6180ebcb3f417cf30d175305545bb980449b99f50bcf74ec300198e15bad5881"
     ),
 }
 
@@ -3291,7 +3582,7 @@ _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "dispatch_lane_work_effect_from_snapshot": "20b07ac620f07eca9a61e14f198473a5beb9fdf77bf5222d34f0d7338791ec47",
 }
 
-_PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {"ordinary_loop": "cf1175fb9703fb722dea4460957dd63847e4a6ec98b5394c66823f8aed0576cf", "pending_loop": "04cec89b8a40983a59dc0eaf425257a9bd9ff1a60f8ea6a2c870cb25c7601b05", "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041", "pending_active": "29f0362cb294a442e22ee77fa002ad75d89e7af6c244debfc5b26968b3300c95"}
+_PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {"ordinary_loop": "cf1175fb9703fb722dea4460957dd63847e4a6ec98b5394c66823f8aed0576cf", "pending_loop": "04cec89b8a40983a59dc0eaf425257a9bd9ff1a60f8ea6a2c870cb25c7601b05", "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041", "pending_active": "5ca201b1f8f20512fd218c79ed0eaecd41cf2a42cbd0c5b3e0f6525f3e180c27"}
 _PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "e3156115c7608e58491724d41dc852b11db86a92617e2d9454049a6dc898a08d"
 
 # `asyncNodeServiceDeadlines` is a proof-only projection of this one explicit
@@ -3317,22 +3608,24 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "registry:ConcreteLifecycleWorkRegistry::project_claimed_certified_serve_dispatch": "985dcb45690f99cde6bc2b07703e9c2cf915ceb1abb43b99710e8be71c4f5f26",
     "scheduler:CertifiedServeSchedulerObservationV1::from_live_cuts": "886ef927aff3c6f8ae8577bb1bcb729f4058b48f20df6c5fbf1c3773c43b3d4f",
     "scheduler:claim_certified_serve_turn_v1": "93578174a9077b0cda5510e9f763b416731fd5bcae84fcc3c124949c8a3535d1",
-    "turn:prepare_and_dispatch_current_certified_serve": "3860ef97a19c524a74b7ae6aaaa0af2d8e0696571e8e5644986595f47f66d085",
-    "turn:LaunchedProductionLifecycleV1::drive_completion_turn": "26d2ec8d584372896275230c113558e7b6143de582d241b904bdfc87b3acc503",
+    "turn:prepare_and_dispatch_current_certified_serve": "c9171ad0e583732c0300b4d7c3ffc605e488924f9a78da85ce9114559db71985",
+    "turn:LaunchedProductionLifecycleV1::drive_completion_pre_gate": "8d2afb7d4ba4c1b9b268332316962f4b2c37c209c619f34ee98481e6a3c00d7c",
+    "turn:LaunchedProductionLifecycleV1::drive_ready_completion_turn": "ac0744fc956cd44064bd4906f276395e075afc962626f8bbdc3e0e33f436db16",
+    "turn:LaunchedProductionLifecycleV1::drive_completion_turn": "7ca0b1da70431c09a45682449db54d2fe752d62dbfde87ad8bfe28eadd91d15d",
     "worker:LifecycleCertifiedServeTaskV1::from_dequeued_parts": "0c9f86b230960b4db64254028b54894adcc3ee29d7a09aff10df489f82830aa1",
     "worker:LifecycleIoCapacityReservation<'_>::preflight_lifecycle_certified_serve": "698cf37eefa08f22e3fc49a3bba6e04fce8c4e031e94ba6922cde786ce78556c",
     "worker:LifecycleIoCapacityReservation<'_>::commit_lifecycle_certified_serve": "f1edcfbd0f5c22919a05212cf7de00e5f914d551ca86f6b5b6156dc254e3d3f9",
-    "worker:PreparedLifecycleCertifiedServeCompletionV1::settle_deliver_and_acknowledge": "2fb06e74b5c42ad6d54976116085bf255908f5e0549544e7216e8738576a975d",
+    "worker:PreparedLifecycleCertifiedServeCompletionV1::settle_deliver_and_acknowledge": "1c91ff556738f1f0c0ba826da163173aaa8bea1d061356e4949c9bbe179d031a",
     "worker:ProductionV2Services::post_to_peer_on_reply_routes": "326e01fb46a4f99e7bd8c3b09f3216252b74ee7448003a2640dec578e4a8c08f",
     "worker:ProductionV2Services::drain_lifecycle_certified_serve_completion": "689949b5b5c84b99ae0c5ef0124b264111c358b9f1f2da88a2700e26ce5a4fbf",
     "body_store:V2BodyStore::read_durable_body_for_certified_serve": "c3e4d12afaa3f18ad1d5b0865eb3a54f4ad892eff4449b9d9d5b72bfd8f26c87",
     "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": "77930bc25fa0078aba267238ba1f3e8016eaa28f9a2d3aa58b4199c3f3333d10",
     "projection:super::ProductionLifecycleOwnerV1::settle_producer_turn_advanced": "d15b6ada19aa19ddd64ce9a23ca4ec06518cb4eb99cfe386976f7f85bc6f3917",
-    "ordinary:run_lifecycle_active_height": "0691601d460ba01010d786a2d146d522edf6fc8b7804c1840d0229b17f24c5cc",
-    "pending:run_pending_active_height": "29f0362cb294a442e22ee77fa002ad75d89e7af6c244debfc5b26968b3300c95",
-    "height:drain_lifecycle_v2_ingress": "9a75ea7202bfcace792b217f5fca78ff31d041ef6f41039765823b4d6da0b0d2",
+    "ordinary:run_lifecycle_active_height": "951d96da77e5e5834141747b0865e942d19cecf9cb834c0cee741dcbbc423b6d",
+    "pending:run_pending_active_height": "5ca201b1f8f20512fd218c79ed0eaecd41cf2a42cbd0c5b3e0f6525f3e180c27",
+    "height:drain_lifecycle_v2_ingress": "43c08f0351b6372c758800c5fcbe887712de8cc1517b0584a06268528d5514b2",
     "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
-    "launch:ProductionLeaderWireIngressBindingV1::retire": "9d86d64a689217d27551b081f69a145e8b43a860dcd7ddf209ff3d53760f3485",
+    "launch:ProductionLeaderWireIngressBindingV1::retire": "b2aca6532fa807ad78a8cbd4d202152209c53dd5dd8c5a4fd5bba45f7df18c4d",
     "launch:ProductionLifecycleOwnerV1::launch": "6b74510906f87755de55b779c17ce3b7eb64b670f77026c2b7f14f4aadfcd48d",
 }
 
@@ -3726,13 +4019,17 @@ _PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256 = {
 
 # Exact production retirement of the leader-wire lifecycle gate. The retired
 # Certified-Serve gate and joint height-ingress wrappers are not production
-# seams; the lifecycle contract binds canonical close and exact leader unbind.
+# seams; the lifecycle contract binds canonical close and atomic leader-wire
+# retirement.
 _PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256 = {
     "runner::close_ingress_for_rollover": (
         "61ae9f7cd71bc2576f9330c5874d2018b873d6144514e9f733f5774343ddd1a5"
     ),
-    "ingress::unbind_leader_wire_lifecycle_gate": (
-        "4a5b25faedea52bea79ac5041b0f643b5baf7bbb0858d9e6953a5f9e9260869c"
+    "ingress::retire_leader_wire_lifecycle_gate": (
+        "1f324000dd3dd89c98afa705bc74e1e03014a2ebd164c681a020759fbf4e109a"
+    ),
+    "leader_wire_store::park_sealed_ingress": (
+        "5941150174b03f6321979beb00b9771125e49f87c3c770d31c6daaef09705a0b"
     ),
     "ingress::close": (
         "24741c2de73120ea5e1a9564203f5d5e0bd9d80a7f1a89d0bca2511e73dee1a7"
@@ -3751,7 +4048,7 @@ _PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256 = {
         "b9ad00e3d2ee76b202fa98f53cab9f7264c63a7d9a3050b0c3d57c0449cfb8f5"
     ),
     "user::Root::parse": (
-        "7676351f7b370537454bceb3933c2d543269a141de3f2fcc9183d7c77b506f92"
+        "8170e90b0db284bcf347b588a0b0536e0ba438a2eb79562a247e8937c213da73"
     ),
     "worker::validate_shared_ownership_geometry": (
         "67026793b1424da887ccec0301157480e43b3585d298ab1545fe98e8cb577411"

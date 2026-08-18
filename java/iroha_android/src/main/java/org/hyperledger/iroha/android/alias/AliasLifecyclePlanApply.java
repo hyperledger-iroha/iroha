@@ -15,7 +15,7 @@ import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
 
-/** Safe local handoff from a verified lifecycle plan to the ordinary transaction pipeline. */
+/** Safe local handoff from a verified lifecycle plan to the public transaction pipeline. */
 public final class AliasLifecyclePlanApply {
   private AliasLifecyclePlanApply() {}
 
@@ -42,7 +42,7 @@ public final class AliasLifecyclePlanApply {
         metadata);
   }
 
-  /** Builds one ordinary transaction containing the exact planner lifecycle frame. */
+  /** Builds one transaction containing the exact planner lifecycle frame. */
   public static TransactionPayload buildTransactionPayload(
       final AliasLifecyclePlanRequestV1 request,
       final AliasLifecycleTransactionPlanV1 plan,
@@ -98,7 +98,7 @@ public final class AliasLifecyclePlanApply {
         .build();
   }
 
-  /** Locally signs a verified lifecycle plan and submits it through the normal endpoint. */
+  /** Locally signs a verified lifecycle plan and submits it through the public endpoint. */
   public static CompletableFuture<ClientResponse> signAndSubmit(
       final IrohaClient client,
       final AliasLifecyclePlanRequestV1 request,

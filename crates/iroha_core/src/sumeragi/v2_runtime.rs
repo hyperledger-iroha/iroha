@@ -15998,7 +15998,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             };
             match relation {
                 RuntimeFetchAuthorityRelation::Upgrade => incoming_statement,
-                RuntimeFetchAuthorityRelation::Same | RuntimeFetchAuthorityRelation::Stale => {
+                RuntimeFetchAuthorityRelation::Same => None,
+                RuntimeFetchAuthorityRelation::Stale => {
                     if retained_owner != *ownership.owner() {
                         self.latch_fail_closed(
                             "coalesced body completion changed its exact lifecycle owner",

@@ -363,24 +363,61 @@ fn candidate(
     fixture: &Fixture,
     effect: &AdapterEffect,
     ownership: &RuntimeEffectOwnership,
-) -> CandidateAdmission {
+) -> AuthorityFreeAdmissionProjection {
     let pending = ownership
         .pending_adapter_effect_binding(effect)
         .expect("mint ordinal-free pending lifecycle binding");
-    let request = admission_request(
+    authority_free_admission_projection(
         lifecycle_context(&fixture.context),
         &fixture.verified,
         effect,
         &pending,
     )
-    .expect("project exact bound adapter effect");
-    let AdmissionRequest::Candidate(candidate) = request else {
-        panic!("all adapter effects project to lifecycle candidates")
+    .expect("project exact bound adapter coordinates")
+}
+fn certified_validate_candidate(
+    fixture: &Fixture,
+    fetch: &AdapterEffect,
+    store: &AdapterEffect,
+    validate: &AdapterEffect,
+    validate_owner: &RuntimeEffectOwnership,
+    receipt: &crate::sumeragi::v2_body_store::DurableBodyReceipt,
+) -> CandidateAdmission {
+    let response = wire::CertifiedBodyResponse {
+        request_hash: HashOf::from_untyped_unchecked(Hash::new(
+            b"lifecycle projection certified response request",
+        )),
+        manifest: fixture.manifest.clone(),
+        body: fixture.body.clone(),
+        responder: 0,
+        signature: vec![0xA5],
     };
-    candidate
+    let fetch_evidence = CertifiedFetchReplayEvidenceV1::from_signed_response_for_test(
+        fetch, &response, receipt,
+    )
+    .expect("seal exact certified Fetch evidence");
+    let store_evidence = fetch_evidence
+        .project_store_for_test(store, receipt)
+        .expect("project exact certified Store evidence");
+    let validate_pending = validate_owner
+        .pending_adapter_effect_binding(validate)
+        .expect("retain exact Validate pending binding");
+    let validate_evidence = store_evidence
+        .project_validate(store, receipt, validate, &validate_pending)
+        .expect("project exact certified Validate evidence");
+    super::super::replay_authority::DurableValidateReplayEvidenceV1::certified(
+        validate_evidence,
+    )
+    .project_candidate_for_test(
+        &fixture.verified,
+        validate,
+        receipt,
+        &validate_pending,
+    )
+    .expect("sealed certified Validate evidence projects one candidate")
 }
 fn assert_candidate_shape(
-    candidate: &CandidateAdmission,
+    candidate: &AuthorityFreeAdmissionProjection,
     effect: &AdapterEffect,
     ownership: &RuntimeEffectOwnership,
     work_class: LifecycleWorkClass,
@@ -395,8 +432,6 @@ fn assert_candidate_shape(
         PredecessorScope::Independent
     );
     assert_eq!(candidate.initial_state, InitialLifecycleState::Ready);
-    assert_eq!(candidate.payload, DurablePayloadReference::None);
-    assert!(candidate.producer_turn.is_none());
     assert_eq!(
         candidate.causal_root.digest(),
         candidate.reconstruction_source
@@ -1997,23 +2032,25 @@ fn every_adapter_effect_class_and_specialized_phase_projects_ready_one_slot_work
             assert_eq!(projected.key.execution_commitment(), None);
         }
         let mut coordinator = fixture.coordinator();
-        let decision = coordinator
-            .admit_bound_adapter_effect(&fixture.verified, &effect, &ownership)
-            .expect("authenticated effect projection succeeds");
+        let decision = coordinator.admit_bound_adapter_effect(
+            &fixture.verified,
+            &effect,
+            &ownership,
+        );
         if matches!(
             work_class,
-            LifecycleWorkClass::Store | LifecycleWorkClass::Validate | LifecycleWorkClass::Apply
+            LifecycleWorkClass::Broadcast | LifecycleWorkClass::EquivocationReport
         ) {
-            assert_eq!(
-                decision,
-                AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata),
-                "raw body-stage projection cannot bypass receipt-bound staging"
-            );
-        } else {
             assert!(matches!(
                 decision,
-                AdmissionDecision::Admitted { ordinal: 1, .. }
+                Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
             ));
+        } else {
+            assert_eq!(
+                decision,
+                Err(AdapterEffectAdmissionError::UnsupportedReplayAuthority),
+                "authority-free coordinates cannot bypass their sealed replay owner"
+            );
         }
     }
 }
@@ -2082,17 +2119,13 @@ fn certified_store_and_validate_inherit_authority_but_require_receipt_bound_stag
     assert_eq!(store_candidate.causal_root, validate_candidate.causal_root);
     let mut coordinator = fixture.coordinator();
     assert_eq!(
-        coordinator
-            .admit_bound_adapter_effect(&fixture.verified, &store, &store_owner)
-            .expect("raw Store projection is structurally authenticated"),
-        AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata),
+        coordinator.admit_bound_adapter_effect(&fixture.verified, &store, &store_owner),
+        Err(AdapterEffectAdmissionError::UnsupportedReplayAuthority),
         "Fetch-to-Store admission requires the receipt-bound body transition"
     );
     assert_eq!(
-        coordinator
-            .admit_bound_adapter_effect(&fixture.verified, &validate, &validate_owner)
-            .expect("raw Validate projection is structurally authenticated"),
-        AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata),
+        coordinator.admit_bound_adapter_effect(&fixture.verified, &validate, &validate_owner),
+        Err(AdapterEffectAdmissionError::UnsupportedReplayAuthority),
         "Store-to-Validate admission requires the receipt-bound body transition"
     );
 }
@@ -2130,16 +2163,19 @@ fn recovery_cut_consumes_exact_terminal_validate_body_outcome() {
     let validate_owner = store_owner
         .rebind_as_inherited_adapter_effect(&validate)
         .expect("Store authorizes exact Validate successor");
-    let mut validate_candidate = candidate(&fixture, &validate, &validate_owner);
     let durable = crate::sumeragi::v2_body_store::DurableBodyReceipt::for_test(
         fixture.context.id(),
         fixture.round,
         fixture.subject,
         HashOf::new(&fixture.manifest),
     );
-    validate_candidate.payload = DurablePayloadReference::BodyFrame(
-        durable_body_frame_reference(lifecycle_context(&fixture.context), &durable)
-            .expect("validated body belongs to the fixture lifecycle context"),
+    let validate_candidate = certified_validate_candidate(
+        &fixture,
+        &fetch,
+        &store,
+        &validate,
+        &validate_owner,
+        &durable,
     );
     let outcome = crate::sumeragi::v2_body_store::DurableBodyValidationOutcome::validated_for_test(
         crate::sumeragi::v2_body_store::ValidatedBodyReceipt::for_test_with_commitment(
@@ -2238,19 +2274,26 @@ fn recovery_cut_consumes_exact_terminal_validate_body_outcome() {
 #[test]
 fn coordinator_method_enforces_zero_to_one_retry_and_foreign_owner_rejection() {
     let fixture = Fixture::new();
-    let mut unsigned = fixture.proposal.clone();
-    unsigned.signature.clear();
-    let effect = AdapterEffect::Sign {
-        tag: fixture.tag,
-        request: SignRequest::Proposal(unsigned),
-    };
+    let effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::Proposal(fixture.proposal.clone()),
+    ));
     let exact = bound_ownership(&effect, fixture.tag, 30);
     let foreign_tag = EventTag::new(
         fixture.tag.height(),
         fixture.tag.view(),
         Generation::new(fixture.tag.generation().get() + 1),
     );
-    let foreign = bound_ownership(&effect, foreign_tag, 31);
+    let foreign = bind_adapter_effect_batch_ownership(
+        core::slice::from_ref(&effect),
+        vec![RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+            foreign_tag,
+            31,
+            b"foreign projection admission owner",
+        )],
+    )
+    .expect("bind semantically foreign projection owner")
+    .pop()
+    .expect("one foreign projection owner");
     let mut coordinator = fixture.coordinator();
     assert!(matches!(
         coordinator.admit_bound_adapter_effect(&fixture.verified, &effect, &exact),
@@ -2261,7 +2304,7 @@ fn coordinator_method_enforces_zero_to_one_retry_and_foreign_owner_rejection() {
         coordinator.admit_bound_adapter_effect(&fixture.verified, &effect, &exact),
         Ok(AdmissionDecision::Retry {
             ordinal: 1,
-            action: RetryAction::StutterLiveSigner,
+            action: RetryAction::RefanoutEnvelope,
             ..
         })
     ));

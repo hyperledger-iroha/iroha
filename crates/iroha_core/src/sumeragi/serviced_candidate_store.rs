@@ -941,23 +941,14 @@ pub(crate) struct LeaderWireLifecycleStoreGate {
 /// Move-only proof that every physical ingress carrier supplied by one sealed
 /// fair queue was durably returned to selector-dormant ownership.
 ///
-/// The receipt retains the exact gate handle and token set so volatile queue
-/// state can be discarded only after the synchronous sidecar publication has
-/// succeeded. It is deliberately neither `Clone` nor `Copy`.
+/// Exact gate and carrier equality is release-checked before this opaque proof
+/// is minted. It authorizes volatile release only after synchronous sidecar
+/// publication succeeds and is deliberately neither `Clone` nor `Copy`.
 #[must_use = "closed ingress retirement must authorize the volatile queue release"]
 pub(super) struct SealedLeaderWireIngressRetirementV1 {
-    gate: Arc<LeaderWireLifecycleStoreGate>,
-    tokens: BTreeMap<FairV2IngressLeaderWireSlot, FairV2IngressLeaderWireToken>,
+    _private: (),
 }
 impl SealedLeaderWireIngressRetirementV1 {
-    /// Verify the receipt against the still-bound gate and frozen carrier set.
-    pub(super) fn exactly_matches(
-        &self,
-        gate: &Arc<LeaderWireLifecycleStoreGate>,
-        tokens: &BTreeMap<FairV2IngressLeaderWireSlot, FairV2IngressLeaderWireToken>,
-    ) -> bool {
-        LeaderWireLifecycleStoreGate::ptr_eq(&self.gate, gate) && &self.tokens == tokens
-    }
     /// Consume the proof after the volatile queue and binding are gone.
     pub(super) fn complete(self) {}
     /// Drop the process-local proof at an injected process boundary.
@@ -1509,10 +1500,7 @@ impl LeaderWireLifecycleStoreGate {
             *state = previous;
             return Err(error);
         }
-        Ok(SealedLeaderWireIngressRetirementV1 {
-            gate: Arc::clone(self),
-            tokens: carriers,
-        })
+        Ok(SealedLeaderWireIngressRetirementV1 { _private: () })
     }
     /// Atomically persist an Ingress owner before fair ingress returns Accepted.
     ///

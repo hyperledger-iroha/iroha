@@ -420,7 +420,7 @@ fn live_wal_pre_admission_surface_is_closed_and_has_one_apply_join() {
     for required in [
         "pub(super) fn seal_live_wal_apply(",
         "retained_validated_receipt_is_exact()",
-        "project_validate_apply_successor",
+        ".complete_exact_apply(",
         "retained_apply_join_is_exact(&persisted)",
     ] {
         assert!(
@@ -428,6 +428,17 @@ fn live_wal_pre_admission_surface_is_closed_and_has_one_apply_join() {
             "live WAL Apply join omitted {required}"
         );
     }
+    let replay_authority = include_str!("../v2_lifecycle_replay_authority.rs");
+    let exact_apply = replay_authority
+        .split("pub(super) fn complete_exact_apply(")
+        .nth(1)
+        .expect("the live WAL seal has one exact Apply completion")
+        .split("/// Bind completed `Apply` evidence to its exact retained Validate predecessor.")
+        .next()
+        .expect("the live WAL Apply completion stays bounded");
+    assert!(exact_apply.contains(
+        ".project_validate_apply_successor(predecessor_effect, &self.effect)"
+    ));
     for forbidden in [
         "#[derive(Clone",
         "Option<SealedLiveWalPersistedEffectV1>",
@@ -1266,13 +1277,21 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
             "post-insert recovered Sign path acquired fallible check {forbidden}"
         );
     }
-    let carrier_inventory = production
+    let carrier_declaration = production
         .split("struct DurableRecoveredWalSignWork")
         .nth(1)
         .expect("closed recovered Sign carrier exists")
-        .split("enum ConcreteLifecycleWorkKind")
+        .split("/// Closed concrete carrier for one exact standalone recovered control Sign.")
         .next()
-        .expect("work-kind inventory follows recovered Sign carrier");
+        .expect("recovered control Sign carrier follows the phase-vote declaration");
+    let carrier_impl = production
+        .split("impl DurableRecoveredWalSignWork {")
+        .nth(1)
+        .expect("closed recovered Sign carrier has one implementation")
+        .split("/// Whether one concrete registry row is still an executable adapter effect or")
+        .next()
+        .expect("work-kind inventory follows the recovered Sign implementation");
+    let carrier_inventory = [carrier_declaration, carrier_impl].concat();
     for required in [
         "repair: DurableAuthenticatedWalVoteLifecycleRepair",
         "validation: DetachedRecoveredValidateCompletion",
@@ -1324,19 +1343,45 @@ fn ready_validate_execution_surface_is_closed_borrow_bound_and_unwired() {
             "child-effect borrow exposed forbidden {forbidden}"
         );
     }
+    let generic_effect_borrow = production
+        .split("pub(super) const fn effect(&self) -> &AdapterEffect {")
+        .nth(1)
+        .expect("generic registry effect oracle has one implementation")
+        .split("const fn is_pending_adapter(&self) -> bool")
+        .next()
+        .expect("generic registry effect oracle stays bounded");
+    assert_eq!(
+        generic_effect_borrow
+            .matches(".installed_child_effect()")
+            .count(),
+        1
+    );
+    let recovered_sign_dispatch = production
+        .split("pub(super) fn prepare_recovered_lifecycle_sign_dispatch(")
+        .nth(1)
+        .expect("typed recovered Sign dispatch has one implementation")
+        .split("/// Attest one exact Ready recovered Decision Fetch and seal its request authority.")
+        .next()
+        .expect("typed recovered Sign dispatch stays bounded");
+    assert_eq!(
+        recovered_sign_dispatch
+            .matches(".installed_child_effect()")
+            .count(),
+        1
+    );
     assert_eq!(
         production.matches(".installed_child_effect()").count(),
-        1,
-        "only the closed concrete carrier may borrow the durable child effect"
+        2,
+        "only the generic effect oracle and typed recovered Sign dispatch may borrow the durable child effect"
     );
     let ledger_source = reviewed_lifecycle_ledger_source_for_test();
     let frame_revalidation = ledger_source
         .split("pub(super) fn revalidates_durable_authenticated_wal_vote_repair(")
         .nth(1)
         .expect("ledger exposes one narrow durable repair revalidation")
-        .split("    /// Atomically replace the ledger")
+        .split("pub(super) fn revalidates_authenticated_wal_control_sign(")
         .next()
-        .expect("ledger revalidation ends before persistence");
+        .expect("durable repair revalidation ends before the next ledger revalidation");
     for required in [
         "let Ok(loaded) = self.load()",
         "durable.belongs_to_loaded(self, &loaded)",

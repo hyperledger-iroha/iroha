@@ -72,6 +72,23 @@ fn accepted_tx_with(
         None,
     )
 }
+fn accepted_queue_plan_tx_with(
+    account_id: AccountId,
+    key_pair: &KeyPair,
+    time_source: &TimeSource,
+    instructions: Vec<InstructionBox>,
+    metadata: Metadata,
+) -> AcceptedTransaction<'static> {
+    accepted_tx_with_attachments_and_intent(
+        account_id,
+        key_pair,
+        time_source,
+        instructions,
+        metadata,
+        None,
+        TransactionAdmissionIntent::QueuePlanSynced,
+    )
+}
 fn accepted_tx_with_attachments(
     account_id: AccountId,
     key_pair: &KeyPair,
@@ -79,6 +96,25 @@ fn accepted_tx_with_attachments(
     instructions: Vec<InstructionBox>,
     metadata: Metadata,
     attachments: Option<ProofAttachmentList>,
+) -> AcceptedTransaction<'static> {
+    accepted_tx_with_attachments_and_intent(
+        account_id,
+        key_pair,
+        time_source,
+        instructions,
+        metadata,
+        attachments,
+        TransactionAdmissionIntent::Ordinary,
+    )
+}
+fn accepted_tx_with_attachments_and_intent(
+    account_id: AccountId,
+    key_pair: &KeyPair,
+    time_source: &TimeSource,
+    instructions: Vec<InstructionBox>,
+    metadata: Metadata,
+    attachments: Option<ProofAttachmentList>,
+    admission_intent: TransactionAdmissionIntent,
 ) -> AcceptedTransaction<'static> {
     let network_id = queue_test_network_id();
     let mut builder = TransactionBuilder::new_with_time_source(
@@ -88,7 +124,8 @@ fn accepted_tx_with_attachments(
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions(instructions)
-    .with_metadata(metadata);
+    .with_metadata(metadata)
+    .with_admission_intent(admission_intent);
     if let Some(att) = attachments {
         builder = builder.with_attachments(att);
     }

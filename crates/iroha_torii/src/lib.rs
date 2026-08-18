@@ -305,7 +305,7 @@ use iroha_data_model::{
     transaction::{
         SignedTransaction, TransactionDomain, TransactionPayload, TransactionSubmissionReceipt,
         TransactionSubmissionReceiptPayload,
-        signed::{TransactionEntrypoint, TransactionResult},
+        signed::{TransactionAdmissionIntent, TransactionEntrypoint, TransactionResult},
     },
 };
 use iroha_executor_data_model::permission::account::{
@@ -23467,6 +23467,12 @@ fn queue_plan_synced_acceptance_expectation(
     else {
         return Ok(None);
     };
+    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return Err(
+            "QueuePlanSynced proxy request carries an ordinary signature-bound admission intent"
+                .to_owned(),
+        );
+    }
     let admission_binding = admission_binding.clone().ok_or_else(|| {
         "QueuePlanSynced request is missing its exact admission binding".to_owned()
     })?;
@@ -24404,6 +24410,31 @@ async fn execute_torii_proxy_request_with_fallback(
     execute_torii_proxy_request_with_fallback_admitted(app, routing_decision, request, None).await
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn take_local_torii_proxy_fast_path(
+    request: &ToriiProxyRequestV6,
+    candidate_peers: &mut Vec<ToriiProxyCandidate>,
+) -> Option<PeerId> {
+    let local_index = candidate_peers
+        .iter()
+        .position(|candidate| matches!(candidate, ToriiProxyCandidate::Local(_)))?;
+    // A strict QueuePlan acknowledgement is an f+1 certificate. The local authority
+    // contributes one attestation, but must stay in the shared candidate aggregator so
+    // remote attestations can join it before the public response is returned. Put the
+    // known-good local authority first so an earlier unavailable remote cannot consume
+    // the strict request budget before the local journal record is fsynced.
+    if queue_plan_synced_entrypoint_hash(&request.request).is_some() {
+        if local_index != 0 {
+            let local = candidate_peers.remove(local_index);
+            candidate_peers.insert(0, local);
+        }
+        return None;
+    }
+    let ToriiProxyCandidate::Local(local_peer_id) = candidate_peers.swap_remove(local_index) else {
+        unreachable!("selected candidate is local");
+    };
+    Some(local_peer_id)
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_proxy_request_with_fallback_admitted(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -24471,14 +24502,7 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
         },
     };
     let mut candidate_peers = candidates.peers;
-    if let Some(local_index) = candidate_peers
-        .iter()
-        .position(|candidate| matches!(candidate, ToriiProxyCandidate::Local(_)))
-    {
-        let ToriiProxyCandidate::Local(local_peer_id) = candidate_peers.swap_remove(local_index)
-        else {
-            unreachable!("selected candidate is local");
-        };
+    if let Some(local_peer_id) = take_local_torii_proxy_fast_path(&request, &mut candidate_peers) {
         let request_id = request.request_id.clone();
         let mut response = match execute_torii_proxy_request_locally_with_proxy_memory(
             app,
@@ -24499,6 +24523,7 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
         mark_torii_proxy_request_completed(app, request_id).await;
         return hold_torii_proxy_memory_in_response_body(response, proxy_memory);
     }
+    let candidate_proxy_memory = proxy_memory.clone();
     let response = execute_torii_proxy_request_across_candidates(
         candidate_peers,
         routing_decision,
@@ -24506,19 +24531,29 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
         app.torii_proxy_http_ingress_envelope
             .forwarding_transient_bytes,
         torii_proxy_hedge_delay(app.as_ref()),
-        |candidate, request| async move {
-            match candidate {
-                ToriiProxyCandidate::Local(_) => {
-                    unreachable!("local proxy candidates execute before shared request encoding")
-                }
-                ToriiProxyCandidate::P2p(peer_id) => {
-                    execute_torii_proxy_request_via_peer(app, peer_id, request.into_arc()).await
-                }
-                ToriiProxyCandidate::HttpBridge { peer_id, torii_url } => {
-                    execute_torii_proxy_request_via_http_bridge_shared(
-                        app, peer_id, torii_url, request,
-                    )
-                    .await
+        |candidate, request| {
+            let proxy_memory = candidate_proxy_memory.clone();
+            async move {
+                match candidate {
+                    ToriiProxyCandidate::Local(peer_id) => {
+                        execute_torii_proxy_request_locally_with_proxy_memory(
+                            app,
+                            peer_id,
+                            Arc::unwrap_or_clone(request.into_arc()),
+                            Some(proxy_memory),
+                        )
+                        .await
+                        .map(|admitted| admitted.snapshot)
+                    }
+                    ToriiProxyCandidate::P2p(peer_id) => {
+                        execute_torii_proxy_request_via_peer(app, peer_id, request.into_arc()).await
+                    }
+                    ToriiProxyCandidate::HttpBridge { peer_id, torii_url } => {
+                        execute_torii_proxy_request_via_http_bridge_shared(
+                            app, peer_id, torii_url, request,
+                        )
+                        .await
+                    }
                 }
             }
         },
@@ -25518,6 +25553,13 @@ async fn execute_torii_transaction_via_proxy(
     let routing_decision = routing_plan.coordinator_route();
     let entrypoint_hash = transaction.hash();
     let signed_transaction_hash = signed_transaction_hash_for_entrypoint(&transaction);
+    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return torii_proxy_error_response(
+            StatusCode::CONFLICT,
+            "queue_plan_admission_intent_mismatch",
+            "public transaction submission requires a signature-bound QueuePlanSynced admission intent",
+        );
+    }
     // An ordinary durable ingress/gossip claim deliberately has no global identity yet. It is
     // not a public QueuePlanSynced retry: construct the canonical global binding below and let
     // strict admission atomically promote the exact unbound journal owner. Only an already
@@ -27744,6 +27786,13 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
             admission: ToriiProxyTransactionAdmissionV2::QueuePlanSynced,
             admission_binding,
         } => {
+            if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+                return torii_proxy_error_response(
+                    StatusCode::CONFLICT,
+                    "queue_plan_admission_intent_mismatch",
+                    "QueuePlanSynced proxy request carries an ordinary signature-bound admission intent",
+                );
+            }
             let ingress_plan = match validate_proxy_routing_plan_hint(expected_plan) {
                 Ok(plan) => plan,
                 Err(error) => {

@@ -24,8 +24,8 @@ fn recovered_wal_sign_open_is_opaque_precommit_checked_and_runner_inert() {
         "parent.terminal() == Some(Some(super::TerminalOutcome::Advanced))",
         "parent.continuation()",
         "fn insert_repaired_child_from_record(",
-        "record.owner() != self.child_address.owner",
-        "record.ordinal() != self.child_address.ordinal",
+        "record.owner() == self.child_address.owner",
+        "record.ordinal() == self.child_address.ordinal",
         "fn splice_candidates(",
         "(Some(parent), None) if parent == &self.parent",
         "(None, Some(child)) if child == &self.child",
@@ -33,7 +33,7 @@ fn recovered_wal_sign_open_is_opaque_precommit_checked_and_runner_inert() {
         "pub(crate) struct RecoveredWalSignLifecycleOpenError<'registry>",
         "LifecycleCoordinator::prepare_with_authority_borrowed(",
         "self.prepared_join_is_exact(&prepared, &recovery, &projection)",
-        "prepared.commit(payload_store, &recovery)",
+        "prepared.commit_with_registry(",
         "self.opened_join_is_exact(&coordinator, &recovery, &projection)",
         "PostCommitMismatch",
     ] {
@@ -62,12 +62,16 @@ fn recovered_wal_sign_open_is_opaque_precommit_checked_and_runner_inert() {
         .find("self.prepared_join_is_exact(&prepared, &recovery, &projection)")
         .expect("precommit exact join exists");
     let commit = open
-        .find("prepared.commit(payload_store, &recovery)")
-        .expect("durable open commit exists");
+        .find("prepared.commit_with_registry(")
+        .expect("durable registry-coupled open commit exists");
     let postcommit = open
         .find("self.opened_join_is_exact(&coordinator, &recovery, &projection)")
         .expect("postcommit exact join exists");
     assert!(precommit < commit && commit < postcommit);
+    let registry_coupled_commit = &open[commit..postcommit];
+    assert!(registry_coupled_commit.contains("&mut *self.registry"));
+    assert!(registry_coupled_commit.contains("payload_store"));
+    assert!(registry_coupled_commit.contains("&mut recovery"));
     for seed in [
         "seed_parent_candidate_for_test",
         "seed_child_candidate_for_test",
@@ -474,7 +478,7 @@ fn durable_validate_wait_dispatch_is_move_only_single_entry_and_unwired() {
         "filter(|ordinal| **ordinal == record.ordinal)",
         "filter(|owner| **owner == record.owner)",
         "record.episode.frozen_predecessors.is_empty()",
-        "episode_authority.universe_for(record.key)",
+        "coordinator\n            .episode_authority\n            .universe_for(record.key)",
         "episode_authority.admits_slots(",
         "durable_validate_payload_is_exact(record.key, metadata.payload)",
     ] {
@@ -548,9 +552,9 @@ fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
         .split("struct DurableValidateCompletion {")
         .nth(1)
         .expect("Validate completion carrier has one declaration")
-        .split("enum ConcreteLifecycleWorkKind")
+        .split("/// Closed, move-only replay-evidence preflight for one directly signed effect.")
         .next()
-        .expect("work-kind inventory follows Validate completion carrier");
+        .expect("direct signed replay preflight follows Validate completion carrier");
     for required in [
         "address: ConcreteWorkAddress",
         "incumbent: DurableValidateBody",
@@ -608,12 +612,29 @@ fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
             "shared validated authority helper omitted {required}"
         );
     }
+    let recovery_parent = include_str!(
+        "../v2_lifecycle_work_registry_validate_recovery_parent.rs"
+    );
+    let fixture_only = recovery_parent
+        .split("#[cfg(test)]\nimpl super::concrete_admission::LifecycleWorkRegistryHolder {")
+        .nth(1)
+        .expect("recovered Validate fixture helpers stay behind one test-only impl");
+    let fixture_helper_uses = fixture_only
+        .matches("validate_validated_receipt_authority(")
+        .count();
     assert_eq!(
-        registry_production
-            .matches("validate_validated_receipt_authority(")
-            .count(),
+        fixture_helper_uses, 1,
+        "only the genuine recovered-WAL fixture may call the shared helper under cfg(test)"
+    );
+    let production_helper_uses = registry_production
+        .matches("validate_validated_receipt_authority(")
+        .count()
+        .checked_sub(fixture_helper_uses)
+        .expect("test-only helper calls are part of the reviewed expanded source");
+    assert_eq!(
+        production_helper_uses,
         8,
-        "carrier validation, classification, binding, reattachment, Ready preflight, recovery, and fixed adapter join must share one helper"
+        "the shared helper definition and seven production consumers must remain exact"
     );
     let declarations = registry_production
         .split_once("// DURABLE_VALIDATE_VOLATILE_COMPLETION_DECLARATIONS_BEGIN")
@@ -813,7 +834,7 @@ fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
         "record.key == authority.lifecycle_key()",
         "record.stage == authority.lifecycle_stage()",
         "record.episode.frozen_predecessors.is_empty()",
-        "episode_authority.universe_for(record.key)",
+        "coordinator\n            .episode_authority\n            .universe_for(record.key)",
         "episode_authority.admits_slots(",
         "filter(|candidate| candidate.ordinal == record.ordinal)",
         "filter(|candidate| candidate.key == record.key)",
@@ -896,9 +917,9 @@ fn certified_fetch_dequeue_commit_requires_the_durable_token() {
         .split("struct CertifiedFetchCompletion {")
         .nth(1)
         .expect("installed completion has one declaration")
-        .split("impl CertifiedFetchCompletion")
+        .split("/// Closed durable form of one admitted `StoreBody` effect.")
         .next()
-        .expect("installed completion validation follows its declaration");
+        .expect("durable Store carrier follows installed completion");
     assert!(installed_completion.contains("durable_receipt: DurableBodyReceipt"));
     assert!(installed_completion.contains("replay_evidence: CertifiedFetchReplayEvidenceV1"));
     assert!(installed_completion.contains(".project_durable_ready_fetch("));
@@ -1079,7 +1100,11 @@ fn recovered_decision_apply_scheduler_attestation_stays_closed_and_io_bounded() 
 }
 #[test]
 fn recovered_decision_apply_terminal_settlement_is_exact_and_post_fsync_infallible() {
-    let registry = include_str!("../v2_lifecycle_work_registry_validate_recovery.rs");
+    let registry = [
+        include_str!("../v2_lifecycle_work_registry_validate_recovery.rs"),
+        include_str!("../v2_lifecycle_work_registry_validate_recovery_registry_impl.rs"),
+    ]
+    .concat();
     let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test();
     let executor = include_str!("../v2_effects.rs");

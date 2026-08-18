@@ -2646,6 +2646,12 @@ struct ValidationStartPlan {
     admission: ValidationAdmissionPlan,
     commit: ValidationCommitPlan,
 }
+#[derive(Clone, Copy, Debug, Default)]
+struct ValidationStartContext<'a> {
+    planned_durable_receipt: Option<&'a DurableBodyReceipt>,
+    planned_owner: Option<&'a BodyPipelineOwnerBindingPlan>,
+    replacing_store: Option<EffectWorkId>,
+}
 #[derive(Debug)]
 struct FinalityCompletion {
     tag: EventTag,
@@ -7599,9 +7605,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         ownership: ownership.clone(),
                         origin: *origin,
                     },
-                    Some(&receipt),
-                    None,
-                    Some(completion.work_id()),
+                    ValidationStartContext {
+                        planned_durable_receipt: Some(&receipt),
+                        replacing_store: Some(completion.work_id()),
+                        ..ValidationStartContext::default()
+                    },
                 )
                 .map_err(|error| self.close(error, services))?,
             ),
@@ -11516,9 +11524,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                             ownership: consumer.ownership().clone(),
                             origin: local_origin,
                         },
-                        None,
-                        Some(&owner_plan),
-                        None,
+                        ValidationStartContext {
+                            planned_owner: Some(&owner_plan),
+                            ..ValidationStartContext::default()
+                        },
                     )?;
                     self.admit_validation_start(&validation, services)?;
                     self.commit_body_pipeline_owner(owner_plan);
@@ -11655,7 +11664,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.pending_store_bytes = pending_store_bytes;
         Ok(())
     }
-    #[allow(clippy::too_many_arguments)]
     fn begin_validation<S: V2EffectServices>(
         &mut self,
         round: wire::ConsensusRound,
@@ -11669,9 +11677,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             subject,
             durable_receipt,
             consumer,
-            None,
-            None,
-            None,
+            ValidationStartContext::default(),
         )?;
         self.admit_validation_start(&plan, services)?;
         self.commit_validation_start(plan);
@@ -11683,11 +11689,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         subject: wire::BlockSubject,
         durable_receipt: DurableBodyReceipt,
         consumer: ValidationConsumer,
-        planned_durable_receipt: Option<&DurableBodyReceipt>,
-        planned_owner: Option<&BodyPipelineOwnerBindingPlan>,
-        replacing_store: Option<EffectWorkId>,
+        context: ValidationStartContext<'_>,
     ) -> Result<ValidationStartPlan, EffectExecutorError> {
         let key = (round, subject);
+        let ValidationStartContext {
+            planned_durable_receipt,
+            planned_owner,
+            replacing_store,
+        } = context;
         if durable_receipt.context_id() != self.context.id()
             || durable_receipt.round() != round
             || durable_receipt.subject() != subject
@@ -11908,13 +11917,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 (
                     Some(StoreConsumer::LocalProposal {
                         tag: store_tag,
+                        origin: store_origin,
                         ..
                     }),
                     ValidationConsumer::LocalProposal {
                         tag: validation_tag,
+                        origin: validation_origin,
                         ..
                     }
-                ) if store_tag == validation_tag
+                ) if store_tag == validation_tag && store_origin == validation_origin
             );
             if store.task.manifest.round != round
                 || store.task.manifest.subject != subject

@@ -2250,7 +2250,7 @@ mod tests {
             b"lifecycle-ingress-foreign-context",
         )));
         let peer = PeerId::from(KeyPair::random().public_key().clone());
-        let ingress = FairV2Ingress::new(4, 1024 * 1024, 512 * 1024, 0, 0);
+        let ingress = FairV2Ingress::new(7, 1024 * 1024, 512 * 1024, 0, 0);
         ingress
             .configure_roster([peer.clone()])
             .expect("configure foreign-winner lane");
@@ -2345,7 +2345,7 @@ mod tests {
         )));
         let first = PeerId::from(KeyPair::random().public_key().clone());
         let second = PeerId::from(KeyPair::random().public_key().clone());
-        let ingress = FairV2Ingress::new(16, 1024 * 1024, 512 * 1024, 0, 512 * 1024);
+        let ingress = FairV2Ingress::new(16, 2 * 1024 * 1024, 512 * 1024, 0, 512 * 1024);
         ingress
             .configure_roster([first.clone(), second.clone()])
             .expect("two validator lanes fit the identity test queue");
@@ -2396,27 +2396,21 @@ mod tests {
         assert!(cut.pre_cut_is_intact());
         drop(cut);
 
-        let rotated = FairV2Ingress::new(16, 1024 * 1024, 512 * 1024, 0, 512 * 1024);
+        let rotated = FairV2Ingress::new(16, 3 * 1024 * 1024, 1024 * 1024, 0, 512 * 1024);
         rotated
             .configure_roster([first.clone(), second.clone()])
             .expect("two validator lanes fit the fair-selection rotation queue");
         rotated.state.lock().leader_wire_context = Some((context_id, HEIGHT));
         rotated.open().expect("open fair-selection rotation queue");
-        let first_message = certified_body_response(context_id, HEIGHT);
-        let mut second_same_source = first_message.clone();
-        let BlockMessage::V2(second_message) = &mut second_same_source else {
-            unreachable!("certified response fixture is Sumeragi V2")
-        };
-        let wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) =
-            &mut second_message.payload
-        else {
-            unreachable!("certified response fixture retains its payload class")
-        };
-        response.signature[0] ^= 1;
+        let first_message = commit_certificate_request(context_id, HEIGHT, &first, 1);
+        let second_same_source = commit_certificate_request(context_id, HEIGHT, &first, 2);
         for (message, source) in [
             (first_message, first.clone()),
             (second_same_source, first.clone()),
-            (certified_body_response(context_id, HEIGHT), second.clone()),
+            (
+                commit_certificate_request(context_id, HEIGHT, &second, 3),
+                second.clone(),
+            ),
         ] {
             assert!(matches!(
                 rotated.try_push(InboundBlockMessage::new(message, Some(source))),

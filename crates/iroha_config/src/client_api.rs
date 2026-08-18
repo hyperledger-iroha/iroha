@@ -602,6 +602,16 @@ impl FastJsonWrite for SoranetHandshakePowUpdate {
             out.push_str("\"ticket_ttl_secs\":");
             let _ = write!(out, "{value}");
         }
+        if let Some(value) = self.outbound_mint_capacity {
+            field(out);
+            out.push_str("\"outbound_mint_capacity\":");
+            let _ = write!(out, "{value}");
+        }
+        if let Some(value) = self.inbound_verify_capacity {
+            field(out);
+            out.push_str("\"inbound_verify_capacity\":");
+            let _ = write!(out, "{value}");
+        }
         if let Some(key_hex) = &self.signed_ticket_public_key_hex {
             field(out);
             out.push_str("\"signed_ticket_public_key_hex\":");
@@ -632,6 +642,12 @@ impl FastJsonWrite for SoranetHandshakePowSummary {
         out.push(',');
         out.push_str("\"ticket_ttl_secs\":");
         let _ = write!(out, "{}", self.ticket_ttl_secs);
+        out.push(',');
+        out.push_str("\"outbound_mint_capacity\":");
+        let _ = write!(out, "{}", self.outbound_mint_capacity);
+        out.push(',');
+        out.push_str("\"inbound_verify_capacity\":");
+        let _ = write!(out, "{}", self.inbound_verify_capacity);
         if let Some(key_hex) = &self.signed_ticket_public_key_hex {
             out.push(',');
             out.push_str("\"signed_ticket_public_key_hex\":");
@@ -2777,6 +2793,10 @@ pub struct SoranetHandshakePowSummary {
     pub min_ticket_ttl_secs: u64,
     /// Target ticket time-to-live in seconds.
     pub ticket_ttl_secs: u64,
+    /// Maximum concurrent local Argon2 ticket mints.
+    pub outbound_mint_capacity: usize,
+    /// Maximum concurrent remote Argon2 ticket verifications.
+    pub inbound_verify_capacity: usize,
     /// Optional Argon2 puzzle parameters.
     pub puzzle: Option<SoranetHandshakePuzzleSummary>,
     /// Optional ML-DSA-44 public key for verifying signed tickets (hex).
@@ -2790,6 +2810,8 @@ impl From<&'_ base::SoranetPow> for SoranetHandshakePowSummary {
             max_future_skew_secs: value.max_future_skew.as_secs(),
             min_ticket_ttl_secs: value.min_ticket_ttl.as_secs(),
             ticket_ttl_secs: value.ticket_ttl.as_secs(),
+            outbound_mint_capacity: value.outbound_mint_capacity.get(),
+            inbound_verify_capacity: value.inbound_verify_capacity.get(),
             puzzle: value.puzzle.map(SoranetHandshakePuzzleSummary::from),
             signed_ticket_public_key_hex: value.signed_ticket_public_key.as_ref().map(hex::encode),
         }
@@ -2998,6 +3020,10 @@ pub struct SoranetHandshakePowUpdate {
     pub min_ticket_ttl_secs: Option<u64>,
     /// Override ticket TTL.
     pub ticket_ttl_secs: Option<u64>,
+    /// Request a local Argon2 mint-capacity change (requires restart).
+    pub outbound_mint_capacity: Option<usize>,
+    /// Request a remote Argon2 verify-capacity change (requires restart).
+    pub inbound_verify_capacity: Option<usize>,
     /// Override puzzle parameters.
     pub puzzle: Option<SoranetHandshakePuzzleUpdate>,
     /// Override the signed-ticket verification key (hex).
@@ -3011,6 +3037,8 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
         let mut max_future_skew = None;
         let mut min_ticket_ttl = None;
         let mut ticket_ttl = None;
+        let mut outbound_mint_capacity = None;
+        let mut inbound_verify_capacity = None;
         let mut puzzle = None;
         let mut signed_ticket_public_key_hex = None;
         let kh_required = norito::json::key_hash_const("required");
@@ -3018,6 +3046,8 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
         let kh_max_future_skew = norito::json::key_hash_const("max_future_skew_secs");
         let kh_min_ticket_ttl = norito::json::key_hash_const("min_ticket_ttl_secs");
         let kh_ticket_ttl = norito::json::key_hash_const("ticket_ttl_secs");
+        let kh_outbound_mint_capacity = norito::json::key_hash_const("outbound_mint_capacity");
+        let kh_inbound_verify_capacity = norito::json::key_hash_const("inbound_verify_capacity");
         let kh_signed_ticket_public_key =
             norito::json::key_hash_const("signed_ticket_public_key_hex");
         let kh_puzzle = norito::json::key_hash_const("puzzle");
@@ -3042,6 +3072,20 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
                 }
                 x if x == kh_ticket_ttl && w.last_key() == "ticket_ttl_secs" => {
                     ticket_ttl = Some(w.parse_u64_inline()?);
+                }
+                x if x == kh_outbound_mint_capacity && w.last_key() == "outbound_mint_capacity" => {
+                    outbound_mint_capacity = Some(
+                        usize::try_from(w.parse_u64_inline()?)
+                            .map_err(|_| NoritoError::Message("usize overflow".into()))?,
+                    );
+                }
+                x if x == kh_inbound_verify_capacity
+                    && w.last_key() == "inbound_verify_capacity" =>
+                {
+                    inbound_verify_capacity = Some(
+                        usize::try_from(w.parse_u64_inline()?)
+                            .map_err(|_| NoritoError::Message("usize overflow".into()))?,
+                    );
                 }
                 x if x == kh_signed_ticket_public_key
                     && w.last_key() == "signed_ticket_public_key_hex" =>
@@ -3063,6 +3107,8 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowSummary {
             max_future_skew_secs: max_future_skew.unwrap_or(0),
             min_ticket_ttl_secs: min_ticket_ttl.unwrap_or(0),
             ticket_ttl_secs: ticket_ttl.unwrap_or(0),
+            outbound_mint_capacity: outbound_mint_capacity.unwrap_or(0),
+            inbound_verify_capacity: inbound_verify_capacity.unwrap_or(0),
             puzzle,
             signed_ticket_public_key_hex,
         })
@@ -3082,6 +3128,8 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
         let mut max_future_skew = None;
         let mut min_ticket_ttl = None;
         let mut ticket_ttl = None;
+        let mut outbound_mint_capacity = None;
+        let mut inbound_verify_capacity = None;
         let mut puzzle = None;
         let mut signed_ticket_public_key_hex = None;
         let kh_required = norito::json::key_hash_const("required");
@@ -3089,6 +3137,8 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
         let kh_max_future_skew = norito::json::key_hash_const("max_future_skew_secs");
         let kh_min_ticket_ttl = norito::json::key_hash_const("min_ticket_ttl_secs");
         let kh_ticket_ttl = norito::json::key_hash_const("ticket_ttl_secs");
+        let kh_outbound_mint_capacity = norito::json::key_hash_const("outbound_mint_capacity");
+        let kh_inbound_verify_capacity = norito::json::key_hash_const("inbound_verify_capacity");
         let kh_signed_ticket_public_key =
             norito::json::key_hash_const("signed_ticket_public_key_hex");
         let kh_puzzle = norito::json::key_hash_const("puzzle");
@@ -3114,6 +3164,20 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
                 x if x == kh_ticket_ttl && w.last_key() == "ticket_ttl_secs" => {
                     ticket_ttl = Some(w.parse_u64_inline()?);
                 }
+                x if x == kh_outbound_mint_capacity && w.last_key() == "outbound_mint_capacity" => {
+                    outbound_mint_capacity = Some(
+                        usize::try_from(w.parse_u64_inline()?)
+                            .map_err(|_| NoritoError::Message("usize overflow".into()))?,
+                    );
+                }
+                x if x == kh_inbound_verify_capacity
+                    && w.last_key() == "inbound_verify_capacity" =>
+                {
+                    inbound_verify_capacity = Some(
+                        usize::try_from(w.parse_u64_inline()?)
+                            .map_err(|_| NoritoError::Message("usize overflow".into()))?,
+                    );
+                }
                 x if x == kh_signed_ticket_public_key
                     && w.last_key() == "signed_ticket_public_key_hex" =>
                 {
@@ -3134,6 +3198,8 @@ impl<'a> FastFromJson<'a> for SoranetHandshakePowUpdate {
             max_future_skew_secs: max_future_skew,
             min_ticket_ttl_secs: min_ticket_ttl,
             ticket_ttl_secs: ticket_ttl,
+            outbound_mint_capacity,
+            inbound_verify_capacity,
             puzzle,
             signed_ticket_public_key_hex,
         })
@@ -3385,7 +3451,9 @@ mod test {
                         difficulty: iroha_crypto::soranet::puzzle::DEFAULT_DIFFICULTY,
                         max_future_skew_secs: 300,
                         min_ticket_ttl_secs: 30,
-                        ticket_ttl_secs: 60,
+                        ticket_ttl_secs: 300,
+                        outbound_mint_capacity: 1,
+                        inbound_verify_capacity: 1,
                         puzzle: Some(SoranetHandshakePuzzleSummary {
                             memory_kib: 64 * 1024,
                             time_cost: 2,
@@ -3482,6 +3550,8 @@ mod test {
                     max_future_skew_secs: Some(900),
                     min_ticket_ttl_secs: Some(45),
                     ticket_ttl_secs: Some(120),
+                    outbound_mint_capacity: Some(2),
+                    inbound_verify_capacity: Some(3),
                     puzzle: None,
                     signed_ticket_public_key_hex: None,
                 }),
@@ -3509,6 +3579,8 @@ mod test {
         assert_eq!(pow.max_future_skew_secs, Some(900));
         assert_eq!(pow.min_ticket_ttl_secs, Some(45));
         assert_eq!(pow.ticket_ttl_secs, Some(120));
+        assert_eq!(pow.outbound_mint_capacity, Some(2));
+        assert_eq!(pow.inbound_verify_capacity, Some(3));
         let network = parsed.network.expect("network update should roundtrip");
         assert_eq!(network.require_sm_handshake_match, Some(false));
         assert_eq!(network.require_sm_openssl_preview_match, Some(true));

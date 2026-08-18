@@ -47,6 +47,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_config/src/parameters/user.rs'): (
         Path('user/kura.rs'),
+        Path('user_soranet_handshake_tests.rs'),
         Path('user/torii_peer_geo.rs'),
         Path('user/torii_soranet_privacy_ingest.rs'),
         Path('user/torii_tx_history.rs'),
@@ -171,6 +172,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('queue/queue_metadata_and_admission_tests.rs'),
         Path('queue/instruction_and_state_routing_tests.rs'),
         Path('queue/routing_batch_admission_tests.rs'),
+        Path('queue/config_factory_test_support.rs'),
         Path('queue/teu_limit_and_backlog_tests.rs'),
         Path('queue/routing_projection_resilience_tests.rs'),
         Path('queue/capacity_and_concurrency_tests.rs'),
@@ -432,6 +434,12 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_adapter_04b_lifecycle_startup.rs'),
         Path('v2_adapter_05_direct_lifecycle.rs'),
     ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs'): (
+        Path('v2_adapter_04_wal_recovery_decision_classifier_cases.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs'): (
+        Path('v2_adapter_04b_lifecycle_startup_tail.rs'),
+    ),
     Path('crates/iroha_core/src/sumeragi/tests/v2_adapter_main_04.rs'): (
         Path('v2_adapter_01_replay_and_registry.rs'),
         Path('v2_adapter_02_view_and_lock_progress.rs'),
@@ -478,10 +486,10 @@ REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 50
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 52
 assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 6
 assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 6
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 44
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 46
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
     REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )

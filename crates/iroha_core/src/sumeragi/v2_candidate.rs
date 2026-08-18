@@ -35,11 +35,11 @@ use iroha_data_model::{
     da::{commitment::DaCommitmentBundle, pin_intent::DaPinIntentBundle},
     events::pipeline::PipelineEventBox,
     merge::{MAX_MERGE_EXECUTION_BATCH_BYTES, MAX_MERGE_EXECUTION_ENTRYPOINTS, MergeLedgerEntry},
-    transaction::TransactionEntrypoint,
+    transaction::{TransactionAdmissionIntent, TransactionEntrypoint},
 };
 use iroha_primitives::time::TimeSource;
 use std::{
-    collections::{BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     num::{NonZeroU64, NonZeroUsize},
 };
 use thiserror::Error;
@@ -619,12 +619,54 @@ impl V2CandidateAssembler {
             .as_ref()
             .and_then(|entry| entry.execution_batch.as_ref())
             .is_some();
+        let mut carrier_queue_plan_bindings = BTreeMap::new();
+        if let Some(entry) = attachments.certified_merge_entry.as_ref() {
+            for certificate in &entry.queue_plan_admissions {
+                let admission =
+                    crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+                        state.network_id_ref(),
+                        certificate,
+                    )
+                    .map_err(CandidateError::MergeApplicationContext)?;
+                let binding = admission.certificate.binding;
+                if carrier_queue_plan_bindings
+                    .insert(binding.entrypoint_hash.clone(), binding)
+                    .is_some()
+                {
+                    return Err(CandidateError::MergeApplicationContext(
+                        "certified merge carrier repeats a QueuePlan entrypoint".to_owned(),
+                    ));
+                }
+            }
+        }
         let mut records = Vec::with_capacity(pending.len());
         for (source_ordinal, transaction) in pending.into_iter().enumerate() {
             report.inspected = report.inspected.saturating_add(1);
             if record_ordinary_execution_carrier_exclusion(certified_execution_selected, report) {
                 continue;
             }
+            let entrypoint_hash = transaction.hash_as_entrypoint();
+            let queue_plan_binding = if transaction.entrypoint().admission_intent()
+                == TransactionAdmissionIntent::QueuePlanSynced
+            {
+                match carrier_queue_plan_bindings.get(&entrypoint_hash) {
+                    Some(binding) => Some(binding.clone()),
+                    None => match state
+                        .queue_plan_pending_binding_for_entrypoint(entrypoint_hash.clone())
+                    {
+                        Ok(Some(binding)) => Some(binding),
+                        Ok(None) => {
+                            // A QueuePlan transaction is a FIFO barrier until the same carrier or
+                            // canonical parent state owns its exact admission certificate. Skipping
+                            // it would let later work overtake a signature-bound admission promise.
+                            break;
+                        }
+                        Err(_) => return Err(CandidateError::RestartRequired),
+                    },
+                }
+            } else {
+                None
+            };
             let routing_plan = match queue.route_plan_with_state(&transaction, state) {
                 Ok(plan) => plan,
                 Err(_) => {
@@ -632,6 +674,17 @@ impl V2CandidateAssembler {
                     return Err(CandidateError::RestartRequired);
                 }
             };
+            if let Some(binding) = queue_plan_binding
+                && let Err(reason) = binding.validate_for_request(
+                    state.network_id_ref(),
+                    transaction.entrypoint(),
+                    &routing_plan,
+                )
+            {
+                return Err(CandidateError::MergeApplicationContext(format!(
+                    "QueuePlan candidate differs from its immutable admission binding: {reason}"
+                )));
+            }
             if queue.transaction_selection_durability_faulted() {
                 return Err(CandidateError::RestartRequired);
             }
@@ -642,7 +695,7 @@ impl V2CandidateAssembler {
                 continue;
             }
             records.push(CandidateRecord {
-                entrypoint_hash: transaction.hash_as_entrypoint(),
+                entrypoint_hash,
                 transaction,
                 routing_plan,
                 encoded_len,
@@ -1492,6 +1545,22 @@ mod tests {
         .sign(key.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
+    fn accepted_with_intent(
+        seed: u8,
+        intent: TransactionAdmissionIntent,
+    ) -> AcceptedTransaction<'static> {
+        let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("deterministic transaction key");
+        let authority = AccountId::new(key.public_key().clone());
+        let tx = TransactionBuilder::new(
+            crate::sumeragi::synthetic_network_id("v2-candidate-test"),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_admission_intent(intent)
+        .sign(key.private_key());
+        AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
     fn record(seed: u8, label: &str, source_ordinal: usize) -> CandidateRecord {
         let transaction = accepted(seed, label);
         CandidateRecord {
@@ -1734,6 +1803,96 @@ mod tests {
             panic!("an idle height must not manufacture an empty candidate");
         };
         assert_eq!(report, CandidateScanReport::default());
+    }
+    #[test]
+    fn queue_plan_intent_is_a_fifo_barrier_until_parent_state_owns_its_exact_binding() {
+        let (state, _context, anchor, key) = snapshot_parent_fixture();
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(3));
+        let queue = Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        );
+        let queue_plan = accepted_with_intent(0x81, TransactionAdmissionIntent::QueuePlanSynced);
+        let follower = accepted_with_intent(0x82, TransactionAdmissionIntent::Ordinary);
+        let assembler = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(8), nonzero(64 * 1024), nonzero(8))
+                .expect("candidate limits"),
+            time_source,
+        );
+        let mut blocked_report = CandidateScanReport::default();
+        let blocked = assembler
+            .snapshot_routable_candidates(
+                &queue,
+                &state,
+                &CandidateAttachments::default(),
+                vec![queue_plan.clone(), follower.clone()],
+                64 * 1024,
+                &mut blocked_report,
+            )
+            .expect("an absent marker is a normal bounded wait");
+        assert!(blocked.is_empty());
+        assert_eq!(blocked_report.inspected, 1);
+
+        let routing_plan = queue
+            .route_plan_with_state(&queue_plan, &state)
+            .expect("fixture transaction has a routable plan");
+        let validators = vec![PeerId::new(key.public_key().clone())];
+        let context = crate::queue::QueuePlanAdmissionContextV2 {
+            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V2,
+            authority_height: 2,
+            proposal_height: 3,
+            predecessor_block_hash: Some(anchor.snapshot_block_hash),
+            routing_plan_digest: routing_plan.digest(),
+            route_incarnations: routing_plan
+                .legs()
+                .into_iter()
+                .map(|leg| crate::queue::QueuePlanRouteIncarnationV2 {
+                    leg,
+                    lane_incarnation: state
+                        .lane_incarnation_at_height(leg.route.lane_id, 3)
+                        .expect("fixture route has an active lane incarnation"),
+                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set_hash: HashOf::new(&validators),
+                    validator_set: validators.clone(),
+                    validator_count: 1,
+                    durability_threshold: 1,
+                })
+                .collect(),
+        };
+        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
+            state.network_id_ref(),
+            queue_plan.entrypoint(),
+            &routing_plan,
+            context,
+            3,
+        )
+        .expect("construct exact QueuePlan binding");
+        state
+            .install_queue_plan_pending_binding_for_test(&binding)
+            .expect("install exact parent-state binding");
+
+        let mut ready_report = CandidateScanReport::default();
+        let ready = assembler
+            .snapshot_routable_candidates(
+                &queue,
+                &state,
+                &CandidateAttachments::default(),
+                vec![queue_plan.clone(), follower.clone()],
+                64 * 1024,
+                &mut ready_report,
+            )
+            .expect("exact parent-state binding makes the FIFO prefix eligible");
+        assert_eq!(
+            ready
+                .iter()
+                .map(|candidate| candidate.entrypoint_hash)
+                .collect::<Vec<_>>(),
+            vec![
+                queue_plan.hash_as_entrypoint(),
+                follower.hash_as_entrypoint()
+            ]
+        );
+        assert_eq!(ready_report.inspected, 2);
     }
     #[test]
     fn proposal_work_gate_normalizes_empty_control_bundles() {

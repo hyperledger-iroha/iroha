@@ -1,13 +1,16 @@
 // SoraNet handshake configuration regressions included from `peer`.
-use std::{fmt, num::NonZeroU32};
+use super::*;
 use rand::{
     RngCore, SeedableRng,
     rand_core::{TryCryptoRng, TryRngCore},
     rngs::StdRng,
 };
 use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
+use std::{
+    fmt,
+    num::{NonZeroU32, NonZeroUsize},
+};
 use tempfile::tempdir;
-use super::*;
 fn test_admission_transcript() -> [u8; 32] {
     pow::derive_admission_transcript(b"soranet-test-client-hello")
 }
@@ -727,16 +730,13 @@ async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellat
     let second_started = Arc::new(AtomicBool::new(false));
     let (release_first, wait_for_release) = std_mpsc::channel();
     let first_started_by_work = Arc::clone(&first_started);
-    let first = tokio::spawn(run_serialized_soranet_puzzle_work(
-        Arc::clone(&gate),
-        move || {
-            first_started_by_work.store(true, Ordering::Release);
-            wait_for_release
-                .recv_timeout(Duration::from_secs(2))
-                .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
-            Ok(1_u8)
-        },
-    ));
+    let first = tokio::spawn(run_soranet_puzzle_work(Arc::clone(&gate), move || {
+        first_started_by_work.store(true, Ordering::Release);
+        wait_for_release
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
+        Ok(1_u8)
+    }));
     tokio::time::timeout(Duration::from_secs(1), async {
         while !first_started.load(Ordering::Acquire) {
             tokio::task::yield_now().await;
@@ -751,13 +751,10 @@ async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellat
     let _ = first.await;
     let cancelled_waiter_started = Arc::new(AtomicBool::new(false));
     let cancelled_waiter_started_by_work = Arc::clone(&cancelled_waiter_started);
-    let cancelled_waiter = tokio::spawn(run_serialized_soranet_puzzle_work(
-        Arc::clone(&gate),
-        move || {
-            cancelled_waiter_started_by_work.store(true, Ordering::Release);
-            Ok(3_u8)
-        },
-    ));
+    let cancelled_waiter = tokio::spawn(run_soranet_puzzle_work(Arc::clone(&gate), move || {
+        cancelled_waiter_started_by_work.store(true, Ordering::Release);
+        Ok(3_u8)
+    }));
     tokio::task::yield_now().await;
     assert!(
         !cancelled_waiter_started.load(Ordering::Acquire),
@@ -766,13 +763,10 @@ async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellat
     cancelled_waiter.abort();
     let _ = cancelled_waiter.await;
     let second_started_by_work = Arc::clone(&second_started);
-    let second = tokio::spawn(run_serialized_soranet_puzzle_work(
-        Arc::clone(&gate),
-        move || {
-            second_started_by_work.store(true, Ordering::Release);
-            Ok(2_u8)
-        },
-    ));
+    let second = tokio::spawn(run_soranet_puzzle_work(Arc::clone(&gate), move || {
+        second_started_by_work.store(true, Ordering::Release);
+        Ok(2_u8)
+    }));
     tokio::time::sleep(Duration::from_millis(25)).await;
     assert!(
         !second_started.load(Ordering::Acquire),
@@ -802,7 +796,7 @@ async fn puzzle_work_gate_bounds_concurrency_and_keeps_the_async_runtime_respons
     for value in 0..WORKERS {
         let active = Arc::clone(&active);
         let peak = Arc::clone(&peak);
-        workers.push(tokio::spawn(run_serialized_soranet_puzzle_work(
+        workers.push(tokio::spawn(run_soranet_puzzle_work(
             Arc::clone(&gate),
             move || {
                 let current = active.fetch_add(1, Ordering::AcqRel) + 1;
@@ -842,13 +836,35 @@ async fn puzzle_work_gate_bounds_concurrency_and_keeps_the_async_runtime_respons
     assert_eq!(gate.available_permits(), 1);
 }
 #[tokio::test(flavor = "current_thread")]
+async fn inbound_puzzle_pressure_cannot_consume_outbound_recovery_capacity() {
+    let admission = SoranetPuzzleWorkAdmission::new(
+        NonZeroUsize::new(1).expect("non-zero outbound capacity"),
+        NonZeroUsize::new(1).expect("non-zero inbound capacity"),
+    );
+    let inbound_gate = admission.inbound_verify_gate();
+    let held_inbound = inbound_gate
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("inbound gate open");
+    assert!(inbound_gate.try_acquire_owned().is_err());
+    let outbound = admission
+        .outbound_mint_gate()
+        .try_acquire_owned()
+        .expect("inbound verification cannot starve outbound ticket minting");
+    drop(outbound);
+    drop(held_inbound);
+    assert_eq!(admission.inbound_verify_gate().available_permits(), 1);
+    assert_eq!(admission.outbound_mint_gate().available_permits(), 1);
+}
+#[tokio::test(flavor = "current_thread")]
 async fn closed_puzzle_work_gate_fails_closed_without_running_work() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let gate = Arc::new(Semaphore::new(1));
     gate.close();
     let started = Arc::new(AtomicBool::new(false));
     let started_by_work = Arc::clone(&started);
-    let error = run_serialized_soranet_puzzle_work(gate, move || {
+    let error = run_soranet_puzzle_work(gate, move || {
         started_by_work.store(true, Ordering::Release);
         Ok(())
     })

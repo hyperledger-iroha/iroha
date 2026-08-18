@@ -1280,6 +1280,73 @@ fn detached_validation_outcomes_replay_only_after_current_consumer_attaches() {
     }
 }
 #[test]
+fn rejected_local_proposal_is_terminal_and_fails_closed_without_new_work() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    executor
+        .admit_local_proposal(
+            tag(0),
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            &mut services,
+        )
+        .expect("admit the initial local proposal");
+    let store_id = services.store_tasks[0].id();
+    let stored = services.execute_store(store_id);
+    executor
+        .complete_body_store(stored, &mut services)
+        .expect("persist the local proposal before validation");
+    let first_validation_id = services.validation_tasks[0].id();
+    services.validation_error = Some("transient local prerequisite".to_owned());
+    let rejected = services.execute_validation(first_validation_id);
+    assert_eq!(
+        executor
+            .complete_body_validation(rejected, &mut services)
+            .expect("record the local validation rejection"),
+        CompletionDisposition::Accepted
+    );
+    assert!(executor.pending_validations.is_empty());
+    assert!(executor.local_validate_replay.is_empty());
+    assert!(executor.rejected_bodies.contains_key(&key));
+    assert!(executor.durable_bodies.contains_key(&key));
+    assert!(executor.recovered_bodies.contains_key(&key));
+    assert!(executor.body_pipeline_owners.contains_key(&key));
+    assert_eq!(
+        services.rejected_validations,
+        vec!["transient local prerequisite"]
+    );
+
+    let before = executor.body_ownership_projection();
+    assert!(matches!(
+        executor.admit_local_proposal(
+            tag(0),
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            &mut services,
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("durable deterministic rejection")
+    ));
+    assert_eq!(
+        services.store_tasks.len(),
+        1,
+        "a sealed rejection must not repeat the durable Store operation"
+    );
+    assert_eq!(services.validation_tasks.len(), 1);
+    assert_eq!(executor.body_ownership_projection(), before);
+    assert!(executor.rejected_bodies.contains_key(&key));
+    assert!(executor.durable_bodies.contains_key(&key));
+    assert!(executor.recovered_bodies.contains_key(&key));
+    assert!(executor.pending_validations.is_empty());
+    assert!(executor.local_validate_replay.is_empty());
+    assert!(executor.validated_bodies.is_empty());
+    assert!(executor.local_proposal_ready_replay.is_empty());
+    assert!(executor.status().fail_closed);
+    assert_eq!(services.closed.len(), 1);
+}
+#[test]
 fn contradictory_terminal_validation_catalogues_fail_closed() {
     for conflicting_receipt in [false, true] {
         let fixture = Fixture::new();

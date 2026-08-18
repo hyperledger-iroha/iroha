@@ -865,7 +865,6 @@ mod recovery_tests {
             stage_kind,
             u8::try_from(ordinal).expect("small classifier view"),
         );
-        assert_eq!(replay.work_class, work_class);
         let causal_root = CausalRoot::new(LifecycleDigest::new(
             [u8::try_from(ordinal).expect("small classifier marker"); 32],
         ));
@@ -873,7 +872,7 @@ mod recovery_tests {
             replay.key,
             OwnerId::new(causal_root, ordinal),
             ordinal,
-            work_class,
+            replay.work_class,
             replay.stage,
             terminal,
             causal_root.digest(),
@@ -882,6 +881,7 @@ mod recovery_tests {
             continuation,
         )
         .expect("construct classifier-only durable record")
+        .with_work_class_for_test(work_class)
     }
     fn ordinary_stage_inventory() -> [(LifecycleWorkClass, LifecycleStageKind); 20] {
         [

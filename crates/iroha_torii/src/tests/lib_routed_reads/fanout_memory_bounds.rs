@@ -660,19 +660,27 @@ fn ingress_envelope_accounts_raw_decode_canonical_and_scope_phases() {
     assert!(QueryIngressMemoryEnvelope::from_slot_bytes(fixed, usize::MAX).is_none());
 }
 #[test]
-fn internal_proxy_http_envelope_accounts_decode_shared_frame_and_scratch() {
+fn internal_proxy_http_envelope_accounts_decode_shared_frame_local_clone_and_scratch() {
     let fixed = query_fanout_fixed_overhead_bytes().expect("proxy fixed overhead fits usize");
     let envelope = ToriiProxyHttpIngressEnvelope::from_max_content_bytes(17)
         .expect("exact proxy HTTP phase boundary should fit");
     assert_eq!(
         envelope.working_set_bytes,
-        fixed + TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1 + 4 * 17
+        fixed + TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1 + 5 * 17
     );
     assert_eq!(envelope.body_bytes, 17);
     assert_eq!(envelope.decode_allocated_bytes, 17);
     assert_eq!(envelope.forwarded_request_bytes, 17);
     assert_eq!(envelope.forwarding_transient_bytes, 17);
     assert!(envelope.phases_fit());
+    let undersized = ToriiProxyHttpIngressEnvelope {
+        working_set_bytes: envelope.working_set_bytes - 1,
+        ..envelope
+    };
+    assert!(
+        !undersized.phases_fit(),
+        "the strict local clone must be charged to the admitted envelope"
+    );
 }
 #[test]
 fn public_ingress_and_local_clone_share_one_fanout_decode_phase() {
@@ -1238,6 +1246,27 @@ async fn query_fanout_memory_permit_lives_until_response_body_is_dropped() {
         QueryFanoutMemoryReservation::new(permit),
     );
     assert_eq!(semaphore.available_permits(), 0);
+    drop(response);
+    assert_eq!(semaphore.available_permits(), 1);
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+#[tokio::test]
+async fn torii_proxy_memory_permit_lives_until_response_body_is_dropped() {
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+    let permit = semaphore
+        .clone()
+        .acquire_owned()
+        .await
+        .expect("test semaphore should be open");
+    let response = hold_torii_proxy_memory_in_response_body(
+        Response::new(Body::from(Bytes::from_static(b"bounded"))),
+        ToriiProxyMemoryReservation::new(permit),
+    );
+    assert_eq!(
+        semaphore.available_permits(),
+        0,
+        "the proxy response body must retain the complete request reservation"
+    );
     drop(response);
     assert_eq!(semaphore.available_permits(), 1);
 }

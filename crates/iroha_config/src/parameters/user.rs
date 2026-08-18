@@ -1360,11 +1360,12 @@ impl Root {
                 validator_roster_len,
                 effect_work_capacity,
                 sumeragi.queues.bodies.get(),
-                reply_source_capacity,
+                sumeragi.queues.authenticated_non_validator_sources.get(),
             ) {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "{error}; configured validator roster is {validator_roster_len}, network reply-source capacity is {reply_source_capacity}, and certified-request capacity is {}",
+                        "{error}; configured validator roster is {validator_roster_len}, authenticated non-validator source capacity is {}, and certified-request capacity is {}",
+                        sumeragi.queues.authenticated_non_validator_sources,
                         sumeragi.queues.bodies,
                     )),
                 );
@@ -6319,6 +6320,10 @@ pub struct SoranetHandshakePow {
     min_ticket_ttl_secs: u64,
     #[config(default = "Self::default_ticket_ttl()")]
     ticket_ttl_secs: u64,
+    #[config(default = "Self::default_puzzle_work_capacity()")]
+    outbound_mint_capacity: NonZeroUsize,
+    #[config(default = "Self::default_puzzle_work_capacity()")]
+    inbound_verify_capacity: NonZeroUsize,
     #[config(default = "Self::default_revocation_store_capacity()")]
     revocation_store_capacity: u64,
     #[config(default = "Self::default_revocation_store_ttl()")]
@@ -6342,7 +6347,18 @@ impl SoranetHandshakePow {
         30
     }
     const fn default_ticket_ttl() -> u64 {
-        60
+        Self::default_max_future_skew()
+    }
+    const fn default_puzzle_work_capacity() -> NonZeroUsize {
+        nonzero!(1usize)
+    }
+    fn bound_puzzle_work_capacity(capacity: NonZeroUsize) -> NonZeroUsize {
+        NonZeroUsize::new(
+            capacity
+                .get()
+                .min(actual::SoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION),
+        )
+        .expect("bounded SoraNet puzzle-work capacity is non-zero")
     }
     const fn default_revocation_store_capacity() -> u64 {
         8_192
@@ -6359,6 +6375,8 @@ impl SoranetHandshakePow {
             max_future_skew_secs,
             min_ticket_ttl_secs,
             ticket_ttl_secs,
+            outbound_mint_capacity,
+            inbound_verify_capacity,
             revocation_store_capacity,
             revocation_store_ttl_secs,
             revocation_store_path,
@@ -6387,6 +6405,8 @@ impl SoranetHandshakePow {
             max_future_skew,
             min_ticket_ttl,
             ticket_ttl,
+            outbound_mint_capacity: Self::bound_puzzle_work_capacity(outbound_mint_capacity),
+            inbound_verify_capacity: Self::bound_puzzle_work_capacity(inbound_verify_capacity),
             revocation_store_capacity,
             revocation_max_ttl,
             revocation_store_path: revocation_store_path.to_string_lossy().into_owned().into(),
@@ -6441,37 +6461,7 @@ impl SoranetHandshakePuzzle {
 }
 #[cfg(test)]
 mod soranet_handshake_puzzle_tests {
-    use super::*;
-    #[test]
-    fn parse_bounds_argon2_resource_costs() {
-        let upper = SoranetHandshakePuzzle {
-            memory_kib: u32::MAX,
-            time_cost: u32::MAX,
-            lanes: u32::MAX,
-        }
-        .parse();
-        assert_eq!(
-            upper.memory_kib.get(),
-            iroha_crypto::soranet::puzzle::MAX_MEMORY_KIB
-        );
-        assert_eq!(
-            upper.time_cost.get(),
-            iroha_crypto::soranet::puzzle::MAX_TIME_COST
-        );
-        assert_eq!(upper.lanes.get(), iroha_crypto::soranet::puzzle::MAX_LANES);
-        let lower = SoranetHandshakePuzzle {
-            memory_kib: 0,
-            time_cost: 0,
-            lanes: 0,
-        }
-        .parse();
-        assert_eq!(
-            lower.memory_kib.get(),
-            iroha_crypto::soranet::puzzle::MIN_MEMORY_KIB
-        );
-        assert_eq!(lower.time_cost.get(), 1);
-        assert_eq!(lower.lanes.get(), 1);
-    }
+    include!("user_soranet_handshake_tests.rs");
 }
 /// User-level configuration container for SoraNet privacy telemetry.
 #[derive(Debug, Clone, Copy, ReadConfig)]
@@ -33697,20 +33687,20 @@ publish_delay_seconds = 17
         );
     }
     #[test]
-    fn sumeragi_v2_lifecycle_geometry_accepts_default_body_connection_boundary() {
+    fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
         let mut table = base_table();
         let network = table
             .get_mut("network")
             .and_then(Value::as_table_mut)
             .expect("network table");
-        network.insert("max_total_connections".into(), Value::Integer(100));
+        network.insert("max_total_connections".into(), Value::Integer(131));
         let actual = load_root(table);
         assert_eq!(
             actual
                 .network
                 .max_total_connections
                 .map(std::num::NonZeroUsize::get),
-            Some(100),
+            Some(131),
         );
     }
     #[test]
@@ -33884,7 +33874,7 @@ publish_delay_seconds = 17
             .get_mut("network")
             .and_then(Value::as_table_mut)
             .expect("network table");
-        network.insert("max_total_connections".into(), Value::Integer(100));
+        network.insert("max_total_connections".into(), Value::Integer(132));
         let sumeragi = table
             .entry("sumeragi")
             .or_insert_with(|| Value::Table(Table::new()))
@@ -33895,7 +33885,7 @@ publish_delay_seconds = 17
             .or_insert_with(|| Value::Table(Table::new()))
             .as_table_mut()
             .expect("sumeragi.queues table");
-        queues.insert("bodies".into(), Value::Integer(36));
+        queues.insert("bodies".into(), Value::Integer(132));
         let actual = load_root(table);
         let shared_capacity = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
             (actual.sumeragi.queues.commands.get()
@@ -33921,7 +33911,7 @@ publish_delay_seconds = 17
             .get_mut("network")
             .and_then(Value::as_table_mut)
             .expect("network table");
-        network.insert("max_total_connections".into(), Value::Integer(100));
+        network.insert("max_total_connections".into(), Value::Integer(132));
         let sumeragi = table
             .entry("sumeragi")
             .or_insert_with(|| Value::Table(Table::new()))
@@ -33932,32 +33922,47 @@ publish_delay_seconds = 17
             .or_insert_with(|| Value::Table(Table::new()))
             .as_table_mut()
             .expect("sumeragi.queues table");
-        queues.insert("bodies".into(), Value::Integer(35));
+        queues.insert("bodies".into(), Value::Integer(130));
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("one maximum reply-source fanout must fit exact output");
         let report = format!("{error:?}");
         assert!(
             report.contains(
-                "Sumeragi v2 outbound shared ownership capacity 299 is below one maximum fanout 300; configured network reply-source capacity is 100"
+                "Sumeragi v2 outbound shared ownership capacity 394 is below one maximum fanout 396; configured network reply-source capacity is 132"
             ),
             "{report}",
         );
     }
     #[test]
-    fn sumeragi_v2_lifecycle_geometry_rejects_former_core_default() {
+    fn sumeragi_v2_lifecycle_geometry_rejects_unreservable_authenticated_sources() {
         let mut table = base_table();
         let network = table
             .get_mut("network")
             .and_then(Value::as_table_mut)
             .expect("network table");
         network.insert("max_total_connections".into(), Value::Integer(120));
+        let sumeragi = table
+            .entry("sumeragi")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi table");
+        let queues = sumeragi
+            .entry("queues")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("sumeragi.queues table");
+        queues.insert(
+            "authenticated_non_validator_sources".into(),
+            Value::Integer(101),
+        );
+        queues.insert("bodies".into(), Value::Integer(310));
+        queues.insert("body_bytes".into(), Value::Integer(103 * 33 * 1024 * 1024));
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("height-local lifecycle capacity must fit its physical-slot space");
         let report = format!("{error:?}");
         assert!(
-            report.contains(
-                "Sumeragi v2 production lifecycle capacity geometry requires 78516 records (consensus 16, effect 256, serve 39122, producer 39122), above the canonical height-local maximum 65536"
-            ),
+            report.contains("above the canonical height-local maximum 65536")
+                && report.contains("authenticated non-validator source capacity is 101"),
             "{report}",
         );
     }

@@ -1484,7 +1484,8 @@ impl<'tx> AcceptedTransaction<'tx> {
             TransactionSignatureError::InvalidFeePaymentIntent(_)
             | TransactionSignatureError::MissingTimeToLive
             | TransactionSignatureError::GenesisDomainNotAllowed
-            | TransactionSignatureError::GenesisDomainRequired => {
+            | TransactionSignatureError::GenesisDomainRequired
+            | TransactionSignatureError::GenesisAdmissionIntentRequired => {
                 SignatureRejectionCode::MalformedSignature
             }
             TransactionSignatureError::UnexpectedMultisigSignatures

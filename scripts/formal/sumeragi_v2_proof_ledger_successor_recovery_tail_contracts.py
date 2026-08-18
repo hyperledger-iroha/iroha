@@ -2339,7 +2339,9 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
     outcome_tokens = rust_code_tokens(outcomes)
     for token, count in (
         ("PassThrough(LifecycleCurrentRunnerTurn<'cursor>)", 2),
-        ("Selected(ProductionLifecycleCompletionSelectionV1)", 1),
+        ("Selected(ProductionLifecycleCompletionSelectionV1)", 2),
+        ("Ordinary(LifecycleCurrentRunnerTurn<'cursor>)", 1),
+        ("Ready(ProductionLifecycleReadyCompletionTurnV1<'cursor>)", 1),
         ("Selected(ProductionLifecycleIngressSelectionV1)", 1),
         ("Ordinary(ProductionPreparedOrdinaryIngressTurnV1)", 1),
     ):
@@ -2361,73 +2363,126 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
                 f"forbidden token {forbidden!r}"
             )
 
-    completion_items = [
-        rust_item
-        for rust_item in rust_items(sources["driver"], "drive_completion_turn")
-        if rust_item.brace_context
-        == (("impl", "LaunchedProductionLifecycleV1"),)
-    ]
-    if len(completion_items) != 1:
-        errors.append(
-            f"{paths['driver']}: unified lifecycle Completion turn driver must "
-            f"have one launched owner; found {len(completion_items)}"
-        )
-        completion = None
-    else:
-        completion = completion_items[0]
+    def launched_completion_item(name: str, description: str):
+        matches = [
+            rust_item
+            for rust_item in rust_items(sources["driver"], name)
+            if rust_item.brace_context
+            == (("impl", "LaunchedProductionLifecycleV1"),)
+        ]
+        if len(matches) != 1:
+            errors.append(
+                f"{paths['driver']}: {description} must have one launched owner; "
+                f"found {len(matches)}"
+            )
+            return None
+        return matches[0]
+
+    completion_pre_gate = launched_completion_item(
+        "drive_completion_pre_gate",
+        "lifecycle Completion parked/physical pre-gate",
+    )
+    ready_completion = launched_completion_item(
+        "drive_ready_completion_turn",
+        "lifecycle Completion fresh Ready dispatcher",
+    )
+    completion = launched_completion_item(
+        "drive_completion_turn",
+        "composed lifecycle Completion turn driver",
+    )
     require_order(
         "driver",
-        completion,
-        "unified lifecycle Completion parked-owner and Ready order",
+        completion_pre_gate,
+        "lifecycle Completion parked-owner and physical-head pre-gate order",
         (
             "self.recovered_decision_apply_deferred.take()",
             "self.recovered_lifecycle_sign_completion.is_some()",
             "self.recovered_decision_fetch_body_completion.is_some()",
             "self.services.take_next_recovered_lifecycle_completion()",
-            "self.owner.classify_completion_ready_work()",
+            "ProductionLifecycleCompletionPreGateV1::Ready(",
         ),
     )
-    if completion is not None:
-        completion_tokens = rust_code_tokens(completion.source)
-        for token, count, label in (
-            (
-                "self.services.take_next_recovered_lifecycle_completion()",
-                1,
-                "unified lifecycle Completion single-head classifier",
-            ),
-            (
-                "if result.is_err() { self.close_output_for_restart(); }",
-                2,
-                "unified lifecycle Completion selected-dispatch failure closure",
-            ),
-        ):
-            observed = _token_sequence_count(completion_tokens, rust_code_tokens(token))
-            if observed != count:
-                errors.append(
-                    f"{paths['driver']}:{completion.line}: {label} must contain "
-                    f"{token!r} exactly {count} time(s); found {observed}"
-                )
     require_tokens(
         "driver",
-        completion,
-        "unified lifecycle Completion pass-through ownership",
+        completion_pre_gate,
+        "lifecycle Completion physical-head ownership",
         (
             "RecoveredLifecycleCompletionTakeV1::PassThrough",
-            "ProductionCompletionReadyWorkV1::PassThrough",
+            "RecoveredLifecycleCompletionTakeV1::CertifiedServe(completion)",
         ),
     )
-    if completion is not None:
-        completion_pass_throughs = _token_sequence_count(
-            rust_code_tokens(completion.source),
-            rust_code_tokens(
-                "return ProductionLifecycleCompletionTurnV1::PassThrough(runner)"
-            ),
+    if completion_pre_gate is not None:
+        ordinary_returns = _token_sequence_count(
+            rust_code_tokens(completion_pre_gate.source),
+            rust_code_tokens("ProductionLifecycleCompletionPreGateV1::Ordinary(runner)"),
         )
-        if completion_pass_throughs != 3:
+        if ordinary_returns != 2:
             errors.append(
-                f"{paths['driver']}:{completion.line}: unified lifecycle Completion "
-                "pass-through ownership must preserve exactly three early-return "
-                f"sites; found {completion_pass_throughs}"
+                f"{paths['driver']}:{completion_pre_gate.line}: lifecycle Completion "
+                "pre-gate must return the exact ordinary cursor for both a foreign "
+                f"runner rank and an ordinary physical head; found {ordinary_returns} sites"
+            )
+    require_order(
+        "driver",
+        ready_completion,
+        "fresh lifecycle Completion Ready-work dispatch",
+        (
+            "self.owner.classify_completion_ready_work()",
+            "ProductionCompletionReadyWorkV1::PassThrough",
+            "ProductionLifecycleCompletionTurnV1::PassThrough(runner)",
+            "ProductionCompletionReadyWorkV1::RecoveredIo",
+            "dispatch_recovered_completion_with_runner_debt",
+            "ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast",
+            "refanout_recovered_lifecycle_signed_broadcast_with_runner_debt",
+        ),
+    )
+    require_order(
+        "driver",
+        completion,
+        "composed lifecycle Completion pre-gate and Ready order",
+        (
+            "self.drive_completion_pre_gate(runner, lane_work)",
+            "ProductionLifecycleCompletionPreGateV1::Selected(selected)",
+            "ProductionLifecycleCompletionPreGateV1::Ordinary(runner)",
+            "ProductionLifecycleCompletionPreGateV1::Ready(ready)",
+            "self.drive_ready_completion_turn(ready)",
+        ),
+    )
+    for target, token, count, label in (
+        (
+            completion_pre_gate,
+            "self.services.take_next_recovered_lifecycle_completion()",
+            1,
+            "lifecycle Completion single physical-head classifier",
+        ),
+        (
+            ready_completion,
+            "self.owner.classify_completion_ready_work()",
+            1,
+            "lifecycle Completion single fresh Ready census",
+        ),
+        (
+            completion,
+            "self.drive_completion_pre_gate(runner, lane_work)",
+            1,
+            "composed lifecycle Completion single pre-gate",
+        ),
+        (
+            completion,
+            "self.drive_ready_completion_turn(ready)",
+            1,
+            "composed lifecycle Completion single Ready dispatch",
+        ),
+    ):
+        if target is None:
+            continue
+        observed = _token_sequence_count(
+            rust_code_tokens(target.source), rust_code_tokens(token)
+        )
+        if observed != count:
+            errors.append(
+                f"{paths['driver']}:{target.line}: {label} must contain {token!r} "
+                f"exactly {count} time(s); found {observed}"
             )
 
     completion_head = item("worker", "take_next_recovered_lifecycle_completion")
@@ -2994,12 +3049,12 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             )
     require_order(
         "driver",
-        completion,
-        "unified recovered Completion composite dispatch",
+        ready_completion,
+        "fresh lifecycle Completion Ready composite dispatch",
         (
             "ProductionCompletionReadyWorkV1::RecoveredIo",
             "owner.dispatch_recovered_completion_with_runner_debt(",
-            "if result.is_err()",
+            "if let Err(error) = &result",
             "ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(result)",
         ),
     )
@@ -3335,10 +3390,15 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "executor.has_retained_certified_body_response()",
             "outer_ingress_turns(limit, context_id, height)",
             "LifecycleRunnerRankTarget::Completion",
-            "activated.drive_completion_turn(current_turn, lane_work)",
-            "services.drain_completions(executor)?",
+            "activated.drive_completion_pre_gate(current_turn, lane_work)",
+            "PreGate::Ordinary(ordinary_turn)",
+            "drain_one_ordinary_completion_after_lifecycle_pass_through",
+            "PreGate::Selected(selected)",
+            "PreGate::Ready(ready)",
+            "producer_claim == LifecycleProducerClaimDispositionV1::Eligible",
+            "activated.drive_ready_completion_turn(ready)",
             "completion_selection_stops_batch(&selected)",
-            "return Ok(())",
+            "LifecycleV2IngressDrainDispositionV1::ready(producer_claim)",
             "LifecycleRunnerRankTarget::Runtime",
             "advance_executor(receiver, executor, services, 1)?",
             "LifecycleRunnerRankTarget::Ingress",
@@ -3351,17 +3411,23 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         lifecycle_height_driver,
         "activated lifecycle ordinary batch selected outcomes",
         (
-            "ProductionLifecycleCompletionTurnV1::PassThrough(ordinary_turn,)",
-            "ProductionLifecycleCompletionTurnV1::Selected(selected,)",
+            "ProductionLifecycleCompletionPreGateV1 as PreGate",
+            "ProductionLifecycleCompletionTurnV1 as CompletionTurn",
+            "CompletionTurn::PassThrough(empty_turn)",
+            "CompletionTurn::Selected(selected)",
             "selected.restart_required()",
             "ProductionPreparedOrdinaryIngressConsumptionV1::Continue",
             "ProductionPreparedOrdinaryIngressConsumptionV1::StopBatch",
+            "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCapacityPending",
+            "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry",
+            "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCompetingReady",
             "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchQueued",
+            "ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending",
+            "ProductionLifecycleIngressSelectionV1::CertifiedServeCompetingReady",
             "ProductionLifecycleIngressSelectionV1::CertifiedServeQueued",
+            "ProductionLifecycleIngressSelectionV1::CertifiedServeReplayQueued",
             "ProductionLifecycleIngressSelectionV1::CertifiedServeTerminal",
-            "ProductionLifecycleIngressSelectionV1::CapacityPending",
-            "ProductionLifecycleIngressSelectionV1::Retry",
-            "ProductionLifecycleIngressSelectionV1::OrdinaryRetained",
+            "ProductionLifecycleIngressSelectionV1::CertifiedServeRetry",
             "ProductionLifecycleIngressSelectionV1::RestartRequired",
         ),
     )

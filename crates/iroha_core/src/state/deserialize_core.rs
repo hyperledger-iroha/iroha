@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};
+use super::{default_oracle, *};
 use norito::codec::{DecodeAll, Encode};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use super::{default_oracle, *};
+use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};
 enum SnapshotJsonField<'a> {
     Borrowed(&'a str),
     #[cfg(test)]
@@ -21,10 +21,9 @@ impl<'a> SnapshotJsonField<'a> {
                 // canonical verification does not need one field-sized temporary String.
                 let canonical = json::to_json(&value)?;
                 if canonical.as_bytes() != raw.as_bytes() {
-                    return Err(json::Error::InvalidField {
-                        field: field.to_owned(),
-                        message: "snapshot field is not canonically encoded".to_owned(),
-                    });
+                    return Err(json::Error::Message(
+                        "snapshot field is not canonically encoded".to_owned(),
+                    ));
                 }
                 Ok(value)
             })(),
@@ -1394,7 +1393,23 @@ fn take_topology_cell(
     map: &mut SnapshotJsonMap<'_>,
     key: &str,
 ) -> Result<Cell<Vec<PeerId>>, json::Error> {
-    take_required(map, key)
+    let value = map
+        .remove(key)
+        .ok_or_else(|| json::Error::missing_field(key))?;
+    match value {
+        SnapshotJsonField::Borrowed(raw) if raw.as_bytes().first() == Some(&b'[') => {
+            SnapshotJsonField::Borrowed(raw)
+                .decode_canonical(key)
+                .map(Cell::new)
+        }
+        #[cfg(test)]
+        SnapshotJsonField::Owned(json::Value::Array(values)) => {
+            SnapshotJsonField::Owned(json::Value::Array(values))
+                .decode_canonical(key)
+                .map(Cell::new)
+        }
+        other => other.decode_canonical(key),
+    }
 }
 fn reject_legacy_musubi_state(
     smart_contract_state: &Storage<StatePath, Vec<u8>>,

@@ -745,11 +745,7 @@ pub mod network {
         /// Core profile constant-rate neighbor budget.
         pub const CORE_CONSTANT_NEIGHBORS: usize = 48;
         /// Core profile soft cap for total connections.
-        ///
-        /// Ninety-nine is the largest bound whose production lifecycle owner
-        /// geometry fits the canonical height-local ledger with the default
-        /// body queue and the maximum legal validator roster.
-        pub const CORE_MAX_TOTAL_CONNECTIONS: usize = 99;
+        pub const CORE_MAX_TOTAL_CONNECTIONS: usize = 120;
         /// Core profile soft cap for inbound connections.
         pub const CORE_MAX_INCOMING: usize = 48;
         /// Home profile scheduler tick (milliseconds) for shaping calculations.

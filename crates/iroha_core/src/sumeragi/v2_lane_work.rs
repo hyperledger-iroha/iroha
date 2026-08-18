@@ -23846,7 +23846,7 @@ pub(super) mod tests {
             )
             .expect("recovered durable certificate");
         assert_eq!(durable.proposal, recovered.proposal);
-        assert_eq!(durable.prepare_qc, recovered.prepare_qc);
+        assert_eq!(durable.prepare_qc, retained_prepare_qc);
         assert_eq!(durable.commit_qc, recovered.commit_qc);
         assert!(
             adapter

@@ -1,6 +1,12 @@
 use super::*;
-use iroha_config::parameters::actual::SoranetPuzzle as ConfigPuzzle;
-use std::{fs, num::NonZeroU32, time::Duration};
+use iroha_config::parameters::actual::{
+    SoranetPow as ActualSoranetPow, SoranetPuzzle as ConfigPuzzle,
+};
+use std::{
+    fs,
+    num::{NonZeroU32, NonZeroUsize},
+    time::Duration,
+};
 use tempfile::tempdir;
 #[test]
 fn runtime_from_handshake_preserves_puzzle_parameters() {
@@ -35,7 +41,53 @@ fn runtime_from_handshake_preserves_puzzle_parameters() {
     assert_eq!(puzzle.memory_kib().get(), 64 * 1024);
     assert_eq!(puzzle.time_cost().get(), 3);
     assert_eq!(puzzle.lanes().get(), 2);
+    assert_eq!(
+        runtime.puzzle_work_capacities(),
+        (NonZeroUsize::new(1).unwrap(), NonZeroUsize::new(1).unwrap())
+    );
 }
+#[test]
+fn runtime_reload_rejects_puzzle_capacity_change_without_replacing_the_gate() {
+    let mut handshake = ActualSoranetHandshake::default();
+    let dir = tempdir().expect("tempdir");
+    handshake.pow.revocation_store_path = dir
+        .path()
+        .join("revocations.norito")
+        .to_string_lossy()
+        .into_owned()
+        .into();
+    let runtime = runtime_from_handshake(handshake.clone()).expect("initial runtime");
+    handshake.pow.outbound_mint_capacity = NonZeroUsize::new(2).unwrap();
+    let error = runtime_from_handshake(handshake).expect_err("capacity reload requires restart");
+    assert!(
+        matches!(error, Error::HandshakeSoranet(message) if message.contains("restart required"))
+    );
+    assert_eq!(
+        runtime.puzzle_work_capacities(),
+        (NonZeroUsize::new(1).unwrap(), NonZeroUsize::new(1).unwrap())
+    );
+}
+
+#[test]
+fn runtime_from_handshake_rejects_oversized_actual_puzzle_capacity() {
+    let mut handshake = ActualSoranetHandshake::default();
+    handshake.pow.outbound_mint_capacity = NonZeroUsize::new(usize::MAX).unwrap();
+    let error = runtime_from_handshake(handshake)
+        .expect_err("programmatic actual capacity must respect the production bound");
+    assert!(matches!(error, Error::HandshakeSoranet(message)
+            if message.contains("outbound_mint_capacity")
+                && message.contains("exceeds the per-direction maximum")));
+
+    let mut handshake = ActualSoranetHandshake::default();
+    handshake.pow.inbound_verify_capacity =
+        NonZeroUsize::new(ActualSoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION + 1).unwrap();
+    let error = runtime_from_handshake(handshake)
+        .expect_err("inbound actual capacity must respect the production bound");
+    assert!(matches!(error, Error::HandshakeSoranet(message)
+            if message.contains("inbound_verify_capacity")
+                && message.contains("exceeds the per-direction maximum")));
+}
+
 #[test]
 fn runtime_from_handshake_rejects_invalid_pow_bounds() {
     let mut handshake = ActualSoranetHandshake::default();

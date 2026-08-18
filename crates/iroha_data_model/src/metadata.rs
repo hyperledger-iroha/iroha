@@ -319,6 +319,12 @@ impl Metadata {
     pub fn insert(&mut self, key: Name, value: impl Into<Json>) -> Option<Json> {
         self.0.insert(key, value.into())
     }
+
+    /// Remove one crate-internal protocol marker without exposing general
+    /// mutation through the opaque public metadata API.
+    pub(crate) fn remove_internal(&mut self, key: &Name) -> Option<Json> {
+        self.0.remove(key)
+    }
 }
 #[cfg(feature = "transparent_api")]
 impl Metadata {

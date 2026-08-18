@@ -1,3 +1,8 @@
+fn explorer_state_signature(state: &LifecycleCoordinator) -> [u8; 32] {
+    let exact_state = format!("{state:?}");
+    *blake3::hash(exact_state.as_bytes()).as_bytes()
+}
+
 #[test]
 fn dependency_free_explorer_covers_capacities_peers_stages_and_eight_events() {
     let mut covered_stages = BTreeSet::new();
@@ -25,7 +30,7 @@ fn dependency_free_explorer_covers_capacities_peers_stages_and_eight_events() {
                 .collect();
             let initial = LifecycleCoordinator::new(context(), 0, geometry.clone());
             let mut frontier = vec![initial.clone()];
-            let mut seen = BTreeSet::from([format!("{initial:?}")]);
+            let mut seen = BTreeSet::from([explorer_state_signature(&initial)]);
             for depth in 0_u64..=8 {
                 let mut next = Vec::new();
                 for state in frontier {
@@ -145,7 +150,7 @@ fn dependency_free_explorer_covers_capacities_peers_stages_and_eight_events() {
                     for successor in successors {
                         assert_terminal_irreversibility(&state, &successor);
                         assert_coordinator_invariants(&successor);
-                        let signature = format!("{successor:?}");
+                        let signature = explorer_state_signature(&successor);
                         if seen.insert(signature) {
                             next.push(successor);
                         }
@@ -166,8 +171,10 @@ fn dependency_free_explorer_covers_capacities_peers_stages_and_eight_events() {
 #[test]
 fn restart_seeds_high_water_and_rollover_preserves_it() {
     let mut coordinator = LifecycleCoordinator::new(context(), 5, capacities(8));
+    // Height-context ids retain the canonical typed-hash marker in their final byte.
+    let successor_context = LifecycleContext::new(digest(45), 8);
     let owner = OwnerId {
-        causal_root: CausalRoot::new(digest(77)),
+        causal_root: CausalRoot::new(digest(88)),
         first_admission_ordinal: 5,
     };
     let replay = super::replay_authority::exact_record_fixture(
@@ -209,9 +216,9 @@ fn restart_seeds_high_water_and_rollover_preserves_it() {
     let mut premature = coordinator.clone();
     premature.rollover(RolloverSnapshot {
         retired_context: context(),
-        successor_context: LifecycleContext::new(digest(44), 8),
+        successor_context,
         successor_predecessor: context().id,
-        successor_authority: authority(LifecycleContext::new(digest(44), 8), capacities(8)),
+        successor_authority: authority(successor_context, capacities(8)),
         successor_ledger_root: None,
         serve_cancellations: Vec::new(),
         retained_high_water: 5,
@@ -229,9 +236,9 @@ fn restart_seeds_high_water_and_rollover_preserves_it() {
     coordinator.settle_turn(lease, TurnOutcome::Advanced);
     coordinator.rollover(RolloverSnapshot {
         retired_context: context(),
-        successor_context: LifecycleContext::new(digest(44), 8),
+        successor_context,
         successor_predecessor: context().id,
-        successor_authority: authority(LifecycleContext::new(digest(44), 8), capacities(8)),
+        successor_authority: authority(successor_context, capacities(8)),
         successor_ledger_root: None,
         serve_cancellations: Vec::new(),
         retained_high_water: 5,
@@ -244,7 +251,7 @@ fn restart_seeds_high_water_and_rollover_preserves_it() {
             coordinator.high_water,
             coordinator.records.len()
         ),
-        (LifecycleContext::new(digest(44), 8), 5, 0)
+        (successor_context, 5, 0)
     );
     let mut successor = candidate(
         40,
@@ -253,14 +260,14 @@ fn restart_seeds_high_water_and_rollover_preserves_it() {
         InitialLifecycleState::Ready,
         PredecessorScope::Independent,
     );
-    successor.key.context = digest(44);
-    successor.key.round.height = 8;
-    successor
-        .key
-        .proposal_round
-        .as_mut()
-        .expect("proposal round")
-        .height = 8;
+    let replay = super::replay_authority::exact_record_fixture(
+        successor_context,
+        LifecycleStageKind::FetchBody,
+        40,
+    );
+    successor.key = replay.key;
+    successor.payload = replay.payload;
+    successor.replay_authority = replay.authority;
     assert_eq!(
         admitted(coordinator.admit(AdmissionRequest::Candidate(successor))).1,
         6
@@ -280,14 +287,6 @@ fn restart_rejects_a_no_successor_validate_without_its_body_frame() {
         &geometry,
     );
     request.reconstruction_source = request.causal_root.digest();
-    let key = request.key;
-    request.payload = DurablePayloadReference::BodyFrame(schema::DurableBodyFrameReference::new(
-        key.context(),
-        key.proposal_round().expect("Validate proposal round"),
-        key.subject().expect("Validate body subject"),
-        digest(91),
-        digest(92),
-    ));
     let mut live = LifecycleCoordinator::new(context(), 0, geometry.clone());
     admitted(live.admit(AdmissionRequest::Candidate(request)));
     let live_snapshot = recovery_snapshot(&live);

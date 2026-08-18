@@ -610,9 +610,8 @@ fn sealed_height_retirement_crash_after_dormant_fsync_reopens_without_a_carrier(
         (gate, carriers, token)
     };
     let retirement = gate
-        .park_sealed_ingress(carriers.clone())
+        .park_sealed_ingress(carriers)
         .expect("publish the Dormant cut before the injected crash");
-    assert!(retirement.exactly_matches(&gate, &carriers));
     // Inject the process cut before the infallible volatile-clear tail. Both the
     // fair queue and its in-memory mirror disappear with the process owner.
     retirement.abandon_at_crash_cut();

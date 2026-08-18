@@ -456,40 +456,33 @@ mod tests {
         );
     }
     #[test]
-    fn sumeragi_v2_lifecycle_geometry_rejects_taira_default_core_capacity() {
+    fn sumeragi_v2_lifecycle_geometry_uses_authenticated_ingress_sources() {
         assert_eq!(
-            sumeragi_v2_lifecycle_capacity_geometry(4, 256, 163, 120),
-            Err(SumeragiV2LifecycleCapacityGeometryError::TotalTooLarge {
-                consensus: 16,
-                effect: 256,
-                serve: 39_128,
-                producer: 39_128,
-                total: 78_528,
-                maximum: 65_536,
-            }),
-        );
-        assert_eq!(
-            sumeragi_v2_lifecycle_capacity_geometry(4, 256, 163, 32),
+            sumeragi_v2_lifecycle_capacity_geometry(4, 256, 163, 2),
             Ok(SumeragiV2LifecycleCapacityGeometry {
                 consensus: 16,
                 effect: 256,
-                serve: 10_440,
-                producer: 10_440,
-                total: 21_152,
+                serve: 660,
+                producer: 660,
+                total: 1_592,
+            }),
+        );
+        assert_eq!(
+            sumeragi_v2_lifecycle_capacity_geometry(31, 256, 163, 2),
+            Ok(SumeragiV2LifecycleCapacityGeometry {
+                consensus: 16,
+                effect: 256,
+                serve: 714,
+                producer: 714,
+                total: 1_700,
             }),
         );
     }
     #[test]
-    fn sumeragi_v2_lifecycle_geometry_checks_connection_and_arithmetic_boundaries() {
-        assert_eq!(
-            sumeragi_v2_lifecycle_capacity_geometry(31, 256, 163, 99)
-                .expect("default core capacity must fit the maximum legal roster")
-                .total,
-            64_944,
-        );
+    fn sumeragi_v2_lifecycle_geometry_checks_source_and_arithmetic_boundaries() {
         assert_eq!(
             sumeragi_v2_lifecycle_capacity_geometry(4, 256, 163, 100)
-                .expect("four-validator boundary must fit")
+                .expect("four-validator authenticated-source boundary must fit")
                 .total,
             65_488,
         );

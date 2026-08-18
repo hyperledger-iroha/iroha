@@ -6604,10 +6604,11 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
     /// Failure returns the complete armed token. Success still publishes
     /// nothing and is safe to retain across the subsequent LedgerV1 fsync.
     #[allow(clippy::result_large_err)]
+    #[inline(never)]
     pub(in crate::sumeragi) fn prepare_registry_work(
-        mut self,
+        mut self: Box<Self>,
         permit: LiveValidateSignWorkProjectionPermit,
-    ) -> Result<Self, Self> {
+    ) -> Result<Box<Self>, Box<Self>> {
         if !self.post_wal_publication_is_exact() {
             return Err(self);
         }
@@ -6648,9 +6649,10 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
     /// No fallible operation is permitted here. The caller has already swapped
     /// the staged lifecycle coordinator, while the retained exclusive registry
     /// reservation proves the parent absent and child vacant.
+    #[inline(never)]
     pub(in crate::sumeragi) fn install_registry_and_commit_adapter(
-        mut self,
-        reservation: LiveValidateSignRegistryReservation<'_>,
+        mut self: Box<Self>,
+        reservation: Box<LiveValidateSignRegistryReservation<'_>>,
     ) {
         let work = self
             .registry_work
@@ -6684,6 +6686,7 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
             .sign_core_effect
             .take()
             .expect("pre-fsync publication retains its Sign effect");
+        let reservation = *reservation;
         work.install_into(reservation);
         self.adapter.reducer = next_reducer;
         self.adapter.registry = next_registry;
@@ -12229,7 +12232,20 @@ impl SumeragiV2Adapter {
         };
         match payload {
             wire::ConsensusMessageV2Payload::Proposal(proposal) => {
-                if proposal.round.view != current_view {
+                if proposal.round.view > current_view {
+                    // A proposal can outrun the TimeoutCertificate which
+                    // installs its view. Keep the already-authenticated
+                    // runtime carrier at its exact FIFO position so certified
+                    // progress can install that view and the proposal can be
+                    // retried once. Treating it as terminally irrelevant lets
+                    // the generic leader-wire tombstone suppress every later
+                    // byte-identical retransmission after the view advances.
+                    return Ok((
+                        Some(Self::ignored_outcome(reducer::IgnoreReason::Busy)),
+                        None,
+                    ));
+                }
+                if proposal.round.view < current_view {
                     return Ok((
                         Some(Self::ignored_outcome(reducer::IgnoreReason::IrrelevantView)),
                         None,

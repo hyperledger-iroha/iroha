@@ -1220,9 +1220,7 @@ fn decision_body_stage_retry_rejects_same_root_ordinary_binding_without_mutation
                 tag: tag(0),
                 ownership: ordinary_validation_retry,
             },
-            None,
-            None,
-            None,
+            ValidationStartContext::default(),
         ),
         Err(EffectExecutorError::Contract(reason))
             if reason.contains("proposal or quorum authority")
@@ -1869,7 +1867,7 @@ fn recovered_preintent_executor(
     services._body_directory = Some(directory);
     (executor, services)
 }
-fn reopen_retired_rejection(fixture: &Fixture) -> (TempDir, V2BodyStore, DurableBodyReceipt) {
+fn reopen_rejection(fixture: &Fixture) -> (TempDir, V2BodyStore, DurableBodyReceipt) {
     let directory = TempDir::new().expect("rejected pre-intent body-store directory");
     let mut store = V2BodyStore::open_with_policy(
         directory.path(),
@@ -1888,12 +1886,16 @@ fn reopen_retired_rejection(fixture: &Fixture) -> (TempDir, V2BodyStore, Durable
         .expect("persist deterministic rejection marker");
     assert!(rejected.rejection_reason().is_some());
     drop(store);
-    let mut reopened = V2BodyStore::open_with_policy(
+    let reopened = V2BodyStore::open_with_policy(
         directory.path(),
         fixture.context.clone(),
         BlockSignaturePolicy::GenesisAuthority(fixture.validator_keys[0].public_key().clone()),
     )
     .expect("reopen rejected pre-intent body store");
+    (directory, reopened, durable)
+}
+fn reopen_retired_rejection(fixture: &Fixture) -> (TempDir, V2BodyStore, DurableBodyReceipt) {
+    let (directory, mut reopened, durable) = reopen_rejection(fixture);
     reopened
         .retain_recovered_markers_for_authority(
             super::super::v2::RecoveredValidationAuthority::for_test(&fixture.context, []),
@@ -2026,6 +2028,40 @@ fn cold_retired_validated_preintent_replays_physical_store_and_validation_once()
         [RuntimeCompletion::LocalProposal(_, manifest, ..)] if manifest == &fixture.manifest
     ));
     assert!(services.closed.is_empty());
+}
+#[test]
+fn cold_active_rejection_denies_local_adoption_without_live_pipeline_owner() {
+    let fixture = Fixture::new();
+    let (directory, mut reopened, durable) = reopen_rejection(&fixture);
+    reopened
+        .revalidate_recovered_markers(|_| {
+            Err::<wire::ExecutionCommitment, _>(
+                "deterministic recovered rejection".to_owned(),
+            )
+        })
+        .expect("semantically replay the exact deterministic rejection");
+    assert_eq!(reopened.rejected_recovery_catalog().len(), 1);
+    assert!(reopened.retired_rejected_recovery_catalog().is_empty());
+    let (mut executor, mut services) =
+        recovered_preintent_executor(&fixture, directory, reopened, tag(0));
+    let key = (fixture.manifest.round, fixture.manifest.subject);
+    assert_eq!(executor.rejected_bodies.get(&key), Some(&durable));
+    assert!(!executor.body_pipeline_owners.contains_key(&key));
+    let before = executor.body_ownership_projection();
+
+    assert!(matches!(
+        executor.admit_local_proposal(
+            tag(0),
+            fixture.manifest.clone(),
+            fixture.body.clone(),
+            &mut services,
+        ),
+        Err(EffectExecutorError::Contract(reason))
+            if reason.contains("durable deterministic rejection")
+    ));
+    assert_eq!(executor.body_ownership_projection(), before);
+    assert!(executor.output_guard.restart_required());
+    assert_eq!(services.closed.len(), 1);
 }
 #[test]
 fn cold_retired_rejection_denies_local_adoption_but_not_reducer_validation() {

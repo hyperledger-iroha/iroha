@@ -409,7 +409,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
         "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
         "super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeQueued,",
-        "super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CapacityPending,",
+        "super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending,",
         "production lifecycle finalization behavior must preserve exact production order",
     ),
     (
@@ -624,10 +624,10 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-        "pub(in crate::sumeragi) fn drive_completion_turn<'cursor>(",
+        "pub(in crate::sumeragi) fn drive_ready_completion_turn<'cursor>(",
         "owner.dispatch_recovered_completion_with_runner_debt(",
         "owner.dispatch_recovered_decision_apply_with_runner_debt(",
-        "unified recovered Completion composite dispatch",
+        "fresh lifecycle Completion Ready-work dispatch",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
@@ -710,7 +710,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
         "Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::Service {",
         "ProductionLifecycleIngressSelectionV1::RestartRequired",
-        "ProductionLifecycleIngressSelectionV1::Retry",
+        "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry",
         "recovered Fetch Phase-A service failure",
     ),
     (
@@ -1043,8 +1043,8 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         "fn retire(&mut self) -> Result<(), String>",
-        "self.ingress.unbind_leader_wire_lifecycle_gate(&gate)",
-        "self.ingress.unbind_unreviewed_leader_wire_lifecycle_gate(&gate)",
+        "self.ingress.retire_leader_wire_lifecycle_gate(&gate)",
+        "self.ingress.retire_unreviewed_leader_wire_lifecycle_gate(&gate)",
         "sealed leader-wire launch binding omits production refinement tokens",
     ),
     (
@@ -2146,7 +2146,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         "fn retire(&mut self) -> Result<(), String>",
-        "self.ingress.unbind_leader_wire_lifecycle_gate(gate)?",
+        "self.ingress.retire_leader_wire_lifecycle_gate(&gate)?",
         "self.gate = None;",
         "sealed leader-wire launch binding omits production refinement tokens",
     ),

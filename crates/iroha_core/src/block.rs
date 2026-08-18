@@ -6878,8 +6878,8 @@ pub(crate) mod valid {
                 .and_then(|bundle| bundle.merge_entry.as_ref());
             let staged = state_block.staged_merge_entry();
             let entry = match (reference, staged) {
-                (None, None) => return Ok(()),
-                (Some(reference), Some(entry)) if reference.matches_entry(entry) => entry,
+                (None, None) => None,
+                (Some(reference), Some(entry)) if reference.matches_entry(entry) => Some(entry),
                 (Some(_), None) => {
                     return Err(Self::execution_context_error(
                         "certified merge reference was not staged on the execution overlay",
@@ -6896,22 +6896,77 @@ pub(crate) mod valid {
                     ));
                 }
             };
-            let Some(batch) = entry.execution_batch.as_ref() else {
-                return Ok(());
-            };
-            let merge_entrypoints = batch
-                .lanes
-                .iter()
-                .flat_map(|execution| execution.entrypoint_hashes.iter().copied())
-                .collect::<BTreeSet<_>>();
-            if block
-                .external_entrypoints_cloned()
-                .map(|entrypoint| Hash::from(entrypoint.hash()))
-                .any(|hash| merge_entrypoints.contains(&hash))
-            {
-                return Err(Self::execution_context_error(
-                    "ordinary block entrypoint duplicates a certified merge-batch entrypoint",
-                ));
+            if let Some(batch) = entry.and_then(|entry| entry.execution_batch.as_ref()) {
+                let merge_entrypoints = batch
+                    .lanes
+                    .iter()
+                    .flat_map(|execution| execution.entrypoint_hashes.iter().copied())
+                    .collect::<BTreeSet<_>>();
+                if block
+                    .external_entrypoints_cloned()
+                    .map(|entrypoint| Hash::from(entrypoint.hash()))
+                    .any(|hash| merge_entrypoints.contains(&hash))
+                {
+                    return Err(Self::execution_context_error(
+                        "ordinary block entrypoint duplicates a certified merge-batch entrypoint",
+                    ));
+                }
+            }
+            state_block
+                .require_queue_plan_admission_intents_from_block(block)
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "QueuePlan admission intent is not satisfied: {error}"
+                    ))
+                })?;
+            if let Some(bundle) = block.execution_context() {
+                for (index, (entrypoint, context)) in block
+                    .external_entrypoints_cloned()
+                    .zip(bundle.external.iter())
+                    .enumerate()
+                {
+                    if entrypoint.admission_intent()
+                        != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+                    {
+                        continue;
+                    }
+                    let binding = state_block
+                        .queue_plan_pending_binding_for_entrypoint(entrypoint.hash())
+                        .map_err(|error| {
+                            Self::execution_context_error(format!(
+                                "QueuePlan binding lookup failed at index {index}: {error}"
+                            ))
+                        })?
+                        .ok_or_else(|| {
+                            Self::execution_context_error(format!(
+                                "QueuePlan entrypoint at index {index} has no pending immutable binding"
+                            ))
+                        })?;
+                    let routing_plan = binding.routing_plan().map_err(|error| {
+                        Self::execution_context_error(format!(
+                            "QueuePlan binding routing plan is invalid at index {index}: {error}"
+                        ))
+                    })?;
+                    binding
+                        .validate_for_request(state_block.network_id(), &entrypoint, &routing_plan)
+                        .map_err(|error| {
+                            Self::execution_context_error(format!(
+                                "QueuePlan entrypoint differs from its binding at index {index}: {error}"
+                            ))
+                        })?;
+                    let coordinator = routing_plan.coordinator_route();
+                    if context.entrypoint_hash != entrypoint.hash()
+                        || context.lane_id != coordinator.lane_id
+                        || context.dataspace_id != coordinator.dataspace_id
+                        || context.routing_plan_digest != routing_plan.digest()
+                        || context.routing_plan_legs
+                            != crate::queue::execution_context_legs_for_routing_plan(&routing_plan)
+                    {
+                        return Err(Self::execution_context_error(format!(
+                            "QueuePlan execution context differs from its immutable binding at index {index}"
+                        )));
+                    }
+                }
             }
             Ok(())
         }

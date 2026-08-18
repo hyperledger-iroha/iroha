@@ -48,10 +48,20 @@ impl V2LaneWorkAdapter {
                     ))
                 })?;
             match disposition {
-                PendingQueuePlanAdmissionDisposition::Exact => self
-                    .kura
-                    .remove_pending_queue_plan_admission_certificate(certificate_hash)
-                    .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?,
+                PendingQueuePlanAdmissionDisposition::Exact => {
+                    // Retain the quorum certificate while the marker is canonical but the body
+                    // is not. It remains the authenticated handoff for peers lagging behind the
+                    // marker and is retired only with canonical transaction membership.
+                    if self
+                        .state
+                        .queue_plan_admission_certificate_transaction_applied(&certificate_bytes)
+                        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
+                    {
+                        self.kura
+                            .remove_pending_queue_plan_admission_certificate(certificate_hash)
+                            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;
+                    }
+                }
                 PendingQueuePlanAdmissionDisposition::DefinitiveConflict
                 | PendingQueuePlanAdmissionDisposition::Stale => {
                     let queue = self.lane_drain_queue.as_ref().ok_or_else(|| {

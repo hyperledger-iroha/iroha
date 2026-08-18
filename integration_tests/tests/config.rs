@@ -147,6 +147,8 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
                 max_future_skew_secs: Some(900),
                 min_ticket_ttl_secs: Some(120),
                 ticket_ttl_secs: Some(300),
+                outbound_mint_capacity: None,
+                inbound_verify_capacity: None,
                 signed_ticket_public_key_hex: None,
                 puzzle: Some(SoranetHandshakePuzzleUpdate {
                     enabled: Some(true),
@@ -292,6 +294,8 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
                 max_future_skew_secs: Some(target_max_future_skew),
                 min_ticket_ttl_secs: Some(target_min_ttl),
                 ticket_ttl_secs: Some(target_ticket_ttl),
+                outbound_mint_capacity: None,
+                inbound_verify_capacity: None,
                 signed_ticket_public_key_hex: None,
                 puzzle: Some(SoranetHandshakePuzzleUpdate {
                     enabled: Some(true),

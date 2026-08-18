@@ -4857,30 +4857,6 @@ impl FairV2Ingress {
         self.debug_assert_consistent(&state);
         Ok(retiring.len())
     }
-    /// Detach a closed height's durable productive-wire owner.
-    pub(crate) fn unbind_leader_wire_lifecycle_gate(
-        &self,
-        gate: &Arc<serviced_candidate_store::LeaderWireLifecycleStoreGate>,
-    ) -> Result<(), String> {
-        let mut state = self.state.lock();
-        if state.open || state.len != 0 {
-            return Err(
-                "leader-wire lifecycle gate cannot unbind from nonempty open ingress".to_owned(),
-            );
-        }
-        let Some(bound) = state.leader_wire_lifecycle_gate.as_ref() else {
-            return Ok(());
-        };
-        if !serviced_candidate_store::LeaderWireLifecycleStoreGate::ptr_eq(bound, gate) {
-            return Err("leader-wire lifecycle gate changed per-height ownership".to_owned());
-        }
-        state.leader_wire_lifecycle_gate = None;
-        state.leader_wire_lifecycle_ordinals = None;
-        state.leader_wire_context = None;
-        state.leader_wire_lifecycles.clear();
-        self.debug_assert_consistent(&state);
-        Ok(())
-    }
     /// Seal one height, durably park its queued productive carriers, and detach.
     ///
     /// `service_lock` excludes a consumer whose predicate snapshot temporarily
@@ -4945,7 +4921,7 @@ impl FairV2Ingress {
                 "sealed leader-wire ingress disagreed with live carrier ownership".to_owned(),
             );
         }
-        let retirement = bound.park_sealed_ingress(carriers.clone())?;
+        let retirement = bound.park_sealed_ingress(carriers)?;
 
         let mut empty_lanes = state
             .roster

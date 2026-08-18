@@ -32,11 +32,9 @@ beep = true
 [network]
 address = "addr:0.0.0.0:1337#BF18"
 public_address = "addr:taira-validator-1.sora.org:1337#D426"
-# Bounds lifecycle Serve/Producer owners for the four-validator queue geometry.
-max_total_connections = 32
 max_frame_bytes = 23068700
 max_frame_bytes_block_sync = 23068672
-max_frame_bytes_tx_gossip = 11534336
+max_frame_bytes_tx_gossip = 13631488
 p2p_queue_cap_high = 65536
 p2p_queue_cap_low = 32768
 p2p_post_queue_cap = 65536

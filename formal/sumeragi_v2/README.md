@@ -1576,9 +1576,9 @@ canonical-carrier completion regressions produced that historical 864-test,
 brings the historical inventory to the 856-test, 40-module checkpoint. The
 exact retired-attempt accessor, mixed-carrier successor, two-link cold-restart
 hydration, and noncanonical autonomous-output retirement regressions bring the current
-inventory to 860 tests across 40 modules.
+inventory to 860 tests across 43 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 88 legs. The
+corridor contains 91 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
 The first-release sidecar keeps wire protocol version 1 and uses positive
 `NonZeroU64` responder generation, requester epoch, and per-stream semantic
@@ -1651,7 +1651,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329`.
+`b6457553bc8d41f74ebc708ea3d4e6187117f0f008da2c2dea697b0771741b44`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal

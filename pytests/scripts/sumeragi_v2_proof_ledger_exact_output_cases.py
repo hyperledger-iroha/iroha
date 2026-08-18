@@ -1931,7 +1931,7 @@
             "pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;",
             "pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 3;",
             "pub const V2_EXACT_OUTPUT_CLASS_COUNT: usize = 2;",
-            "exact-output defaults must retain the reviewed completion divisor, reducer batch, and three-class geometry",
+            "exact-output defaults must retain the reviewed completion divisor, two Serve phase families, bounded lifecycle records, reducer batch, and three-class geometry",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
@@ -1966,7 +1966,7 @@
             "pub fn parse(self) -> Result<actual::Root, ParseError> {",
             ".max_total_connections\n",
             ".max_connections_per_peer\n",
-            "root configuration must derive the authenticated-source bound from network geometry and fail parsing",
+            "root configuration must derive the authenticated-source bound from network geometry and reject invalid lifecycle or exact-output capacity",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",

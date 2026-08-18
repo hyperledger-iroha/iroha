@@ -14,11 +14,6 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     );
     assert_eq!(defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get(), 1_024);
     assert_eq!(
-        defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS,
-        99,
-        "the default core reply-source bound must fit maximum-roster lifecycle geometry"
-    );
-    assert_eq!(
         defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
         2
     );

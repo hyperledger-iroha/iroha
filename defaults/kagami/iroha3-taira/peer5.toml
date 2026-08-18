@@ -43,7 +43,7 @@ address = "addr:0.0.0.0:1342#762A"
 public_address = "addr:172.28.0.15:1342#8717"
 max_frame_bytes = 23068700
 max_frame_bytes_block_sync = 23068672
-max_frame_bytes_tx_gossip = 11534336
+max_frame_bytes_tx_gossip = 13631488
 
 [torii]
 address = "addr:0.0.0.0:8085#E987"

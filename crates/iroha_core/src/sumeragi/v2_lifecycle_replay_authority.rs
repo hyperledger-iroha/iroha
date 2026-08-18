@@ -4311,6 +4311,7 @@ impl AuthenticatedRecoveredDurableCertifiedFetchCensusV1 {
     ) -> bool {
         self.ledger_frame_identity == ledger.frame_identity()
             && self.entries.len() == live_body_fetch_count
+            && self.is_exact()
     }
     /// Consume the authenticated census into its single startup phase.
     pub(super) fn into_startup(
@@ -4538,9 +4539,11 @@ mod tests {
 }
 #[cfg(test)]
 pub(super) use tests::{
-    ReplayCase, durable_certified_fetch_projection_fixture, exact_body_record_fixture,
-    exact_durable_certified_fetch_record_fixture, exact_local_body_record_fixture,
-    exact_pending_certified_fetch_candidate_fixture, exact_record_fixture,
-    exact_recovered_decision_terminal_family_fixture, exact_replay_authority_for_payload_fixture,
-    exact_timeout_sign_broadcast_fixture, foreign_certified_serve_family_authority_fixture,
+    ReplayCase, durable_certified_fetch_projection_fixture,
+    durable_certified_fetch_waiting_record_fixture, exact_body_execution_commitment_fixture,
+    exact_body_record_fixture, exact_durable_certified_fetch_record_fixture,
+    exact_local_body_record_fixture, exact_pending_certified_fetch_candidate_fixture,
+    exact_record_fixture, exact_recovered_decision_terminal_family_fixture,
+    exact_replay_authority_for_payload_fixture, exact_timeout_sign_broadcast_fixture,
+    foreign_certified_serve_family_authority_fixture,
 };

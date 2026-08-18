@@ -70,6 +70,8 @@ impl Fixture {
         let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed(
             *context.id().as_bytes(),
         )));
+        let context =
+            LifecycleContext::new(digest_from_bytes(context_id.0.as_ref()), context.height());
         let round = wire::ConsensusRound {
             context_id,
             height: context.height(),
@@ -157,7 +159,7 @@ impl Fixture {
             }],
         };
         let requester_key =
-            KeyPair::try_from_seed(vec![seed.wrapping_add(0x91); 32], Algorithm::Ed25519)
+            KeyPair::try_from_seed(vec![seed.wrapping_add(0x91).max(1); 32], Algorithm::Ed25519)
                 .expect("deterministic replay fixture requester key");
         let serve_request = wire::CertifiedBodyRequest {
             round,
@@ -500,6 +502,14 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_body_record_fixture(
         .expect("the canonical V1 fixture covers every lifecycle stage");
     (case, receipt)
 }
+pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_body_execution_commitment_fixture(
+    context: LifecycleContext,
+    seed: u8,
+) -> wire::ExecutionCommitment {
+    Fixture::for_record(context, seed)
+        .prepare_qc
+        .execution_commitment
+}
 /// Build one pending certified-Fetch candidate from its real verified fixture inputs.
 pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_pending_certified_fetch_candidate_fixture(
     verified: &crate::sumeragi::v2::VerifiedHeightContext,
@@ -655,6 +665,27 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn durable_certified_fetch_pro
         completion_digest,
         expected_manifest_hash: fixture.body_receipt.manifest_hash(),
     }
+}
+pub(in crate::sumeragi::v2_lifecycle_coordinator) fn durable_certified_fetch_waiting_record_fixture(
+    context: LifecycleContext,
+    seed: u8,
+) -> ReplayCase {
+    let fixture = Fixture::for_record(context, seed);
+    let coordinates = CertifiedBodyPipelineCoordinatesV1 {
+        tag: fixture.tag,
+        certificate: fixture.prepare_qc,
+        manifest: fixture.proposal.manifest,
+        fetch_manifest_present: true,
+        certified_sources: Vec::new(),
+    };
+    let family = exact_certified_body_pipeline_family(&coordinates, &fixture.body_receipt)
+        .expect("canonical fixture binds one waiting Certified Fetch family");
+    replay_case(
+        context,
+        LifecycleReplaySourceV1::BodyPipeline(family.source),
+        LifecycleStageKind::FetchBody,
+        DurablePayloadReference::None,
+    )
 }
 pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_durable_certified_fetch_record_fixture(
     context: LifecycleContext,

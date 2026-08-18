@@ -134,13 +134,13 @@ fn capacity_geometry_from_limits(
     roster_len: usize,
     effect_work_capacity: usize,
     certified_request_capacity: usize,
-    reply_route_source_capacity: usize,
+    authenticated_non_validator_source_capacity: usize,
 ) -> Option<CapacityGeometry> {
     let shared = sumeragi_v2_lifecycle_capacity_geometry(
         roster_len,
         effect_work_capacity,
         certified_request_capacity,
-        reply_route_source_capacity,
+        authenticated_non_validator_source_capacity,
     )
     .ok()?;
     if effect_work_capacity == 0 || certified_request_capacity == 0 {
@@ -154,15 +154,35 @@ fn capacity_geometry_from_limits(
     ]);
     Some(geometry)
 }
+fn production_capacity_geometry_from_limits(
+    roster_len: usize,
+    effect_work_capacity: usize,
+    certified_request_capacity: usize,
+    authenticated_non_validator_source_capacity: usize,
+    reply_route_source_capacity: usize,
+) -> Option<CapacityGeometry> {
+    if authenticated_non_validator_source_capacity == 0
+        || authenticated_non_validator_source_capacity > reply_route_source_capacity
+    {
+        return None;
+    }
+    capacity_geometry_from_limits(
+        roster_len,
+        effect_work_capacity,
+        certified_request_capacity,
+        authenticated_non_validator_source_capacity,
+    )
+}
 fn production_capacity_geometry(
     verified: &VerifiedHeightContext,
     config: &SumeragiV2Config,
     reply_route_source_capacity: usize,
 ) -> Option<CapacityGeometry> {
-    capacity_geometry_from_limits(
+    production_capacity_geometry_from_limits(
         verified.context().roster.len(),
         usize::try_from(config.limits.effect_work_capacity).ok()?,
         usize::try_from(config.limits.certified_request_capacity).ok()?,
+        usize::try_from(config.limits.authenticated_non_validator_source_capacity).ok()?,
         reply_route_source_capacity,
     )
 }
@@ -245,11 +265,29 @@ mod tests {
         assert!(capacity_geometry_from_limits(4, 8, 1, 32_768).is_none());
         assert!(
             capacity_geometry_from_limits(4, 256, 163, 120).is_none(),
-            "former Taira defaults exceed the aggregate lifecycle ledger bound"
+            "reply-route capacity must not be reused as the authenticated-source owner bound"
         );
-        let taira = capacity_geometry_from_limits(4, 256, 163, 32)
-            .expect("bounded Taira geometry must fit production authority");
-        assert_eq!(taira.limit(CapacityClass::Serve), 10_440);
-        assert_eq!(taira.limit(CapacityClass::Producer), 10_440);
+        let large_source_geometry = capacity_geometry_from_limits(4, 256, 163, 32)
+            .expect("a large explicit authenticated-source bound remains representable");
+        assert_eq!(large_source_geometry.limit(CapacityClass::Serve), 10_440);
+        assert_eq!(large_source_geometry.limit(CapacityClass::Producer), 10_440);
+    }
+
+    #[test]
+    fn four_validator_geometry_uses_authenticated_ingress_source_bound() {
+        let geometry = production_capacity_geometry_from_limits(4, 256, 512, 2, 120)
+            .expect("four-validator integration geometry is representable");
+        assert_eq!(geometry.limit(CapacityClass::Consensus), 16);
+        assert_eq!(geometry.limit(CapacityClass::Effect), 256);
+        assert_eq!(geometry.limit(CapacityClass::Serve), 2_056);
+        assert_eq!(geometry.limit(CapacityClass::Producer), 2_056);
+        assert_eq!(
+            CapacityClass::ALL
+                .into_iter()
+                .map(|class| geometry.limit(class))
+                .sum::<usize>(),
+            4_384
+        );
+        assert!(production_capacity_geometry_from_limits(4, 256, 512, 121, 120).is_none());
     }
 }

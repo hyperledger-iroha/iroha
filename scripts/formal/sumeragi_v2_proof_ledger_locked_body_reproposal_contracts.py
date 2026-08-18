@@ -1399,7 +1399,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "prepared_local_proposal_exactly_matches": "666d62c1d4104e6f0e07548434bd2d789514d23531e598032b743ed66e2afc5a",
     "activate_with_prepared_local_proposal": "dbfce16c82f866d3f833f0d04c490851d72ce48fad28e178e16ef059355ddadc",
     "run_non_pending_lifecycle_loop": "cf1175fb9703fb722dea4460957dd63847e4a6ec98b5394c66823f8aed0576cf",
-    "run_lifecycle_active_height": "0691601d460ba01010d786a2d146d522edf6fc8b7804c1840d0229b17f24c5cc",
+    "run_lifecycle_active_height": "951d96da77e5e5834141747b0865e942d19cecf9cb834c0cee741dcbbc423b6d",
     "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner": "ad38dabcaf0b4e2464c7aa4ed4d9867949588f617feb74cad713fb78b7cb9510",
     "prepared_local_proposal_state_is_affine_and_context_directive_bound": "e2e8af92151f3b187cdb8eca6f40bb67a5472060ed6fdc79b5fea0127d02c3b3",
     "schedule_local_proposal": "187b6563fb36d2108658af92649719c486d1a895748e833eca35372f7318600e",
