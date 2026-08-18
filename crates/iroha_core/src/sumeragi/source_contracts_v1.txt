@@ -106,12 +106,27 @@ required|control_authority|SignRequest::TimeoutVote(vote)|missing exact control 
 required|control_authority|ReplayWalRoleV1::TIMEOUT_INTENT|missing exact control mapping: ReplayWalRoleV1::TIMEOUT_INTENT
 required|control_authority|LifecycleStageKind::SignTimeoutVote|missing exact control mapping: LifecycleStageKind::SignTimeoutVote
 region|durable|ledger|after|pub(in crate::sumeragi) fn open_recovered_control_startup(|before|/// Bind one paired recovered-WAL open
+region|timeout_successor_tokens|ledger|at|/// Purely staged proof that one exact recovered timeout Broadcast was retired.|before|/// Complete durable proof that one canonical CompleteTip predecessor retired.
+required|timeout_successor_tokens|struct StagedRecoveredTimeoutSupersessionSuccessorV1|missing sealed staged timeout-supersession token
+required|timeout_successor_tokens|struct AuthenticatedRecoveredTimeoutSupersessionSuccessorV1|missing sealed authenticated timeout-supersession witness
+forbidden|timeout_successor_tokens|#[derive(|timeout-supersession tokens must remain move-only
+forbidden|timeout_successor_tokens|impl Clone for|timeout-supersession tokens must not implement Clone
+forbidden|timeout_successor_tokens|impl Copy for|timeout-supersession tokens must not implement Copy
+forbidden|timeout_successor_tokens|fn into_parts(|timeout-supersession tokens must expose no parts API
+forbidden|timeout_successor_tokens|fn parts(|timeout-supersession tokens must expose no parts API
+forbidden|timeout_successor_tokens|pub fn|timeout-supersession tokens must expose no public constructor or accessor
+forbidden|timeout_successor_tokens|pub(super) fn|timeout-supersession tokens must expose no module-visible constructor or accessor
+forbidden|timeout_successor_tokens|pub(in crate::sumeragi) fn|timeout-supersession tokens must expose no Sumeragi-visible constructor or accessor
+region|timeout_successor_cas|ledger|after|fn persist_recovered_timeout_supersession_successor(|before|/// Open a height-local ledger under the coordinator's sealed size bounds.
+order|timeout_successor_cas|4|staged.exactly_matches_successor(|self.persist_exact_successor(opened, successor)?|self.load()? != *successor|staged.into_authenticated(self, successor)|timeout-supersession authorization, exact CAS, exact reload, and witness mint must remain ordered inside one private store method
 required|durable|stage_authenticated_wal_control_sign|locate recovered control durable staging
 required|durable|reconcile_superseded_timeout_broadcast|locate exact obsolete-timeout reconciliation
 required|durable|persist_exact_successor|locate recovered control durable publication
+required|durable|persist_recovered_timeout_supersession_successor|locate exact timeout-supersession CAS and witness mint
 required|durable|LifecycleWorkRegistryHolder::empty|locate recovered control registry construction
-required|durable|if superseded \p\p staged|recovered control storage transaction must persist only changed state
+required|durable|if let Some(staged_supersession) =|recovered control storage transaction must authenticate timeout supersession before publication
 order|durable|4|reconcile_superseded_timeout_broadcast|stage_authenticated_wal_control_sign|persist_exact_successor|LifecycleWorkRegistryHolder::empty|obsolete-timeout reconciliation, control staging, and durable publication precede volatile registry construction
+order|durable|4|reconcile_superseded_timeout_broadcast|stage_authenticated_wal_control_sign|persist_recovered_timeout_supersession_successor|LifecycleWorkRegistryHolder::empty|authenticated timeout-supersession publication precedes volatile registry construction
 forbidden|durable|RuntimeLifecycleOrdinalSource|recovered control storage transaction must not expose RuntimeLifecycleOrdinalSource
 forbidden|durable|publish_recovered_adapter_status|recovered control storage transaction must not publish adapter status
 region|decision_durable|ledger|after|pub(in crate::sumeragi) fn open_recovered_decision_fetch_startup(|before|/// Bind one paired recovered-WAL open

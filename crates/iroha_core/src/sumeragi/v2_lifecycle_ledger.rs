@@ -1487,6 +1487,132 @@ pub(in crate::sumeragi) struct AuthenticatedCompleteTipPredecessorStorageV1 {
     retained_serve_payloads:
         BTreeSet<crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadId>,
 }
+/// Purely staged proof that one exact recovered timeout Broadcast was retired.
+///
+/// The proof is minted only by the roster- and WAL-authenticated supersession
+/// classifier. It carries no publication authority by itself; the control-Sign
+/// owner-open transaction must consume it after its exact CAS has reloaded the
+/// complete successor frame.
+#[must_use = "a staged timeout supersession must be published or discarded"]
+struct StagedRecoveredTimeoutSupersessionSuccessorV1 {
+    context: LifecycleContext,
+    predecessor_frame_identity: LifecycleDigest,
+    reconciled_frame_identity: LifecycleDigest,
+}
+impl StagedRecoveredTimeoutSupersessionSuccessorV1 {
+    fn new(opened: &LifecycleLedgerV1, reconciled: &LifecycleLedgerV1) -> Option<Self> {
+        let context = opened.context();
+        let predecessor_frame_identity = opened.frame_identity();
+        let reconciled_frame_identity = reconciled.frame_identity();
+        (context == reconciled.context() && predecessor_frame_identity != reconciled_frame_identity)
+            .then_some(Self {
+                context,
+                predecessor_frame_identity,
+                reconciled_frame_identity,
+            })
+    }
+
+    /// Check the complete successor which the specialized store CAS may publish.
+    fn exactly_matches_successor(
+        &self,
+        store: &LifecycleLedgerStoreV1,
+        opened: &LifecycleLedgerV1,
+        reconciled: &LifecycleLedgerV1,
+        successor: &LifecycleLedgerV1,
+        projection: &AuthenticatedRecoveredWalControlProjection,
+        control_ordinal: u128,
+    ) -> bool {
+        let Ok((expected, expected_ordinal, _staged_control)) =
+            reconciled.stage_authenticated_wal_control_sign(projection)
+        else {
+            return false;
+        };
+        opened.context() == self.context
+            && reconciled.context() == self.context
+            && successor.context() == self.context
+            && opened.frame_identity() == self.predecessor_frame_identity
+            && reconciled.frame_identity() == self.reconciled_frame_identity
+            && expected == *successor
+            && expected_ordinal == control_ordinal
+            && projection.exactly_matches_ledger_at(successor, control_ordinal)
+            && store.context == self.context
+    }
+
+    /// Mint only after the specialized store method completed CAS and reload.
+    fn into_authenticated(
+        self,
+        store: &LifecycleLedgerStoreV1,
+        successor: &LifecycleLedgerV1,
+    ) -> AuthenticatedRecoveredTimeoutSupersessionSuccessorV1 {
+        AuthenticatedRecoveredTimeoutSupersessionSuccessorV1 {
+            store: store.clone(),
+            context: self.context,
+            predecessor_frame_identity: self.predecessor_frame_identity,
+            successor_frame_identity: successor.frame_identity(),
+        }
+    }
+}
+/// Move-only proof of one exact timeout-supersession owner-open publication.
+///
+/// This is the sole exception to CompleteTip's frozen-nonempty-successor rule.
+/// It remains sealed inside the production lifecycle owner until that owner is
+/// joined to the exact retired predecessor which froze the old frame.
+#[must_use = "a timeout-supersession successor proof must be consumed by owner binding"]
+pub(super) struct AuthenticatedRecoveredTimeoutSupersessionSuccessorV1 {
+    store: LifecycleLedgerStoreV1,
+    context: LifecycleContext,
+    predecessor_frame_identity: LifecycleDigest,
+    successor_frame_identity: LifecycleDigest,
+}
+impl AuthenticatedRecoveredTimeoutSupersessionSuccessorV1 {
+    fn authorizes_complete_tip_owner_join(
+        &self,
+        retirement_store: &LifecycleLedgerStoreV1,
+        owner_store: &LifecycleLedgerStoreV1,
+        frozen: &LifecycleLedgerV1,
+        loaded: &LifecycleLedgerV1,
+        coordinator: &LifecycleLedgerV1,
+    ) -> bool {
+        self.store.same_publication_target(retirement_store)
+            && self.store.same_publication_target(owner_store)
+            && self.context == retirement_store.context
+            && self.context == owner_store.context
+            && frozen.context() == self.context
+            && loaded.context() == self.context
+            && coordinator.context() == self.context
+            && frozen.frame_identity() == self.predecessor_frame_identity
+            && loaded.frame_identity() == self.successor_frame_identity
+            && coordinator.frame_identity() == self.successor_frame_identity
+            && retirement_store.load().ok().as_ref() == Some(loaded)
+            && owner_store.load().ok().as_ref() == Some(loaded)
+            && self.store.load().ok().as_ref() == Some(loaded)
+    }
+
+    /// Construct the already-authenticated half of the compositional bind test.
+    #[cfg(test)]
+    fn for_exact_store_successor_test(
+        store: &LifecycleLedgerStoreV1,
+        predecessor: &LifecycleLedgerV1,
+        successor: &LifecycleLedgerV1,
+    ) -> Self {
+        assert_eq!(predecessor.context(), successor.context());
+        assert_eq!(store.context, successor.context());
+        assert_eq!(store.load().ok().as_ref(), Some(successor));
+        Self {
+            store: store.clone(),
+            context: successor.context(),
+            predecessor_frame_identity: predecessor.frame_identity(),
+            successor_frame_identity: successor.frame_identity(),
+        }
+    }
+
+    /// Corrupt only the sealed context for a fail-closed bind regression.
+    #[cfg(test)]
+    fn with_context_for_test(mut self, context: LifecycleContext) -> Self {
+        self.context = context;
+        self
+    }
+}
 /// Complete durable proof that one canonical CompleteTip predecessor retired.
 ///
 /// This token is minted only after the exact predecessor frame is fully
@@ -1536,19 +1662,21 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
     pub(in crate::sumeragi) const fn retained_high_water(&self) -> u128 {
         self.retained_high_water
     }
-    fn successor_descends_from_retirement(&self) -> bool {
-        self.successor_ledger.context() == self.successor_store.context
-            && self.successor_ledger.frame_identity() == self.successor_frame_identity
-            && if self.successor_ledger.records.is_empty() {
-                self.successor_ledger.producer_debts.is_empty()
-                    && self.successor_ledger.high_water == self.retained_high_water
+    fn frame_descends_from_retained_floor(&self, ledger: &LifecycleLedgerV1) -> bool {
+        ledger.context() == self.successor_store.context
+            && if ledger.records.is_empty() {
+                ledger.producer_debts.is_empty() && ledger.high_water == self.retained_high_water
             } else {
-                self.successor_ledger.high_water >= self.retained_high_water
-                    && self.successor_ledger.records.iter().all(|record| {
+                ledger.high_water >= self.retained_high_water
+                    && ledger.records.iter().all(|record| {
                         record.ordinal() > self.retained_high_water
                             && record.owner().first_admission_ordinal() > self.retained_high_water
                     })
             }
+    }
+    fn successor_descends_from_retirement(&self) -> bool {
+        self.successor_ledger.frame_identity() == self.successor_frame_identity
+            && self.frame_descends_from_retained_floor(&self.successor_ledger)
     }
     fn predecessor_remains_exact(&self) -> bool {
         self.predecessor_ledger.frame_identity() == self.predecessor_frame_identity
@@ -1564,8 +1692,9 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
     /// initially empty successor can advance before the owner is joined.  The
     /// adoption is deliberately one-way and narrow: only the exact initialized
     /// empty frame can move, and every row in the replacement must begin above
-    /// the predecessor's retained ordinal floor.  A nonempty retirement-time
-    /// frame remains frozen and must match byte-for-byte.
+    /// the predecessor's retained ordinal floor. A nonempty retirement-time
+    /// frame remains frozen here; `bind_successor_owner` admits only the
+    /// separate move-only proof of an exact timeout-supersession owner-open CAS.
     fn authorizes_owner_open_successor(&self, successor: &LifecycleLedgerV1) -> bool {
         if successor == &self.successor_ledger {
             return self.successor_descends_from_retirement();
@@ -1693,14 +1822,54 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
         let Ok(successor_ledger) = self.successor_store.load() else {
             return Err(CompleteTipSuccessorOwnerBindErrorV1);
         };
-        if !self.authorizes_owner_open_successor(&successor_ledger)
+        let retirement_frame_authorizes = self.authorizes_owner_open_successor(&successor_ledger);
+        let timeout_supersession_authorizes = if retirement_frame_authorizes {
+            false
+        } else if !self.successor_descends_from_retirement()
+            || !self.frame_descends_from_retained_floor(&successor_ledger)
+            || !self.predecessor_remains_exact()
+        {
+            false
+        } else {
+            let Some(owner_store) = owner.coordinator.ledger_store.as_ref() else {
+                return Err(CompleteTipSuccessorOwnerBindErrorV1);
+            };
+            let Ok(coordinator_ledger) = LifecycleLedgerV1::from_coordinator(&owner.coordinator)
+            else {
+                return Err(CompleteTipSuccessorOwnerBindErrorV1);
+            };
+            owner
+                .timeout_supersession_successor
+                .as_ref()
+                .is_some_and(|successor| {
+                    successor.authorizes_complete_tip_owner_join(
+                        &self.successor_store,
+                        owner_store,
+                        &self.successor_ledger,
+                        &successor_ledger,
+                        &coordinator_ledger,
+                    )
+                })
+        };
+        if (retirement_frame_authorizes && owner.timeout_supersession_successor.is_some())
+            || (!retirement_frame_authorizes && !timeout_supersession_authorizes)
             || !self.matches_successor_owner_ledger(&mut owner, &successor_ledger)
         {
             return Err(CompleteTipSuccessorOwnerBindErrorV1);
         }
+        if timeout_supersession_authorizes {
+            drop(
+                owner
+                    .timeout_supersession_successor
+                    .take()
+                    .expect("authenticated timeout supersession was observed above"),
+            );
+        }
         // Freeze the owner-authenticated publication, not the retirement-time
-        // empty snapshot.  Every later runner/status check is strict against
-        // this new frame and therefore still rejects post-bind drift.
+        // snapshot. The sole nonempty replacement path consumed the exact
+        // owner-open timeout-supersession witness above. Every later
+        // runner/status check is strict against this new frame and therefore
+        // still rejects post-bind drift.
         self.successor_frame_identity = successor_ledger.frame_identity();
         self.successor_ledger = successor_ledger;
         if !self.exactly_matches_successor_owner(&mut owner) {
@@ -2405,6 +2574,7 @@ impl AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
             kura_binding: None,
             apply_service: None,
             adapter_startup: Some(adapter_startup),
+            timeout_supersession_successor: None,
         })
     }
     #[cfg(test)]
@@ -2731,6 +2901,7 @@ impl ProductionLifecycleOwnerV1 {
                     kura_binding: None,
                     apply_service: None,
                     adapter_startup: Some(adapter_startup),
+                    timeout_supersession_successor: None,
                 });
             }
             let adapter_authority = projection
@@ -2820,6 +2991,7 @@ impl ProductionLifecycleOwnerV1 {
                 kura_binding: None,
                 apply_service: None,
                 adapter_startup: Some(adapter_startup),
+                timeout_supersession_successor: None,
             })
         }
         if let Ok((broadcast, parent_ordinal, child_ordinal)) =
@@ -2860,7 +3032,7 @@ impl ProductionLifecycleOwnerV1 {
             adapter_startup: ProductionLifecycleAdapterStartupV1,
         ) -> Result<ProductionLifecycleOwnerV1, ProductionRecoveredWalControlStartupErrorV1>
         {
-            let (reconciled, superseded) = opened
+            let (reconciled, staged_timeout_supersession) = opened
                 .reconcile_superseded_timeout_broadcast(&verified, &projection)
                 .map_err(|_error| {
                     ProductionRecoveredWalControlStartupErrorV1::new(
@@ -2874,18 +3046,43 @@ impl ProductionLifecycleOwnerV1 {
                         "recovered control durable row is absent-or-exact invariant failed",
                     )
                 })?;
-            if superseded || staged {
-                ledger_store
-                    .persist_exact_successor(&opened, &repaired)
-                    .map_err(|_error| {
-                        ProductionRecoveredWalControlStartupErrorV1::new(
-                            "recovered control LedgerV1 successor publication failed",
-                        )
-                    })?;
-            }
-            if !ledger_store.load().is_ok_and(|loaded| loaded == repaired)
-                || !projection.exactly_matches_ledger_at(&repaired, ordinal)
+            let timeout_supersession_successor = if let Some(staged_supersession) =
+                staged_timeout_supersession
             {
+                Some(
+                        ledger_store
+                            .persist_recovered_timeout_supersession_successor(
+                                staged_supersession,
+                                &opened,
+                                &reconciled,
+                                &repaired,
+                                &projection,
+                                ordinal,
+                            )
+                            .map_err(|_error| {
+                                ProductionRecoveredWalControlStartupErrorV1::new(
+                                    "recovered control timeout supersession successor publication failed",
+                                )
+                            })?,
+                    )
+            } else {
+                if staged {
+                    ledger_store
+                        .persist_exact_successor(&opened, &repaired)
+                        .map_err(|_error| {
+                            ProductionRecoveredWalControlStartupErrorV1::new(
+                                "recovered control LedgerV1 successor publication failed",
+                            )
+                        })?;
+                }
+                None
+            };
+            let reopened = ledger_store.load().map_err(|_error| {
+                ProductionRecoveredWalControlStartupErrorV1::new(
+                    "recovered control LedgerV1 reopen changed the exact row",
+                )
+            })?;
+            if reopened != repaired || !projection.exactly_matches_ledger_at(&repaired, ordinal) {
                 return Err(ProductionRecoveredWalControlStartupErrorV1::new(
                     "recovered control LedgerV1 reopen changed the exact row",
                 ));
@@ -2944,6 +3141,7 @@ impl ProductionLifecycleOwnerV1 {
                 kura_binding: None,
                 apply_service: None,
                 adapter_startup: Some(adapter_startup),
+                timeout_supersession_successor,
             })
         }
         open_recovered_control_sign_startup(
@@ -3100,6 +3298,7 @@ impl ProductionLifecycleOwnerV1 {
             kura_binding: None,
             apply_service: None,
             adapter_startup: Some(adapter_startup),
+            timeout_supersession_successor: None,
         })
     }
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
@@ -3206,6 +3405,7 @@ impl ProductionLifecycleOwnerV1 {
             kura_binding: None,
             apply_service: None,
             adapter_startup: Some(adapter_startup),
+            timeout_supersession_successor: None,
         })
     }
     /// Publish or exactly coalesce one recovered Decision body fast-forward.
@@ -3327,6 +3527,7 @@ impl ProductionLifecycleOwnerV1 {
             kura_binding: None,
             apply_service: None,
             adapter_startup: Some(adapter_startup),
+            timeout_supersession_successor: None,
         })
     }
     /// Bind one paired recovered-WAL open and adapter startup to exact owners.
@@ -3389,11 +3590,17 @@ impl ProductionLifecycleOwnerV1 {
             kura_binding: None,
             apply_service: None,
             adapter_startup: Some(adapter_startup),
+            timeout_supersession_successor: None,
         })
     }
 }
 #[cfg(test)]
 impl ProductionLifecycleOwnerV1 {
+    /// Whether owner-open retained the one-shot timeout-supersession successor proof.
+    pub(in crate::sumeragi) fn has_timeout_supersession_successor_for_test(&self) -> bool {
+        self.timeout_supersession_successor.is_some()
+    }
+
     pub(in crate::sumeragi) fn exact_recovered_fetch_join_for_test(&mut self) -> bool {
         if self.coordinator.active_context()
             != projection::lifecycle_context(self.verified.context())

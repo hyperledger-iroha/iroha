@@ -1131,7 +1131,12 @@ fn obsolete_timeout_broadcast_is_atomically_cancelled_before_current_control_rec
     let storage = TempDir::new().expect("temporary superseded timeout lifecycle stores");
     let obsolete = persist_timeout_broadcasts_and_successor_timeout_intent(&safety);
     crate::sumeragi::status::clear_v2_status();
-    drop(open_control_owner_for_test(&safety, &storage, false));
+    let first_owner = open_control_owner_for_test(&safety, &storage, false);
+    assert!(
+        !first_owner.has_timeout_supersession_successor_for_test(),
+        "ordinary pre-incident owner-open cannot mint a timeout-supersession witness"
+    );
+    drop(first_owner);
     crate::sumeragi::status::clear_v2_status();
     let lifecycle_context = lifecycle_context_for_control_test();
     let ledger_root = storage.path().join("ledger");
@@ -1181,7 +1186,12 @@ fn obsolete_timeout_broadcast_is_atomically_cancelled_before_current_control_rec
     drop(projection);
     drop(adapter);
 
-    drop(open_control_owner_for_test(&safety, &storage, false));
+    let repeated_owner = open_control_owner_for_test(&safety, &storage, false);
+    assert!(
+        repeated_owner.has_timeout_supersession_successor_for_test(),
+        "the exact first cancellation CAS retains one move-only CompleteTip join witness"
+    );
+    drop(repeated_owner);
     crate::sumeragi::status::clear_v2_status();
     assert_eq!(
         control_timeout_supersession_summary_for_test(&ledger_root, lifecycle_context),
@@ -1197,7 +1207,12 @@ fn obsolete_timeout_broadcast_is_atomically_cancelled_before_current_control_rec
             .expect("inspect atomic supersession frame")
             .ino()
     };
-    drop(open_control_owner_for_test(&safety, &storage, false));
+    let owner = open_control_owner_for_test(&safety, &storage, false);
+    assert!(
+        !owner.has_timeout_supersession_successor_for_test(),
+        "the byte-identical cold stutter cannot mint another successor witness"
+    );
+    drop(owner);
     crate::sumeragi::status::clear_v2_status();
     assert_eq!(
         std::fs::read(&ledger_path).expect("read repeated exact supersession frame"),
@@ -1225,7 +1240,12 @@ fn obsolete_timeout_broadcast_and_missing_current_sign_publish_one_successor() {
     let storage = TempDir::new().expect("temporary missing-current lifecycle stores");
     let obsolete = persist_timeout_broadcasts_and_successor_timeout_intent(&safety);
     crate::sumeragi::status::clear_v2_status();
-    drop(open_control_owner_for_test(&safety, &storage, false));
+    let initial_owner = open_control_owner_for_test(&safety, &storage, false);
+    assert!(
+        !initial_owner.has_timeout_supersession_successor_for_test(),
+        "ordinary pre-incident owner-open cannot mint a timeout-supersession witness"
+    );
+    drop(initial_owner);
     crate::sumeragi::status::clear_v2_status();
     let lifecycle_context = lifecycle_context_for_control_test();
     let ledger_root = storage.path().join("ledger");
@@ -1237,7 +1257,12 @@ fn obsolete_timeout_broadcast_and_missing_current_sign_publish_one_successor() {
     ));
     let ledger_path = ledger_root.join("lifecycle-ledger-v1.norito");
     let incident = std::fs::read(&ledger_path).expect("read timeout-only incident frame");
-    drop(open_control_owner_for_test(&safety, &storage, false));
+    let owner = open_control_owner_for_test(&safety, &storage, false);
+    assert!(
+        owner.has_timeout_supersession_successor_for_test(),
+        "the atomic cancellation-plus-missing-Sign successor retains one exact join witness"
+    );
+    drop(owner);
     crate::sumeragi::status::clear_v2_status();
     assert_eq!(
         control_timeout_supersession_summary_for_test(&ledger_root, lifecycle_context),

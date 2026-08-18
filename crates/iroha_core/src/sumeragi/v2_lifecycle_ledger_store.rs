@@ -147,6 +147,41 @@ impl LifecycleLedgerStoreV1 {
             && self.max_records == other.max_records
             && self.max_frame_bytes == other.max_frame_bytes
     }
+    /// Publish one exact timeout-supersession owner-open successor and mint its join proof.
+    ///
+    /// Keeping the staged proof, compare-and-swap, reload, and authenticated
+    /// witness mint inside one private store method prevents callers from
+    /// manufacturing the CompleteTip exception after an unrelated overwrite.
+    #[allow(clippy::too_many_arguments)]
+    fn persist_recovered_timeout_supersession_successor(
+        &self,
+        staged: StagedRecoveredTimeoutSupersessionSuccessorV1,
+        opened: &LifecycleLedgerV1,
+        reconciled: &LifecycleLedgerV1,
+        successor: &LifecycleLedgerV1,
+        projection: &AuthenticatedRecoveredWalControlProjection,
+        control_ordinal: u128,
+    ) -> Result<AuthenticatedRecoveredTimeoutSupersessionSuccessorV1, LifecycleLedgerError> {
+        if !staged.exactly_matches_successor(
+            self,
+            opened,
+            reconciled,
+            successor,
+            projection,
+            control_ordinal,
+        ) {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "timeout supersession successor changed before exact publication".to_owned(),
+            ));
+        }
+        self.persist_exact_successor(opened, successor)?;
+        if self.load()? != *successor {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "timeout supersession successor changed after exact publication".to_owned(),
+            ));
+        }
+        Ok(staged.into_authenticated(self, successor))
+    }
     /// Open a height-local ledger under the coordinator's sealed size bounds.
     pub(in crate::sumeragi) fn open(
         root: &Path,
@@ -242,8 +277,10 @@ impl LifecycleLedgerStoreV1 {
     /// exact stutter confirms an already-present fsynced frame without rewriting
     /// it. When the logical empty frame has not yet been published, even an exact
     /// stutter writes it durably. Otherwise a successful return means `successor`
-    /// is the exact fsynced V1 frame replacing `current`. Callers may perform only
-    /// infallible in-memory publication after this method returns.
+    /// is the exact fsynced V1 frame replacing `current`. Ordinary callers may
+    /// perform only infallible in-memory publication afterward. A specialized
+    /// fail-stop wrapper may immediately reload the exact frame to mint a sealed
+    /// receipt; any reload failure consumes startup and publishes no live owner.
     pub(super) fn persist_exact_successor(
         &self,
         current: &LifecycleLedgerV1,
@@ -1372,7 +1409,7 @@ pub(in crate::sumeragi) fn control_timeout_supersession_persistence_failure_for_
     let Ok((store, opened)) = LifecycleLedgerStoreV1::open(root, context) else {
         return false;
     };
-    let Ok((reconciled, true)) =
+    let Ok((reconciled, Some(_staged_supersession))) =
         opened.reconcile_superseded_timeout_broadcast(verified, projection)
     else {
         return false;

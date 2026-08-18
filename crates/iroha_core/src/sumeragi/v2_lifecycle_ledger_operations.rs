@@ -941,11 +941,12 @@ impl LifecycleLedgerV1 {
     /// recovered WAL projection proves a strictly newer view in the same
     /// context, and the two-row owner census excludes partial lineage claims.
     /// Zero matching rows stutter; multiple eligible rows fail closed.
-    pub(super) fn reconcile_superseded_timeout_broadcast(
+    fn reconcile_superseded_timeout_broadcast(
         &self,
         verified: &VerifiedHeightContext,
         projection: &AuthenticatedRecoveredWalControlProjection,
-    ) -> Result<(Self, bool), LifecycleLedgerError> {
+    ) -> Result<(Self, Option<StagedRecoveredTimeoutSupersessionSuccessorV1>), LifecycleLedgerError>
+    {
         self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
         if !projection.is_exact(verified) || !projection.belongs_to_context(self.context()) {
             return Err(LifecycleLedgerError::InvalidLedger(
@@ -1028,7 +1029,7 @@ impl LifecycleLedgerV1 {
             ));
         }
         let Some((child_ordinal, obsolete)) = eligible.pop() else {
-            return Ok((self.clone(), false));
+            return Ok((self.clone(), None));
         };
         let mut reconciled = self.clone();
         let Some(child) = reconciled
@@ -1053,7 +1054,14 @@ impl LifecycleLedgerV1 {
         }
         child.terminal = Some(PersistedTerminalV1::from_schema(TerminalOutcome::Cancelled));
         reconciled.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        Ok((reconciled, true))
+        let staged = StagedRecoveredTimeoutSupersessionSuccessorV1::new(self, &reconciled)
+            .ok_or_else(|| {
+                LifecycleLedgerError::InvalidLedger(
+                    "timeout Broadcast supersession did not change the exact ledger frame"
+                        .to_owned(),
+                )
+            })?;
+        Ok((reconciled, Some(staged)))
     }
 
     /// Stage exactly one standalone Proposal/Timeout control Sign row.

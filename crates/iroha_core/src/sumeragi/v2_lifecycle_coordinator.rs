@@ -349,6 +349,8 @@ pub(crate) struct ProductionLifecycleOwnerV1 {
     kura_binding: Option<crate::sumeragi::v2::RecoveredLifecycleOwnerKuraBindingV1>,
     apply_service: Option<crate::sumeragi::v2_apply::V2ApplyService>,
     adapter_startup: Option<crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1>,
+    timeout_supersession_successor:
+        Option<ledger::AuthenticatedRecoveredTimeoutSupersessionSuccessorV1>,
 }
 // PRODUCTION_LIFECYCLE_OWNER_DECLARATION_END
 /// Move-only permit for transferring the recovery-replay Apply service.

@@ -2208,6 +2208,7 @@ impl ProductionLifecyclePostOutputHandoffV1 {
             kura_binding,
             apply_service,
             adapter_startup,
+            timeout_supersession_successor: _,
         } = owner;
         let kura_binding = kura_binding.ok_or_else(|| {
             ProductionLifecycleFinalizationErrorV1::RetirementCensus(
