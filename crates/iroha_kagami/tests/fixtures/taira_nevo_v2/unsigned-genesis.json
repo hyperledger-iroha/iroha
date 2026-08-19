@@ -733,6 +733,91 @@
           }
         },
         {
+          "Register": {
+            "Role": {
+              "id": "nevo_taira_alias_bootstrap",
+              "permissions": [
+                {
+                  "name": "CanManageAccountAlias",
+                  "payload": {
+                    "scope": {
+                      "scope": "alias",
+                      "value": {
+                        "canonical_name": {
+                          "label": "admin",
+                          "domain": null,
+                          "dataspace": "universal"
+                        },
+                        "dataspace_id": 0
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "CanManageAccountAlias",
+                  "payload": {
+                    "scope": {
+                      "scope": "alias",
+                      "value": {
+                        "canonical_name": {
+                          "label": "inori",
+                          "domain": null,
+                          "dataspace": "universal"
+                        },
+                        "dataspace_id": 0
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "CanManageAccountAlias",
+                  "payload": {
+                    "scope": {
+                      "scope": "alias",
+                      "value": {
+                        "canonical_name": {
+                          "label": "source_guard",
+                          "domain": null,
+                          "dataspace": "universal"
+                        },
+                        "dataspace_id": 0
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "CanManageAccountAlias",
+                  "payload": {
+                    "scope": {
+                      "scope": "dataspace",
+                      "value": 10
+                    }
+                  }
+                },
+                {
+                  "name": "CanManageAccountAlias",
+                  "payload": {
+                    "scope": {
+                      "scope": "dataspace",
+                      "value": 8477022798449861195
+                    }
+                  }
+                },
+                {
+                  "name": "CanManageAccountAlias",
+                  "payload": {
+                    "scope": {
+                      "scope": "domain",
+                      "value": "nevo.dpn"
+                    }
+                  }
+                }
+              ],
+              "grant_to": "testuﾛ1NヰﾋhM25ｳﾙﾁUｺﾂxｼqPﾙPﾅPdNｼﾖ2oﾉﾀdJﾘZﾖ3pTｳ1MLRWYG"
+            }
+          }
+        },
+        {
           "EnsureAlias": {
             "intent": {
               "kind": "dataspace",
@@ -909,6 +994,13 @@
               "expected_payment_asset": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
               "max_amount": "0.5",
               "valid_until_ms": 18446744073709551615
+            }
+          }
+        },
+        {
+          "Unregister": {
+            "Role": {
+              "object": "nevo_taira_alias_bootstrap"
             }
           }
         },

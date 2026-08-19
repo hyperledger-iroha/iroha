@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import hashlib
 import importlib.util
 import json
@@ -112,14 +113,16 @@ def test_composition_is_deterministic_unsigned_and_secret_free(tmp_path: Path) -
     assert keys == (
         ["Register"] * 4
         + ["Mint"] * 4
+        + ["Register"]
         + ["EnsureAlias"] * 6
+        + ["Unregister"]
         + ["Grant"] * 9
         + ["EnrollFeeSponsorBeneficiary"] * 4
     )
     registered_accounts = [
         instruction["Register"]["Account"]["id"]
         for instruction in overlay["instructions"]
-        if "Register" in instruction
+        if "Account" in instruction.get("Register", {})
     ]
     assert registered_accounts == [
         inputs.onboarding_authority_account_id,
@@ -133,6 +136,20 @@ def test_composition_is_deterministic_unsigned_and_secret_free(tmp_path: Path) -
         if "Mint" in instruction
     ]
     assert funded_accounts == registered_accounts
+    role_registration = overlay["instructions"][8]["Register"]["Role"]
+    assert role_registration["id"] == composer.GENESIS_ALIAS_BOOTSTRAP_ROLE_ID
+    assert role_registration["grant_to"] == config.genesis_authority_account_id
+    assert [permission["payload"]["scope"] for permission in role_registration["permissions"]] == (
+        composer._genesis_alias_bootstrap_scopes()
+    )
+    assert {permission["name"] for permission in role_registration["permissions"]} == {
+        "CanManageAccountAlias"
+    }
+    assert overlay["instructions"][15] == {
+        "Unregister": {
+            "Role": {"object": composer.GENESIS_ALIAS_BOOTSTRAP_ROLE_ID}
+        }
+    }
     alias_targets = [
         composer._ensure_alias_target(instruction)
         for instruction in overlay["instructions"]
@@ -229,6 +246,15 @@ def test_composition_is_deterministic_unsigned_and_secret_free(tmp_path: Path) -
         "dpn_inori_account_id": inputs.dpn_inori_account_id,
         "dpn_epr_guard_account_id": inputs.dpn_epr_guard_account_id,
     }
+    assert review["genesis_overlay"]["instruction_count"] == 29
+    assert review["genesis_overlay"]["genesis_alias_bootstrap"] == {
+        "authority_account_id": config.genesis_authority_account_id,
+        "authority_source": "base_config.genesis.public_key",
+        "role_id": composer.GENESIS_ALIAS_BOOTSTRAP_ROLE_ID,
+        "permissions": role_registration["permissions"],
+        "registered_before_alias_intents": True,
+        "unregistered_after_alias_intents": True,
+    }
     assert review["genesis_overlay"]["dpn_permission_grants"] == [
         {
             "account_id": inputs.api_signer_account_id,
@@ -252,6 +278,15 @@ def test_composition_is_deterministic_unsigned_and_secret_free(tmp_path: Path) -
         review["genesis_overlay"]["dpn_settlement_holder_account_id"]
         == inputs.dpn_inori_account_id
     )
+
+
+def test_composition_rejects_reusing_implicit_genesis_authority(tmp_path: Path) -> None:
+    _, inputs, _, base, _, config, _ = _loaded(tmp_path)
+    colliding = replace(
+        inputs, api_signer_account_id=config.genesis_authority_account_id
+    )
+    with pytest.raises(composer.CompositionError, match="implicit genesis authority"):
+        composer.compose_genesis(base, colliding, config)
 
 
 def test_review_verification_recomposes_exact_unsigned_genesis(tmp_path: Path) -> None:

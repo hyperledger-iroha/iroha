@@ -1,12 +1,12 @@
 {
-  "schema": "iroha.taira.nevo-reset-review.v2",
+  "schema": "iroha.taira.nevo-reset-review.v3",
   "chain": "fc56984b-2be7-431d-840e-21514d1883f0",
   "chain_discriminant": 369,
   "state": "unsigned_operator_review_required",
   "public_inputs_sha256": "eacdf8d3cd1e914502ddd7942aaec888d466f38dc97cf514a00bbd0fab458d63",
   "base_genesis_sha256": "a7f3ac0979b0d46965d7e7fc68d5633fde9c5f0c17ba7002db0c04e1f9094d18",
-  "base_config_sha256": "b691817bc5e0335939e2cf2ae05bc10eed5c29fd73d31f492cdd864aba63d9a6",
-  "unsigned_genesis_sha256": "6b1f4a2d66a58a11beed5f1d9ef5eb40ff0637e975c43fd4ddc7fa74cd101f95",
+  "base_config_sha256": "adf7220a305d95917c31c5363d178c0e29a7652a6e9f14f622a5a269e21b5168",
+  "unsigned_genesis_sha256": "357fe786b54d71d6775ec277fab688e722431056164a9e513e4dd367321a0b42",
   "public_identities": {
     "onboarding_authority_account_id": "testuﾛ1PｺfMﾇﾘｾﾄoﾂﾊﾔH7ZdﾘhﾚmAｸdnｳu1ｱﾄ1ｺﾋuSﾑﾀﾇﾐuHEB5DP",
     "api_signer_account_id": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
@@ -29,7 +29,7 @@
   ],
   "genesis_overlay": {
     "transaction_count": 1,
-    "instruction_count": 27,
+    "instruction_count": 29,
     "dataspace_roots": [
       {
         "alias": "dpn",
@@ -67,6 +67,90 @@
         "role": "primary"
       }
     ],
+    "genesis_alias_bootstrap": {
+      "authority_account_id": "testuﾛ1NヰﾋhM25ｳﾙﾁUｺﾂxｼqPﾙPﾅPdNｼﾖ2oﾉﾀdJﾘZﾖ3pTｳ1MLRWYG",
+      "authority_source": "base_config.genesis.public_key",
+      "role_id": "nevo_taira_alias_bootstrap",
+      "permissions": [
+        {
+          "name": "CanManageAccountAlias",
+          "payload": {
+            "scope": {
+              "scope": "alias",
+              "value": {
+                "canonical_name": {
+                  "label": "admin",
+                  "domain": null,
+                  "dataspace": "universal"
+                },
+                "dataspace_id": 0
+              }
+            }
+          }
+        },
+        {
+          "name": "CanManageAccountAlias",
+          "payload": {
+            "scope": {
+              "scope": "alias",
+              "value": {
+                "canonical_name": {
+                  "label": "inori",
+                  "domain": null,
+                  "dataspace": "universal"
+                },
+                "dataspace_id": 0
+              }
+            }
+          }
+        },
+        {
+          "name": "CanManageAccountAlias",
+          "payload": {
+            "scope": {
+              "scope": "alias",
+              "value": {
+                "canonical_name": {
+                  "label": "source_guard",
+                  "domain": null,
+                  "dataspace": "universal"
+                },
+                "dataspace_id": 0
+              }
+            }
+          }
+        },
+        {
+          "name": "CanManageAccountAlias",
+          "payload": {
+            "scope": {
+              "scope": "dataspace",
+              "value": 10
+            }
+          }
+        },
+        {
+          "name": "CanManageAccountAlias",
+          "payload": {
+            "scope": {
+              "scope": "dataspace",
+              "value": 8477022798449861195
+            }
+          }
+        },
+        {
+          "name": "CanManageAccountAlias",
+          "payload": {
+            "scope": {
+              "scope": "domain",
+              "value": "nevo.dpn"
+            }
+          }
+        }
+      ],
+      "registered_before_alias_intents": true,
+      "unregistered_after_alias_intents": true
+    },
     "contract_deployment_permission_grant": {
       "account_id": "testuﾛ1NﾑﾅpﾐTm5Yfﾕ3ｦSヰﾏBｶA5ｻﾔｽｱｼDkDｸkVZBｳﾈyｽﾜヰ9NA1NP",
       "permission": "CanRegisterSmartContractCode",

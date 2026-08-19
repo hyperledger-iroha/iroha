@@ -37,7 +37,7 @@ except ModuleNotFoundError as error:
 
 
 PUBLIC_INPUT_SCHEMA = "iroha.taira.nevo-reset-public-inputs.v2"
-REVIEW_SCHEMA = "iroha.taira.nevo-reset-review.v2"
+REVIEW_SCHEMA = "iroha.taira.nevo-reset-review.v3"
 EXPECTED_PUBLIC_INPUT_FIELDS = frozenset(
     {
         "schema",
@@ -79,6 +79,7 @@ ADMIN_ACCOUNT_ALIAS = "admin@universal"
 INORI_ACCOUNT_ALIAS = "inori@universal"
 EPR_GUARD_ACCOUNT_ALIAS = "source_guard@universal"
 CONTRACT_DEPLOYMENT_PERMISSION = "CanRegisterSmartContractCode"
+GENESIS_ALIAS_BOOTSTRAP_ROLE_ID = "nevo_taira_alias_bootstrap"
 FEE_ASSET_ALIAS = "xor#universal"
 ACCOUNT_FUNDING_AMOUNT = "1000000"
 ALIAS_POLICY_VERSION = 2
@@ -90,6 +91,7 @@ MAX_BASE_GENESIS_BYTES = 16 * 1024 * 1024
 MAX_OUTPUT_BYTES = 32 * 1024 * 1024
 TOKEN_HASH_RE = re.compile(r"blake3:[0-9a-f]{64}\Z")
 PROGRAM_NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9_-]{0,126}[a-z0-9])?\Z")
+ED25519_PUBLIC_KEY_RE = re.compile(r"ed0120([0-9A-F]{64})\Z")
 
 # Detect the retired sample namespace without retaining its literal in this
 # Taira source path. This is SHA-256(lowercase namespace), with a fixed length
@@ -206,6 +208,7 @@ class BaseConfig:
     fee_sponsor_program_id: str
     fee_sponsor_account_id: str
     fee_sponsor_program_name: str
+    genesis_authority_account_id: str
 
 
 def fail(message: str) -> NoReturn:
@@ -593,6 +596,20 @@ def _parse_base_config(raw: bytes, base_genesis: dict[str, Any]) -> BaseConfig:
         fail(f"base config chain must be exactly `{CHAIN_ID}`")
     if config.get("chain_discriminant") != CHAIN_DISCRIMINANT:
         fail(f"base config chain_discriminant must be exactly {CHAIN_DISCRIMINANT}")
+    genesis = config.get("genesis")
+    public_key = genesis.get("public_key") if isinstance(genesis, dict) else None
+    public_key_match = (
+        ED25519_PUBLIC_KEY_RE.fullmatch(public_key)
+        if isinstance(public_key, str)
+        else None
+    )
+    if public_key_match is None:
+        fail("base config `[genesis] public_key` must be one canonical Ed25519 public key")
+    genesis_public_key = bytes.fromhex(public_key_match.group(1))
+    _validate_ed25519_public_key(genesis_public_key, "genesis authority public key")
+    genesis_authority_account_id = _encode_taira_i105_account(
+        ED25519_SINGLE_CONTROLLER_PREFIX + genesis_public_key
+    )
     if _catalog_id(config, DPN_DATASPACE_ALIAS) != DPN_DATASPACE_ID:
         fail(f"base config must map `dpn` to dataspace {DPN_DATASPACE_ID}")
     if _catalog_id(config, IS2_DATASPACE_ALIAS) != IS2_DATASPACE_ID:
@@ -632,6 +649,7 @@ def _parse_base_config(raw: bytes, base_genesis: dict[str, Any]) -> BaseConfig:
         fee_sponsor_program_id=program,
         fee_sponsor_account_id=sponsor,
         fee_sponsor_program_name=program_name,
+        genesis_authority_account_id=genesis_authority_account_id,
     )
 
 
@@ -788,6 +806,9 @@ def _validate_pristine_overlay_target(genesis: dict[str, Any], inputs: PublicInp
             domain = register.get("Domain")
             if isinstance(domain, dict) and domain.get("id") == NEVO_DOMAIN:
                 fail(f"base genesis already registers `{NEVO_DOMAIN}`")
+            role = register.get("Role")
+            if isinstance(role, dict) and role.get("id") == GENESIS_ALIAS_BOOTSTRAP_ROLE_ID:
+                fail("base genesis already registers the NEVO alias-bootstrap role")
         if _ensure_alias_target(instruction) in forbidden_alias_targets:
             fail("base genesis already contains a NEVO reset alias target")
         grant = instruction.get("Grant")
@@ -900,6 +921,71 @@ def _ensure_account_alias(
     }
 
 
+def _exact_account_alias_scope(alias_literal: str) -> dict[str, Any]:
+    label, separator, dataspace = alias_literal.partition("@")
+    if not separator or not label or dataspace != UNIVERSAL_DATASPACE_ALIAS:
+        fail("internal NEVO account alias scope must be a two-segment universal alias")
+    return {
+        "scope": "alias",
+        "value": {
+            "canonical_name": {
+                "label": label,
+                "domain": None,
+                "dataspace": dataspace,
+            },
+            "dataspace_id": UNIVERSAL_DATASPACE_ID,
+        },
+    }
+
+
+def _genesis_alias_bootstrap_scopes() -> list[dict[str, Any]]:
+    scopes = [
+        {"scope": "dataspace", "value": DPN_DATASPACE_ID},
+        {"scope": "dataspace", "value": IS2_DATASPACE_ID},
+        {"scope": "domain", "value": NEVO_DOMAIN},
+        _exact_account_alias_scope(ADMIN_ACCOUNT_ALIAS),
+        _exact_account_alias_scope(INORI_ACCOUNT_ALIAS),
+        _exact_account_alias_scope(EPR_GUARD_ACCOUNT_ALIAS),
+    ]
+    # `Role.permissions` is a BTreeSet ordered by the permission name and its
+    # canonical JSON payload. Emit that order up front so signing does not
+    # reorder the reviewed role payload while binding the genesis manifest.
+    return sorted(
+        scopes,
+        key=lambda scope: json.dumps(
+            {"scope": scope}, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ),
+    )
+
+
+def _register_genesis_alias_bootstrap_role(config: BaseConfig) -> dict[str, Any]:
+    return {
+        "Register": {
+            "Role": {
+                "id": GENESIS_ALIAS_BOOTSTRAP_ROLE_ID,
+                "permissions": [
+                    {
+                        "name": "CanManageAccountAlias",
+                        "payload": {"scope": scope},
+                    }
+                    for scope in _genesis_alias_bootstrap_scopes()
+                ],
+                "grant_to": config.genesis_authority_account_id,
+            }
+        }
+    }
+
+
+def _unregister_genesis_alias_bootstrap_role() -> dict[str, Any]:
+    return {
+        "Unregister": {
+            "Role": {
+                "object": GENESIS_ALIAS_BOOTSTRAP_ROLE_ID,
+            }
+        }
+    }
+
+
 def _grant_permission(destination: str, name: str, payload: Any) -> dict[str, Any]:
     return {
         "Grant": {
@@ -950,12 +1036,14 @@ def nevo_overlay_instructions(inputs: PublicInputs, config: BaseConfig) -> list[
         _mint_fee_asset(asset, api_signer),
         _mint_fee_asset(asset, dpn_inori),
         _mint_fee_asset(asset, dpn_epr_guard),
+        _register_genesis_alias_bootstrap_role(config),
         _ensure_dataspace(DPN_DATASPACE_ALIAS, DPN_DATASPACE_ID, authority, asset),
         _ensure_dataspace(IS2_DATASPACE_ALIAS, IS2_DATASPACE_ID, authority, asset),
         _ensure_domain(authority, asset),
         _ensure_account_alias(ADMIN_ACCOUNT_ALIAS, api_signer, asset),
         _ensure_account_alias(INORI_ACCOUNT_ALIAS, dpn_inori, asset),
         _ensure_account_alias(EPR_GUARD_ACCOUNT_ALIAS, dpn_epr_guard, asset),
+        _unregister_genesis_alias_bootstrap_role(),
     ]
     instructions.extend(
         [
@@ -989,6 +1077,13 @@ def compose_genesis(
 ) -> dict[str, Any]:
     """Return a new unsigned genesis without mutating the caller's object."""
 
+    if config.genesis_authority_account_id in {
+        inputs.onboarding_authority_account_id,
+        inputs.api_signer_account_id,
+        inputs.dpn_inori_account_id,
+        inputs.dpn_epr_guard_account_id,
+    }:
+        fail("a public NEVO account must not reuse the implicit genesis authority account")
     _validate_base_program(base_genesis, config)
     _validate_pristine_overlay_target(base_genesis, inputs)
     # A JSON round trip provides a bounded, type-preserving deep copy while
@@ -1090,6 +1185,20 @@ def build_review_manifest(
                     "role": "primary",
                 },
             ],
+            "genesis_alias_bootstrap": {
+                "authority_account_id": config.genesis_authority_account_id,
+                "authority_source": "base_config.genesis.public_key",
+                "role_id": GENESIS_ALIAS_BOOTSTRAP_ROLE_ID,
+                "permissions": [
+                    {
+                        "name": "CanManageAccountAlias",
+                        "payload": {"scope": scope},
+                    }
+                    for scope in _genesis_alias_bootstrap_scopes()
+                ],
+                "registered_before_alias_intents": True,
+                "unregistered_after_alias_intents": True,
+            },
             "contract_deployment_permission_grant": {
                 "account_id": inputs.api_signer_account_id,
                 "permission": CONTRACT_DEPLOYMENT_PERMISSION,
