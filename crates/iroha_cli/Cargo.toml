@@ -48,6 +48,11 @@ path = "src/bin/iroha.rs"
 required-features = ["cli"]
 
 [[bin]]
+name = "taira_operator_status"
+path = "src/bin/taira_operator_status.rs"
+required-features = ["cli"]
+
+[[bin]]
 name = "ivm_execution_keygen"
 path = "src/bin/ivm_execution_keygen.rs"
 required-features = ["dev-tools"]

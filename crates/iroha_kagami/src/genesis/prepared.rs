@@ -833,9 +833,7 @@ mod tests {
             .get_mut("transactions")
             .and_then(norito::json::Value::as_array_mut)
             .expect("bound fixture transactions")
-            .push(norito::json::Value::Object(
-                norito::json::native::Map::new(),
-            ));
+            .push(norito::json::Value::Object(norito::json::native::Map::new()));
         std::fs::write(
             &fixture.manifest,
             norito::json::to_vec_pretty(&spliced_manifest).expect("encode spliced bound fixture"),

@@ -287,6 +287,7 @@ OPERATION_FLAGS: dict[str, set[str]] = {
         "--local-testnet-reviewed-inputs-sha256",
         "--genesis-external-signer", "--trusted-genesis-external-signer-sha256",
         "--genesis-native-verifier", "--trusted-genesis-native-verifier-sha256",
+        "--operator-status-client", "--trusted-operator-status-client-sha256",
         "--onboarding-token-hash-tool", "--irohad-sha256", "--source-commit",
         "--dpn-validator-release-commit",
         "--cargo-lock-sha256", "--workspace-source-manifest-sha256",
@@ -406,6 +407,7 @@ INPUT_PATH_FLAGS = {
     "--privacy-release-dir", "--genesis-external-signer",
     "--local-testnet-reviewed-input-dir",
     "--genesis-native-verifier",
+    "--operator-status-client",
     "--kagemusha-release-root",
     "--onboarding-token-hash-tool", "--reset-bundle", "--validator-binary",
     "--supervisor", "--linux-archive", "--linux-authority-dir",
@@ -484,6 +486,7 @@ TRUSTED_EXECUTABLE_FLAGS = frozenset(
         "--qualification-external-signer",
         "--genesis-external-signer",
         "--genesis-native-verifier",
+        "--operator-status-client",
         "--onboarding-token-hash-tool",
         "--oras",
         "--release-manifest-verifier",
@@ -493,6 +496,7 @@ TRUSTED_EXECUTABLE_FLAGS = frozenset(
 EXECUTABLE_DIGEST_FLAGS = {
     "--genesis-external-signer": "--trusted-genesis-external-signer-sha256",
     "--genesis-native-verifier": "--trusted-genesis-native-verifier-sha256",
+    "--operator-status-client": "--trusted-operator-status-client-sha256",
     "--qualification-external-signer": (
         "--trusted-qualification-external-signer-sha256"
     ),

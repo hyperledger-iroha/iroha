@@ -1,7 +1,7 @@
 //! Secure runtime loading for the CLI operator-signing key.
-use std::path::Path;
 use eyre::{Result, WrapErr as _, bail, eyre};
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PrivateKey};
+use std::path::Path;
 use zeroize::Zeroizing;
 const MAX_OPERATOR_PRIVATE_KEY_FILE_BYTES: u64 = 4 * 1024;
 /// Load one canonical operator private key from an owner-only runtime file.
@@ -122,9 +122,9 @@ fn load_operator_key_pair_unix(path: &Path) -> Result<KeyPair> {
 }
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
-    use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
     use super::*;
+    use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
+    use std::{fs, path::Path};
     #[cfg(unix)]
     fn write_private_key(path: &Path, contents: &[u8]) {
         use std::os::unix::fs::PermissionsExt as _;

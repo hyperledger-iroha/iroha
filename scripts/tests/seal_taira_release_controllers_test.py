@@ -137,6 +137,11 @@ def test_controller_closures_are_exact_installed_operation_dependencies() -> Non
     assert controller.EXECUTABLE_DIGEST_FLAGS["--genesis-native-verifier"] == (
         "--trusted-genesis-native-verifier-sha256"
     )
+    assert "--operator-status-client" in controller.INPUT_PATH_FLAGS
+    assert "--operator-status-client" in controller.TRUSTED_EXECUTABLE_FLAGS
+    assert controller.EXECUTABLE_DIGEST_FLAGS["--operator-status-client"] == (
+        "--trusted-operator-status-client-sha256"
+    )
     assert "seal" not in {action for contract in controller.ROLE_OPERATIONS.values() for action in contract[1]}
     assert "cleanup" not in {action for contract in controller.ROLE_OPERATIONS.values() for action in contract[1]}
     assert controller.ROLE_OPERATIONS["linux-boi-qualification"] == (
@@ -1731,6 +1736,14 @@ def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema
             "sha256": executable_sha256,
         },
         {
+            "digest_flag": "--trusted-operator-status-client-sha256",
+            "flag": "--operator-status-client",
+            "operation": "prepare-reset",
+            "path": str(executable),
+            "run_as": "runtime",
+            "sha256": executable_sha256,
+        },
+        {
             "flag": "--onboarding-token-hash-tool",
             "operation": "prepare-reset",
             "path": str(executable),
@@ -1747,6 +1760,8 @@ def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema
         "--trusted-genesis-external-signer-sha256", executable_sha256,
         "--genesis-native-verifier", str(executable),
         "--trusted-genesis-native-verifier-sha256", executable_sha256,
+        "--operator-status-client", str(executable),
+        "--trusted-operator-status-client-sha256", executable_sha256,
         "--onboarding-token-hash-tool", str(executable),
         "--irohad-sha256", "2" * 64,
         "--source-commit", "a" * 40,

@@ -2247,7 +2247,15 @@ plist files may remain on disk, but their jobs must not be loaded.
 First place the authenticated private reset bundle at one exact child of
 `/Users/administrator/apps/dpn-test/taira/reset-bundles/`, and place the
 already admitted executable at
-`/Users/administrator/apps/dpn-test/taira/releases/<release>/iroha3d`. The
+`/Users/administrator/apps/dpn-test/taira/releases/<release>/iroha3d`. Copy the
+source-matched `kagami` and `taira_operator_status` binaries into that same
+exact release child. Build the latter from the admitted source before staging:
+
+```bash
+cargo iroha-fast -- build --locked --release -p iroha_cli --bin taira_operator_status
+```
+
+The activation and reset manifest bind all three executable digests. The
 bundle stays mode `0700`, owned by `administrator:staff`, and retains the exact
 `taira-exact2f-reset-bundle` layout. Its reset manifest must bind the executable
 SHA-256, signed genesis, four config hashes, and four empty storage trees. The
@@ -2281,6 +2289,8 @@ Create an owner-only activation manifest beneath
   "binary_sha256": "<lowercase SHA-256>",
   "genesis_native_verifier": "/Users/administrator/apps/dpn-test/taira/releases/<release>/kagami",
   "genesis_native_verifier_sha256": "<lowercase SHA-256>",
+  "operator_status_client": "/Users/administrator/apps/dpn-test/taira/releases/<release>/taira_operator_status",
+  "operator_status_client_sha256": "<lowercase SHA-256>",
   "genesis_external_signer_sha256": "<lowercase SHA-256>",
   "genesis_public_key": "<canonical Ed25519 multihash>",
   "genesis_expected_hash": "<64 lowercase hex characters>",
@@ -2292,6 +2302,8 @@ Create an owner-only activation manifest beneath
   "bound_genesis_manifest_sha256": "<lowercase SHA-256>",
   "signed_genesis_sha256": "<lowercase SHA-256>",
   "local_reviewed_inputs_identity_sha256": "<lowercase SHA-256>",
+  "local_testnet_source_closure_sha256": "<lowercase SHA-256>",
+  "local_testnet_python_sha256": "<SHA-256 of resolved /opt/homebrew/bin/python3>",
   "source_commit": "<full lowercase Iroha commit>",
   "dpn_validator_release_commit": "<full lowercase DPN commit>",
   "limits": {
@@ -2304,35 +2316,80 @@ Create an owner-only activation manifest beneath
 }
 ```
 
-The active same-host testnet activation uses
-`local_reviewed_inputs_identity_sha256`. A production-authority reset instead
-uses `privacy_native_verifier_sha256`; the activation must contain exactly one
-of those two mode bindings, matching the reset manifest's
+The active same-host testnet activation uses all three local bindings shown
+above. A production-authority reset instead uses
+`privacy_native_verifier_sha256`; the activation must contain exactly the
+fields for one mode, matching the reset manifest's
 `privacy_bootstrap_release.schema`.
 
-For that same-host testnet bundle, invoke the sealed `prepare-reset` operation
-with the reviewed local five-file input set instead of a production privacy
-release. The two modes are mutually exclusive:
+The same-host lane does not use the root-owned production controller and does
+not use `sudo`. Its reviewed input directory contains exactly four mode-0600
+files: `privacy_bootstrap_plan.json`, `config.toml`, `genesis.json`, and
+`nevo-reset.review.json`. It must not contain a broker export or an authority
+manifest. The plan is the checked-in null-NetworkId staging plan and the base
+and rendered configs keep Bootle/Lantern issuance disabled; issuer enablement
+is a separate post-genesis operation after the signed NetworkId exists.
+
+First stage the exact controller/import closure into one absent UID501-owned
+mode-0700 directory. The staged tree admits no extra file, directory,
+symlink, hard link, or bytecode cache. Use the explicit Homebrew interpreter;
+neither a shebang nor `python3` from `PATH` is admitted:
 
 ```bash
-sudo -n "${TAIRA_CONTROLLER_COMMAND}" run "${CONTROLLER_COMMON[@]}" \
-  prepare-reset -- \
+TAIRA_PYTHON=/opt/homebrew/bin/python3
+TAIRA_PYTHON_RESOLVED="$(${TAIRA_PYTHON} -I -B -S -c 'import sys; print(sys.executable)')"
+TAIRA_PYTHON_SHA256="$(/usr/bin/shasum -a 256 "${TAIRA_PYTHON_RESOLVED}" | /usr/bin/awk '{print $1}')"
+LOCAL_CONTROLLER_PARENT=/Users/administrator/apps/dpn-test/taira/local-reset-controller
+LOCAL_CONTROLLER_ROOT=${LOCAL_CONTROLLER_PARENT}/20260819-nevo-reset-1
+/bin/mkdir -p "${LOCAL_CONTROLLER_PARENT}"
+/bin/chmod 0700 "${LOCAL_CONTROLLER_PARENT}"
+"${TAIRA_PYTHON}" -I -B -S \
+  scripts/inspect_taira_local_reset_source_closure.py \
+  --stage-root "${LOCAL_CONTROLLER_ROOT}" \
+  > /Users/administrator/apps/dpn-test/taira/reset-manifests/20260819-nevo-reset-1.source-closure.json
+LOCAL_SOURCE_CLOSURE_SHA256="$(
+  "${TAIRA_PYTHON}" -I -B -S \
+    "${LOCAL_CONTROLLER_ROOT}/scripts/inspect_taira_local_reset_source_closure.py" \
+    --digest-only
+)"
+LOCAL_REVIEWED_INPUTS_SHA256="$(
+  "${TAIRA_PYTHON}" -I -B -S \
+    "${LOCAL_CONTROLLER_ROOT}/scripts/inspect_taira_local_reviewed_inputs.py" \
+    --reviewed-input-dir "${LOCAL_REVIEWED_INPUT_DIR}" \
+    --source-commit "${SOURCE_COMMIT}" \
+    --dpn-validator-release-commit "${DPN_VALIDATOR_RELEASE_COMMIT}" \
+    --cargo-lock-sha256 "${CARGO_LOCK_SHA256}" \
+    --workspace-source-manifest-sha256 "${WORKSPACE_SOURCE_MANIFEST_SHA256}" \
+    --local-testnet-source-closure-sha256 "${LOCAL_SOURCE_CLOSURE_SHA256}" \
+    --local-testnet-python-sha256 "${TAIRA_PYTHON_SHA256}" \
+    --digest-only
+)"
+```
+
+Then invoke the staged preparation entry point directly as UID501. Both local
+digests are mandatory, and production controller flags are forbidden:
+
+```bash
+"${TAIRA_PYTHON}" -I -B -S \
+  "${LOCAL_CONTROLLER_ROOT}/scripts/prepare_taira_empty_reset_bundle.py" \
   --source-bundle "${LOCAL_RESET_SOURCE_BUNDLE}" \
   --source-bundle-sha256 "${LOCAL_RESET_SOURCE_BUNDLE_SHA256}" \
   --local-testnet-reviewed-input-dir "${LOCAL_REVIEWED_INPUT_DIR}" \
   --local-testnet-reviewed-inputs-sha256 "${LOCAL_REVIEWED_INPUTS_SHA256}" \
+  --local-testnet-source-closure-sha256 "${LOCAL_SOURCE_CLOSURE_SHA256}" \
+  --local-testnet-python-sha256 "${TAIRA_PYTHON_SHA256}" \
   --genesis-external-signer "${GENESIS_EXTERNAL_SIGNER}" \
   --trusted-genesis-external-signer-sha256 "${GENESIS_SIGNER_SHA256}" \
   --genesis-native-verifier "${GENESIS_NATIVE_VERIFIER}" \
   --trusted-genesis-native-verifier-sha256 "${GENESIS_NATIVE_VERIFIER_SHA256}" \
+  --operator-status-client "${OPERATOR_STATUS_CLIENT}" \
+  --trusted-operator-status-client-sha256 "${OPERATOR_STATUS_CLIENT_SHA256}" \
   --onboarding-token-hash-tool "${ONBOARDING_TOKEN_HASH_TOOL}" \
   --irohad-sha256 "${IROHAD_SHA256}" \
   --source-commit "${SOURCE_COMMIT}" \
   --dpn-validator-release-commit "${DPN_VALIDATOR_RELEASE_COMMIT}" \
   --cargo-lock-sha256 "${CARGO_LOCK_SHA256}" \
   --workspace-source-manifest-sha256 "${WORKSPACE_SOURCE_MANIFEST_SHA256}" \
-  --controller-manifest "${TAIRA_CONTROLLER_ROOT}/authority-controller-v1.json" \
-  --controller-digest "${EXPECTED_CONTROLLER_DIGEST}" \
   --output-bundle "${LOCAL_RESET_BUNDLE}"
 ```
 
@@ -2340,16 +2397,33 @@ The default invocation is read-only and prints the exact manifest-bound
 confirmation string:
 
 ```bash
-python3 scripts/deploy_taira_user_launchagent_reset.py \
+"${TAIRA_PYTHON}" -I -B -S \
+  "${LOCAL_CONTROLLER_ROOT}/scripts/deploy_taira_user_launchagent_reset.py" \
   --manifest /Users/administrator/apps/dpn-test/taira/reset-manifests/20260819-nevo-reset-1.json
 ```
 
 Only after reviewing that projection, fencing every API writer, and receiving
-explicit reset approval may an operator repeat it with `--apply`, the printed
-`--confirm-reset` value, and an owner-private runtime operator-key file. Use a
-separate `--rollback-operator-private-key-file` only when the predecessor and
-candidate genesis authorize different operator keys. Neither key is copied to
-the evidence archive.
+explicit reset approval may an operator repeat it with `--apply` and the
+printed `--confirm-reset` value. Protected status checks require exactly four
+candidate keys and four predecessor keys in validator order; there is no
+shared-key fallback. The files remain runtime-only and are never copied to the
+evidence archive:
+
+```bash
+"${TAIRA_PYTHON}" -I -B -S \
+  "${LOCAL_CONTROLLER_ROOT}/scripts/deploy_taira_user_launchagent_reset.py" \
+  --manifest /Users/administrator/apps/dpn-test/taira/reset-manifests/20260819-nevo-reset-1.json \
+  --apply \
+  --confirm-reset "${EXACT_PRINTED_CONFIRMATION}" \
+  --operator-private-key-file "${LOCAL_RESET_BUNDLE}/rendered/taira-validator-1/runtime/validator-signer.key" \
+  --operator-private-key-file "${LOCAL_RESET_BUNDLE}/rendered/taira-validator-2/runtime/validator-signer.key" \
+  --operator-private-key-file "${LOCAL_RESET_BUNDLE}/rendered/taira-validator-3/runtime/validator-signer.key" \
+  --operator-private-key-file "${LOCAL_RESET_BUNDLE}/rendered/taira-validator-4/runtime/validator-signer.key" \
+  --rollback-operator-private-key-file "${PREDECESSOR_VALIDATOR_1_KEY}" \
+  --rollback-operator-private-key-file "${PREDECESSOR_VALIDATOR_2_KEY}" \
+  --rollback-operator-private-key-file "${PREDECESSOR_VALIDATOR_3_KEY}" \
+  --rollback-operator-private-key-file "${PREDECESSOR_VALIDATOR_4_KEY}"
+```
 
 The apply transaction captures the old plist bytes and public artifact/storage
 identities before the first bootout. It stops all four jobs, atomically installs

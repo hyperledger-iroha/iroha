@@ -54,6 +54,7 @@ def activation_payload(
 ) -> dict[str, object]:
     binary = layout.releases / "candidate-release/iroha3d"
     verifier = binary.with_name("kagami")
+    operator_client = binary.with_name("taira_operator_status")
     return {
         "schema": module.SCHEMA,
         "generation": generation,
@@ -68,6 +69,10 @@ def activation_payload(
         "genesis_native_verifier_sha256": hashlib.sha256(
             b"candidate-native-verifier"
         ).hexdigest(),
+        "operator_status_client": str(operator_client),
+        "operator_status_client_sha256": hashlib.sha256(
+            b"candidate-operator-status-client"
+        ).hexdigest(),
         "genesis_external_signer_sha256": "4" * 64,
         "genesis_public_key": (
             "ed0120403BA31890B09C40B7108A0AC1319D27C10FE5442027CF8333C5C3A09CBB0343"
@@ -81,6 +86,10 @@ def activation_payload(
         "bound_genesis_manifest_sha256": "8" * 64,
         "signed_genesis_sha256": "9" * 64,
         "local_reviewed_inputs_identity_sha256": "c" * 64,
+        "local_testnet_source_closure_sha256": "d" * 64,
+        "local_testnet_python_sha256": module.stable_hash_path(
+            module.LOCAL_TESTNET_PYTHON.resolve(strict=True)
+        ).sha256,
         "source_commit": "2" * 40,
         "dpn_validator_release_commit": "3" * 40,
         "limits": {
@@ -136,6 +145,12 @@ def build_fixture(tmp_path: Path) -> tuple[module.Layout, module.Activation, Sim
     private_file(candidate_binary, b"candidate-binary", executable=True)
     candidate_verifier = Path(str(payload["genesis_native_verifier"]))
     private_file(candidate_verifier, b"candidate-native-verifier", executable=True)
+    candidate_operator_client = Path(str(payload["operator_status_client"]))
+    private_file(
+        candidate_operator_client,
+        b"candidate-operator-status-client",
+        executable=True,
+    )
     bundle = Path(str(payload["bundle"]))
     private_dir(bundle)
     private_file(bundle / "genesis.json", b'{"domain":"nevo.dpn"}\n')
@@ -236,6 +251,32 @@ def test_parser_is_dry_run_by_default() -> None:
 
     assert args.apply is False
     assert args.confirm_reset is None
+
+
+def test_readme_local_lane_is_isolated_direct_four_file_and_per_peer() -> None:
+    readme = (
+        module.nevo_composer.REPO_ROOT / "configs/soranexus/taira/README.md"
+    ).read_text(encoding="utf-8")
+    section = readme.split("### Existing macOS user-LaunchAgent cohort", 1)[1]
+    section = section.split("The live bundle is never composed", 1)[0]
+
+    assert "/opt/homebrew/bin/python3" in section
+    assert section.count("-I -B -S") >= 4
+    assert "exactly four mode-0600" in section
+    assert "--local-testnet-reviewed-inputs-sha256" in section
+    assert "--local-testnet-source-closure-sha256" in section
+    assert "--local-testnet-python-sha256" in section
+    assert '"operator_status_client"' in section
+    assert '"operator_status_client_sha256"' in section
+    assert "--operator-status-client" in section
+    assert "--trusted-operator-status-client-sha256" in section
+    assert "--controller-manifest" not in section
+    assert "sudo " not in section
+    assert section.count("\n  --operator-private-key-file ") == module.PEER_COUNT
+    assert (
+        section.count("\n  --rollback-operator-private-key-file ")
+        == module.PEER_COUNT
+    )
 
 
 def test_manifest_requires_exact_user_cohort_and_refuses_system_label(tmp_path: Path) -> None:
@@ -399,6 +440,10 @@ def test_genesis_integrity_binds_review_signed_verifier_and_all_peer_artifacts(
         native_verifier_peer_config_set_sha256=peer_config_set_sha256,
         bound_genesis_manifest_sha256=hashlib.sha256(bound).hexdigest(),
         signed_genesis_sha256=hashlib.sha256(signed).hexdigest(),
+        privacy_native_verifier_sha256="c" * 64,
+        local_reviewed_inputs_identity_sha256=None,
+        local_testnet_source_closure_sha256=None,
+        local_testnet_python_sha256=None,
     )
     receipt = {
         "schema": "iroha.kagami.prepared-genesis-verification.v2",
@@ -439,13 +484,12 @@ def test_genesis_integrity_binds_review_signed_verifier_and_all_peer_artifacts(
         "native_genesis_verifier_sha256": (
             activation.genesis_native_verifier_sha256
         ),
+        "operator_status_client_sha256": activation.operator_status_client_sha256,
         "native_genesis_verifier_receipt_sha256": receipt_sha,
         "native_verifier_peer_config_set_sha256": (
             activation.native_verifier_peer_config_set_sha256
         ),
-        "local_reviewed_inputs_identity_sha256": (
-            activation.local_reviewed_inputs_identity_sha256
-        ),
+        "privacy_native_verifier_sha256": activation.privacy_native_verifier_sha256,
     }
     linkage_sha = hashlib.sha256(module._artifact_canonical_json(linkage)).hexdigest()
     activation = dataclasses.replace(
@@ -476,11 +520,15 @@ def test_genesis_integrity_binds_review_signed_verifier_and_all_peer_artifacts(
         },
         "validator_artifact_inventory": inventory,
         "privacy_bootstrap_release": {
-            "schema": "iroha.taira.local_testnet_reviewed_reset.v1"
+            "schema": "iroha.taira.signed_privacy_reset.v1"
         },
-        "local_reviewed_inputs_identity_sha256": (
-            activation.local_reviewed_inputs_identity_sha256
-        ),
+        "privacy_native_verifier_sha256": activation.privacy_native_verifier_sha256,
+        "operator_status_client_sha256": activation.operator_status_client_sha256,
+        "release_controller": {
+            "digest": "e" * 64,
+            "manifest_sha256": "f" * 64,
+            "platform": "macos",
+        },
     }
     manifest["genesis_external_signer_sha256"] = manifest.pop(
         "external_signer_sha256"
@@ -528,6 +576,306 @@ def test_genesis_integrity_binds_review_signed_verifier_and_all_peer_artifacts(
 
     private_file(bundle_plan.peers[1].config, b"mutated-config")
     with pytest.raises(module.ResetError, match="peer config digest changed"):
+        module._require_nevo_genesis_integrity(activation, manifest)
+
+
+def _local_genesis_integrity_fixture(
+    tmp_path: Path,
+) -> tuple[module.Activation, dict[str, object]]:
+    """Build one real, broker-free local review projection from checked-in bytes."""
+
+    _layout, activation, bundle_plan = build_fixture(tmp_path)
+    bundle = bundle_plan.root
+    fixture = (
+        module.nevo_composer.REPO_ROOT
+        / "crates/iroha_kagami/tests/fixtures/taira_nevo_v2"
+    )
+    reviewed = (fixture / "unsigned-genesis.json").read_bytes()
+    review_raw = (fixture / "review.json").read_bytes()
+    config_raw = (
+        module.nevo_composer.REPO_ROOT / "configs/soranexus/taira/config.toml"
+    ).read_bytes()
+    plan_raw = (
+        module.nevo_composer.REPO_ROOT
+        / "configs/soranexus/taira/privacy_bootstrap_plan.json"
+    ).read_bytes()
+    verified_review = module.nevo_composer.verify_reviewed_payloads(
+        unsigned_genesis_bytes=reviewed,
+        review_bytes=review_raw,
+        base_genesis_bytes=module.nevo_composer.CHECKED_IN_TAIRA_GENESIS.read_bytes(),
+        base_config_bytes=config_raw,
+    )
+    pre_sign = b'{"rendered":true}\n'
+    bound = b'{"bound":true}\n'
+    signed = b"signed-local-nevo-genesis"
+    private_file(bundle / "genesis.reviewed-unsigned.json", reviewed)
+    private_file(bundle / "genesis.pre-sign-rendered.json", pre_sign)
+    private_file(bundle / "nevo-reset.review.json", review_raw)
+    private_file(bundle / "genesis.json", bound)
+    private_file(bundle / "genesis.signed.nrt", signed)
+    private_file(bundle / "base-config.toml", config_raw)
+    for peer in bundle_plan.peers:
+        private_file(peer.config, config_raw)
+
+    closure_manifest, closure_sha256 = module.local_testnet_source_closure()
+    closure = {**closure_manifest, "sha256": closure_sha256}
+    peer_config_sha256 = [
+        hashlib.sha256(peer.config.read_bytes()).hexdigest()
+        for peer in bundle_plan.peers
+    ]
+    config_manifest = {
+        peer.slug: digest
+        for peer, digest in zip(bundle_plan.peers, peer_config_sha256)
+    }
+    config_set_sha256 = module._ordered_sha256_set(peer_config_sha256)
+    reviewed_inputs_raw = {
+        "privacy_bootstrap_plan.json": plan_raw,
+        "config.toml": config_raw,
+        "genesis.json": reviewed,
+        "nevo-reset.review.json": review_raw,
+    }
+    reviewed_inputs = {
+        name: {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
+        for name, raw in reviewed_inputs_raw.items()
+    }
+    cargo_lock_sha256 = "a" * 64
+    workspace_sha256 = "b" * 64
+    source = {
+        "commit": activation.source_commit,
+        "dpn_validator_release_commit": activation.dpn_validator_release_commit,
+        "cargo_lock_sha256": cargo_lock_sha256,
+        "workspace_source_manifest_sha256": workspace_sha256,
+    }
+    identity_manifest = {
+        "schema": "iroha.taira.local_testnet_reviewed_inputs.v1",
+        "authority_claim": "none-user-authorized-same-host-testnet",
+        "source": source,
+        "privacy_inputs": reviewed_inputs,
+    }
+    reviewed_identity = hashlib.sha256(
+        module._artifact_canonical_json(identity_manifest)
+    ).hexdigest()
+    activation = dataclasses.replace(
+        activation,
+        nevo_review_sha256=hashlib.sha256(review_raw).hexdigest(),
+        reviewed_unsigned_genesis_sha256=hashlib.sha256(reviewed).hexdigest(),
+        pre_sign_rendered_genesis_sha256=hashlib.sha256(pre_sign).hexdigest(),
+        native_verifier_peer_config_set_sha256=config_set_sha256,
+        bound_genesis_manifest_sha256=hashlib.sha256(bound).hexdigest(),
+        signed_genesis_sha256=hashlib.sha256(signed).hexdigest(),
+        privacy_native_verifier_sha256=None,
+        local_reviewed_inputs_identity_sha256=reviewed_identity,
+        local_testnet_source_closure_sha256=closure_sha256,
+    )
+    roster_sha256 = hashlib.sha256(
+        (bundle / "validator-roster.toml").read_bytes()
+    ).hexdigest()
+    receipt = {
+        "schema": "iroha.kagami.prepared-genesis-verification.v2",
+        "status": "verified",
+        "reviewed_manifest_sha256": activation.reviewed_unsigned_genesis_sha256,
+        "validator_roster_sha256": roster_sha256,
+        "bound_manifest_sha256": activation.bound_genesis_manifest_sha256,
+        "pre_sign_manifest_sha256": activation.pre_sign_rendered_genesis_sha256,
+        "signed_genesis_sha256": activation.signed_genesis_sha256,
+        "peer_config_sha256": peer_config_sha256,
+        "peer_config_set_sha256": config_set_sha256,
+        "genesis_public_key": activation.genesis_public_key,
+        "expected_hash": activation.genesis_expected_hash,
+        "validator_count": module.PEER_COUNT,
+        "reviewed_transform_passed": True,
+        "allowed_transform_passed": True,
+        "staged_context_passed": True,
+        "full_core_validation_passed": True,
+    }
+    receipt_sha256 = hashlib.sha256(
+        module._artifact_canonical_json(receipt)
+    ).hexdigest()
+    linkage = {
+        "schema": "iroha.taira.nevo-genesis-artifact-linkage.v1",
+        "review_sha256": activation.nevo_review_sha256,
+        "reviewed_unsigned_genesis_sha256": activation.reviewed_unsigned_genesis_sha256,
+        "validator_roster_sha256": roster_sha256,
+        "pre_sign_rendered_genesis_sha256": activation.pre_sign_rendered_genesis_sha256,
+        "bound_genesis_manifest_sha256": activation.bound_genesis_manifest_sha256,
+        "signed_genesis_sha256": activation.signed_genesis_sha256,
+        "genesis_expected_hash": activation.genesis_expected_hash,
+        "genesis_public_key": activation.genesis_public_key,
+        "external_signer_sha256": activation.genesis_external_signer_sha256,
+        "native_genesis_verifier_sha256": activation.genesis_native_verifier_sha256,
+        "operator_status_client_sha256": activation.operator_status_client_sha256,
+        "native_genesis_verifier_receipt_sha256": receipt_sha256,
+        "native_verifier_peer_config_set_sha256": config_set_sha256,
+        "local_reviewed_inputs_identity_sha256": reviewed_identity,
+    }
+    linkage_sha256 = hashlib.sha256(
+        module._artifact_canonical_json(linkage)
+    ).hexdigest()
+    activation = dataclasses.replace(
+        activation,
+        genesis_artifact_linkage_sha256=linkage_sha256,
+    )
+    inventory = {
+        peer.slug: {
+            "directories": [],
+            "files": {"config.toml": digest},
+        }
+        for peer, digest in zip(bundle_plan.peers, peer_config_sha256)
+    }
+    review_projection = {
+        "schema": verified_review["schema"],
+        "sha256": reviewed_inputs["nevo-reset.review.json"]["sha256"],
+        "public_inputs_sha256": verified_review["public_inputs_sha256"],
+        "unsigned_genesis_sha256": verified_review["unsigned_genesis_sha256"],
+        "public_identities": verified_review["public_identities"],
+        "credential_hash_bindings": verified_review["credential_hash_bindings"],
+    }
+    privacy_release = {
+        "schema": "iroha.taira.local_testnet_reviewed_reset.v1",
+        "reviewed_inputs": reviewed_inputs,
+        "bound_genesis_manifest_sha256": activation.bound_genesis_manifest_sha256,
+        "signed_genesis_sha256": activation.signed_genesis_sha256,
+        "validator_config_sha256": config_manifest,
+        "nevo_reset_review": review_projection,
+        "authority_claim": "none-user-authorized-same-host-testnet",
+        "issuer_state": "disabled-no-broker",
+        "post_genesis_issuer_enablement_required": True,
+        "reviewed_inputs_identity_sha256": reviewed_identity,
+        "source": source,
+    }
+    manifest: dict[str, object] = {
+        "cargo_lock_sha256": cargo_lock_sha256,
+        "workspace_source_manifest_sha256": workspace_sha256,
+        "genesis_expected_hash": activation.genesis_expected_hash,
+        "genesis_public_key": activation.genesis_public_key,
+        "genesis_external_signer_sha256": activation.genesis_external_signer_sha256,
+        "genesis_native_verifier_sha256": activation.genesis_native_verifier_sha256,
+        "operator_status_client_sha256": activation.operator_status_client_sha256,
+        "genesis_artifact_linkage": linkage,
+        "genesis_artifact_linkage_sha256": linkage_sha256,
+        "genesis_native_verifier_receipt": receipt,
+        "genesis_native_verifier_receipt_sha256": receipt_sha256,
+        "native_verifier_peer_config_set_sha256": config_set_sha256,
+        "validator_roster_sha256": roster_sha256,
+        "configs": config_manifest,
+        "validator_artifact_inventory": inventory,
+        "privacy_bootstrap_release": privacy_release,
+        "local_reviewed_inputs_identity_sha256": reviewed_identity,
+        "local_testnet_source_closure": closure,
+        "local_testnet_python": {
+            "path": str(module.LOCAL_TESTNET_PYTHON),
+            "sha256": activation.local_testnet_python_sha256,
+        },
+    }
+    return activation, manifest
+
+
+def test_local_genesis_integrity_accepts_exact_broker_free_reviewed_release(
+    tmp_path: Path,
+) -> None:
+    activation, manifest = _local_genesis_integrity_fixture(tmp_path)
+
+    receipt, inventory = module._require_nevo_genesis_integrity(
+        activation, manifest
+    )
+
+    assert receipt["status"] == "verified"
+    assert set(inventory) == set(module.SLUGS)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    (
+        (lambda release: release.update(authority_claim="claimed"), "authority or issuer"),
+        (lambda release: release.update(issuer_state="enabled"), "authority or issuer"),
+        (
+            lambda release: release["reviewed_inputs"].update(
+                {"bootle_lantern_broker_public.json": {"sha256": "0" * 64, "size": 1}}
+            ),
+            "exactly four files",
+        ),
+        (
+            lambda release: release["reviewed_inputs"]["config.toml"].update(
+                sha256="0" * 64
+            ),
+            "reviewed input changed",
+        ),
+    ),
+)
+def test_local_genesis_integrity_rejects_authority_issuer_broker_and_row_drift(
+    tmp_path: Path,
+    mutation,
+    message: str,
+) -> None:
+    activation, manifest = _local_genesis_integrity_fixture(tmp_path)
+    release = manifest["privacy_bootstrap_release"]
+    assert isinstance(release, dict)
+    mutation(release)
+
+    with pytest.raises(module.ResetError, match=message):
+        module._require_nevo_genesis_integrity(activation, manifest)
+
+
+def test_local_genesis_integrity_rejects_identity_controller_and_enabled_peer(
+    tmp_path: Path,
+) -> None:
+    activation, manifest = _local_genesis_integrity_fixture(tmp_path / "identity")
+    release = manifest["privacy_bootstrap_release"]
+    assert isinstance(release, dict)
+    release["reviewed_inputs_identity_sha256"] = "0" * 64
+    with pytest.raises(module.ResetError, match="identity differs"):
+        module._require_nevo_genesis_integrity(activation, manifest)
+
+    activation, manifest = _local_genesis_integrity_fixture(tmp_path / "controller")
+    manifest["release_controller"] = {
+        "digest": "0" * 64,
+        "manifest_sha256": "1" * 64,
+        "platform": "macos",
+    }
+    with pytest.raises(module.ResetError, match="production verifier authority"):
+        module._require_nevo_genesis_integrity(activation, manifest)
+
+    activation, manifest = _local_genesis_integrity_fixture(tmp_path / "issuer")
+    peer_config = activation.bundle / "rendered" / module.SLUGS[2] / "config.toml"
+    private_file(
+        peer_config,
+        peer_config.read_bytes().replace(
+            b"[torii.privacy_bootle_lantern_issuer]\nenabled = false",
+            b"[torii.privacy_bootle_lantern_issuer]\nenabled = true",
+            1,
+        ),
+    )
+    peer_digest = hashlib.sha256(peer_config.read_bytes()).hexdigest()
+    config_manifest = manifest["configs"]
+    assert isinstance(config_manifest, dict)
+    config_manifest[module.SLUGS[2]] = peer_digest
+    release = manifest["privacy_bootstrap_release"]
+    assert isinstance(release, dict)
+    release["validator_config_sha256"] = dict(config_manifest)
+    inventory = manifest["validator_artifact_inventory"]
+    assert isinstance(inventory, dict)
+    inventory[module.SLUGS[2]]["files"]["config.toml"] = peer_digest
+    config_hashes = [config_manifest[slug] for slug in module.SLUGS]
+    config_set = module._ordered_sha256_set(config_hashes)
+    manifest["native_verifier_peer_config_set_sha256"] = config_set
+    linkage = manifest["genesis_artifact_linkage"]
+    assert isinstance(linkage, dict)
+    linkage["native_verifier_peer_config_set_sha256"] = config_set
+    receipt = manifest["genesis_native_verifier_receipt"]
+    assert isinstance(receipt, dict)
+    receipt["peer_config_sha256"] = config_hashes
+    receipt["peer_config_set_sha256"] = config_set
+    receipt_sha = hashlib.sha256(module._artifact_canonical_json(receipt)).hexdigest()
+    manifest["genesis_native_verifier_receipt_sha256"] = receipt_sha
+    linkage["native_genesis_verifier_receipt_sha256"] = receipt_sha
+    linkage_sha = hashlib.sha256(module._artifact_canonical_json(linkage)).hexdigest()
+    manifest["genesis_artifact_linkage_sha256"] = linkage_sha
+    activation = dataclasses.replace(
+        activation,
+        native_verifier_peer_config_set_sha256=config_set,
+        genesis_artifact_linkage_sha256=linkage_sha,
+    )
+    with pytest.raises(module.ResetError, match="issuance exactly disabled"):
         module._require_nevo_genesis_integrity(activation, manifest)
 
 
@@ -681,10 +1029,16 @@ class FixtureHealth(module.HealthClient):
         del headers
         if not parse_json:
             return None
-        port = int(url.split(":")[2].split("/")[0])
+        return {"blocks": 7}
+
+    def _protected_status(
+        self,
+        port: int,
+        network_id: str,
+        private_key_file: Path,
+    ) -> dict[str, object]:
+        del network_id, private_key_file
         suffix = 2 if self.disagree and port == module.TORII_PORTS[-1] else 0
-        if not url.endswith("/v1/sumeragi/status"):
-            return {"blocks": 7}
         subject = {"block_hash": "00" * 31 + f"0{suffix}"}
         return {
             "protocol_version": 4,
@@ -719,43 +1073,41 @@ class FixtureHealth(module.HealthClient):
         }
 
 
-class FixtureOperatorContext:
-    def headers(self, method: str, target: str, body: bytes) -> dict[str, str]:
-        del method, target, body
-        return {}
+def fixture_operator_keys() -> tuple[Path, ...]:
+    return tuple(Path(f"/runtime-only/operator-{index}.key") for index in range(4))
 
 
 def test_health_requires_exact_three_of_four_qc() -> None:
     with pytest.raises(module.ResetError, match="3-of-4 quorum"):
         FixtureHealth(minimum_signers=2).fleet_sample(
-            module.TORII_PORTS, FixtureOperatorContext()
+            module.TORII_PORTS, OLD_NETWORK_ID, fixture_operator_keys()
         )
 
 
 def test_health_requires_one_common_committed_frontier() -> None:
     with pytest.raises(module.ResetError, match="disagree"):
         FixtureHealth(disagree=True).fleet_sample(
-            module.TORII_PORTS, FixtureOperatorContext()
+            module.TORII_PORTS, OLD_NETWORK_ID, fixture_operator_keys()
         )
 
 
 def test_health_requires_a_durable_three_signer_commit_qc() -> None:
     with pytest.raises(module.ResetError, match="durable CommitQC"):
         FixtureHealth(qc_signers=2).fleet_sample(
-            module.TORII_PORTS, FixtureOperatorContext()
+            module.TORII_PORTS, OLD_NETWORK_ID, fixture_operator_keys()
         )
 
 
 def test_health_requires_four_distinct_node_identities() -> None:
     with pytest.raises(module.ResetError, match="distinct node identities"):
         FixtureHealth(same_node=True).fleet_sample(
-            module.TORII_PORTS, FixtureOperatorContext()
+            module.TORII_PORTS, OLD_NETWORK_ID, fixture_operator_keys()
         )
 
 
 def test_health_accepts_exact_four_peer_three_of_four_qc() -> None:
     sample = FixtureHealth().fleet_sample(
-        module.TORII_PORTS, FixtureOperatorContext()
+        module.TORII_PORTS, OLD_NETWORK_ID, fixture_operator_keys()
     )
 
     assert sample.height == 7
@@ -767,11 +1119,6 @@ def test_health_stability_does_not_require_idle_chain_advancement(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     health = FixtureHealth()
-    monkeypatch.setattr(
-        module,
-        "load_operator_context_from_file",
-        lambda *_args: FixtureOperatorContext(),
-    )
     monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
     limits = module.Limits(
         minimum_free_bytes=module.MIN_FREE_BYTES,
@@ -784,11 +1131,189 @@ def test_health_stability_does_not_require_idle_chain_advancement(
     first, second = health.wait_fleet(
         module.TORII_PORTS,
         OLD_NETWORK_ID,
-        Path("/runtime-only/operator.key"),
+        fixture_operator_keys(),
         limits,
     )
 
     assert first == second
+
+
+def test_health_requires_four_distinct_ordered_peer_authentication_keys() -> None:
+    health = FixtureHealth()
+    limits = module.Limits(
+        minimum_free_bytes=module.MIN_FREE_BYTES,
+        maximum_fsync_latency_ms=500,
+        startup_timeout_seconds=30,
+        stability_timeout_seconds=5,
+        poll_interval_seconds=0.25,
+    )
+    with pytest.raises(module.ResetError, match="four distinct ordered peer key"):
+        health.wait_fleet(
+            module.TORII_PORTS,
+            OLD_NETWORK_ID,
+            (Path("/runtime-only/shared.key"),) * module.PEER_COUNT,
+            limits,
+        )
+    with pytest.raises(module.ResetError, match="four ordered peer key files"):
+        health.fleet_sample(
+            module.TORII_PORTS,
+            OLD_NETWORK_ID,
+            (Path("/runtime-only/one.key"),),
+        )
+
+
+@pytest.mark.parametrize(
+    ("port", "network_id", "key_path"),
+    (
+        (module.TORII_PORTS[0], OLD_NETWORK_ID, Path("/private/old-peer-1.key")),
+        (
+            module.TORII_PORTS[3],
+            module.reset_bundle.validator_renderer._format_literal(
+                "hash", NEW_HASH.upper()
+            ),
+            Path("/private/candidate-peer-4.key"),
+        ),
+    ),
+)
+def test_native_operator_status_client_is_digest_pinned_fixed_env_and_exact_argv(
+    tmp_path: Path,
+    port: int,
+    network_id: str,
+    key_path: Path,
+) -> None:
+    client = private_file(
+        tmp_path / "taira_operator_status",
+        (
+            b"#!/opt/homebrew/bin/python3\n"
+            b"import json, os, sys\n"
+            + f"expected = {['--torii-url', f'http://127.0.0.1:{port}/', '--network-id', network_id, '--operator-private-key-file', str(key_path), '--timeout-ms', '2000']!r}\n".encode()
+            + b"proxy = any(name.upper().endswith('_PROXY') for name in os.environ)\n"
+            + b"if sys.argv[1:] != expected or os.environ.get('LANG') != 'C' or os.environ.get('LC_ALL') != 'C' or proxy:\n"
+            + b"    raise SystemExit(23)\n"
+            + b"print(json.dumps({'status': 'ok'}, sort_keys=True))\n"
+        ),
+        executable=True,
+    )
+    digest = hashlib.sha256(client.read_bytes()).hexdigest()
+    health = module.HealthClient(client, digest)
+
+    assert health._protected_status(
+        port, network_id, key_path
+    ) == {"status": "ok"}
+
+    wrong_digest = module.HealthClient(client, "0" * 64)
+    with pytest.raises(module.ResetError, match="differs before protected read"):
+        wrong_digest._protected_status(
+            port, network_id, key_path
+        )
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    (
+        (b"#!/bin/sh\nexit 23\n", "refused the protected read"),
+        (b"#!/bin/sh\nprintf 'not-json\\n'\n", "returned invalid JSON"),
+    ),
+)
+def test_native_operator_status_client_rejects_exit_and_invalid_json(
+    tmp_path: Path,
+    body: bytes,
+    message: str,
+) -> None:
+    client = private_file(tmp_path / "taira_operator_status", body, executable=True)
+    health = module.HealthClient(client, hashlib.sha256(body).hexdigest())
+
+    with pytest.raises(module.ResetError, match=message):
+        health._protected_status(
+            module.TORII_PORTS[0], OLD_NETWORK_ID, Path("/private/peer-1.key")
+        )
+
+
+def test_native_operator_status_client_rejects_timeout_oversize_and_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    timeout_client = private_file(
+        tmp_path / "timeout/taira_operator_status",
+        b"#!/bin/sh\n/bin/sleep 10\n",
+        executable=True,
+    )
+    timeout_health = module.HealthClient(
+        timeout_client, hashlib.sha256(timeout_client.read_bytes()).hexdigest()
+    )
+    ticks = iter((0.0, 5.0, 5.0))
+    monkeypatch.setattr(module.time, "monotonic", lambda: next(ticks, 5.0))
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    with pytest.raises(module.ResetError, match="runtime bound"):
+        timeout_health._protected_status(
+            module.TORII_PORTS[0], OLD_NETWORK_ID, Path("/private/peer-1.key")
+        )
+
+    monkeypatch.undo()
+    oversize_client = private_file(
+        tmp_path / "oversize/taira_operator_status",
+        (
+            b"#!/opt/homebrew/bin/python3\n"
+            b"import sys\n"
+            + f"sys.stdout.write('x' * {module.MAX_HTTP_BYTES + 1})\n".encode()
+        ),
+        executable=True,
+    )
+    oversize_health = module.HealthClient(
+        oversize_client,
+        hashlib.sha256(oversize_client.read_bytes()).hexdigest(),
+    )
+    with pytest.raises(module.ResetError, match="bound"):
+        oversize_health._protected_status(
+            module.TORII_PORTS[0], OLD_NETWORK_ID, Path("/private/peer-1.key")
+        )
+
+    mutation_client = private_file(
+        tmp_path / "mutation/taira_operator_status",
+        (
+            b"#!/opt/homebrew/bin/python3\n"
+            b"import sys\n"
+            b"with open(sys.argv[0], 'ab') as output:\n"
+            b"    output.write(b' ')\n"
+            b"print('{}')\n"
+        ),
+        executable=True,
+    )
+    mutation_health = module.HealthClient(
+        mutation_client,
+        hashlib.sha256(mutation_client.read_bytes()).hexdigest(),
+    )
+    with pytest.raises(module.ResetError, match="changed during protected read"):
+        mutation_health._protected_status(
+            module.TORII_PORTS[0], OLD_NETWORK_ID, Path("/private/peer-1.key")
+        )
+
+
+def test_apply_refuses_nonexact_or_misordered_peer_key_paths(tmp_path: Path) -> None:
+    _layout, plan, _captured, _launchctl = build_plan_fixture(tmp_path)
+    candidate = tuple(
+        peer.workdir / "runtime/validator-signer.key" for peer in plan.candidate
+    )
+    predecessor = tuple(
+        peer.workdir / "runtime/validator-signer.key" for peer in plan.predecessor
+    )
+
+    with pytest.raises(module.ResetError, match="exact ordered peer runtime paths"):
+        module.apply_reset(
+            plan,
+            confirmation=plan.activation.confirmation,
+            operator_private_key_files=tuple(reversed(candidate)),
+            rollback_operator_private_key_files=predecessor,
+        )
+    with pytest.raises(
+        module.ResetError, match="exact ordered predecessor runtime paths"
+    ):
+        module.apply_reset(
+            plan,
+            confirmation=plan.activation.confirmation,
+            operator_private_key_files=candidate,
+            rollback_operator_private_key_files=tuple(reversed(predecessor)),
+        )
 
 
 def test_apply_refuses_wrong_confirmation_before_lock(tmp_path: Path) -> None:
@@ -798,8 +1323,8 @@ def test_apply_refuses_wrong_confirmation_before_lock(tmp_path: Path) -> None:
         module.apply_reset(
             plan,
             confirmation="RESET-THE-WRONG-THING",
-            operator_private_key_file=Path("/private/key"),
-            rollback_operator_private_key_file=Path("/private/key"),
+            operator_private_key_files=(Path("/private/key"),),
+            rollback_operator_private_key_files=(Path("/private/key"),),
         )
 
     assert not plan.activation.path.parents[1].joinpath(".user-launchagent-reset.lock").exists()
@@ -915,9 +1440,13 @@ def test_apply_automatically_rolls_back_a_candidate_qc_failure(
         module.apply_reset(
             plan,
             confirmation=plan.activation.confirmation,
-            operator_private_key_file=Path("/runtime-only/new-operator.key"),
-            rollback_operator_private_key_file=Path(
-                "/runtime-only/old-operator.key"
+            operator_private_key_files=tuple(
+                peer.workdir / "runtime/validator-signer.key"
+                for peer in plan.candidate
+            ),
+            rollback_operator_private_key_files=tuple(
+                peer.workdir / "runtime/validator-signer.key"
+                for peer in plan.predecessor
             ),
             layout=layout,
             ops=ops,  # type: ignore[arg-type]

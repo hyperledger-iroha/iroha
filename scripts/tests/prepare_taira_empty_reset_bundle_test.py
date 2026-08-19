@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import unittest
@@ -45,6 +46,9 @@ def test_isolated_cli_loads_only_its_trusted_sibling_modules(
     assert "--local-testnet-reviewed-input-dir" in result.stdout
     assert "--local-testnet-reviewed-inputs-sha256" in result.stdout
     assert "--local-testnet-source-closure-sha256" in result.stdout
+    assert "--local-testnet-python-sha256" in result.stdout
+    assert "--operator-status-client" in result.stdout
+    assert "--trusted-operator-status-client-sha256" in result.stdout
     assert "--kagemusha-release-root" in result.stdout
     assert "--kagemusha-activation-authority" in result.stdout
 
@@ -532,6 +536,10 @@ def _prepare_args(
     if not native_genesis_verifier.exists():
         _write_private(native_genesis_verifier, b"fake native genesis verifier")
         native_genesis_verifier.chmod(0o700)
+    operator_status_client = private / "taira_operator_status"
+    if not operator_status_client.exists():
+        _write_private(operator_status_client, b"fake native operator status client")
+        operator_status_client.chmod(0o700)
     controller_manifest = private / "authority-controller-v1.json"
     if not controller_manifest.exists():
         _write_private(controller_manifest, b'{"test":"controller"}\n')
@@ -542,11 +550,16 @@ def _prepare_args(
         local_testnet_reviewed_input_dir=None,
         local_testnet_reviewed_inputs_sha256=None,
         local_testnet_source_closure_sha256=None,
+        local_testnet_python_sha256=None,
         genesis_external_signer=genesis_signer,
         trusted_genesis_external_signer_sha256=reset_bundle.sha256(genesis_signer),
         genesis_native_verifier=native_genesis_verifier,
         trusted_genesis_native_verifier_sha256=reset_bundle.sha256(
             native_genesis_verifier
+        ),
+        operator_status_client=operator_status_client,
+        trusted_operator_status_client_sha256=reset_bundle.sha256(
+            operator_status_client
         ),
         onboarding_token_hash_tool=token_hash_tool,
         output_bundle=private / "output",
@@ -934,8 +947,23 @@ def test_local_testnet_reviewed_inputs_reject_finalized_or_broker_inputs(
             workspace_source_manifest_sha256="ef" * 32,
         )
 
+    _local_reviewed_inputs(root)
+    _write_private(root / "bootle_lantern_broker_public.json", b"{}\n")
+    with pytest.raises(RuntimeError, match="exactly four files"):
+        reset_bundle._inspect_local_testnet_reviewed_inputs(
+            root,
+            source_commit="ab" * 20,
+            dpn_validator_release_commit=DPN_COMMIT,
+            cargo_lock_sha256="cd" * 32,
+            workspace_source_manifest_sha256="ef" * 32,
+        )
 
-def test_local_testnet_source_closure_is_exact_and_operator_inspectable() -> None:
+
+def test_local_testnet_source_closure_is_exact_and_operator_inspectable(
+    tmp_path: Path,
+) -> None:
+    from scripts import deploy_taira_user_launchagent_reset as user_reset
+
     manifest, digest = reset_bundle.local_testnet_source_closure()
     assert manifest["schema"] == reset_bundle.LOCAL_TESTNET_SOURCE_CLOSURE_SCHEMA
     assert [row["path"] for row in manifest["files"]] == list(
@@ -944,6 +972,9 @@ def test_local_testnet_source_closure_is_exact_and_operator_inspectable() -> Non
     assert hashlib.sha256(
         reset_bundle.canonical_json_bytes(manifest)
     ).hexdigest() == digest
+    consumer_manifest, consumer_digest = user_reset.local_testnet_source_closure()
+    assert consumer_manifest == manifest
+    assert consumer_digest == digest
 
     inspector = SCRIPT.with_name("inspect_taira_local_reset_source_closure.py")
     result = subprocess.run(
@@ -956,22 +987,87 @@ def test_local_testnet_source_closure_is_exact_and_operator_inspectable() -> Non
     assert result.returncode == 0, result.stderr
     assert result.stdout == f"{digest}\n"
 
-    _write_private(
-        root / "privacy_bootstrap_plan.json",
-        (
-            reset_bundle.nevo_composer.REPO_ROOT
-            / "configs/soranexus/taira/privacy_bootstrap_plan.json"
-        ).read_bytes(),
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    staged = private / "source-closure"
+    staged_result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-S",
+            str(inspector),
+            "--stage-root",
+            str(staged),
+        ],
+        cwd=SCRIPT.parent.parent,
+        capture_output=True,
+        check=False,
+        text=True,
     )
-    _write_private(root / "bootle_lantern_broker_public.json", b"{}\n")
-    with pytest.raises(RuntimeError, match="exactly four files"):
-        reset_bundle._inspect_local_testnet_reviewed_inputs(
-            root,
-            source_commit="ab" * 20,
-            dpn_validator_release_commit=DPN_COMMIT,
-            cargo_lock_sha256="cd" * 32,
-            workspace_source_manifest_sha256="ef" * 32,
-        )
+    assert staged_result.returncode == 0, staged_result.stderr
+    staged_manifest = json.loads(staged_result.stdout)
+    assert staged_manifest == {**manifest, "sha256": digest}
+    assert stat.S_IMODE(staged.stat().st_mode) == 0o700
+    staged_inspector = staged / "scripts/inspect_taira_local_reset_source_closure.py"
+    isolated = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-S",
+            str(staged_inspector),
+            "--digest-only",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert isolated.returncode == 0, isolated.stderr
+    assert isolated.stdout == f"{digest}\n"
+
+    reviewed = private / "reviewed-inputs"
+    _local_reviewed_inputs(reviewed)
+    _, _, reviewed_digest = reset_bundle._inspect_local_testnet_reviewed_inputs(
+        reviewed,
+        source_commit="ab" * 20,
+        dpn_validator_release_commit=DPN_COMMIT,
+        cargo_lock_sha256="cd" * 32,
+        workspace_source_manifest_sha256="ef" * 32,
+    )
+    python_digest = reset_bundle.stable_hash_path(
+        reset_bundle.LOCAL_TESTNET_PYTHON.resolve(strict=True)
+    ).sha256
+    reviewed_inspector = staged / "scripts/inspect_taira_local_reviewed_inputs.py"
+    inspected = subprocess.run(
+        [
+            str(reset_bundle.LOCAL_TESTNET_PYTHON),
+            "-I",
+            "-B",
+            "-S",
+            str(reviewed_inspector),
+            "--reviewed-input-dir",
+            str(reviewed),
+            "--source-commit",
+            "ab" * 20,
+            "--dpn-validator-release-commit",
+            DPN_COMMIT,
+            "--cargo-lock-sha256",
+            "cd" * 32,
+            "--workspace-source-manifest-sha256",
+            "ef" * 32,
+            "--local-testnet-source-closure-sha256",
+            digest,
+            "--local-testnet-python-sha256",
+            python_digest,
+            "--digest-only",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert inspected.returncode == 0, inspected.stderr
+    assert inspected.stdout == f"{reviewed_digest}\n"
 
 
 def test_source_reset_snapshot_rejects_any_post_review_byte_mutation(

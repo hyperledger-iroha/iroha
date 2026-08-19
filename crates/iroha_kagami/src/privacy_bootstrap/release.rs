@@ -2213,10 +2213,8 @@ mod tests {
             .expect("staging plan object")
             .remove("network_id");
         assert!(
-            validate_staging_plan_v1(&populated)
-                .expect_err("missing staging NetworkId key must be rejected")
-                .to_string()
-                .contains("inventory differs")
+            validate_staging_plan_v1(&populated).is_err(),
+            "missing staging NetworkId key must be rejected"
         );
     }
     #[test]

@@ -34,14 +34,24 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
 try:
     from scripts import compose_taira_nevo_reset_genesis as nevo_composer
     from scripts import deploy_taira_v21_reset as reset_bundle
-    from scripts.operator_http_headers import load_operator_context_from_file
+    from scripts.release_artifact_contract import (
+        stable_hash_path,
+        verify_private_python_source_closure,
+    )
 except ModuleNotFoundError:  # Direct execution sets sys.path to scripts/.
     import compose_taira_nevo_reset_genesis as nevo_composer
     import deploy_taira_v21_reset as reset_bundle
-    from operator_http_headers import load_operator_context_from_file
+    from release_artifact_contract import (
+        stable_hash_path,
+        verify_private_python_source_closure,
+    )
 
 
 SCHEMA = "iroha.taira.user-launchagent-reset.v1"
@@ -61,6 +71,45 @@ SYSTEM_LABELS = tuple(
 SLUGS = tuple(f"taira-validator-{number}" for number in range(1, PEER_COUNT + 1))
 TORII_PORTS = tuple(29_080 + offset for offset in range(PEER_COUNT))
 P2P_PORTS = tuple(33_337 + offset for offset in range(PEER_COUNT))
+LOCAL_TESTNET_SOURCE_CLOSURE_SCHEMA = (
+    "iroha.taira.local-testnet-reset-source-closure.v1"
+)
+LOCAL_TESTNET_PYTHON = Path("/opt/homebrew/bin/python3")
+LOCAL_TESTNET_SOURCE_CLOSURE_FILES = (
+    "configs/soranexus/taira/config.toml",
+    "configs/soranexus/taira/genesis.json",
+    "configs/soranexus/taira/privacy_bootstrap_plan.json",
+    "scripts/build_privacy_v1_boi_handoff.py",
+    "scripts/check_native_sdk_abi22_artifact.py",
+    "scripts/compose_taira_nevo_reset_genesis.py",
+    "scripts/compute_workspace_source_manifest.py",
+    "scripts/deploy_taira_user_launchagent_reset.py",
+    "scripts/deploy_taira_v21_reset.py",
+    "scripts/deploy_taira_v21_reset_authority.py",
+    "scripts/deploy_taira_v21_reset_health.py",
+    "scripts/extract_authenticated_taira_privacy_release.py",
+    "scripts/inspect_taira_local_reset_source_closure.py",
+    "scripts/inspect_taira_local_reviewed_inputs.py",
+    "scripts/iso_operator_auth.py",
+    "scripts/operator_http_headers.py",
+    "scripts/prepare_taira_empty_reset_bundle.py",
+    "scripts/release_artifact_contract.py",
+    "scripts/release_manifest_signing.py",
+    "scripts/render_taira_validator_bundle.py",
+    "scripts/seal_taira_release_controllers.py",
+    "scripts/taira_authority_client.py",
+    "scripts/taira_constants.py",
+    "scripts/taira_privacy_protocol_receipt.py",
+    "scripts/taira_privacy_rollout_contract.py",
+    "scripts/taira_release_authority.py",
+    "scripts/taira_rollout_admission.py",
+)
+LOCAL_TESTNET_REVIEWED_INPUT_FILES = (
+    "config.toml",
+    "genesis.json",
+    "nevo-reset.review.json",
+    "privacy_bootstrap_plan.json",
+)
 
 HOME = Path("/Users/administrator")
 TAIRA_ROOT = HOME / "apps/dpn-test/taira"
@@ -85,6 +134,8 @@ MANIFEST_KEYS = frozenset(
         "binary_sha256",
         "genesis_native_verifier",
         "genesis_native_verifier_sha256",
+        "operator_status_client",
+        "operator_status_client_sha256",
         "genesis_external_signer_sha256",
         "genesis_public_key",
         "genesis_expected_hash",
@@ -100,11 +151,18 @@ MANIFEST_KEYS = frozenset(
         "limits",
     }
 )
-PRIVACY_INPUT_ACTIVATION_KEYS = frozenset(
+PRODUCTION_PRIVACY_ACTIVATION_KEYS = frozenset(
+    {"privacy_native_verifier_sha256"}
+)
+LOCAL_TESTNET_PRIVACY_ACTIVATION_KEYS = frozenset(
     {
-        "privacy_native_verifier_sha256",
         "local_reviewed_inputs_identity_sha256",
+        "local_testnet_source_closure_sha256",
+        "local_testnet_python_sha256",
     }
+)
+PRIVACY_INPUT_ACTIVATION_KEYS = (
+    PRODUCTION_PRIVACY_ACTIVATION_KEYS | LOCAL_TESTNET_PRIVACY_ACTIVATION_KEYS
 )
 LIMIT_KEYS = frozenset(
     {
@@ -198,6 +256,8 @@ class Activation:
     binary_sha256: str
     genesis_native_verifier: Path
     genesis_native_verifier_sha256: str
+    operator_status_client: Path
+    operator_status_client_sha256: str
     genesis_external_signer_sha256: str
     genesis_public_key: str
     genesis_expected_hash: str
@@ -210,6 +270,8 @@ class Activation:
     signed_genesis_sha256: str
     privacy_native_verifier_sha256: str | None
     local_reviewed_inputs_identity_sha256: str | None
+    local_testnet_source_closure_sha256: str | None
+    local_testnet_python_sha256: str | None
     source_commit: str
     dpn_validator_release_commit: str
     limits: Limits
@@ -273,6 +335,7 @@ class ResetPlan:
     log_dir: Path
     binary_identity: tuple[int, int, int, int, int, int]
     genesis_native_verifier_identity: tuple[int, int, int, int, int, int]
+    operator_status_client_identity: tuple[int, int, int, int, int, int]
     validator_artifact_inventory: Mapping[str, Mapping[str, object]]
 
 
@@ -481,6 +544,82 @@ def hash_regular(
     return hashlib.sha256(body).hexdigest(), info
 
 
+def local_testnet_source_closure() -> tuple[dict[str, object], str]:
+    """Recompute the exact user-owned preparation/deployment source closure."""
+
+    if tuple(sorted(set(LOCAL_TESTNET_SOURCE_CLOSURE_FILES))) != (
+        LOCAL_TESTNET_SOURCE_CLOSURE_FILES
+    ):
+        raise AssertionError("local-testnet source closure inventory is not exact")
+    repository = Path(__file__).resolve().parent.parent
+    rows: list[dict[str, object]] = []
+    for relative in LOCAL_TESTNET_SOURCE_CLOSURE_FILES:
+        digest, info = hash_regular(
+            repository / relative,
+            MAX_GENESIS_BYTES,
+            f"local-testnet source closure {relative}",
+        )
+        rows.append(
+            {"path": relative, "sha256": digest, "size": info.st_size}
+        )
+    manifest: dict[str, object] = {
+        "schema": LOCAL_TESTNET_SOURCE_CLOSURE_SCHEMA,
+        "files": rows,
+    }
+    digest = hashlib.sha256(_artifact_canonical_json(manifest)).hexdigest()
+    return manifest, digest
+
+
+def local_testnet_python_sha256(expected_sha256: object) -> str:
+    """Bind the local controller to the exact explicit Python 3.11+ binary."""
+
+    expected = require_sha256(expected_sha256, "local testnet Python SHA-256")
+    if sys.version_info < (3, 11):
+        fail("local testnet reset requires Python 3.11 or newer")
+    try:
+        invoked = LOCAL_TESTNET_PYTHON.resolve(strict=True)
+        running = Path(sys.executable).resolve(strict=True)
+        info = invoked.lstat()
+    except OSError as error:
+        raise ResetError(f"local testnet Python cannot be resolved: {error}") from error
+    if (
+        invoked != running
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_uid != UID
+        or info.st_nlink != 1
+        or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    ):
+        fail("local testnet Python runtime has unsafe custody or path")
+    observed = stable_hash_path(invoked, max_size=MAX_BINARY_BYTES).sha256
+    if observed != expected:
+        fail("local testnet Python differs from the activation")
+    return observed
+
+
+def require_local_testnet_source_runtime(
+    expected_sha256: str,
+    expected_python_sha256: str,
+) -> None:
+    """Bind local reset execution to one isolated exact owner-private tree."""
+
+    expected = require_sha256(
+        expected_sha256,
+        "local testnet source closure SHA-256",
+    )
+    manifest, observed = local_testnet_source_closure()
+    if observed != expected:
+        fail("local testnet source closure differs from the activation")
+    local_testnet_python_sha256(expected_python_sha256)
+    verify_private_python_source_closure(
+        SCRIPT_DIR.parent,
+        manifest,
+        expected,
+        owner_uid=UID,
+        entrypoint="scripts/deploy_taira_user_launchagent_reset.py",
+        require_isolated_runtime=True,
+    )
+
+
 def parse_toml(path: Path, owner_uid: int, label: str) -> tuple[dict[str, Any], str]:
     body, _ = read_regular(
         path,
@@ -533,10 +672,10 @@ def load_activation(path: Path, layout: Layout = PRODUCTION_LAYOUT) -> Activatio
     if not isinstance(payload, dict):
         fail("activation manifest must be one JSON object")
     privacy_input_keys = set(payload) & PRIVACY_INPUT_ACTIVATION_KEYS
-    if (
-        len(privacy_input_keys) != 1
-        or set(payload) != MANIFEST_KEYS | privacy_input_keys
-    ):
+    if privacy_input_keys not in {
+        PRODUCTION_PRIVACY_ACTIVATION_KEYS,
+        LOCAL_TESTNET_PRIVACY_ACTIVATION_KEYS,
+    } or set(payload) != MANIFEST_KEYS | privacy_input_keys:
         fail("activation manifest schema is not exact")
     if (
         payload.get("schema") != SCHEMA
@@ -551,15 +690,18 @@ def load_activation(path: Path, layout: Layout = PRODUCTION_LAYOUT) -> Activatio
     bundle_value = payload.get("bundle")
     binary_value = payload.get("binary")
     verifier_value = payload.get("genesis_native_verifier")
+    operator_client_value = payload.get("operator_status_client")
     if (
         not isinstance(bundle_value, str)
         or not isinstance(binary_value, str)
         or not isinstance(verifier_value, str)
+        or not isinstance(operator_client_value, str)
     ):
         fail("activation candidate paths must be strings")
     bundle = Path(bundle_value)
     binary = Path(binary_value)
     genesis_native_verifier = Path(verifier_value)
+    operator_status_client = Path(operator_client_value)
     bundle_parts = relative_descendant(
         bundle,
         layout.reset_bundles,
@@ -578,12 +720,20 @@ def load_activation(path: Path, layout: Layout = PRODUCTION_LAYOUT) -> Activatio
         "candidate native genesis verifier",
         minimum_parts=2,
     )
+    operator_client_parts = relative_descendant(
+        operator_status_client,
+        layout.releases,
+        "candidate native operator status client",
+        minimum_parts=2,
+    )
     if (
         len(bundle_parts) != 1
         or bundle_parts[0] != generation
         or len(binary_parts) != 2
         or binary_parts[-1] != "iroha3d"
         or verifier_parts != (*binary_parts[:-1], "kagami")
+        or operator_client_parts
+        != (*binary_parts[:-1], "taira_operator_status")
     ):
         fail("candidate reset bundle, binary, or native verifier path shape is not exact")
     require_no_symlink_ancestry(bundle, layout.taira_root, "candidate reset bundle")
@@ -592,6 +742,11 @@ def load_activation(path: Path, layout: Layout = PRODUCTION_LAYOUT) -> Activatio
         genesis_native_verifier,
         layout.taira_root,
         "candidate native genesis verifier",
+    )
+    require_no_symlink_ancestry(
+        operator_status_client,
+        layout.taira_root,
+        "candidate native operator status client",
     )
     limits = payload.get("limits")
     if not isinstance(limits, dict):
@@ -645,6 +800,11 @@ def load_activation(path: Path, layout: Layout = PRODUCTION_LAYOUT) -> Activatio
             payload.get("genesis_native_verifier_sha256"),
             "genesis_native_verifier_sha256",
         ),
+        operator_status_client=operator_status_client,
+        operator_status_client_sha256=require_sha256(
+            payload.get("operator_status_client_sha256"),
+            "operator_status_client_sha256",
+        ),
         genesis_external_signer_sha256=require_sha256(
             payload.get("genesis_external_signer_sha256"),
             "genesis_external_signer_sha256",
@@ -695,6 +855,22 @@ def load_activation(path: Path, layout: Layout = PRODUCTION_LAYOUT) -> Activatio
                 "local_reviewed_inputs_identity_sha256",
             )
             if "local_reviewed_inputs_identity_sha256" in privacy_input_keys
+            else None
+        ),
+        local_testnet_source_closure_sha256=(
+            require_sha256(
+                payload.get("local_testnet_source_closure_sha256"),
+                "local_testnet_source_closure_sha256",
+            )
+            if "local_testnet_source_closure_sha256" in privacy_input_keys
+            else None
+        ),
+        local_testnet_python_sha256=(
+            require_sha256(
+                payload.get("local_testnet_python_sha256"),
+                "local_testnet_python_sha256",
+            )
+            if "local_testnet_python_sha256" in privacy_input_keys
             else None
         ),
         source_commit=require_commit(payload.get("source_commit"), "source_commit"),
@@ -1223,6 +1399,250 @@ def _rehash_validator_artifact_inventory(
                 fail(f"candidate bootstrap artifact changed: {slug}/{relative}")
 
 
+def _require_local_testnet_source_closure(
+    activation: Activation,
+    manifest: Mapping[str, object],
+) -> dict[str, object]:
+    closure = manifest.get("local_testnet_source_closure")
+    if not isinstance(closure, dict) or set(closure) != {"schema", "files", "sha256"}:
+        fail("local-testnet reset source closure schema is not exact")
+    rows = closure.get("files")
+    if (
+        closure.get("schema") != LOCAL_TESTNET_SOURCE_CLOSURE_SCHEMA
+        or not isinstance(rows, list)
+        or len(rows) != len(LOCAL_TESTNET_SOURCE_CLOSURE_FILES)
+    ):
+        fail("local-testnet reset source closure inventory is not exact")
+    for expected_path, row in zip(LOCAL_TESTNET_SOURCE_CLOSURE_FILES, rows):
+        if not isinstance(row, dict) or set(row) != {"path", "sha256", "size"}:
+            fail("local-testnet reset source closure row is not exact")
+        size = row.get("size")
+        if (
+            row.get("path") != expected_path
+            or require_sha256(row.get("sha256"), f"source closure {expected_path}")
+            != row.get("sha256")
+            or isinstance(size, bool)
+            or not isinstance(size, int)
+            or size <= 0
+        ):
+            fail("local-testnet reset source closure row is invalid")
+    projected = {"schema": closure["schema"], "files": rows}
+    digest = hashlib.sha256(_artifact_canonical_json(projected)).hexdigest()
+    if (
+        digest != closure.get("sha256")
+        or digest != activation.local_testnet_source_closure_sha256
+    ):
+        fail("local-testnet reset source closure differs from activation")
+    current, current_digest = local_testnet_source_closure()
+    if current != projected or current_digest != digest:
+        fail("local-testnet reset source closure differs from the executing code")
+    python_binding = manifest.get("local_testnet_python")
+    if (
+        not isinstance(python_binding, Mapping)
+        or set(python_binding) != {"path", "sha256"}
+        or python_binding.get("path") != str(LOCAL_TESTNET_PYTHON)
+        or python_binding.get("sha256") != activation.local_testnet_python_sha256
+    ):
+        fail("local-testnet Python binding differs from activation")
+    local_testnet_python_sha256(python_binding.get("sha256"))
+    plan_payload, _ = read_regular(
+        Path(__file__).resolve().parent.parent
+        / "configs/soranexus/taira/privacy_bootstrap_plan.json",
+        MAX_CONFIG_BYTES,
+        "local-testnet privacy staging plan",
+    )
+    try:
+        plan = json.loads(plan_payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ResetError("local-testnet privacy staging plan is invalid JSON") from error
+    if (
+        not isinstance(plan, dict)
+        or set(plan)
+        != {
+            "bootle_lantern_issuer",
+            "chain_discriminant",
+            "chain_id",
+            "genesis_authority",
+            "governance_permission",
+            "governance_rollout",
+            "network_id",
+            "privacy_catalog",
+            "schema",
+            "schema_version",
+        }
+        or plan.get("schema") != "iroha.taira.privacy_bootstrap_plan.v1"
+        or plan.get("schema_version") != 1
+        or plan.get("network_id", object()) is not None
+    ):
+        fail("local-testnet privacy plan is not the exact null-NetworkId staging schema")
+    return projected
+
+
+def _require_issuer_disabled(config: Mapping[str, object], label: str) -> None:
+    torii = config.get("torii")
+    issuer = (
+        torii.get("privacy_bootle_lantern_issuer")
+        if isinstance(torii, Mapping)
+        else None
+    )
+    provider_binding_fields = {
+        "issuer_id_hex",
+        "policy_id_hex",
+        "runtime_provider_registry_handle",
+        "runtime_provider_registry_revision",
+        "runtime_provider_registry_policy_digest_hex",
+    }
+    if (
+        not isinstance(issuer, Mapping)
+        or issuer.get("enabled") is not False
+        or set(issuer) & provider_binding_fields
+    ):
+        fail(f"{label} does not keep Bootle/Lantern issuance exactly disabled")
+
+
+def _require_local_testnet_reviewed_release(
+    activation: Activation,
+    manifest: Mapping[str, object],
+    privacy_release: Mapping[str, object],
+    review: Mapping[str, object],
+) -> None:
+    expected_keys = {
+        "schema",
+        "reviewed_inputs",
+        "bound_genesis_manifest_sha256",
+        "signed_genesis_sha256",
+        "validator_config_sha256",
+        "nevo_reset_review",
+        "authority_claim",
+        "issuer_state",
+        "post_genesis_issuer_enablement_required",
+        "reviewed_inputs_identity_sha256",
+        "source",
+    }
+    if set(privacy_release) != expected_keys:
+        fail("local-testnet reviewed release schema is not exact")
+    if (
+        privacy_release.get("authority_claim")
+        != "none-user-authorized-same-host-testnet"
+        or privacy_release.get("issuer_state") != "disabled-no-broker"
+        or privacy_release.get("post_genesis_issuer_enablement_required") is not True
+    ):
+        fail("local-testnet reset makes an invalid authority or issuer claim")
+    reviewed_inputs = privacy_release.get("reviewed_inputs")
+    if not isinstance(reviewed_inputs, Mapping) or set(reviewed_inputs) != set(
+        LOCAL_TESTNET_REVIEWED_INPUT_FILES
+    ):
+        fail("local-testnet reset reviewed input inventory is not exactly four files")
+    for name in LOCAL_TESTNET_REVIEWED_INPUT_FILES:
+        row = reviewed_inputs.get(name)
+        if not isinstance(row, Mapping) or set(row) != {"sha256", "size"}:
+            fail(f"local-testnet reviewed input row is not exact: {name}")
+        size = row.get("size")
+        require_sha256(row.get("sha256"), f"local-testnet reviewed input {name}")
+        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+            fail(f"local-testnet reviewed input size is invalid: {name}")
+
+    closure = manifest.get("local_testnet_source_closure")
+    if not isinstance(closure, Mapping) or not isinstance(closure.get("files"), list):
+        fail("local-testnet reset source closure is unavailable")
+    closure_rows = {
+        row["path"]: row
+        for row in closure["files"]
+        if isinstance(row, Mapping) and isinstance(row.get("path"), str)
+    }
+    artifact_paths = {
+        "config.toml": activation.bundle / "base-config.toml",
+        "genesis.json": activation.bundle / "genesis.reviewed-unsigned.json",
+        "nevo-reset.review.json": activation.bundle / "nevo-reset.review.json",
+    }
+    for name, path in artifact_paths.items():
+        digest, info = hash_regular(
+            path,
+            MAX_GENESIS_BYTES,
+            f"local-testnet reviewed input {name}",
+            owner_uid=UID,
+            exact_mode=0o600,
+        )
+        row = reviewed_inputs[name]
+        if digest != row["sha256"] or info.st_size != row["size"]:
+            fail(f"local-testnet reviewed input changed: {name}")
+    for name, closure_path in {
+        "config.toml": "configs/soranexus/taira/config.toml",
+        "privacy_bootstrap_plan.json": (
+            "configs/soranexus/taira/privacy_bootstrap_plan.json"
+        ),
+    }.items():
+        source_row = closure_rows.get(closure_path)
+        reviewed_row = reviewed_inputs[name]
+        if (
+            not isinstance(source_row, Mapping)
+            or source_row.get("sha256") != reviewed_row["sha256"]
+            or source_row.get("size") != reviewed_row["size"]
+        ):
+            fail(f"local-testnet reviewed input is not source-pinned: {name}")
+
+    source = privacy_release.get("source")
+    expected_source = {
+        "commit": activation.source_commit,
+        "dpn_validator_release_commit": activation.dpn_validator_release_commit,
+        "cargo_lock_sha256": manifest.get("cargo_lock_sha256"),
+        "workspace_source_manifest_sha256": manifest.get(
+            "workspace_source_manifest_sha256"
+        ),
+    }
+    if source != expected_source:
+        fail("local-testnet reviewed input source identity changed")
+    reviewed_identity_manifest = {
+        "schema": "iroha.taira.local_testnet_reviewed_inputs.v1",
+        "authority_claim": "none-user-authorized-same-host-testnet",
+        "source": source,
+        "privacy_inputs": reviewed_inputs,
+    }
+    reviewed_identity = hashlib.sha256(
+        _artifact_canonical_json(reviewed_identity_manifest)
+    ).hexdigest()
+    if (
+        reviewed_identity != privacy_release.get("reviewed_inputs_identity_sha256")
+        or reviewed_identity != activation.local_reviewed_inputs_identity_sha256
+        or reviewed_identity != manifest.get("local_reviewed_inputs_identity_sha256")
+    ):
+        fail("local-testnet reviewed input identity differs from activation")
+    if (
+        privacy_release.get("bound_genesis_manifest_sha256")
+        != activation.bound_genesis_manifest_sha256
+        or privacy_release.get("signed_genesis_sha256")
+        != activation.signed_genesis_sha256
+        or privacy_release.get("validator_config_sha256") != manifest.get("configs")
+    ):
+        fail("local-testnet reviewed release artifact bindings changed")
+
+    review_record = privacy_release.get("nevo_reset_review")
+    expected_review_record = {
+        "schema": review.get("schema"),
+        "sha256": reviewed_inputs["nevo-reset.review.json"]["sha256"],
+        "public_inputs_sha256": review.get("public_inputs_sha256"),
+        "unsigned_genesis_sha256": review.get("unsigned_genesis_sha256"),
+        "public_identities": review.get("public_identities"),
+        "credential_hash_bindings": review.get("credential_hash_bindings"),
+    }
+    if review_record != expected_review_record:
+        fail("local-testnet NEVO review projection changed")
+
+    base_config, _ = parse_toml(
+        activation.bundle / "base-config.toml",
+        UID,
+        "local-testnet base config",
+    )
+    _require_issuer_disabled(base_config, "local-testnet base config")
+    for slug in SLUGS:
+        peer_config, _ = parse_toml(
+            activation.bundle / "rendered" / slug / "config.toml",
+            UID,
+            f"local-testnet peer config {slug}",
+        )
+        _require_issuer_disabled(peer_config, f"local-testnet peer config {slug}")
+
+
 def _require_nevo_genesis_integrity(
     activation: Activation,
     manifest: Mapping[str, object],
@@ -1242,6 +1662,7 @@ def _require_nevo_genesis_integrity(
         "genesis_public_key",
         "external_signer_sha256",
         "native_genesis_verifier_sha256",
+        "operator_status_client_sha256",
         "native_genesis_verifier_receipt_sha256",
         "native_verifier_peer_config_set_sha256",
     }
@@ -1251,16 +1672,40 @@ def _require_nevo_genesis_integrity(
     if privacy_release.get("schema") == "iroha.taira.signed_privacy_reset.v1":
         privacy_binding_key = "privacy_native_verifier_sha256"
         privacy_binding_value = activation.privacy_native_verifier_sha256
-        if activation.local_reviewed_inputs_identity_sha256 is not None:
+        if (
+            activation.local_reviewed_inputs_identity_sha256 is not None
+            or activation.local_testnet_source_closure_sha256 is not None
+            or activation.local_testnet_python_sha256 is not None
+            or "local_testnet_source_closure" in manifest
+            or "local_testnet_python" in manifest
+        ):
             fail("production reset activation claims local-testnet reviewed inputs")
+        release_controller = manifest.get("release_controller")
+        if (
+            not isinstance(release_controller, Mapping)
+            or set(release_controller) != {"digest", "manifest_sha256", "platform"}
+            or release_controller.get("platform") != "macos"
+        ):
+            fail("production reset lacks its exact release controller binding")
+        require_sha256(release_controller.get("digest"), "release controller digest")
+        require_sha256(
+            release_controller.get("manifest_sha256"),
+            "release controller manifest SHA-256",
+        )
     elif (
         privacy_release.get("schema")
         == "iroha.taira.local_testnet_reviewed_reset.v1"
     ):
         privacy_binding_key = "local_reviewed_inputs_identity_sha256"
         privacy_binding_value = activation.local_reviewed_inputs_identity_sha256
-        if activation.privacy_native_verifier_sha256 is not None:
+        if (
+            activation.privacy_native_verifier_sha256 is not None
+            or activation.local_testnet_source_closure_sha256 is None
+            or activation.local_testnet_python_sha256 is None
+            or "release_controller" in manifest
+        ):
             fail("local-testnet reset activation claims production verifier authority")
+        _require_local_testnet_source_closure(activation, manifest)
     else:
         fail("reset manifest privacy bootstrap release schema is unsupported")
     if privacy_binding_value is None:
@@ -1347,6 +1792,10 @@ def _require_nevo_genesis_integrity(
             "genesis_native_verifier_sha256",
             activation.genesis_native_verifier_sha256,
         ),
+        "operator_status_client_sha256": (
+            "operator_status_client_sha256",
+            activation.operator_status_client_sha256,
+        ),
         "native_verifier_peer_config_set_sha256": (
             "native_verifier_peer_config_set_sha256",
             activation.native_verifier_peer_config_set_sha256,
@@ -1429,7 +1878,7 @@ def _require_nevo_genesis_integrity(
         "NEVO reset review",
     )
     try:
-        nevo_composer.verify_reviewed_payloads(
+        verified_review = nevo_composer.verify_reviewed_payloads(
             unsigned_genesis_bytes=reviewed_raw,
             review_bytes=review_raw,
             base_genesis_bytes=nevo_composer._read_bounded_regular(
@@ -1449,6 +1898,13 @@ def _require_nevo_genesis_integrity(
         "reviewed_unsigned_genesis_sha256"
     ]:
         fail("NEVO review does not hash the exact reviewed unsigned genesis")
+    if privacy_release.get("schema") == "iroha.taira.local_testnet_reviewed_reset.v1":
+        _require_local_testnet_reviewed_release(
+            activation,
+            manifest,
+            privacy_release,
+            verified_review,
+        )
 
     inventory = _validate_validator_artifact_inventory(
         activation.bundle,
@@ -1547,6 +2003,24 @@ def _run_native_genesis_verifier(
     return metadata_identity(verifier_info)
 
 
+def _require_operator_status_client(
+    activation: Activation,
+) -> tuple[int, int, int, int, int, int]:
+    digest, info = hash_regular(
+        activation.operator_status_client,
+        MAX_BINARY_BYTES,
+        "candidate native operator status client",
+        owner_uid=UID,
+    )
+    if (
+        digest != activation.operator_status_client_sha256
+        or not stat.S_ISREG(info.st_mode)
+        or stat.S_IMODE(info.st_mode) & 0o111 == 0
+    ):
+        fail("candidate native operator status client differs from activation")
+    return metadata_identity(info)
+
+
 def build_plan(
     activation: Activation,
     *,
@@ -1618,6 +2092,7 @@ def build_plan(
         activation,
         native_verifier_receipt,
     )
+    operator_status_client_identity = _require_operator_status_client(activation)
     network_hash = bundle_plan.manifest.get("genesis_expected_hash")
     if network_hash != activation.genesis_expected_hash:
         fail("reset manifest genesis expected hash differs from activation")
@@ -1696,6 +2171,7 @@ def build_plan(
         log_dir=log_dir,
         binary_identity=metadata_identity(binary_info),
         genesis_native_verifier_identity=genesis_native_verifier_identity,
+        operator_status_client_identity=operator_status_client_identity,
         validator_artifact_inventory=validator_artifact_inventory,
     )
 
@@ -1707,11 +2183,105 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
 
 
 class HealthClient:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        operator_status_client: Path | None = None,
+        operator_status_client_sha256: str | None = None,
+    ) -> None:
         self.opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
             _RejectRedirects(),
         )
+        self.operator_status_client = operator_status_client
+        self.operator_status_client_sha256 = operator_status_client_sha256
+
+    def _protected_status(
+        self,
+        port: int,
+        network_id: str,
+        private_key_file: Path,
+    ) -> dict[str, object]:
+        client = self.operator_status_client
+        expected_sha256 = self.operator_status_client_sha256
+        if client is None or expected_sha256 is None:
+            fail("native operator status client is unavailable")
+        before_sha256, before_info = hash_regular(
+            client,
+            MAX_BINARY_BYTES,
+            "native operator status client",
+            owner_uid=UID,
+        )
+        if (
+            before_sha256 != expected_sha256
+            or not stat.S_ISREG(before_info.st_mode)
+            or stat.S_IMODE(before_info.st_mode) & 0o111 == 0
+        ):
+            fail("native operator status client differs before protected read")
+        command = [
+            str(client),
+            "--torii-url",
+            f"http://127.0.0.1:{port}/",
+            "--network-id",
+            network_id,
+            "--operator-private-key-file",
+            str(private_key_file),
+            "--timeout-ms",
+            "2000",
+        ]
+        with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+            try:
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.DEVNULL,
+                    stdout=stdout,
+                    stderr=stderr,
+                    cwd="/",
+                    env={"LANG": "C", "LC_ALL": "C"},
+                    close_fds=True,
+                    start_new_session=True,
+                )
+            except OSError as error:
+                raise ResetError("native operator status client could not start") from error
+            deadline = time.monotonic() + 4.0
+            while process.poll() is None:
+                if (
+                    time.monotonic() >= deadline
+                    or os.fstat(stdout.fileno()).st_size > MAX_HTTP_BYTES
+                    or os.fstat(stderr.fileno()).st_size > 64 * 1024
+                ):
+                    process.kill()
+                    process.wait()
+                    fail("native operator status client exceeded its runtime bound")
+                time.sleep(0.01)
+            if (
+                os.fstat(stdout.fileno()).st_size > MAX_HTTP_BYTES
+                or os.fstat(stderr.fileno()).st_size > 64 * 1024
+            ):
+                fail("native operator status client exceeded its output bound")
+            stdout.seek(0)
+            payload = stdout.read(MAX_HTTP_BYTES + 1)
+            if process.returncode != 0:
+                fail("native operator status client refused the protected read")
+        after_sha256, after_info = hash_regular(
+            client,
+            MAX_BINARY_BYTES,
+            "native operator status client",
+            owner_uid=UID,
+        )
+        if (
+            after_sha256 != before_sha256
+            or metadata_identity(after_info) != metadata_identity(before_info)
+        ):
+            fail("native operator status client changed during protected read")
+        try:
+            value = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ResetError(
+                "native operator status client returned invalid JSON"
+            ) from error
+        if not isinstance(value, dict):
+            fail("native operator status client did not return one JSON object")
+        return value
 
     def _request(
         self,
@@ -1759,18 +2329,17 @@ class HealthClient:
             self._request(f"{root}/health", parse_json=False)
             self._request(f"{root}/readyz", parse_json=False)
 
-    def peer_sample(self, port: int, operator_context: Any) -> dict[str, object]:
+    def peer_sample(
+        self,
+        port: int,
+        network_id: str,
+        private_key_file: Path,
+    ) -> dict[str, object]:
         root = f"http://127.0.0.1:{port}"
         self._request(f"{root}/health", parse_json=False)
         self._request(f"{root}/readyz", parse_json=False)
         status = self._request(f"{root}/status", parse_json=True)
-        target = "/v1/sumeragi/status"
-        headers = operator_context.headers("GET", target, b"")
-        sumeragi = self._request(
-            f"{root}{target}",
-            headers=headers,
-            parse_json=True,
-        )
+        sumeragi = self._protected_status(port, network_id, private_key_file)
         assert isinstance(status, dict) and isinstance(sumeragi, dict)
         blocks = status.get("blocks")
         height = sumeragi.get("height")
@@ -1882,9 +2451,23 @@ class HealthClient:
             **fingerprints,
         }
 
-    def fleet_sample(self, ports: Sequence[int], operator_context: Any) -> FleetSample:
-        samples = tuple(self.peer_sample(port, operator_context) for port in ports)
-        if len(samples) != PEER_COUNT or len({sample["port"] for sample in samples}) != PEER_COUNT:
+    def fleet_sample(
+        self,
+        ports: Sequence[int],
+        network_id: str,
+        private_key_files: Sequence[Path],
+    ) -> FleetSample:
+        if (
+            len(ports) != PEER_COUNT
+            or len(private_key_files) != PEER_COUNT
+            or len(set(private_key_files)) != PEER_COUNT
+        ):
+            fail("health authentication requires exactly four ordered peer key files")
+        samples = tuple(
+            self.peer_sample(port, network_id, private_key_file)
+            for port, private_key_file in zip(ports, private_key_files)
+        )
+        if len({sample["port"] for sample in samples}) != PEER_COUNT:
             fail("health sample is not the exact four-validator cohort")
         heights = {sample["height"] for sample in samples}
         hashes = {sample["block_hash"] for sample in samples}
@@ -1909,16 +2492,20 @@ class HealthClient:
         self,
         ports: Sequence[int],
         network_id: str,
-        private_key_file: Path,
+        private_key_files: Sequence[Path],
         limits: Limits,
     ) -> tuple[FleetSample, FleetSample]:
-        context = load_operator_context_from_file(network_id, private_key_file)
+        if (
+            len(private_key_files) != PEER_COUNT
+            or len(set(private_key_files)) != PEER_COUNT
+        ):
+            fail("health authentication requires four distinct ordered peer key files")
         deadline = time.monotonic() + limits.startup_timeout_seconds
         last_error: Exception | None = None
         first: FleetSample | None = None
         while time.monotonic() < deadline:
             try:
-                first = self.fleet_sample(ports, context)
+                first = self.fleet_sample(ports, network_id, private_key_files)
                 break
             except (ResetError, OSError) as error:
                 last_error = error
@@ -1929,7 +2516,7 @@ class HealthClient:
         time.sleep(limits.poll_interval_seconds)
         while time.monotonic() < stable_deadline:
             try:
-                current = self.fleet_sample(ports, context)
+                current = self.fleet_sample(ports, network_id, private_key_files)
                 same_frontier = (
                     current.height == first.height
                     and current.block_hash == first.block_hash
@@ -2146,6 +2733,9 @@ def require_candidate_inputs_unchanged(plan: ResetPlan) -> None:
     verifier_identity = _run_native_genesis_verifier(plan.activation, receipt)
     if verifier_identity != plan.genesis_native_verifier_identity:
         fail("candidate native genesis verifier identity changed after planning")
+    operator_client_identity = _require_operator_status_client(plan.activation)
+    if operator_client_identity != plan.operator_status_client_identity:
+        fail("candidate native operator status client identity changed after planning")
 
 
 def require_plan_unchanged(plan: ResetPlan) -> None:
@@ -2253,7 +2843,7 @@ def rollback(
     plan: ResetPlan,
     ops: LaunchctlOps,
     health: HealthClient,
-    rollback_private_key_file: Path,
+    rollback_private_key_files: Sequence[Path],
     reason: BaseException,
 ) -> None:
     errors: list[str] = []
@@ -2305,7 +2895,7 @@ def rollback(
             restored_fleet = health.wait_fleet(
                 [peer.torii_port for peer in plan.predecessor],
                 plan.predecessor[0].network_id,
-                rollback_private_key_file,
+                rollback_private_key_files,
                 plan.activation.limits,
             )
         except ResetError as error:
@@ -2343,20 +2933,45 @@ def release_lock(path: Path) -> None:
         pass
 
 
+def _require_exact_operator_key_paths(
+    plan: ResetPlan,
+    candidate: Sequence[Path],
+    predecessor: Sequence[Path],
+) -> None:
+    expected_candidate = tuple(
+        peer.workdir / "runtime/validator-signer.key" for peer in plan.candidate
+    )
+    expected_predecessor = tuple(
+        peer.workdir / "runtime/validator-signer.key" for peer in plan.predecessor
+    )
+    if tuple(candidate) != expected_candidate:
+        fail("candidate operator keys are not the exact ordered peer runtime paths")
+    if tuple(predecessor) != expected_predecessor:
+        fail("rollback operator keys are not the exact ordered predecessor runtime paths")
+
+
 def apply_reset(
     plan: ResetPlan,
     *,
     confirmation: str,
-    operator_private_key_file: Path,
-    rollback_operator_private_key_file: Path,
+    operator_private_key_files: Sequence[Path],
+    rollback_operator_private_key_files: Sequence[Path],
     layout: Layout = PRODUCTION_LAYOUT,
     ops: LaunchctlOps | None = None,
     health: HealthClient | None = None,
 ) -> dict[str, object]:
     if confirmation != plan.activation.confirmation:
         fail("destructive confirmation does not bind the exact activation manifest")
+    _require_exact_operator_key_paths(
+        plan,
+        operator_private_key_files,
+        rollback_operator_private_key_files,
+    )
     ops = ops or LaunchctlOps()
-    health = health or HealthClient()
+    health = health or HealthClient(
+        plan.activation.operator_status_client,
+        plan.activation.operator_status_client_sha256,
+    )
     acquire_lock(layout.lock_path, layout.taira_root)
     mutated = False
     try:
@@ -2364,14 +2979,24 @@ def apply_reset(
         for peer in plan.predecessor:
             ops.require_loaded_definition(peer.plist_path, peer.plist_body)
         require_plan_unchanged(plan)
+        _require_exact_operator_key_paths(
+            plan,
+            operator_private_key_files,
+            rollback_operator_private_key_files,
+        )
         old_fleet = health.wait_fleet(
             [peer.torii_port for peer in plan.predecessor],
             plan.predecessor[0].network_id,
-            rollback_operator_private_key_file,
+            rollback_operator_private_key_files,
             plan.activation.limits,
         )
         prepare_archive(plan, old_fleet, layout)
         require_plan_unchanged(plan)
+        _require_exact_operator_key_paths(
+            plan,
+            operator_private_key_files,
+            rollback_operator_private_key_files,
+        )
         try:
             mutated = True
             stop_all(ops, LABELS)
@@ -2383,7 +3008,7 @@ def apply_reset(
             candidate_fleet = health.wait_fleet(
                 [peer.torii_port for peer in plan.candidate],
                 plan.network_id,
-                operator_private_key_file,
+                operator_private_key_files,
                 plan.activation.limits,
             )
             require_predecessor_artifacts_unchanged(plan.predecessor)
@@ -2421,7 +3046,7 @@ def apply_reset(
                     plan,
                     ops,
                     health,
-                    rollback_operator_private_key_file,
+                    rollback_operator_private_key_files,
                     error,
                 )
             raise
@@ -2448,6 +3073,10 @@ def plan_projection(plan: ResetPlan) -> dict[str, object]:
         ),
         "genesis_external_signer_sha256": (
             plan.activation.genesis_external_signer_sha256
+        ),
+        "operator_status_client": str(plan.activation.operator_status_client),
+        "operator_status_client_sha256": (
+            plan.activation.operator_status_client_sha256
         ),
         "genesis_public_key": plan.activation.genesis_public_key,
         "genesis_expected_hash": plan.activation.genesis_expected_hash,
@@ -2477,8 +3106,10 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--manifest", required=True, type=Path)
     value.add_argument("--apply", action="store_true")
     value.add_argument("--confirm-reset")
-    value.add_argument("--operator-private-key-file", type=Path)
-    value.add_argument("--rollback-operator-private-key-file", type=Path)
+    value.add_argument("--operator-private-key-file", type=Path, action="append")
+    value.add_argument(
+        "--rollback-operator-private-key-file", type=Path, action="append"
+    )
     return value
 
 
@@ -2486,6 +3117,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(argv)
     require_runtime_identity()
     activation = load_activation(args.manifest)
+    if activation.local_testnet_source_closure_sha256 is not None:
+        require_local_testnet_source_runtime(
+            activation.local_testnet_source_closure_sha256,
+            activation.local_testnet_python_sha256,
+        )
     ops = LaunchctlOps()
     plan = build_plan(activation, launchctl=ops)
     if not args.apply:
@@ -2501,14 +3137,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         HealthClient().unsigned_liveness([peer.torii_port for peer in plan.predecessor])
         print(json.dumps(plan_projection(plan), sort_keys=True, indent=2))
         return 0
-    if args.confirm_reset is None or args.operator_private_key_file is None:
-        fail("--apply requires --confirm-reset and --operator-private-key-file")
-    rollback_key = args.rollback_operator_private_key_file or args.operator_private_key_file
+    if (
+        args.confirm_reset is None
+        or args.operator_private_key_file is None
+        or len(args.operator_private_key_file) != PEER_COUNT
+        or args.rollback_operator_private_key_file is None
+        or len(args.rollback_operator_private_key_file) != PEER_COUNT
+    ):
+        fail(
+            "--apply requires --confirm-reset plus exactly four ordered candidate and four ordered rollback --operator-private-key-file arguments"
+        )
     result = apply_reset(
         plan,
         confirmation=args.confirm_reset,
-        operator_private_key_file=args.operator_private_key_file,
-        rollback_operator_private_key_file=rollback_key,
+        operator_private_key_files=args.operator_private_key_file,
+        rollback_operator_private_key_files=args.rollback_operator_private_key_file,
         ops=ops,
     )
     print(json.dumps(result, sort_keys=True, indent=2))

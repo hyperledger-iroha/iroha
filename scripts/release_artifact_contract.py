@@ -9,6 +9,7 @@ import json
 import os
 import re
 import stat
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -896,6 +897,155 @@ def canonical_json_bytes(value: object) -> bytes:
         )
         + "\n"
     ).encode("utf-8")
+
+
+def verify_private_python_source_closure(
+    root: Path,
+    manifest: Mapping[str, object],
+    expected_sha256: str,
+    *,
+    owner_uid: int,
+    entrypoint: str | None = None,
+    require_isolated_runtime: bool = False,
+) -> None:
+    """Verify one exact owner-private Python source tree and its loaded origins.
+
+    This contract is intentionally stricter than an ordinary release inventory:
+    the root and every directory are mode 0700, every source file is mode 0600
+    with one link, and no unlisted path (including bytecode caches) is admitted.
+    When used by an entry point, Python must have been launched with ``-I -B -S``
+    and every loaded closure module must originate in the verified tree.
+    """
+
+    if (
+        not isinstance(expected_sha256, str)
+        or _HEX_SHA256_RE.fullmatch(expected_sha256) is None
+        or set(manifest) != {"schema", "files"}
+        or not isinstance(manifest.get("schema"), str)
+        or not isinstance(manifest.get("files"), list)
+    ):
+        _fail("private Python source closure manifest is invalid")
+    rows = manifest["files"]
+    assert isinstance(rows, list)
+    normalized_rows: list[dict[str, object]] = []
+    for row in rows:
+        if not isinstance(row, Mapping) or set(row) != {"path", "sha256", "size"}:
+            _fail("private Python source closure row is invalid")
+        path = row.get("path")
+        digest = row.get("sha256")
+        size = row.get("size")
+        if (
+            not isinstance(path, str)
+            or canonical_relative_path(path) != path
+            or not isinstance(digest, str)
+            or _HEX_SHA256_RE.fullmatch(digest) is None
+            or isinstance(size, bool)
+            or not isinstance(size, int)
+            or size <= 0
+        ):
+            _fail("private Python source closure row is invalid")
+        normalized_rows.append({"path": path, "sha256": digest, "size": size})
+    if [row["path"] for row in normalized_rows] != sorted(
+        {str(row["path"]) for row in normalized_rows}
+    ):
+        _fail("private Python source closure rows are not uniquely sorted")
+    if hashlib.sha256(canonical_json_bytes(dict(manifest))).hexdigest() != expected_sha256:
+        _fail("private Python source closure digest differs from the manifest")
+
+    absolute_root = Path(os.path.abspath(root))
+    try:
+        root_info = absolute_root.lstat()
+    except OSError as exc:
+        raise ReleaseArtifactError(
+            f"failed to inspect private Python source closure root: {exc}"
+        ) from exc
+    if (
+        not stat.S_ISDIR(root_info.st_mode)
+        or stat.S_ISLNK(root_info.st_mode)
+        or root_info.st_uid != owner_uid
+        or stat.S_IMODE(root_info.st_mode) != 0o700
+    ):
+        _fail("private Python source closure root must be owner UID mode 0700")
+
+    expected_files = {str(row["path"]) for row in normalized_rows}
+    expected_directories: set[str] = set()
+    for relative in expected_files:
+        parent = PurePosixPath(relative).parent
+        while parent != PurePosixPath("."):
+            expected_directories.add(parent.as_posix())
+            parent = parent.parent
+    actual_files: set[str] = set()
+    actual_directories: set[str] = set()
+    for current, directories, files in os.walk(absolute_root, followlinks=False):
+        current_path = Path(current)
+        current_relative = current_path.relative_to(absolute_root)
+        for name in directories:
+            path = current_path / name
+            relative = (current_relative / name).as_posix()
+            info = path.lstat()
+            if (
+                stat.S_ISLNK(info.st_mode)
+                or not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != owner_uid
+                or stat.S_IMODE(info.st_mode) != 0o700
+            ):
+                _fail(f"private Python source closure directory is unsafe: {relative}")
+            actual_directories.add(relative)
+        for name in files:
+            path = current_path / name
+            relative = (current_relative / name).as_posix()
+            info = path.lstat()
+            if (
+                stat.S_ISLNK(info.st_mode)
+                or not stat.S_ISREG(info.st_mode)
+                or info.st_uid != owner_uid
+                or info.st_nlink != 1
+                or stat.S_IMODE(info.st_mode) != 0o600
+            ):
+                _fail(f"private Python source closure file is unsafe: {relative}")
+            actual_files.add(relative)
+    if actual_directories != expected_directories or actual_files != expected_files:
+        _fail("private Python source closure inventory is not exact")
+    for row in normalized_rows:
+        info = stable_hash_relative(
+            absolute_root,
+            str(row["path"]),
+            max_size=MAX_RELEASE_MANIFEST_SIZE * 32,
+        )
+        if info.sha256 != row["sha256"] or info.size != row["size"]:
+            _fail(f"private Python source closure file changed: {row['path']}")
+
+    if not require_isolated_runtime:
+        return
+    if not (sys.flags.isolated and sys.flags.dont_write_bytecode and sys.flags.no_site):
+        _fail("private Python source closure requires python3 -I -B -S")
+    if entrypoint is None or entrypoint not in expected_files:
+        _fail("private Python source closure entrypoint is not bound")
+    if Path(sys.argv[0]).resolve() != (absolute_root / entrypoint).resolve():
+        _fail("executing entrypoint is outside the private source closure")
+    script_rows = {
+        PurePosixPath(relative).stem: relative
+        for relative in expected_files
+        if relative.startswith("scripts/") and relative.endswith(".py")
+    }
+    for name, loaded in tuple(sys.modules.items()):
+        origin = getattr(loaded, "__file__", None)
+        stem = name.rsplit(".", 1)[-1]
+        expected_relative = script_rows.get(stem)
+        if expected_relative is not None:
+            if not isinstance(origin, str) or Path(origin).resolve() != (
+                absolute_root / expected_relative
+            ).resolve():
+                _fail(f"loaded closure module has an unbound origin: {name}")
+        if not isinstance(origin, str):
+            continue
+        resolved = Path(origin).resolve()
+        try:
+            relative = resolved.relative_to(absolute_root).as_posix()
+        except ValueError:
+            continue
+        if name != "__main__" and relative not in expected_files:
+            _fail(f"loaded module is absent from the exact source closure: {name}")
 
 
 def load_canonical_release_manifest(payload: bytes) -> dict[str, object]:

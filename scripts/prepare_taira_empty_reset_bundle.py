@@ -44,6 +44,7 @@ try:
         stable_hash_relative,
         stable_open_relative,
         stable_read_path,
+        verify_private_python_source_closure,
     )
 except ImportError:
     import compose_taira_nevo_reset_genesis as nevo_composer
@@ -60,6 +61,7 @@ except ImportError:
         stable_hash_relative,
         stable_open_relative,
         stable_read_path,
+        verify_private_python_source_closure,
     )
 
 
@@ -107,13 +109,24 @@ SOURCE_BUNDLE_DIGEST_SCHEMA = "iroha.taira.private-reset-source.inventory.v1"
 LOCAL_TESTNET_SOURCE_CLOSURE_SCHEMA = (
     "iroha.taira.local-testnet-reset-source-closure.v1"
 )
+LOCAL_TESTNET_PYTHON = Path("/opt/homebrew/bin/python3")
 LOCAL_TESTNET_SOURCE_CLOSURE_FILES = (
     "configs/soranexus/taira/config.toml",
     "configs/soranexus/taira/genesis.json",
     "configs/soranexus/taira/privacy_bootstrap_plan.json",
+    "scripts/build_privacy_v1_boi_handoff.py",
+    "scripts/check_native_sdk_abi22_artifact.py",
     "scripts/compose_taira_nevo_reset_genesis.py",
+    "scripts/compute_workspace_source_manifest.py",
+    "scripts/deploy_taira_user_launchagent_reset.py",
+    "scripts/deploy_taira_v21_reset.py",
+    "scripts/deploy_taira_v21_reset_authority.py",
+    "scripts/deploy_taira_v21_reset_health.py",
     "scripts/extract_authenticated_taira_privacy_release.py",
     "scripts/inspect_taira_local_reset_source_closure.py",
+    "scripts/inspect_taira_local_reviewed_inputs.py",
+    "scripts/iso_operator_auth.py",
+    "scripts/operator_http_headers.py",
     "scripts/prepare_taira_empty_reset_bundle.py",
     "scripts/release_artifact_contract.py",
     "scripts/release_manifest_signing.py",
@@ -185,6 +198,63 @@ def local_testnet_source_closure() -> tuple[dict[str, object], str]:
     }
     digest = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
     return manifest, digest
+
+
+def local_testnet_python_sha256(expected_sha256: object) -> str:
+    """Bind local execution to the explicit Homebrew Python 3.11+ binary."""
+
+    if not isinstance(expected_sha256, str):
+        fail("local testnet Python SHA-256 is required")
+    expected = require_sha256(expected_sha256, "local testnet Python SHA-256")
+    if sys.version_info < (3, 11):
+        fail("local testnet reset requires Python 3.11 or newer")
+    try:
+        invoked = LOCAL_TESTNET_PYTHON.resolve(strict=True)
+        running = Path(sys.executable).resolve(strict=True)
+        info = invoked.lstat()
+    except OSError as exc:
+        raise RuntimeError(f"local testnet Python cannot be resolved: {exc}") from exc
+    if (
+        invoked != running
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_uid != 501
+        or info.st_nlink != 1
+        or info.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    ):
+        fail("local testnet Python runtime has unsafe custody or path")
+    observed = stable_hash_path(invoked, max_size=MAX_NATIVE_TOOL_BYTES).sha256
+    if observed != expected:
+        fail("local testnet Python differs from its operator-reviewed SHA-256")
+    return observed
+
+
+def require_local_testnet_source_runtime(
+    expected_sha256: object,
+    expected_python_sha256: object,
+    *,
+    entrypoint: str = "scripts/prepare_taira_empty_reset_bundle.py",
+) -> None:
+    """Bind local-mode execution to one exact isolated owner-private tree."""
+
+    if not isinstance(expected_sha256, str):
+        fail("local testnet source closure SHA-256 is required")
+    expected = require_sha256(
+        expected_sha256, "local testnet source closure SHA-256"
+    )
+    manifest, observed = local_testnet_source_closure()
+    if observed != expected:
+        raise RuntimeError(
+            "local testnet source closure differs from the operator-reviewed digest"
+        )
+    local_testnet_python_sha256(expected_python_sha256)
+    verify_private_python_source_closure(
+        SCRIPT_DIR.parent,
+        manifest,
+        expected,
+        owner_uid=501,
+        entrypoint=entrypoint,
+        require_isolated_runtime=True,
+    )
 
 
 def _require_local_testnet_source_closure(
@@ -1512,6 +1582,8 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
     if production_privacy_mode:
         if args.local_testnet_source_closure_sha256 is not None:
             fail("production privacy mode cannot claim a local-testnet source closure")
+        if args.local_testnet_python_sha256 is not None:
+            fail("production privacy mode cannot claim a local-testnet Python runtime")
         if args.controller_manifest is None or args.controller_digest is None:
             fail("production privacy mode requires the sealed release controller pair")
         controller_digest = require_sha256(
@@ -1538,6 +1610,8 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             fail("local-testnet reviewed inputs require their inspected SHA-256 identity")
         if args.local_testnet_source_closure_sha256 is None:
             fail("local-testnet reset requires its operator-reviewed source closure SHA-256")
+        if args.local_testnet_python_sha256 is None:
+            fail("local-testnet reset requires its operator-reviewed Python SHA-256")
         if args.controller_manifest is not None or args.controller_digest is not None:
             fail("local-testnet reset cannot claim a production release controller")
         local_source_closure, local_source_closure_sha256 = (
@@ -1545,6 +1619,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 args.local_testnet_source_closure_sha256
             )
         )
+        local_testnet_python_sha256(args.local_testnet_python_sha256)
     source = args.source_bundle
     output = args.output_bundle
     privacy_root = (
@@ -1573,6 +1648,22 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
     )
     if genesis_native_verifier_identity[0] != trusted_genesis_native_verifier_sha256:
         fail("native genesis verifier differs from its trusted SHA-256")
+    trusted_operator_status_client_sha256 = require_sha256(
+        args.trusted_operator_status_client_sha256,
+        "native operator status client SHA-256",
+    )
+    operator_status_client_identity = _executable_identity(
+        args.operator_status_client,
+        "native operator status client",
+    )
+    if (
+        operator_status_client_identity[0] != trusted_operator_status_client_sha256
+        or args.operator_status_client.name != "taira_operator_status"
+        or args.operator_status_client.parent != args.genesis_native_verifier.parent
+    ):
+        fail(
+            "native operator status client is not the trusted source-matched verifier sibling"
+        )
     token_hash_tool_identity = _executable_identity(
         args.onboarding_token_hash_tool,
         "native onboarding-token hash tool",
@@ -1887,6 +1978,9 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             "native_genesis_verifier_sha256": (
                 trusted_genesis_native_verifier_sha256
             ),
+            "operator_status_client_sha256": (
+                trusted_operator_status_client_sha256
+            ),
             "native_genesis_verifier_receipt_sha256": (
                 native_genesis_verifier_receipt_sha256
             ),
@@ -1989,6 +2083,9 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 "genesis_native_verifier_sha256": (
                     trusted_genesis_native_verifier_sha256
                 ),
+                "operator_status_client_sha256": (
+                    trusted_operator_status_client_sha256
+                ),
                 "genesis_public_key": genesis_public_key,
                 "genesis_expected_hash": expected_hash,
                 "signed_genesis_sha256": signed_genesis_sha256,
@@ -2060,6 +2157,10 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 **local_source_closure,
                 "sha256": local_source_closure_sha256,
             }
+            manifest["local_testnet_python"] = {
+                "path": str(LOCAL_TESTNET_PYTHON),
+                "sha256": args.local_testnet_python_sha256,
+            }
             manifest["local_reviewed_inputs_identity_sha256"] = (
                 authenticated_manifest_sha
             )
@@ -2107,6 +2208,10 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             result["local_testnet_source_closure_sha256"] = (
                 local_source_closure_sha256
             )
+            result["local_testnet_python_sha256"] = args.local_testnet_python_sha256
+        result["operator_status_client_sha256"] = (
+            trusted_operator_status_client_sha256
+        )
         if args.kagemusha_release_root is not None:
             result["kagemusha_release_root"] = str(args.kagemusha_release_root)
             result["kagemusha_release_policy_sha256"] = (
@@ -2134,10 +2239,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--local-testnet-reviewed-input-dir", type=Path)
     parser.add_argument("--local-testnet-reviewed-inputs-sha256")
     parser.add_argument("--local-testnet-source-closure-sha256")
+    parser.add_argument("--local-testnet-python-sha256")
     parser.add_argument("--genesis-external-signer", type=Path, required=True)
     parser.add_argument("--trusted-genesis-external-signer-sha256", required=True)
     parser.add_argument("--genesis-native-verifier", type=Path, required=True)
     parser.add_argument("--trusted-genesis-native-verifier-sha256", required=True)
+    parser.add_argument("--operator-status-client", type=Path, required=True)
+    parser.add_argument("--trusted-operator-status-client-sha256", required=True)
     parser.add_argument("--onboarding-token-hash-tool", type=Path, required=True)
     parser.add_argument(
         "--kagemusha-release-root",
@@ -2178,6 +2286,11 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.local_testnet_reviewed_input_dir is not None:
+            require_local_testnet_source_runtime(
+                args.local_testnet_source_closure_sha256,
+                args.local_testnet_python_sha256,
+            )
         result = prepare(args)
     except (
         OSError,
