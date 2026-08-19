@@ -757,6 +757,37 @@ and review an unsigned NEVO reset genesis using operator-selected public
 identities and token hashes; keep every private key and raw bearer token in
 runtime-only secret storage.
 
+Use `scripts/compose_taira_nevo_reset_genesis.py` for that public-only
+composition. Copy
+`configs/soranexus/taira/nevo-reset-public-inputs.example.json` to an
+owner-private path and replace every placeholder with two distinct canonical
+Taira Ed25519 account IDs and two distinct `blake3:` token hashes. The composer
+does not accept raw tokens, private-key fields, or an existing output path; it
+also refuses any output path that aliases the checked-in generic genesis.
+
+```bash
+python3 scripts/compose_taira_nevo_reset_genesis.py \
+  --public-inputs /absolute/operator-private/nevo-reset-public-inputs.json \
+  --dry-run
+
+python3 scripts/compose_taira_nevo_reset_genesis.py \
+  --public-inputs /absolute/operator-private/nevo-reset-public-inputs.json \
+  --output-genesis /absolute/operator-review/taira-nevo-reset.unsigned.json \
+  --review-out /absolute/operator-review/taira-nevo-reset.review.json
+
+cargo iroha-fast -- run -p iroha_kagami --bin kagami -- genesis validate \
+  /absolute/operator-review/taira-nevo-reset.unsigned.json
+```
+
+Review both new files and their recorded hashes before passing the unsigned
+genesis to the existing external-signer workflow. The three declarative alias
+intents provision the DPN/is2 roots and `nevo.dpn`; they also derive the exact
+manage/delegate/resolve owner bundle. The API signer receives no alias or
+publishing capability at genesis. Contract-specific permissions, contract
+deployment, and application factoring-policy initialization remain reviewed
+post-genesis steps. Token hashes bind the later validator configuration and
+appear only in the review record, never in the genesis itself.
+
 The signer owns its isolated external software-signing service and encrypted
 runtime-only key access internally; it must never accept a private-key path or
 key bytes through argv, environment, or the rendered tree. Source-built Kagami

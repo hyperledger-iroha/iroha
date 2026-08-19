@@ -428,7 +428,13 @@ def hash_regular(
 
 
 def parse_toml(path: Path, owner_uid: int, label: str) -> tuple[dict[str, Any], str]:
-    body, _ = read_regular(path, MAX_CONFIG_BYTES, label, owner_uid=owner_uid)
+    body, _ = read_regular(
+        path,
+        MAX_CONFIG_BYTES,
+        label,
+        owner_uid=owner_uid,
+        exact_mode=0o600,
+    )
     try:
         value = tomllib.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
@@ -501,7 +507,12 @@ def load_activation(path: Path, layout: Layout = PRODUCTION_LAYOUT) -> Activatio
         "candidate binary",
         minimum_parts=2,
     )
-    if len(bundle_parts) != 1 or len(binary_parts) != 2 or binary_parts[-1] != "iroha3d":
+    if (
+        len(bundle_parts) != 1
+        or bundle_parts[0] != generation
+        or len(binary_parts) != 2
+        or binary_parts[-1] != "iroha3d"
+    ):
         fail("candidate reset bundle or binary path shape is not exact")
     require_no_symlink_ancestry(bundle, layout.taira_root, "candidate reset bundle")
     require_no_symlink_ancestry(binary, layout.taira_root, "candidate binary")
@@ -638,6 +649,19 @@ def parse_old_plist(
         (workdir / "storage", f"predecessor storage {label}"),
     ):
         require_no_symlink_ancestry(candidate_path, layout.taira_root, candidate_label)
+    for directory, directory_label in (
+        (workdir.parent, f"predecessor release root {label}"),
+        (workdir, f"predecessor workdir {label}"),
+        (workdir / "storage", f"predecessor storage {label}"),
+    ):
+        directory_info = directory.lstat()
+        if (
+            stat.S_ISLNK(directory_info.st_mode)
+            or not stat.S_ISDIR(directory_info.st_mode)
+            or directory_info.st_uid != UID
+            or stat.S_IMODE(directory_info.st_mode) != 0o700
+        ):
+            fail(f"{directory_label} custody is not exact")
     stdout = payload.get("StandardOutPath")
     stderr = payload.get("StandardErrorPath")
     if (
@@ -670,8 +694,21 @@ def parse_old_plist(
     storage_info = storage.lstat()
     if not stat.S_ISDIR(storage_info.st_mode) or stat.S_ISLNK(storage_info.st_mode):
         fail(f"predecessor storage is not one real directory: {label}")
-    binary_sha, _ = hash_regular(binary, MAX_BINARY_BYTES, f"predecessor binary {label}")
-    genesis_sha, _ = hash_regular(genesis, 64 * 1024 * 1024, f"predecessor genesis {label}")
+    binary_sha, binary_info = hash_regular(
+        binary,
+        MAX_BINARY_BYTES,
+        f"predecessor binary {label}",
+        owner_uid=UID,
+    )
+    if stat.S_IMODE(binary_info.st_mode) & 0o111 == 0:
+        fail(f"predecessor binary is not executable: {label}")
+    genesis_sha, _ = hash_regular(
+        genesis,
+        64 * 1024 * 1024,
+        f"predecessor genesis {label}",
+        owner_uid=UID,
+        exact_mode=0o600,
+    )
     return PredecessorPeer(
         number=number,
         label=label,
@@ -744,7 +781,11 @@ def require_nevo_bundle(bundle: Path, peers: Sequence[Any]) -> None:
 
     public_paths = [
         bundle / "genesis.json",
+        bundle / "genesis.signed.nrt",
+        bundle / "base-config.toml",
         bundle / "reset-manifest.json",
+        bundle / "validator-roster.toml",
+        bundle / "rendered/genesis.json",
         *(peer.config for peer in peers),
     ]
     for path in public_paths:
@@ -844,9 +885,21 @@ class LaunchctlOps:
         if not required_lines.issubset(observed_lines):
             fail(f"loaded LaunchAgent definition differs from its exact plist: {label}")
         if isinstance(arguments, list):
-            for argument in arguments:
-                if f"\t\t{argument}" not in observed_lines:
-                    fail(f"loaded LaunchAgent arguments differ from its exact plist: {label}")
+            lines = text.splitlines()
+            try:
+                start = lines.index("\targuments = {") + 1
+                end = lines.index("\t}", start)
+            except ValueError as error:
+                raise ResetError(
+                    f"loaded LaunchAgent omitted its argument block: {label}"
+                ) from error
+            loaded_arguments = [
+                line.removeprefix("\t\t")
+                for line in lines[start:end]
+                if line.startswith("\t\t")
+            ]
+            if loaded_arguments != arguments:
+                fail(f"loaded LaunchAgent arguments differ from its exact plist: {label}")
 
     def bootout(self, label: str) -> None:
         self.run(["/bin/launchctl", "bootout", f"{DOMAIN}/{label}"], check=True)
@@ -1099,6 +1152,7 @@ class HealthClient:
         ):
             fail("validator durable height or reducer status is not coherent")
         quorum = context.get("quorum")
+        mode = context.get("mode")
         if (
             context.get("validator_count") != PEER_COUNT
             or not isinstance(quorum, dict)
@@ -1106,6 +1160,10 @@ class HealthClient:
             or isinstance(quorum.get("total_power"), bool)
             or not isinstance(quorum.get("total_power"), int)
             or quorum["total_power"] < PEER_COUNT
+            or not isinstance(mode, dict)
+            or set(mode) != {"mode", "details"}
+            or mode.get("mode") not in {"permissioned", "npos"}
+            or mode.get("details") is not None
         ):
             fail("validator does not expose the exact four-validator 3-of-4 quorum")
         block_hash = subject.get("block_hash")
@@ -1114,13 +1172,71 @@ class HealthClient:
         match = BLOCK_HASH_RE.fullmatch(block_hash)
         if match is None:
             fail("validator committed block hash is not canonical")
+        commit_qc = sumeragi.get("last_commit_qc")
+        if not isinstance(commit_qc, dict):
+            fail("validator omitted its durable CommitQC")
+        certificate = commit_qc.get("certificate")
+        if not isinstance(certificate, dict):
+            fail("validator CommitQC certificate is malformed")
+        round_record = certificate.get("round")
+        phase = certificate.get("phase")
+        if (
+            not isinstance(round_record, dict)
+            or round_record.get("height") != committed
+            or isinstance(round_record.get("view"), bool)
+            or not isinstance(round_record.get("view"), int)
+            or round_record["view"] < 0
+            or not isinstance(phase, dict)
+            or set(phase) != {"phase", "details"}
+            or phase.get("phase") != "commit"
+            or phase.get("details") is not None
+            or certificate.get("subject") != subject
+        ):
+            fail("validator CommitQC does not bind its durable committed subject")
+        signer_count = commit_qc.get("signer_count")
+        minimum_signers = commit_qc.get("min_signers")
+        signed_power = commit_qc.get("signed_power")
+        total_power = commit_qc.get("total_power")
+        if (
+            commit_qc.get("validator_count") != PEER_COUNT
+            or signer_count != 3
+            or minimum_signers != 3
+            or isinstance(signed_power, bool)
+            or not isinstance(signed_power, int)
+            or isinstance(total_power, bool)
+            or not isinstance(total_power, int)
+            or total_power != quorum["total_power"]
+            or signed_power > total_power
+            or signed_power * 3 <= total_power * 2
+            or (mode.get("mode") == "permissioned" and signed_power != signer_count)
+        ):
+            fail("validator durable CommitQC lacks the exact 3-of-4 quorum")
+        fingerprints: dict[str, str] = {}
+        for field in (
+            "height_context_id",
+            "node_fingerprint",
+            "build_fingerprint",
+            "config_fingerprint",
+        ):
+            value = sumeragi.get(field)
+            if value in (None, "", {}):
+                fail(f"validator omitted its {field}")
+            fingerprints[field] = json.dumps(
+                value,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
         return {
             "port": port,
             "height": committed,
             "block_hash": match.group(1).lower(),
             "validator_count": PEER_COUNT,
             "minimum_signers": 3,
+            "signer_count": signer_count,
+            "signed_power": signed_power,
             "total_power": quorum["total_power"],
+            **fingerprints,
         }
 
     def fleet_sample(self, ports: Sequence[int], operator_context: Any) -> FleetSample:
@@ -1131,6 +1247,15 @@ class HealthClient:
         hashes = {sample["block_hash"] for sample in samples}
         if len(heights) != 1 or len(hashes) != 1:
             fail("four validators disagree on their durable committed frontier")
+        for field in (
+            "height_context_id",
+            "build_fingerprint",
+            "config_fingerprint",
+        ):
+            if len({sample[field] for sample in samples}) != 1:
+                fail(f"four validators disagree on {field}")
+        if len({sample["node_fingerprint"] for sample in samples}) != PEER_COUNT:
+            fail("four validator roots do not expose four distinct node identities")
         return FleetSample(
             height=int(next(iter(heights))),
             block_hash=str(next(iter(hashes))),
@@ -1345,7 +1470,7 @@ def prepare_archive(
     )
 
 
-def require_plan_unchanged(plan: ResetPlan) -> None:
+def require_candidate_inputs_unchanged(plan: ResetPlan) -> None:
     activation_sha, _ = hash_regular(
         plan.activation.path,
         MAX_ACTIVATION_MANIFEST_BYTES,
@@ -1369,6 +1494,10 @@ def require_plan_unchanged(plan: ResetPlan) -> None:
     reset_bundle.require_mutable_bundle_identities(
         plan.bundle_plan, phase="before user reset"
     )
+
+
+def require_plan_unchanged(plan: ResetPlan) -> None:
+    require_candidate_inputs_unchanged(plan)
     for peer in plan.predecessor:
         body, _ = read_regular(
             peer.plist_path,
@@ -1594,8 +1723,10 @@ def apply_reset(
         try:
             mutated = True
             stop_all(ops, LABELS)
+            require_plan_unchanged(plan)
             require_predecessor_artifacts_unchanged(plan.predecessor)
             install_candidate_plists(plan)
+            require_candidate_inputs_unchanged(plan)
             bootstrap_all(ops, plan.candidate)
             candidate_fleet = health.wait_fleet(
                 [peer.torii_port for peer in plan.candidate],

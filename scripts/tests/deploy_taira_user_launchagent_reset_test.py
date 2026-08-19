@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 import plistlib
 from types import SimpleNamespace
@@ -117,7 +118,11 @@ def build_fixture(tmp_path: Path) -> tuple[module.Layout, module.Activation, Sim
     bundle = Path(str(payload["bundle"]))
     private_dir(bundle)
     private_file(bundle / "genesis.json", b'{"domain":"nevo.dpn"}\n')
+    private_file(bundle / "genesis.signed.nrt", b"signed-nevo-genesis")
+    private_file(bundle / "base-config.toml", b"chain = 'taira'\n")
     private_file(bundle / "reset-manifest.json", b'{"schema":"fixture"}\n')
+    private_file(bundle / "validator-roster.toml", b"[[validators]]\n")
+    private_file(bundle / "rendered/genesis.json", b'{"domain":"nevo.dpn"}\n')
 
     candidate_peers: list[SimpleNamespace] = []
     for index, (slug, port) in enumerate(zip(module.SLUGS, module.TORII_PORTS), start=1):
@@ -386,10 +391,56 @@ def test_launchctl_refuses_loaded_dormant_system_label(monkeypatch: pytest.Monke
         ops.require_initial_cohort()
 
 
+def test_launchctl_refuses_loaded_argument_reordering(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout, _activation, _bundle_plan = build_fixture(tmp_path)
+    label = module.LABELS[0]
+    path = layout.launch_agents / f"{label}.plist"
+    body = path.read_bytes()
+    payload = plistlib.loads(body)
+    arguments = payload["ProgramArguments"]
+    output = "\n".join(
+        [
+            f"{module.DOMAIN}/{label} = {{",
+            f"\tpath = {path}",
+            "\ttype = LaunchAgent",
+            "\tstate = running",
+            f"\tprogram = {arguments[0]}",
+            "\targuments = {",
+            f"\t\t{arguments[0]}",
+            f"\t\t{arguments[2]}",
+            f"\t\t{arguments[1]}",
+            f"\t\t{arguments[3]}",
+            "\t}",
+            f"\tworking directory = {payload['WorkingDirectory']}",
+            f"\tstdout path = {payload['StandardOutPath']}",
+            f"\tstderr path = {payload['StandardErrorPath']}",
+            f"\tdomain = {module.DOMAIN}",
+            "}",
+        ]
+    ).encode()
+    ops = module.LaunchctlOps()
+    monkeypatch.setattr(ops, "job_output", lambda *_args: output)
+
+    with pytest.raises(module.ResetError, match="arguments differ"):
+        ops.require_loaded_definition(path, body)
+
+
 class FixtureHealth(module.HealthClient):
-    def __init__(self, *, minimum_signers: int = 3, disagree: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        minimum_signers: int = 3,
+        qc_signers: int = 3,
+        disagree: bool = False,
+        same_node: bool = False,
+    ) -> None:
         self.minimum_signers = minimum_signers
+        self.qc_signers = qc_signers
         self.disagree = disagree
+        self.same_node = same_node
 
     def _request(
         self,
@@ -405,6 +456,7 @@ class FixtureHealth(module.HealthClient):
         suffix = 2 if self.disagree and port == module.TORII_PORTS[-1] else 0
         if not url.endswith("/v1/sumeragi/status"):
             return {"blocks": 7}
+        subject = {"block_hash": "00" * 31 + f"0{suffix}"}
         return {
             "protocol_version": 4,
             "restart_required": False,
@@ -412,12 +464,29 @@ class FixtureHealth(module.HealthClient):
             "last_committed_height": 7,
             "height_context": {
                 "validator_count": 4,
+                "mode": {"mode": "permissioned", "details": None},
                 "quorum": {
                     "min_signers": self.minimum_signers,
                     "total_power": 4,
                 },
             },
-            "last_committed_subject": {"block_hash": "00" * 31 + f"0{suffix}"},
+            "last_committed_subject": subject,
+            "last_commit_qc": {
+                "certificate": {
+                    "round": {"height": 7, "view": 0},
+                    "phase": {"phase": "commit", "details": None},
+                    "subject": subject,
+                },
+                "validator_count": 4,
+                "signer_count": self.qc_signers,
+                "min_signers": self.minimum_signers,
+                "signed_power": self.qc_signers,
+                "total_power": 4,
+            },
+            "height_context_id": {"epoch": 1},
+            "node_fingerprint": {"port": 0 if self.same_node else port},
+            "build_fingerprint": {"commit": "a" * 40},
+            "config_fingerprint": {"network": "nevo"},
         }
 
 
@@ -437,6 +506,20 @@ def test_health_requires_exact_three_of_four_qc() -> None:
 def test_health_requires_one_common_committed_frontier() -> None:
     with pytest.raises(module.ResetError, match="disagree"):
         FixtureHealth(disagree=True).fleet_sample(
+            module.TORII_PORTS, FixtureOperatorContext()
+        )
+
+
+def test_health_requires_a_durable_three_signer_commit_qc() -> None:
+    with pytest.raises(module.ResetError, match="durable CommitQC"):
+        FixtureHealth(qc_signers=2).fleet_sample(
+            module.TORII_PORTS, FixtureOperatorContext()
+        )
+
+
+def test_health_requires_four_distinct_node_identities() -> None:
+    with pytest.raises(module.ResetError, match="distinct node identities"):
+        FixtureHealth(same_node=True).fleet_sample(
             module.TORII_PORTS, FixtureOperatorContext()
         )
 
@@ -491,6 +574,124 @@ def test_apply_refuses_wrong_confirmation_before_lock(tmp_path: Path) -> None:
         )
 
     assert not plan.activation.path.parents[1].joinpath(".user-launchagent-reset.lock").exists()
+
+
+class RollbackOps:
+    def __init__(self) -> None:
+        self.loaded = set(module.LABELS)
+
+    def job_loaded(self, domain: str, label: str) -> bool:
+        assert domain == module.DOMAIN
+        return label in self.loaded
+
+    def require_initial_cohort(self) -> None:
+        assert self.loaded == set(module.LABELS)
+
+    def bootout(self, label: str) -> None:
+        self.loaded.remove(label)
+
+    def wait_absent(self, labels: tuple[str, ...]) -> None:
+        assert not (self.loaded & set(labels))
+
+    def bootstrap(self, path: Path) -> None:
+        self.loaded.add(path.stem)
+
+    def require_loaded_definition(self, path: Path, body: bytes) -> None:
+        assert path.read_bytes() == body
+        assert path.stem in self.loaded
+
+
+class RollbackHealth:
+    def wait_fleet(self, *_args: object) -> tuple[module.FleetSample, module.FleetSample]:
+        sample = module.FleetSample(
+            height=7,
+            block_hash="0" * 64,
+            peers=tuple({"port": port} for port in module.TORII_PORTS),
+        )
+        return sample, sample
+
+
+class CandidateFailureHealth(RollbackHealth):
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def wait_fleet(self, *_args: object) -> tuple[module.FleetSample, module.FleetSample]:
+        self.calls += 1
+        if self.calls == 2:
+            raise module.ResetError("candidate QC failed")
+        return super().wait_fleet(*_args)
+
+
+def test_rollback_restores_all_plists_and_retains_storage_evidence(tmp_path: Path) -> None:
+    layout, plan, _captured, _launchctl = build_plan_fixture(tmp_path)
+    private_dir(plan.archive_dir)
+    for peer in plan.candidate:
+        module.atomic_write(
+            peer.plist_path,
+            peer.plist_body,
+            mode=0o600,
+            replace=True,
+        )
+    before_storage = {
+        peer.label: (peer.storage.lstat().st_dev, peer.storage.lstat().st_ino)
+        for peer in plan.predecessor
+    }
+    ops = RollbackOps()
+
+    module.rollback(
+        plan,
+        ops,  # type: ignore[arg-type]
+        RollbackHealth(),  # type: ignore[arg-type]
+        Path("/runtime-only/old-operator.key"),
+        module.ResetError("candidate readiness failed"),
+    )
+
+    assert ops.loaded == set(module.LABELS)
+    for peer in plan.predecessor:
+        assert peer.plist_path.read_bytes() == peer.plist_body
+        assert (peer.storage.lstat().st_dev, peer.storage.lstat().st_ino) == (
+            before_storage[peer.label]
+        )
+    receipt = json.loads((plan.archive_dir / "rollback.json").read_bytes())
+    assert receipt["restored"] is True
+    assert receipt["errors"] == []
+    inventory = json.loads((plan.archive_dir / "inventory.json").read_bytes())
+    assert "rollback.json" in inventory
+
+
+def test_apply_automatically_rolls_back_a_candidate_qc_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout, plan, _captured, _launchctl = build_plan_fixture(tmp_path)
+    monkeypatch.setattr(
+        module.reset_bundle,
+        "require_mutable_bundle_identities",
+        lambda *_args, **_kwargs: None,
+    )
+    ops = RollbackOps()
+    health = CandidateFailureHealth()
+
+    with pytest.raises(module.ResetError, match="candidate QC failed"):
+        module.apply_reset(
+            plan,
+            confirmation=plan.activation.confirmation,
+            operator_private_key_file=Path("/runtime-only/new-operator.key"),
+            rollback_operator_private_key_file=Path(
+                "/runtime-only/old-operator.key"
+            ),
+            layout=layout,
+            ops=ops,  # type: ignore[arg-type]
+            health=health,  # type: ignore[arg-type]
+        )
+
+    assert health.calls == 3
+    assert ops.loaded == set(module.LABELS)
+    assert not layout.lock_path.exists()
+    for peer in plan.predecessor:
+        assert peer.plist_path.read_bytes() == peer.plist_body
+    receipt = json.loads((plan.archive_dir / "rollback.json").read_bytes())
+    assert receipt["restored"] is True
 
 
 def test_plan_projection_is_explicitly_non_mutating(tmp_path: Path) -> None:
