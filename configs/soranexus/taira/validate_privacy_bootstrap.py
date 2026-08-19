@@ -149,6 +149,18 @@ EXPECTED_BROKER_POLICY_KEYS = {
 EXPECTED_BROKER_SCHEMA = "iroha.taira.privacy.bootle-lantern-broker-public.v1"
 EXPECTED_CHAIN_ID = taira_constants.CHAIN_ID
 EXPECTED_PROVIDER_HANDLE = "runtime://privacy/bootle-lantern/taira-primary"
+EXPECTED_PUBLIC_ONBOARDING_CREDENTIALS = [
+    {
+        "id": "REPLACE_WITH_TAIRA_BOI_ONBOARDING_CREDENTIAL_ID",
+        "scope": {"dataspace": "is2"},
+        "token_hash": "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH",
+    },
+    {
+        "id": "REPLACE_WITH_TAIRA_DPN_ONBOARDING_CREDENTIAL_ID",
+        "scope": {"dataspace": "dpn"},
+        "token_hash": "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH",
+    },
+]
 
 
 class PrivacyBootstrapValidationError(RuntimeError):
@@ -701,11 +713,7 @@ def _validate_config(config: dict[str, Any], plan: dict[str, Any], *, release: b
         or not isinstance(onboarding, dict)
         or onboarding.get("private_key_file")
         != "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE"
-        or not isinstance(credentials, list)
-        or len(credentials) != 1
-        or not isinstance(credentials[0], dict)
-        or credentials[0].get("token_hash")
-        != "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH"
+        or credentials != EXPECTED_PUBLIC_ONBOARDING_CREDENTIALS
         or not isinstance(faucet, dict)
         or faucet.get("private_key_file")
         != "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY_FILE"

@@ -77,6 +77,7 @@ SORACLOUD_SIGNER_PUBLIC_KEY_HEX = (
 )
 SORACLOUD_SIGNER_POLICY_DIGEST_HEX = "95" * 32
 ONBOARDING_TOKEN = "bootstrap-api-token-0123456789abcdef"
+DPN_ONBOARDING_TOKEN = "dpn-api-token-0123456789abcdef012345"
 
 
 def _receipt_keypair(index: int) -> tuple[str, str]:
@@ -142,8 +143,15 @@ def test_taira_templates_require_no_backend_offline_enrollment() -> None:
     config_text = TAIRA_CONFIG_PATH.read_text(encoding="utf-8")
     secrets_text = TAIRA_SECRETS_EXAMPLE_PATH.read_text(encoding="utf-8")
 
-    assert "wonderland.universal" not in secrets_text
-    assert 'account_onboarding_scope_dataspace = "is2"' in secrets_text
+    assert "scope_domain" not in secrets_text
+    assert secrets_text.count("[[shared.account_onboarding_credentials]]") == 2
+    assert 'id = "boi-mobile"' in secrets_text
+    assert 'scope_dataspace = "is2"' in secrets_text
+    assert 'id = "dpn-api"' in secrets_text
+    assert 'scope_dataspace = "dpn"' in secrets_text
+    assert config_text.count("[[torii.account_onboarding.credentials]]") == 2
+    assert 'scope = { dataspace = "is2" }' in config_text
+    assert 'scope = { dataspace = "dpn" }' in config_text
     assert "offline_asset_alias" not in secrets_text
     assert "offline_asset_definition_id" not in secrets_text
     assert "offline_asset_scale" not in secrets_text
@@ -485,7 +493,7 @@ def test_checked_in_taira_genesis_contract_deployment_gate_is_release_pinned() -
                 "destination": TAIRA_GENESIS_DEPLOYER_ID,
                 "object": {
                     "name": "CanRegisterAccount",
-                    "payload": {"domain": "wonderland.universal"},
+                    "payload": {"domain": "taira.universal"},
                 },
             }
         ],
@@ -548,7 +556,7 @@ def test_checked_in_taira_genesis_permission_payloads_match_typed_shapes() -> No
             "destination": TAIRA_GENESIS_DEPLOYER_ID,
             "object": {
                 "name": "CanRegisterAccount",
-                "payload": {"domain": "wonderland.universal"},
+                "payload": {"domain": "taira.universal"},
             },
         },
         {
@@ -688,6 +696,18 @@ manifest_directory = "configs/soranexus/taira/manifests"
 cache_directory = "configs/soranexus/taira/manifests"
 poll_interval_ms = 10000
 
+[[nexus.dataspace_catalog]]
+alias = "dpn"
+id = 10
+
+[[nexus.dataspace_catalog]]
+alias = "is"
+id = 11
+
+[[nexus.dataspace_catalog]]
+alias = "is2"
+id = 12
+
 [torii.account_onboarding]
 authority = "REPLACE_WITH_TAIRA_ONBOARDING_AUTHORITY"
 private_key_file = "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE"
@@ -695,9 +715,14 @@ lease_term_years = 1
 additional_permissions = []
 
 [[torii.account_onboarding.credentials]]
-id = "REPLACE_WITH_TAIRA_ONBOARDING_CREDENTIAL_ID"
-scope = { dataspace = "REPLACE_WITH_TAIRA_ONBOARDING_SCOPE" }
-token_hash = "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH"
+id = "REPLACE_WITH_TAIRA_BOI_ONBOARDING_CREDENTIAL_ID"
+scope = { dataspace = "is2" }
+token_hash = "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH"
+
+[[torii.account_onboarding.credentials]]
+id = "REPLACE_WITH_TAIRA_DPN_ONBOARDING_CREDENTIAL_ID"
+scope = { dataspace = "dpn" }
+token_hash = "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH"
 
 [torii.faucet]
 authority = "REPLACE_WITH_TAIRA_FAUCET_AUTHORITY"
@@ -769,9 +794,6 @@ def _write_secrets(path: Path, validator_count: int = 4) -> None:
         "[shared]",
         'account_onboarding_authority = "bootstrap-authority"',
         'account_onboarding_private_key = "bootstrap-private-key"',
-        f'account_onboarding_api_token = "{ONBOARDING_TOKEN}"',
-        'account_onboarding_credential_id = "local-dev"',
-        'account_onboarding_scope_dataspace = "is2"',
         'torii_faucet_authority = "faucet-authority"',
         'torii_faucet_private_key = "faucet-private-key"',
         'kagemusha_commands_private_key = "kagemusha-commands-private-key"',
@@ -788,6 +810,16 @@ def _write_secrets(path: Path, validator_count: int = 4) -> None:
         'streaming_identity_private_key = "streaming-private-key"',
         f'sorafs_council_public_keys = ["{COUNCIL_KEY_1}", "{COUNCIL_KEY_2}", "{COUNCIL_KEY_3}"]',
         "sorafs_council_signature_threshold = 2",
+        "",
+        "[[shared.account_onboarding_credentials]]",
+        'id = "boi-mobile"',
+        f'api_token = "{ONBOARDING_TOKEN}"',
+        'scope_dataspace = "is2"',
+        "",
+        "[[shared.account_onboarding_credentials]]",
+        'id = "dpn-api"',
+        f'api_token = "{DPN_ONBOARDING_TOKEN}"',
+        'scope_dataspace = "dpn"',
         "",
     ]
     for index in range(1, validator_count + 1):
@@ -854,9 +886,12 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert "revision = 1" in config
     assert f'policy_digest_hex = "{SORACLOUD_SIGNER_POLICY_DIGEST_HEX}"' in config
     assert "escrow_accounts" not in config
-    assert 'id = "local-dev"' in config
+    assert 'id = "boi-mobile"' in config
     assert 'scope = { dataspace = "is2" }' in config
+    assert 'id = "dpn-api"' in config
+    assert 'scope = { dataspace = "dpn" }' in config
     assert MODULE._blake3_token_hash(ONBOARDING_TOKEN) in config
+    assert MODULE._blake3_token_hash(DPN_ONBOARDING_TOKEN) in config
     assert "bootstrap-private-key" not in config
     assert "faucet-private-key" not in config
     assert "peer-3-private" not in config
@@ -864,6 +899,20 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     assert "kagemusha-commands-private-key" not in config
     assert "streaming-private-key" not in config
     assert ONBOARDING_TOKEN not in config
+    assert DPN_ONBOARDING_TOKEN not in config
+    credentials = tomllib.loads(config)["torii"]["account_onboarding"]["credentials"]
+    assert credentials == [
+        {
+            "id": "boi-mobile",
+            "scope": {"dataspace": "is2"},
+            "token_hash": MODULE._blake3_token_hash(ONBOARDING_TOKEN),
+        },
+        {
+            "id": "dpn-api",
+            "scope": {"dataspace": "dpn"},
+            "token_hash": MODULE._blake3_token_hash(DPN_ONBOARDING_TOKEN),
+        },
+    ]
     runtime_dir = output_dir / "taira-validator-3" / "runtime"
     validator_key = runtime_dir / "validator-signer.key"
     soranet_key = runtime_dir / "soranet-transport.key"
@@ -2631,6 +2680,19 @@ def test_secret_material_rejects_removed_or_incomplete_signer_shapes(
 
     secrets_path.write_text(
         "[shared]\n"
+        'account_onboarding_api_token = "legacy-token"\n'
+        'account_onboarding_credential_id = "legacy"\n'
+        'account_onboarding_scope_dataspace = "is2"\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"removed onboarding fields.*\[\[shared\.account_onboarding_credentials\]\]",
+    ):
+        MODULE.load_secret_material(secrets_path)
+
+    secrets_path.write_text(
+        "[shared]\n"
         'account_onboarding_authority = "authority"\n'
         'account_onboarding_private_key = "private"\n',
         encoding="utf-8",
@@ -2639,7 +2701,7 @@ def test_secret_material_rejects_removed_or_incomplete_signer_shapes(
         MODULE.load_secret_material(secrets_path)
     except ValueError as error:
         assert "account onboarding is incomplete" in str(error)
-        assert "account_onboarding_api_token" in str(error)
+        assert "account_onboarding_credentials" in str(error)
     else:  # pragma: no cover - defensive assertion
         raise AssertionError("incomplete structural onboarding secrets were accepted")
 
@@ -2739,21 +2801,113 @@ def test_secret_material_requires_exact_provider_backed_soracloud_signer(
             MODULE.load_secret_material(candidate)
 
 
-def test_secret_material_rejects_wonderland_onboarding_scope(tmp_path: Path) -> None:
+def test_secret_material_rejects_non_application_onboarding_scope(
+    tmp_path: Path,
+) -> None:
     secrets_path = tmp_path / "validator_secrets.toml"
     _write_secrets(secrets_path)
     text = secrets_path.read_text(encoding="utf-8").replace(
-        'account_onboarding_scope_dataspace = "is2"',
-        'account_onboarding_scope_domain = "wonderland.universal"',
+        'scope_dataspace = "is2"',
+        'scope_dataspace = "universal"',
     )
     secrets_path.write_text(text, encoding="utf-8")
 
-    try:
+    with pytest.raises(ValueError, match="reviewed Taira application dataspaces"):
         MODULE.load_secret_material(secrets_path)
-    except ValueError as error:
-        assert "deployed Taira dataspace" in str(error)
-    else:  # pragma: no cover - defensive assertion
-        raise AssertionError("renderer accepted the stale Wonderland onboarding scope")
+
+
+def test_secret_material_rejects_duplicate_onboarding_ids_and_tokens(
+    tmp_path: Path,
+) -> None:
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_secrets(secrets_path)
+    valid = secrets_path.read_text(encoding="utf-8")
+
+    duplicate_id = tmp_path / "duplicate-id.toml"
+    duplicate_id.write_text(
+        valid.replace('id = "dpn-api"', 'id = "boi-mobile"'),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="credential id `boi-mobile` is duplicated"):
+        MODULE.load_secret_material(duplicate_id)
+
+    duplicate_token = tmp_path / "duplicate-token.toml"
+    duplicate_token.write_text(
+        valid.replace(DPN_ONBOARDING_TOKEN, ONBOARDING_TOKEN),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="must not reuse API tokens"):
+        MODULE.load_secret_material(duplicate_token)
+
+
+def test_secret_material_requires_distinct_boi_and_dpn_onboarding_credentials(
+    tmp_path: Path,
+) -> None:
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_secrets(secrets_path)
+    valid = secrets_path.read_text(encoding="utf-8")
+    dpn_credential = (
+        "[[shared.account_onboarding_credentials]]\n"
+        'id = "dpn-api"\n'
+        f'api_token = "{DPN_ONBOARDING_TOKEN}"\n'
+        'scope_dataspace = "dpn"\n\n'
+    )
+    assert dpn_credential in valid
+    secrets_path.write_text(valid.replace(dpn_credential, ""), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"required `dpn` and `is2`.*missing dpn"):
+        MODULE.load_secret_material(secrets_path)
+
+
+def test_secret_material_allows_additional_is_onboarding_credential(
+    tmp_path: Path,
+) -> None:
+    secrets_path = tmp_path / "validator_secrets.toml"
+    _write_secrets(secrets_path)
+    text = secrets_path.read_text(encoding="utf-8")
+    extra_credential = (
+        "[[shared.account_onboarding_credentials]]\n"
+        'id = "external-poc"\n'
+        'api_token = "external-poc-token-0123456789abcdef012345"\n'
+        'scope_dataspace = "is"\n\n'
+    )
+    secrets_path.write_text(
+        text.replace("[[validators]]", extra_credential + "[[validators]]", 1),
+        encoding="utf-8",
+    )
+
+    material = MODULE.load_secret_material(secrets_path)
+    assert [
+        credential.scope_dataspace
+        for credential in material.shared.account_onboarding_credentials
+    ] == ["is2", "dpn", "is"]
+
+
+def test_render_bundle_rejects_onboarding_scope_missing_from_catalog(
+    tmp_path: Path,
+) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    secrets_path = tmp_path / "validator_secrets.toml"
+    base_config_path = tmp_path / "config.toml"
+    output_dir = tmp_path / "out"
+    _write_roster(roster_path)
+    _write_secrets(secrets_path)
+    base_config_path.write_text(
+        BASE_CONFIG.replace(
+            '[[nexus.dataspace_catalog]]\nalias = "dpn"\nid = 10\n\n',
+            "",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="scopes are absent.*dpn"):
+        MODULE.render_bundle(
+            base_config_path,
+            roster_path,
+            output_dir,
+            secrets_path=secrets_path,
+        )
+    assert not output_dir.exists()
 
 
 def test_main_supports_single_validator_render(tmp_path: Path) -> None:

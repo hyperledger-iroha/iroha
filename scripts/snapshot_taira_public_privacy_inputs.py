@@ -50,11 +50,23 @@ POLICY_ID = hashlib.sha256(
     b"iroha.taira.privacy.bootle-lantern.policy.v1"
 ).hexdigest()
 PROVIDER_HANDLE = "runtime://privacy/bootle-lantern/taira-primary"
+PUBLIC_ONBOARDING_CREDENTIALS = [
+    {
+        "id": "REPLACE_WITH_TAIRA_BOI_ONBOARDING_CREDENTIAL_ID",
+        "scope": {"dataspace": "is2"},
+        "token_hash": "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH",
+    },
+    {
+        "id": "REPLACE_WITH_TAIRA_DPN_ONBOARDING_CREDENTIAL_ID",
+        "scope": {"dataspace": "dpn"},
+        "token_hash": "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH",
+    },
+]
 CONFIG_PUBLIC_BASE_SHA256 = (
-    "67e2059e3d5b13832ac8b3f19ecb54a46fe24b0653ecb74b89c902a2ddb60077"
+    "25d7d6e36163c9fd012aa6d2b91a25152c8afe31e8a4ba11e78cc6bcc7f1369d"
 )
 GENESIS_PUBLIC_BASE_SHA256 = (
-    "355226bf9aeb76176d5c5fcdf15aaba1acae26f32e0712135ea01127c068bc49"
+    "fd3fb971e026b399b1fcf215c52e25c7cd79862c6748b2395ca9d14087887090"
 )
 PROTOCOLS = (
     (0, "zk-ace-pq-authorization-v0", "ZkAcePqAuthorizationV0"),
@@ -696,11 +708,7 @@ def _validate_public_config(payload: bytes, plan: dict[str, Any]) -> None:
         or not isinstance(onboarding, dict)
         or onboarding.get("private_key_file")
         != "REPLACE_WITH_TAIRA_ONBOARDING_PRIVATE_KEY_FILE"
-        or not isinstance(credentials, list)
-        or len(credentials) != 1
-        or not isinstance(credentials[0], dict)
-        or credentials[0].get("token_hash")
-        != "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH"
+        or credentials != PUBLIC_ONBOARDING_CREDENTIALS
         or not isinstance(faucet, dict)
         or faucet.get("private_key_file")
         != "REPLACE_WITH_TAIRA_FAUCET_PRIVATE_KEY_FILE"

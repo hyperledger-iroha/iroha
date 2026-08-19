@@ -291,7 +291,11 @@ def test_embedded_projection_fingerprints_match_canonical_templates() -> None:
             "/run/secrets/onboarding.key",
         ),
         (
-            "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH",
+            "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH",
+            hashlib.sha256(b"real BOI bearer token").hexdigest(),
+        ),
+        (
+            "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH",
             hashlib.sha256(b"real bearer token").hexdigest(),
         ),
         (

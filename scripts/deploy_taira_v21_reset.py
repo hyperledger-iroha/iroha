@@ -1694,6 +1694,7 @@ def validate_bundle(
     expected_dpn_validator_release_commit: str,
     minimum_free_bytes: int,
     maximum_fsync_latency_ms: int,
+    headroom_anchor: Optional[Path] = None,
 ) -> BundlePlan:
     """Authenticate a fresh v21 bundle without changing it or running binaries."""
 
@@ -1859,7 +1860,7 @@ def validate_bundle(
         [
             bundle,
             *(peer.storage for peer in peers),
-            INSTALL_ROOT / "runtime",
+            headroom_anchor if headroom_anchor is not None else INSTALL_ROOT / "runtime",
         ],
         minimum_free_bytes,
     )

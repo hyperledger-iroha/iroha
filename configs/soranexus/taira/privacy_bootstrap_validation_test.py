@@ -367,7 +367,7 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
                 try:
                     permission = instruction["Grant"]["Permission"]
                     if permission["object"]["name"] == "CanEnactGovernance":
-                        permission["destination"] = "attacker@wonderland"
+                        permission["destination"] = "attacker@sora"
                 except (KeyError, TypeError):
                     pass
         self.write_genesis(genesis)
@@ -375,7 +375,7 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
 
     def test_coordinated_plan_and_genesis_authority_substitution_is_rejected(self) -> None:
         genesis = self.load_genesis()
-        replacement = "attacker@wonderland"
+        replacement = "attacker@sora"
         authority = self.load_plan()["genesis_authority"]
         for transaction in genesis["transactions"]:
             for instruction in transaction["instructions"]:
@@ -448,6 +448,27 @@ class PrivacyBootstrapValidationTests(unittest.TestCase):
         )
         self.config.write_text(config, encoding="utf-8")
         self.assert_rejected("must use the validator runtime key file")
+
+    def test_public_config_requires_distinct_boi_and_dpn_credential_placeholders(
+        self,
+    ) -> None:
+        original = self.config.read_text(encoding="utf-8")
+        for configured, replacement in (
+            (
+                'scope = { dataspace = "dpn" }',
+                'scope = { dataspace = "is2" }',
+            ),
+            (
+                "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH",
+                "materialized-dpn-token-hash",
+            ),
+        ):
+            with self.subTest(configured=configured):
+                self.config.write_text(
+                    original.replace(configured, replacement, 1), encoding="utf-8"
+                )
+                self.assert_rejected("runtime key-file handles")
+        self.config.write_text(original, encoding="utf-8")
 
     def test_materialized_soranet_transport_identity_is_rejected_from_public_config(self) -> None:
         for configured, materialized in (

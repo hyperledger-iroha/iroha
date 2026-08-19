@@ -26,7 +26,7 @@
         {
           "Register": {
             "Domain": {
-              "id": "wonderland.universal",
+              "id": "taira.universal",
               "logo": null,
               "metadata": {
                 "key": "value"
@@ -592,7 +592,7 @@
               "object": {
                 "name": "CanRegisterAccount",
                 "payload": {
-                  "domain": "wonderland.universal"
+                  "domain": "taira.universal"
                 }
               }
             }

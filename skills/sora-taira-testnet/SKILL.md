@@ -43,12 +43,11 @@ point operators at
 For that runtime-only signer config, prefer
 `configs/soranexus/taira/taira-canary-client.example.toml`; the generic
 `defaults/client.toml` targets the zero chain id and is not valid for Taira.
-When `--write-config` is omitted, the rollout scripts now bootstrap
+When `--write-config` is omitted, the MCP rollout script bootstraps
 `/run/secrets/taira-canary-client.toml` automatically by generating a fresh
-ordinary signer, onboarding it on Taira, and attempting an initial faucet claim
-before the write canary. For that public onboarding flow, keep aliases
-dataspace-scoped like `<label>@universal`; do not invent domain-scoped aliases
-such as `@wonderland.universal`.
+ordinary signer, onboarding it with the DPN-scoped credential at the
+dataspace-root alias `<label>@dpn`, and attempting an initial faucet claim
+before the write canary. Do not invent a domain-qualified alias for that flow.
 If the rollout is still using hand-edited validator configs, point them at
 `configs/soranexus/taira/validator_roster.example.toml`,
 `configs/soranexus/taira/validator_secrets.example.toml`, and

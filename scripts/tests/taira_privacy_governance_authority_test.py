@@ -850,7 +850,7 @@ def test_private_untrusted_helpers_have_no_production_caller_or_installed_bypass
 
     request = json.loads(
         action_driver_ipc.build_verange_request(
-            asset_definition_id="rose#wonderland",
+            asset_definition_id="rose#taira",
             candidate_binding_sha256=_digest("candidate"),
             creation_time_millis=1_900_000_000_000,
             network_id_hex="1" * 64,

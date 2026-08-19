@@ -1,0 +1,7 @@
+{
+  "schema": "iroha.taira.nevo-reset-public-inputs.v1",
+  "onboarding_authority_account_id": "REPLACE_WITH_CANONICAL_TAIRA_ED25519_ACCOUNT_ID",
+  "api_signer_account_id": "REPLACE_WITH_DISTINCT_CANONICAL_TAIRA_ED25519_ACCOUNT_ID",
+  "is2_onboarding_token_hash": "blake3:REPLACE_WITH_64_LOWERCASE_HEX_DIGEST",
+  "dpn_onboarding_token_hash": "blake3:REPLACE_WITH_DISTINCT_64_LOWERCASE_HEX_DIGEST"
+}

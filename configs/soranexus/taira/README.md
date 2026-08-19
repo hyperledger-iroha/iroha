@@ -705,6 +705,12 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    SoraFS council roots must be canonical Ed25519
    governance keys; never substitute validator, node identity, or provider
    advert keys.
+   Account onboarding uses `[[shared.account_onboarding_credentials]]`: provide
+   distinct IDs and bearer tokens for the required `is2` and `dpn` scopes, and
+   add an `is` credential only for a separately authorized external-PoC
+   client. Never reuse one bearer token across clients or scopes. The renderer
+   hashes every token into validator config; inject the DPN bearer token into
+   the DPN API separately instead of copying it into every validator bundle.
 4. Create an owner-private absolute render root and render the per-validator
    bundle beneath it:
    - `TAIRA_VALIDATOR_RENDER_ROOT="$(mktemp -d /private/var/tmp/iroha-taira-validator-render.XXXXXX)"`
@@ -742,6 +748,15 @@ When the renderer writes an inline `genesis.expected_hash`, it uppercases that
 body and emits the canonical CRC-bound `hash:<64-hex>#<CRC16>` literal required
 by the config parser. Omitting `--genesis-expected-hash` preserves the
 pre-signing `genesis.expected_hash_file` assignment.
+
+TODO(operator): the checked-in generic genesis still does not provision the
+governed DPN root lease, `nevo.dpn`, or a real funded onboarding authority with
+the exact DPN/is2 alias-management, sponsor-enrollment, and registration
+permissions. Do not sign or deploy it as a repaired Taira reset. First produce
+and review an unsigned NEVO reset genesis using operator-selected public
+identities and token hashes; keep every private key and raw bearer token in
+runtime-only secret storage.
+
 The signer owns its isolated external software-signing service and encrypted
 runtime-only key access internally; it must never accept a private-key path or
 key bytes through argv, environment, or the rendered tree. Source-built Kagami
@@ -2159,6 +2174,101 @@ guarded four-validator cutover. The same job then requires the public Torii
 root and all four protected direct-validator roots to report the exact full
 source commit and three advancing aligned fleet samples before publication.
 
+### Existing macOS user-LaunchAgent cohort
+
+The test host currently supervised outside the root LaunchDaemon layout must
+not be reset with `deploy_taira_v21_reset.py`, the binary-only update
+controller, or manual `launchctl` and storage commands. Its only admitted
+compatibility path is
+`scripts/deploy_taira_user_launchagent_reset.py`. That controller is fixed to
+the `user/501` domain, administrator uid `501`, and exactly these labels:
+
+- `org.sora.taira.user.validator-1`
+- `org.sora.taira.user.validator-2`
+- `org.sora.taira.user.validator-3`
+- `org.sora.taira.user.validator-4`
+
+It refuses an extra user-validator label, any loaded
+`io.soramitsu.taira.validator-*` system job, a broad path, a symlink in the
+trusted tree, or a predecessor whose four plists do not resolve to one common
+binary and signed genesis plus four distinct storage roots. Dormant system
+plist files may remain on disk, but their jobs must not be loaded.
+
+First place the authenticated private reset bundle at one exact child of
+`/Users/administrator/apps/dpn-test/taira/reset-bundles/`, and place the
+already admitted executable at
+`/Users/administrator/apps/dpn-test/taira/releases/<release>/iroha3d`. The
+bundle stays mode `0700`, owned by `administrator:staff`, and retains the exact
+`taira-exact2f-reset-bundle` layout. Its reset manifest must bind the executable
+SHA-256, signed genesis, four config hashes, and four empty storage trees. The
+controller reuses the main reset controller's bundle validator, additionally
+requires `nevo.dpn` in the unsigned genesis, and hash-detects the retired test
+namespace without keeping that namespace literal in source.
+
+Create an owner-only activation manifest beneath
+`/Users/administrator/apps/dpn-test/taira/reset-manifests/` with mode `0600`:
+
+```json
+{
+  "schema": "iroha.taira.user-launchagent-reset.v1",
+  "generation": "20260819-nevo-reset-1",
+  "uid": 501,
+  "launchctl_domain": "user/501",
+  "labels": [
+    "org.sora.taira.user.validator-1",
+    "org.sora.taira.user.validator-2",
+    "org.sora.taira.user.validator-3",
+    "org.sora.taira.user.validator-4"
+  ],
+  "bundle": "/Users/administrator/apps/dpn-test/taira/reset-bundles/20260819-nevo-reset-1",
+  "reset_manifest_sha256": "<lowercase SHA-256>",
+  "binary": "/Users/administrator/apps/dpn-test/taira/releases/<release>/iroha3d",
+  "binary_sha256": "<lowercase SHA-256>",
+  "source_commit": "<full lowercase Iroha commit>",
+  "dpn_validator_release_commit": "<full lowercase DPN commit>",
+  "limits": {
+    "minimum_free_bytes": 17179869184,
+    "maximum_fsync_latency_ms": 500,
+    "startup_timeout_seconds": 300,
+    "stability_timeout_seconds": 60,
+    "poll_interval_seconds": 1
+  }
+}
+```
+
+The default invocation is read-only and prints the exact manifest-bound
+confirmation string:
+
+```bash
+python3 scripts/deploy_taira_user_launchagent_reset.py \
+  --manifest /Users/administrator/apps/dpn-test/taira/reset-manifests/20260819-nevo-reset-1.json
+```
+
+Only after reviewing that projection, fencing every API writer, and receiving
+explicit reset approval may an operator repeat it with `--apply`, the printed
+`--confirm-reset` value, and an owner-private runtime operator-key file. Use a
+separate `--rollback-operator-private-key-file` only when the predecessor and
+candidate genesis authorize different operator keys. Neither key is copied to
+the evidence archive.
+
+The apply transaction captures the old plist bytes and public artifact/storage
+identities before the first bootout. It stops all four jobs, atomically installs
+all four generated user plists, and starts them with the fresh, distinct storage
+directories inside the authenticated bundle. The predecessor release and all
+four predecessor storage directories are never copied, renamed, removed, or
+written by this controller. A startup, readiness, exact 3-of-4 QC, common
+frontier, or custody failure stops the candidate cohort, restores all four old
+plists, restarts the predecessor, and records bounded rollback evidence beneath
+`taira/rollback/user-launchagent/<generation>/`.
+
+Reset activation accepts two coherent fleet samples; it does not assume an idle
+chain creates empty blocks. After the controller succeeds, keep API writers
+fenced until the separately reviewed DPN write canary proves transaction
+finality on the new NetworkId. The canary is the write boundary: before it, the
+retained predecessor cohort is the automatic rollback target; after an accepted
+write, reverting to the predecessor would discard new-chain state and requires
+an explicit operator decision.
+
 The live bundle is never composed beneath `RUNNER_TEMP`: launchd retains its
 bundle-local config, genesis, runtime-sidecar, and storage paths after the job
 ends. `TAIRA_MACOS_RESET_STAGING_ROOT` therefore names canonical persistent
@@ -2502,7 +2612,9 @@ signer config as-is and fail if it is missing; neither script overwrites or
 bootstraps over an operator-supplied path. Omit `--write-config` only when the
 intended flow is to bootstrap the default runtime canary config automatically,
 and then pass the exact owner-private credential with
-`--onboarding-token-file /absolute/runtime/path/onboarding-token`. The MCP
+`--onboarding-token-file /absolute/runtime/path/dpn-onboarding-token`. This must
+be the bearer token for the `dpn`-scoped credential; the MCP bootstrap creates
+its canary alias at the `@dpn` dataspace root. The MCP
 rollout passes its exact operator-bound `--operator-network-id` through to the
 bootstrap helper and rejects any generated or supplied config whose top-level
 `network_id` differs; it never accepts the helper's repository default as a
@@ -2568,13 +2680,14 @@ catalog, and committed-chain identity.
 That config must be a normal `iroha` client TOML for a low-risk runtime-only
 signer. Start from `taira-canary-client.example.toml`, not
 `defaults/client.toml`: the generic repo client uses the zero chain id and the
-development genesis `network_id`, so it is not valid for Taira. The canary
-alias defaults to the dataspace-root form
-`<label>@universal`; do not expand it to `@wonderland.universal` or
-`@universal.universal`. When `--write-config` is omitted and the automatically
+development genesis `network_id`, so it is not valid for Taira. An explicitly
+supplied canary config keeps its reviewed alias scope. The automatic MCP
+rollout bootstrap uses the DPN dataspace-root form `<label>@dpn`; do not expand
+that alias into a domain-qualified alias. When `--write-config` is omitted and the automatically
 selected runtime path is missing, `check_mcp_rollout.sh` requires
-`--onboarding-token-file /absolute/runtime/path/onboarding-token`, generates a
-fresh keypair, onboards the account on public Taira, and writes that
+`--onboarding-token-file /absolute/runtime/path/dpn-onboarding-token` containing
+the DPN-scoped bearer token, generates a fresh keypair, onboards the account on
+public Taira, and writes that
 runtime-only config before the signed ping. An explicit config path is never replaced,
 including when it contains a stale or placeholder authority. The Torii
 onboarding authority enrolls the account in the configured sponsor program;
@@ -3100,8 +3213,9 @@ From `../iroha2-block-explorer-web`:
      `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root https://taira.sora.org "${TAIRA_VALIDATOR_ARGS[@]}" --require-all-validators --resolve-host taira.sora.org:443:127.0.0.1 --expected-git-sha "${EXPECTED_TAIRA_GIT_SHA}"`
    - the public check auto-bootstraps a runtime-only canary config when
     `--write-config` is omitted and
-    `--onboarding-token-file /absolute/runtime/path/onboarding-token` names the
-    exact owner-private route credential, preferring `/run/secrets` only when
+    `--onboarding-token-file /absolute/runtime/path/dpn-onboarding-token` names
+    the exact owner-private `dpn`-scoped route credential, preferring
+    `/run/secrets` only when
     that directory is writable and otherwise using the local temp directory; when
     the default Taira sponsor program is configured, bootstrap skips faucet and
     signs its exact quoted intent unless you set `ROLLOUT_CANARY_SKIP_FAUCET=0`

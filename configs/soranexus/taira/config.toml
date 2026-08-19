@@ -154,9 +154,14 @@ additional_permissions = []
 fee_sponsor_program_id = "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A/cbsi_web"
 
 [[torii.account_onboarding.credentials]]
-id = "REPLACE_WITH_TAIRA_ONBOARDING_CREDENTIAL_ID"
-scope = { dataspace = "REPLACE_WITH_TAIRA_ONBOARDING_SCOPE" }
-token_hash = "REPLACE_WITH_TAIRA_ONBOARDING_TOKEN_HASH"
+id = "REPLACE_WITH_TAIRA_BOI_ONBOARDING_CREDENTIAL_ID"
+scope = { dataspace = "is2" }
+token_hash = "REPLACE_WITH_TAIRA_BOI_ONBOARDING_TOKEN_HASH"
+
+[[torii.account_onboarding.credentials]]
+id = "REPLACE_WITH_TAIRA_DPN_ONBOARDING_CREDENTIAL_ID"
+scope = { dataspace = "dpn" }
+token_hash = "REPLACE_WITH_TAIRA_DPN_ONBOARDING_TOKEN_HASH"
 
 [torii.faucet]
 enabled = true
@@ -528,7 +533,7 @@ description = "Route DPN authorities to the DPN dataspace"
 lane = 4
 dataspace = "is"
 [nexus.routing_policy.rules.matcher]
-account = "*@wonderland.is"
+account = "*@is"
 description = "Route the PoC authority to the private is dataspace"
 
 [[nexus.routing_policy.rules]]

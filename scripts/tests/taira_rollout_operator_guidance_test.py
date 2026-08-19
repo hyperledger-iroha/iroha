@@ -1155,8 +1155,38 @@ def test_mcp_automatic_canary_threads_explicit_onboarding_token_file() -> None:
         "ABSOLUTE_PATH" in source
     )
     assert '--onboarding-token-file "$ROLLOUT_CANARY_ONBOARDING_TOKEN_FILE"' in source
+    assert "--domain dpn" in source
     assert 'domain = account.get("domain", "universal")' in source
     assert 'domain = f"{domain}.universal"' not in source
+
+
+def test_kaigi_localnet_uses_scoped_multi_credential_onboarding_secrets() -> None:
+    source = (TAIRA_DIR / "bootstrap_kaigi_localnet.sh").read_text(encoding="utf-8")
+
+    assert 'shared.get("account_onboarding_credentials", [])' in source
+    assert '{"dpn", "is2"}.difference' in source
+    assert 'scope not in {"dpn", "is", "is2"}' in source
+    assert "account onboarding credentials must not reuse API tokens" in source
+    assert 'runtime_dir / f"onboarding-token-{index:02d}-{credential[\'scope\']}"' in source
+    assert 'f"token_hash = {json.dumps(token_hash)}"' in source
+    assert 'TAIRA_ONBOARDING_API_TOKEN=' not in source
+    assert 'runtime/onboarding-token"' not in source
+
+
+def test_kaigi_localnet_enforces_exact_onboarding_token_bounds() -> None:
+    source = (TAIRA_DIR / "bootstrap_kaigi_localnet.sh").read_text(encoding="utf-8")
+    start = source.index("def validate_token(")
+    end = source.index("\ndef validate_credential_id(", start)
+    namespace: dict[str, object] = {}
+    exec(source[start:end], namespace)
+    validate_token = namespace["validate_token"]
+    assert callable(validate_token)
+
+    assert validate_token("x" * 32, "test token") == "x" * 32
+    assert validate_token("x" * 256, "test token") == "x" * 256
+    for invalid in ("x" * 31, "x" * 257, "x" * 31 + " ", "é" * 32):
+        with pytest.raises(SystemExit, match="32 to 256|printable ASCII"):
+            validate_token(invalid, "test token")
 
 
 def test_public_cutover_cannot_skip_fleet_or_exact_commit() -> None:

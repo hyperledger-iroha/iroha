@@ -116,6 +116,7 @@ output_path = None
 onboarding_token_file = None
 chain_id = "fc56984b-2be7-431d-840e-21514d1883f0"
 network_ids = []
+domains = []
 args = sys.argv[1:]
 for index, value in enumerate(args):
     if value == "--output-config" and index + 1 < len(args):
@@ -126,6 +127,8 @@ for index, value in enumerate(args):
         chain_id = args[index + 1]
     elif value == "--network-id" and index + 1 < len(args):
         network_ids.append(args[index + 1])
+    elif value == "--domain" and index + 1 < len(args):
+        domains.append(args[index + 1])
 
 if output_path is None:
     raise SystemExit("missing --output-config")
@@ -134,6 +137,9 @@ if onboarding_token_file is None:
 if len(network_ids) != 1:
     raise SystemExit("expected exactly one --network-id")
 network_id = network_ids[0]
+if len(domains) > 1:
+    raise SystemExit("expected at most one --domain")
+domain = domains[0] if domains else "universal"
 token_path = Path(onboarding_token_file)
 if not token_path.is_absolute() or not token_path.is_file():
     raise SystemExit("invalid --onboarding-token-file")
@@ -147,6 +153,9 @@ if state_dir:
     Path(state_dir, "bootstrap_network_id_seen").write_text(
         network_id + "\n", encoding="utf-8"
     )
+    Path(state_dir, "bootstrap_domain_seen").write_text(
+        domain + "\n", encoding="utf-8"
+    )
 
 with open(output_path, "w", encoding="utf-8") as handle:
     handle.write(
@@ -154,7 +163,7 @@ with open(output_path, "w", encoding="utf-8") as handle:
         f'network_id = "{network_id}"\n'
         '\n'
         '[account]\n'
-        'domain = "universal"\n'
+        f'domain = "{domain}"\n'
         'public_key = "ED0120FAKEPUBLICKEY0123456789ABCDEF0123456789ABCDEF0123456789AB"\n'
         'private_key = "802620FAKEPRIVATEKEY0123456789ABCDEF0123456789ABCDEF0123456789"\n'
         'chain_discriminant = 369\n'
@@ -477,7 +486,7 @@ for lane_id, lane_alias, dataspace_id, dataspace_alias in lane_specs:
 
 routing_rule_tuples = [
     (3, 10, "account", "*@dpn"),
-    (4, 6647857470246403404, "account", "*@wonderland.is"),
+    (4, 6647857470246403404, "account", "*@is"),
     (5, 8477022798449861195, "account", "*@boi.is2"),
     (5, 8477022798449861195, "account", "*@leumi.is2"),
     (5, 8477022798449861195, "account", "*@hapoalim.is2"),
@@ -510,7 +519,7 @@ routing_rules = [
     )
 ]
 if scenario == "fleet_wrong_routing_matcher":
-    routing_rules[1]["matcher"]["account"] = "*@is"
+    routing_rules[1]["matcher"]["account"] = "*@external.is"
 
 payload = {
     "build": {
@@ -689,7 +698,7 @@ scenario = sys.argv[1]
 after_ping = sys.argv[2] == "1"
 routing_rule_tuples = [
     (3, 10, "account", "*@dpn"),
-    (4, 6647857470246403404, "account", "*@wonderland.is"),
+    (4, 6647857470246403404, "account", "*@is"),
     (5, 8477022798449861195, "account", "*@boi.is2"),
     (5, 8477022798449861195, "account", "*@leumi.is2"),
     (5, 8477022798449861195, "account", "*@hapoalim.is2"),
@@ -724,7 +733,7 @@ routing_rules = [
 if scenario == "public_wrong_routing_matcher" or (
     scenario == "post_canary_wrong_routing_matcher" and after_ping
 ):
-    routing_rules[1]["matcher"]["account"] = "*@is"
+    routing_rules[1]["matcher"]["account"] = "*@external.is"
 
 payload = {
     "build": {
@@ -1603,5 +1612,6 @@ test -f "${root}/tmp/taira-canary-client.toml"
 test -f "${root}/state/onboarding_token_seen"
 grep -Fqx "$TEST_OPERATOR_NETWORK_ID" \
   "${root}/state/bootstrap_network_id_seen"
+grep -Fqx 'dpn' "${root}/state/bootstrap_domain_seen"
 
 echo "check_mcp_rollout mock tests passed."
