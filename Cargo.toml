@@ -398,6 +398,21 @@ codegen-units = 8
 [profile.release.package.iroha_data_model]
 opt-level = 1
 
+# Fast, incremental optimization for local runnable builds only. This profile
+# is not valid for release, packaging, or evidence-producing workflows; those
+# must continue to use the unchanged `release` or `deploy` profiles. Keep the
+# data-model optimizer ceiling aligned with the reviewed release policy above.
+[profile.local-release]
+inherits = "release"
+opt-level = 1
+codegen-units = 64
+incremental = true
+lto = false
+debug = 0
+
+[profile.local-release.package.iroha_data_model]
+opt-level = 1
+
 [profile.deploy]
 inherits = "release"
 strip = "symbols"

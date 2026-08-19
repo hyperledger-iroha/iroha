@@ -76,6 +76,38 @@ Notes:
   visual-codec commands. The SoraFS browser/SDK local QUIC proxy is available
   with `cargo build -p sorafs_orchestrator --features local-quic-proxy`.
 
+### Fast Local Rust Loops
+
+Keep Cargo's default target directory warm and scope the command to the crate
+or binary being changed. The helper keeps the system linker by default,
+enables `sccache` when installed, and exposes opt-in modes for repeated local
+work:
+
+```bash
+# Fast source-check loop; Git commits do not invalidate status-only build metadata.
+scripts/cargo_fast.sh --stable-local-metadata -- check -p iroha_core --lib
+
+# Repeated tests in a stable target lane; incremental test compilation uses more disk.
+scripts/cargo_fast.sh --target-slot core-tests --incremental -- \
+  test -p iroha_core --lib <test_name>
+
+# Runnable optimized binaries without paying the production release-profile cost.
+scripts/cargo_fast.sh --stable-local-metadata -- \
+  build --profile local-release -p irohad --bin iroha3d
+```
+
+Omit `--jobs` to let Cargo use its native jobserver; use `--jobs N` only to cap
+memory-heavy local builds. Use a small number of
+stable `--target-slot` names only when concurrent tasks need isolated Cargo
+locks; creating a fresh dated or temporary target for every build defeats
+incremental reuse. For intentionally cold or isolated lanes, use
+`--no-incremental` to improve `sccache` reuse across targets. The
+`local-release` profile and `--stable-local-metadata` are local-development
+tools only; release, packaging, and evidence workflows must keep using the
+unchanged `release` or `deploy` profiles and exact source metadata. Linker
+selection is explicit (`--linker auto` or `--linker <path>`) because a linker
+that is faster on one platform can be slower on another.
+
 ### Targeted Test Commands
 
 ```bash
