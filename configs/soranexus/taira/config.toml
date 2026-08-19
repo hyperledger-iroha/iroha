@@ -177,7 +177,9 @@ pow_max_anchor_age_blocks = 256
 pow_adaptive_lookback_blocks = 64
 pow_adaptive_claims_per_extra_bit = 0
 pow_adaptive_max_extra_bits = 0
-pow_vrf_seed_enabled = true
+# Fresh testnet generations have no finalized VRF epoch yet; keep the
+# anchor-hash+scrypt faucet usable from genesis.
+pow_vrf_seed_enabled = false
 
 [sorafs.storage]
 enabled = false

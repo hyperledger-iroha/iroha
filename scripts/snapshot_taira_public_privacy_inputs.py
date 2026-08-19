@@ -69,7 +69,7 @@ PUBLIC_ONBOARDING_CREDENTIALS = [
     },
 ]
 CONFIG_PUBLIC_BASE_SHA256 = (
-    "ba0f21fddf6806bc2a40ff3743f3111476141884f8ef104e8392c7fe4760f5e5"
+    "23b92e7f24e6fe1d4e9358fa54b0a8dcec38b0836e4b3154a7d9ac35bb5d86ac"
 )
 PROTOCOLS = (
     (0, "zk-ace-pq-authorization-v0", "ZkAcePqAuthorizationV0"),
