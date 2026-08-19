@@ -334,6 +334,7 @@ def _privacy_release(
             + b'"\nexpected_hash = "REPLACE_WITH_GENESIS_EXPECTED_HASH"\n'
         ),
         "genesis.json": reset_bundle.canonical_json_bytes(genesis),
+        "nevo-reset.review.json": b'{"review":true}\n',
         "bootle_lantern_broker_public.json": b'{"broker":true}\n',
     }
     rows: dict[str, object] = {}
@@ -560,6 +561,34 @@ def _trust_test_controller(
         reset_bundle.controller_seal,
         "verify",
         lambda *_args, **_kwargs: {"verified": True},
+    )
+    monkeypatch.setattr(
+        reset_bundle,
+        "_validate_authenticated_nevo_release",
+        lambda _payloads: {
+            "schema": "iroha.taira.nevo-reset-review.v1",
+            "public_inputs_sha256": "91" * 32,
+            "unsigned_genesis_sha256": "92" * 32,
+            "public_identities": {
+                "onboarding_authority_account_id": "reviewed-onboarding",
+                "api_signer_account_id": "reviewed-api",
+            },
+            "credential_hash_bindings": [
+                {
+                    "scope": {"dataspace": "is2"},
+                    "token_hash": "blake3:" + "93" * 32,
+                },
+                {
+                    "scope": {"dataspace": "dpn"},
+                    "token_hash": "blake3:" + "94" * 32,
+                },
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        reset_bundle,
+        "_validate_rendered_nevo_bindings",
+        lambda *_args, **_kwargs: None,
     )
 
 

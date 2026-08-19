@@ -37,6 +37,13 @@ GENESIS_EXPECTED_HASH_LITERAL = MODULE.validator_renderer._format_literal(
 )
 
 
+def test_network_id_is_derived_from_the_authenticated_reset_genesis() -> None:
+    assert (
+        MODULE.network_id_from_genesis_expected_hash(GENESIS_EXPECTED_HASH)
+        == GENESIS_EXPECTED_HASH_LITERAL
+    )
+
+
 def _receipt_keypair(index: int) -> tuple[str, str, str]:
     return _support_receipt_keypair(index)
 

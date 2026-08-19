@@ -417,7 +417,7 @@ def _assert_native_privacy_composer_bundle_contract(
         '"TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR=$privacy_input"'
         in workflow
     )
-    assert "Snapshot only the four public privacy inputs with the installed controller" in workflow
+    assert "Snapshot only the five public NEVO/privacy inputs with the installed controller" in workflow
     for name in (
         "privacy_bootstrap_plan.json",
         "config.toml",
@@ -946,7 +946,7 @@ def _assert_portable_signed_taira_authority_contract(
     assert "taira_privacy_release_runner" not in finalizer
     assert "bin/iroha3d" not in finalizer
     assert "target/release" not in finalizer
-    linux_snapshot = workflow.index("Snapshot only the four public privacy inputs")
+    linux_snapshot = workflow.index("Snapshot only the five public NEVO/privacy inputs")
     linux_build = workflow.index("Reconstruct source and build the unsigned Linux archive")
     linux_authenticate = workflow.index("Finalize and sign Linux bytes using only installed authority code")
     qualification = workflow.index("macos-secret-free-qualification:")

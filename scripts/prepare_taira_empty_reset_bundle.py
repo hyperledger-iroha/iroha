@@ -30,6 +30,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 try:
+    from . import compose_taira_nevo_reset_genesis as nevo_composer
     from . import extract_authenticated_taira_privacy_release as privacy_release
     from . import render_taira_validator_bundle as renderer
     from . import seal_taira_release_controllers as controller_seal
@@ -45,6 +46,7 @@ try:
         stable_read_path,
     )
 except ImportError:
+    import compose_taira_nevo_reset_genesis as nevo_composer
     import extract_authenticated_taira_privacy_release as privacy_release
     import render_taira_validator_bundle as renderer
     import seal_taira_release_controllers as controller_seal
@@ -593,6 +595,72 @@ def _load_authenticated_privacy_release(
     return payloads, manifest, hashlib.sha256(manifest_payload).hexdigest()
 
 
+def _validate_authenticated_nevo_release(
+    payloads: dict[str, bytes],
+) -> dict[str, Any]:
+    base_genesis = nevo_composer._read_bounded_regular(
+        nevo_composer.CHECKED_IN_TAIRA_GENESIS,
+        nevo_composer.MAX_BASE_GENESIS_BYTES,
+        "sealed canonical Taira genesis",
+    )
+    base_config = nevo_composer._read_bounded_regular(
+        nevo_composer.REPO_ROOT / "configs/soranexus/taira/config.toml",
+        nevo_composer.MAX_BASE_CONFIG_BYTES,
+        "sealed canonical Taira config",
+    )
+    try:
+        return nevo_composer.verify_reviewed_payloads(
+            unsigned_genesis_bytes=payloads["genesis.json"],
+            review_bytes=payloads["nevo-reset.review.json"],
+            base_genesis_bytes=base_genesis,
+            base_config_bytes=base_config,
+        )
+    except (KeyError, nevo_composer.CompositionError) as error:
+        raise RuntimeError(
+            f"authenticated privacy release has an invalid NEVO review: {error}"
+        ) from error
+
+
+def _validate_rendered_nevo_bindings(
+    output: Path, review: dict[str, Any]
+) -> None:
+    identities = review["public_identities"]
+    expected_authority = identities["onboarding_authority_account_id"]
+    expected_hashes = {
+        row["scope"]["dataspace"]: row["token_hash"]
+        for row in review["credential_hash_bindings"]
+    }
+    for slug in SLUGS:
+        config = renderer._load_toml(output / "rendered" / slug / "config.toml")
+        torii = config.get("torii")
+        onboarding = (
+            torii.get("account_onboarding") if isinstance(torii, dict) else None
+        )
+        credentials = (
+            onboarding.get("credentials") if isinstance(onboarding, dict) else None
+        )
+        if (
+            not isinstance(onboarding, dict)
+            or onboarding.get("authority") != expected_authority
+            or not isinstance(credentials, list)
+        ):
+            fail(f"rendered {slug} does not bind the reviewed onboarding authority")
+        observed: dict[str, str] = {}
+        for row in credentials:
+            scope = row.get("scope") if isinstance(row, dict) else None
+            dataspace = scope.get("dataspace") if isinstance(scope, dict) else None
+            token_hash = row.get("token_hash") if isinstance(row, dict) else None
+            if (
+                not isinstance(dataspace, str)
+                or not isinstance(token_hash, str)
+                or dataspace in observed
+            ):
+                fail(f"rendered {slug} has malformed onboarding credential bindings")
+            observed[dataspace] = token_hash
+        if observed != expected_hashes:
+            fail(f"rendered {slug} onboarding token hashes differ from the NEVO review")
+
+
 def _load_source_manifest(source: Path) -> dict[str, object]:
     _require_exact_names(source, SOURCE_TOP_LEVEL_NAMES, "sealed source reset")
     rendered = source / "rendered"
@@ -1083,6 +1151,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             workspace_source_manifest_sha256=workspace_source_manifest_sha256,
         )
     )
+    nevo_review = _validate_authenticated_nevo_release(privacy_payloads)
     kagemusha_activation_authority: str | None = None
     kagemusha_release_policy_sha256: str | None = None
     if args.kagemusha_release_root is not None:
@@ -1265,6 +1334,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 fail("native onboarding-token hash tool changed during rendering")
 
         config_hashes = _validate_rendered_configs(output, expected_hash)
+        _validate_rendered_nevo_bindings(output, nevo_review)
         kagemusha_config_projection = (
             _require_rendered_kagemusha_config_projection(
                 output,
@@ -1361,6 +1431,22 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                     "bound_genesis_manifest_sha256": sha256(output / "genesis.json"),
                     "signed_genesis_sha256": sha256(output / "genesis.signed.nrt"),
                     "validator_config_sha256": config_hashes,
+                    "nevo_reset_review": {
+                        "schema": nevo_review["schema"],
+                        "sha256": hashlib.sha256(
+                            privacy_payloads["nevo-reset.review.json"]
+                        ).hexdigest(),
+                        "public_inputs_sha256": nevo_review[
+                            "public_inputs_sha256"
+                        ],
+                        "unsigned_genesis_sha256": nevo_review[
+                            "unsigned_genesis_sha256"
+                        ],
+                        "public_identities": nevo_review["public_identities"],
+                        "credential_hash_bindings": nevo_review[
+                            "credential_hash_bindings"
+                        ],
+                    },
                 },
             }
         )

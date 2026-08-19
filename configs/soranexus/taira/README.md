@@ -629,7 +629,7 @@ projections, and the exact archive digest.
 
 The Linux workflow enforces three separate roles. First, a no-checkout public-
 input authority runs only the preinstalled controller as root. It descriptor-
-snapshots exactly the four documented secret-free files from
+snapshots exactly the five documented secret-free files from
 `TAIRA_PRIVACY_RELEASE_INPUT_DIR`, rejects links, special files, mode or inode
 drift, and freezes a root-owned `0555` handoff with `0444` files. Second, the
 untrusted archive builder runs beneath `env -i` and receives only the downloaded
@@ -787,6 +787,18 @@ publishing capability at genesis. Contract-specific permissions, contract
 deployment, and application factoring-policy initialization remain reviewed
 post-genesis steps. Token hashes bind the later validator configuration and
 appear only in the review record, never in the genesis itself.
+
+The protected public-input directory must then contain that reviewed unsigned
+genesis as `genesis.json` and its byte-matching review as
+`nevo-reset.review.json`, alongside `privacy_bootstrap_plan.json`,
+`config.toml`, and `bootle_lantern_broker_public.json`. The installed snapshot
+authority independently recomposes the NEVO genesis from the source-pinned
+base config/genesis and the review's public identities and token hashes before
+publishing the five-file handoff. The native release composer receives the
+review explicitly with `--nevo-review`; it never falls back to the generic
+genesis template for a release build. The reset composer then re-verifies the
+same pair and requires every rendered validator's onboarding authority and
+`is2`/`dpn` token hashes to match the review before external signing.
 
 The signer owns its isolated external software-signing service and encrypted
 runtime-only key access internally; it must never accept a private-key path or
@@ -2045,7 +2057,7 @@ identity:
 - The `[self-hosted, Linux, ARM64, taira-untrusted-build]` job reconstructs the reviewed DPN
   source closure and exact `Cargo.lock` only after sealing its controller
   closure, checks the canonical workspace-source manifest, snapshots exactly
-  four secret-free privacy inputs, then builds the unsigned Linux/aarch64
+  five secret-free NEVO/privacy inputs, then builds the unsigned Linux/aarch64
   rollout archive in a scrubbed environment. Only after compilation and native
   evidence generation finish does the sealed finalizer authenticate the
   immutable archive and sign its exact-12 authority plus controller manifest.
@@ -2351,7 +2363,7 @@ is the handoff record for testnet rollout.
 
 The protected `taira-validator-publish` environment must provision canonical,
 non-symlinked paths outside the checkout for the external signer, raw public
-key, pinned `sorafs-validate`, the four-file secret-free
+key, pinned `sorafs-validate`, the five-file secret-free
 `TAIRA_PRIVACY_RELEASE_INPUT_DIR`, macOS reset bundle, operator identity, and
 the independently built external genesis signer. Pin the latter with
 `TAIRA_MACOS_GENESIS_EXTERNAL_SIGNER_SHA256`; its path is

@@ -95,6 +95,8 @@ def _snapshot_args(source: Path, output: Path, forbidden: Path) -> list[str]:
 
 
 def test_controller_closures_are_exact_installed_operation_dependencies() -> None:
+    assert len(controller.LINUX_FILES) == len(set(controller.LINUX_FILES))
+    assert len(controller.MACOS_FILES) == len(set(controller.MACOS_FILES))
     assert "configs/soranexus/taira/prepare_taira_release_source.sh" not in (
         controller.LINUX_FILES + controller.MACOS_FILES
     )

@@ -74,7 +74,6 @@ PEER_COUNT = taira_constants.PEER_COUNT
 CHAIN_ID = taira_constants.CHAIN_ID
 CHAIN_DISCRIMINANT = taira_constants.CHAIN_DISCRIMINANT
 NETWORK_NAME = taira_constants.NETWORK_NAME
-NETWORK_ID = taira_constants.NETWORK_ID
 PROTOCOL_VERSION = 4
 TAIRA_LANE_COUNT = 7
 UNIVERSAL_DATASPACE_ID = 0
@@ -327,6 +326,13 @@ def require_genesis_expected_hash(value: object) -> str:
     if int(value[-2:], 16) & 1 == 0:
         fail("genesis expected hash must carry the Iroha marker bit")
     return value
+
+
+def network_id_from_genesis_expected_hash(value: object) -> str:
+    """Derive the canonical NetworkId bound to an authenticated reset genesis."""
+
+    genesis_hash = require_genesis_expected_hash(value)
+    return validator_renderer._format_literal("hash", genesis_hash.upper())
 
 def require_commit(value: object, label: str = "expected source commit") -> str:
     """Require one full nonzero lowercase Git object id."""
@@ -4217,6 +4223,9 @@ def apply_reset(
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
 
+    genesis_block_hash = require_genesis_expected_hash(
+        bundle.manifest.get("genesis_expected_hash")
+    )
     report: dict[str, Any] = {
         "applied": True,
         "absent_old_children": sorted(
@@ -4230,11 +4239,9 @@ def apply_reset(
         "chain_id": CHAIN_ID,
         "config_set_sha256": deployed_config_set_sha256(bundle),
         "deployment_completed_at_unix_ms": deployment_completed_at_unix_ms(),
-        "genesis_block_hash": require_genesis_expected_hash(
-            bundle.manifest.get("genesis_expected_hash")
-        ),
+        "genesis_block_hash": genesis_block_hash,
         "nexus_topology": restarted.nexus_topology,
-        "network_id": NETWORK_ID,
+        "network_id": network_id_from_genesis_expected_hash(genesis_block_hash),
         "network_name": NETWORK_NAME,
         "protocol_version": PROTOCOL_VERSION,
         "signed_genesis_sha256": require_sha256(

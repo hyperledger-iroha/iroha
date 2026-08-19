@@ -26,6 +26,7 @@ PRIVACY_BOOTSTRAP_PLAN="$PRIVACY_BOOTSTRAP_PLAN_TEMPLATE"
 PRIVACY_BOOTSTRAP_CONFIG="$PRIVACY_BOOTSTRAP_CONFIG_TEMPLATE"
 PRIVACY_BOOTSTRAP_GENESIS="$PRIVACY_BOOTSTRAP_GENESIS_TEMPLATE"
 PRIVACY_BOOTSTRAP_BROKER_PUBLIC=""
+NEVO_RESET_REVIEW=""
 privacy_release_input_snapshot_dir=""
 privacy_composer_tmp_dir=""
 privacy_evidence_tmp_dir=""
@@ -89,12 +90,13 @@ authenticate and sign the immutable archive in a separate process which never
 invokes Cargo or a source-built executable.
 
 `TAIRA_PRIVACY_RELEASE_INPUT_SNAPSHOT_DIR` must be an absolute canonical
-owner-private staging directory containing exactly the four secret-free files
+owner-private staging directory containing exactly the five secret-free files
 copied from the protected release input before this builder starts by
 `kagami privacy-bootstrap render-taira-release-v1`:
   privacy_bootstrap_plan.json
   config.toml
   genesis.json
+  nevo-reset.review.json
   bootle_lantern_broker_public.json
 The staging directory is snapshotted again and the files are independently
 recomposed with the freshly built native Kagami binary before they can enter
@@ -249,6 +251,7 @@ expected = {
     "bootle_lantern_broker_public.json": 4 * 1024 * 1024,
     "config.toml": 8 * 1024 * 1024,
     "genesis.json": 16 * 1024 * 1024,
+    "nevo-reset.review.json": 4 * 1024 * 1024,
     "privacy_bootstrap_plan.json": 8 * 1024 * 1024,
 }
 flags = os.O_RDONLY | os.O_CLOEXEC
@@ -412,6 +415,15 @@ PY
   PRIVACY_BOOTSTRAP_CONFIG="${privacy_release_input_snapshot_dir}/config.toml"
   PRIVACY_BOOTSTRAP_GENESIS="${privacy_release_input_snapshot_dir}/genesis.json"
   PRIVACY_BOOTSTRAP_BROKER_PUBLIC="${privacy_release_input_snapshot_dir}/bootle_lantern_broker_public.json"
+  NEVO_RESET_REVIEW="${privacy_release_input_snapshot_dir}/nevo-reset.review.json"
+fi
+
+if [[ "$PROFILE" == "release" ]]; then
+  python3 -I -S "${REPO_ROOT}/scripts/compose_taira_nevo_reset_genesis.py" \
+    --verify-unsigned-genesis "$PRIVACY_BOOTSTRAP_GENESIS" \
+    --verify-review "$NEVO_RESET_REVIEW" \
+    --base-genesis "$PRIVACY_BOOTSTRAP_GENESIS_TEMPLATE" \
+    --base-config "$PRIVACY_BOOTSTRAP_CONFIG_TEMPLATE"
 fi
 
 python3 - "$PRIVACY_BOOTSTRAP_CONFIG" <<'PY'
@@ -624,6 +636,7 @@ release_inputs=(
 )
 if [[ "$PROFILE" == "release" ]]; then
   release_inputs+=("$PRIVACY_BOOTSTRAP_BROKER_PUBLIC")
+  release_inputs+=("$NEVO_RESET_REVIEW")
 fi
 for release_input in "${release_inputs[@]}"; do
   if [[ ! -s "$release_input" || -L "$release_input" ]] \
@@ -832,7 +845,8 @@ if [[ "$PROFILE" == "release" ]]; then
     --broker-public-export "$PRIVACY_BOOTSTRAP_BROKER_PUBLIC" \
     --plan-template "$PRIVACY_BOOTSTRAP_PLAN_TEMPLATE" \
     --config-template "$PRIVACY_BOOTSTRAP_CONFIG_TEMPLATE" \
-    --genesis-template "$PRIVACY_BOOTSTRAP_GENESIS_TEMPLATE" \
+    --genesis-template "$PRIVACY_BOOTSTRAP_GENESIS" \
+    --nevo-review "$NEVO_RESET_REVIEW" \
     --plan-output "$composed_plan" \
     --config-output "$composed_config" \
     --genesis-output "$composed_genesis" \
@@ -977,10 +991,12 @@ privacy_bootstrap_plan_relative_path=""
 privacy_bootstrap_config_relative_path=""
 privacy_bootstrap_genesis_relative_path=""
 privacy_bootstrap_broker_public_relative_path=""
+nevo_reset_review_relative_path=""
 privacy_bootstrap_plan_sha256="-"
 privacy_bootstrap_config_sha256="-"
 privacy_bootstrap_genesis_sha256="-"
 privacy_bootstrap_broker_public_sha256="-"
+nevo_reset_review_sha256="-"
 if [[ "$PROFILE" == "release" ]]; then
   bundled_taira_dir="${bundle_dir}/configs/soranexus/taira"
   cp "$PRIVACY_BOOTSTRAP_PLAN" "${bundled_taira_dir}/privacy_bootstrap_plan.json"
@@ -994,11 +1010,13 @@ if [[ "$PROFILE" == "release" ]]; then
   privacy_bootstrap_config_relative_path="${privacy_bootstrap_relative_dir}/config.toml"
   privacy_bootstrap_genesis_relative_path="${privacy_bootstrap_relative_dir}/genesis.json"
   privacy_bootstrap_broker_public_relative_path="${privacy_bootstrap_relative_dir}/bootle_lantern_broker_public.json"
+  nevo_reset_review_relative_path="${privacy_bootstrap_relative_dir}/nevo-reset.review.json"
   cp "$PRIVACY_BOOTSTRAP_PLAN" "${bundle_dir}/${privacy_bootstrap_plan_relative_path}"
   cp "$PRIVACY_BOOTSTRAP_CONFIG" "${bundle_dir}/${privacy_bootstrap_config_relative_path}"
   cp "$PRIVACY_BOOTSTRAP_GENESIS" "${bundle_dir}/${privacy_bootstrap_genesis_relative_path}"
   cp "$PRIVACY_BOOTSTRAP_BROKER_PUBLIC" \
     "${bundle_dir}/${privacy_bootstrap_broker_public_relative_path}"
+  cp "$NEVO_RESET_REVIEW" "${bundle_dir}/${nevo_reset_review_relative_path}"
 
   python3 "${bundled_taira_dir}/validate_privacy_bootstrap.py" \
     --mode release \
@@ -1022,6 +1040,9 @@ if [[ "$PROFILE" == "release" ]]; then
   )"
   privacy_bootstrap_broker_public_sha256="$(
     sha256_file "${bundle_dir}/${privacy_bootstrap_broker_public_relative_path}"
+  )"
+  nevo_reset_review_sha256="$(
+    sha256_file "${bundle_dir}/${nevo_reset_review_relative_path}"
   )"
 fi
 privacy_native_relative_dir="provenance/privacy-native"
@@ -1170,6 +1191,8 @@ PRIVACY_BOOTSTRAP_GENESIS_PATH="$privacy_bootstrap_genesis_relative_path" \
 PRIVACY_BOOTSTRAP_GENESIS_SHA256="$privacy_bootstrap_genesis_sha256" \
 PRIVACY_BOOTSTRAP_BROKER_PUBLIC_PATH="$privacy_bootstrap_broker_public_relative_path" \
 PRIVACY_BOOTSTRAP_BROKER_PUBLIC_SHA256="$privacy_bootstrap_broker_public_sha256" \
+NEVO_RESET_REVIEW_PATH="$nevo_reset_review_relative_path" \
+NEVO_RESET_REVIEW_SHA256="$nevo_reset_review_sha256" \
 VALIDATOR_BINARY_SHA256="$validator_binary_sha256" \
 BOOTLE_LANTERN_BROKER_BINARY_SHA256="$bootle_lantern_broker_binary_sha256" \
 PRIVACY_RUNNER_BINARY_SHA256="$privacy_runner_binary_sha256" \
@@ -1208,6 +1231,7 @@ if os.environ["PROFILE_NAME"] == "release":
         "PRIVACY_BOOTSTRAP_CONFIG_SHA256",
         "PRIVACY_BOOTSTRAP_GENESIS_SHA256",
         "PRIVACY_BOOTSTRAP_BROKER_PUBLIC_SHA256",
+        "NEVO_RESET_REVIEW_SHA256",
     )
 else:
     for name in (
@@ -1215,6 +1239,7 @@ else:
         "PRIVACY_BOOTSTRAP_CONFIG_SHA256",
         "PRIVACY_BOOTSTRAP_GENESIS_SHA256",
         "PRIVACY_BOOTSTRAP_BROKER_PUBLIC_SHA256",
+        "NEVO_RESET_REVIEW_SHA256",
     ):
         if os.environ[name] != "-":
             raise SystemExit(f"debug bundle unexpectedly carries {name}")
@@ -1266,6 +1291,12 @@ if os.environ["PROFILE_NAME"] == "release":
             "path": os.environ["PRIVACY_BOOTSTRAP_BROKER_PUBLIC_PATH"],
             "sha256": os.environ["PRIVACY_BOOTSTRAP_BROKER_PUBLIC_SHA256"],
             "bound_by_plan_sha256": True,
+        },
+        "nevo_review": {
+            "path": os.environ["NEVO_RESET_REVIEW_PATH"],
+            "sha256": os.environ["NEVO_RESET_REVIEW_SHA256"],
+            "binds_genesis_sha256": True,
+            "binds_onboarding_token_hashes": True,
         },
     }
 

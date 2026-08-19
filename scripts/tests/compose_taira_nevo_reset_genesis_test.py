@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -156,6 +157,66 @@ def test_composition_is_deterministic_unsigned_and_secret_free(tmp_path: Path) -
     ]
 
 
+def test_review_verification_recomposes_exact_unsigned_genesis(tmp_path: Path) -> None:
+    (
+        _, inputs, canonical_inputs, base, base_bytes, config, config_bytes
+    ) = _loaded(tmp_path)
+    composed = composer.compose_genesis(base, inputs, config)
+    unsigned = composer._pretty_json_bytes(composed)
+    review = composer.build_review_manifest(
+        inputs=inputs,
+        canonical_inputs=canonical_inputs,
+        config=config,
+        base_genesis_bytes=base_bytes,
+        base_config_bytes=config_bytes,
+        unsigned_genesis_bytes=unsigned,
+        instruction_count=len(composed["transactions"][-1]["instructions"]),
+    )
+
+    assert composer.verify_reviewed_payloads(
+        unsigned_genesis_bytes=unsigned,
+        review_bytes=composer._pretty_json_bytes(review),
+        base_genesis_bytes=base_bytes,
+        base_config_bytes=config_bytes,
+    ) == review
+
+
+def test_review_verification_rejects_genesis_or_token_hash_splice(tmp_path: Path) -> None:
+    (
+        _, inputs, canonical_inputs, base, base_bytes, config, config_bytes
+    ) = _loaded(tmp_path)
+    composed = composer.compose_genesis(base, inputs, config)
+    unsigned = composer._pretty_json_bytes(composed)
+    review = composer.build_review_manifest(
+        inputs=inputs,
+        canonical_inputs=canonical_inputs,
+        config=config,
+        base_genesis_bytes=base_bytes,
+        base_config_bytes=config_bytes,
+        unsigned_genesis_bytes=unsigned,
+        instruction_count=len(composed["transactions"][-1]["instructions"]),
+    )
+    spliced = json.loads(json.dumps(review))
+    spliced["credential_hash_bindings"][1]["token_hash"] = _token_hash(
+        "spliced-dpn-token-hash"
+    )
+
+    with pytest.raises(composer.CompositionError, match="recomposition"):
+        composer.verify_reviewed_payloads(
+            unsigned_genesis_bytes=unsigned + b" ",
+            review_bytes=composer._pretty_json_bytes(review),
+            base_genesis_bytes=base_bytes,
+            base_config_bytes=config_bytes,
+        )
+    with pytest.raises(composer.CompositionError, match="closed review"):
+        composer.verify_reviewed_payloads(
+            unsigned_genesis_bytes=unsigned,
+            review_bytes=composer._pretty_json_bytes(spliced),
+            base_genesis_bytes=base_bytes,
+            base_config_bytes=config_bytes,
+        )
+
+
 def test_cli_publishes_new_mode_0600_outputs_and_refuses_replacement(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -189,6 +250,16 @@ def test_cli_publishes_new_mode_0600_outputs_and_refuses_replacement(
 
     assert composer.main(arguments) == 2
     assert "refusing to overwrite existing output" in capsys.readouterr().err
+
+
+def test_cli_imports_only_its_sealed_sibling_closure_in_isolated_mode() -> None:
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", str(SCRIPT), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def stat_mode(path: Path) -> int:

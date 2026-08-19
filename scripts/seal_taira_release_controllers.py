@@ -130,9 +130,13 @@ PYTHON_ENV_SCRUBBER = (
 )
 
 COMMON_FILES = (
+    "configs/soranexus/taira/config.toml",
+    "configs/soranexus/taira/genesis.json",
+    "scripts/compose_taira_nevo_reset_genesis.py",
     "scripts/compute_workspace_source_manifest.py",
     "scripts/seal_taira_release_controllers.py",
     "scripts/taira_authority_client.py",
+    "scripts/taira_constants.py",
 )
 LINUX_FILES = COMMON_FILES + (
     "scripts/build_privacy_v1_boi_handoff.py",
@@ -166,7 +170,6 @@ MACOS_FILES = COMMON_FILES + (
     "scripts/release_artifact_contract.py",
     "scripts/release_manifest_signing.py",
     "scripts/render_taira_validator_bundle.py",
-    "scripts/taira_constants.py",
     "scripts/taira_peer_supervisor.py",
     "scripts/taira_privacy_action_driver_ipc.py",
     "scripts/taira_privacy_governance_authority.py",

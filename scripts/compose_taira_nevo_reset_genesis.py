@@ -24,6 +24,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
 try:
     from scripts import taira_constants
 except ModuleNotFoundError as error:
@@ -41,6 +45,23 @@ EXPECTED_PUBLIC_INPUT_FIELDS = frozenset(
         "api_signer_account_id",
         "is2_onboarding_token_hash",
         "dpn_onboarding_token_hash",
+    }
+)
+EXPECTED_REVIEW_FIELDS = frozenset(
+    {
+        "schema",
+        "chain",
+        "chain_discriminant",
+        "state",
+        "public_inputs_sha256",
+        "base_genesis_sha256",
+        "base_config_sha256",
+        "unsigned_genesis_sha256",
+        "public_identities",
+        "credential_hash_bindings",
+        "genesis_overlay",
+        "secret_boundary",
+        "required_next_steps",
     }
 )
 CHAIN_ID = taira_constants.CHAIN_ID
@@ -467,11 +488,9 @@ def _validate_token_hash(value: Any, context: str) -> str:
     return value
 
 
-def load_public_inputs(path: Path) -> tuple[PublicInputs, bytes]:
-    raw = _read_bounded_regular(path, MAX_PUBLIC_INPUT_BYTES, "public input file")
-    payload = _parse_json(raw, "public input file")
+def _public_inputs_from_payload(payload: Any, context: str) -> PublicInputs:
     if not isinstance(payload, dict):
-        fail("public input file must contain one JSON object")
+        fail(f"{context} must contain one JSON object")
     _reject_secret_fields(payload)
     fields = set(payload)
     if fields != EXPECTED_PUBLIC_INPUT_FIELDS:
@@ -482,7 +501,7 @@ def load_public_inputs(path: Path) -> tuple[PublicInputs, bytes]:
             detail.append("missing " + ", ".join(missing))
         if unknown:
             detail.append("unknown " + ", ".join(unknown))
-        fail("public input fields differ from the closed schema: " + "; ".join(detail))
+        fail(f"{context} fields differ from the closed schema: " + "; ".join(detail))
     if payload["schema"] != PUBLIC_INPUT_SCHEMA:
         fail(f"public input schema must be exactly `{PUBLIC_INPUT_SCHEMA}`")
     onboarding = payload["onboarding_authority_account_id"]
@@ -499,12 +518,18 @@ def load_public_inputs(path: Path) -> tuple[PublicInputs, bytes]:
     )
     if is2_hash == dpn_hash:
         fail("is2 and DPN onboarding credentials must use distinct token hashes")
-    inputs = PublicInputs(
+    return PublicInputs(
         onboarding_authority_account_id=onboarding,
         api_signer_account_id=api_signer,
         is2_onboarding_token_hash=is2_hash,
         dpn_onboarding_token_hash=dpn_hash,
     )
+
+
+def load_public_inputs(path: Path) -> tuple[PublicInputs, bytes]:
+    raw = _read_bounded_regular(path, MAX_PUBLIC_INPUT_BYTES, "public input file")
+    payload = _parse_json(raw, "public input file")
+    inputs = _public_inputs_from_payload(payload, "public input file")
     return inputs, _canonical_json_bytes(inputs.as_dict())
 
 
@@ -538,8 +563,7 @@ def _catalog_id(config: dict[str, Any], alias: str) -> int:
     return matches[0]["id"]
 
 
-def load_base_config(path: Path, base_genesis: dict[str, Any]) -> tuple[BaseConfig, bytes]:
-    raw = _read_bounded_regular(path, MAX_BASE_CONFIG_BYTES, "base Taira config")
+def _parse_base_config(raw: bytes, base_genesis: dict[str, Any]) -> BaseConfig:
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -584,19 +608,20 @@ def load_base_config(path: Path, base_genesis: dict[str, Any]) -> tuple[BaseConf
     if PROGRAM_NAME_RE.fullmatch(program_name) is None:
         fail("base config onboarding fee sponsor program name is invalid")
     fee_asset_definition_id = _resolve_genesis_asset_alias(base_genesis, FEE_ASSET_ALIAS)
-    return (
-        BaseConfig(
-            fee_asset_definition_id=fee_asset_definition_id,
-            fee_sponsor_program_id=program,
-            fee_sponsor_account_id=sponsor,
-            fee_sponsor_program_name=program_name,
-        ),
-        raw,
+    return BaseConfig(
+        fee_asset_definition_id=fee_asset_definition_id,
+        fee_sponsor_program_id=program,
+        fee_sponsor_account_id=sponsor,
+        fee_sponsor_program_name=program_name,
     )
 
 
-def load_base_genesis(path: Path) -> tuple[dict[str, Any], bytes]:
-    raw = _read_bounded_regular(path, MAX_BASE_GENESIS_BYTES, "base Taira genesis")
+def load_base_config(path: Path, base_genesis: dict[str, Any]) -> tuple[BaseConfig, bytes]:
+    raw = _read_bounded_regular(path, MAX_BASE_CONFIG_BYTES, "base Taira config")
+    return _parse_base_config(raw, base_genesis), raw
+
+
+def _parse_base_genesis(raw: bytes) -> dict[str, Any]:
     payload = _parse_json(raw, "base Taira genesis")
     if not isinstance(payload, dict):
         fail("base Taira genesis must contain one JSON object")
@@ -612,7 +637,12 @@ def load_base_genesis(path: Path) -> tuple[dict[str, Any], bytes]:
             transaction.get("instructions"), list
         ):
             fail(f"base genesis transaction {index} lacks an instructions array")
-    return payload, raw
+    return payload
+
+
+def load_base_genesis(path: Path) -> tuple[dict[str, Any], bytes]:
+    raw = _read_bounded_regular(path, MAX_BASE_GENESIS_BYTES, "base Taira genesis")
+    return _parse_base_genesis(raw), raw
 
 
 def _instructions(genesis: dict[str, Any]) -> list[Any]:
@@ -957,6 +987,95 @@ def build_review_manifest(
     }
 
 
+def _public_inputs_from_review(review: Any) -> PublicInputs:
+    if not isinstance(review, dict) or set(review) != EXPECTED_REVIEW_FIELDS:
+        fail("NEVO review fields differ from the closed review schema")
+    identities = review.get("public_identities")
+    if not isinstance(identities, dict) or set(identities) != {
+        "onboarding_authority_account_id",
+        "api_signer_account_id",
+    }:
+        fail("NEVO review public identities are not exact")
+    bindings = review.get("credential_hash_bindings")
+    if not isinstance(bindings, list) or len(bindings) != 2:
+        fail("NEVO review must bind exactly the is2 and DPN credential hashes")
+    expected_scopes = (IS2_DATASPACE_ALIAS, DPN_DATASPACE_ALIAS)
+    token_hashes: list[str] = []
+    for index, (binding, expected_scope) in enumerate(
+        zip(bindings, expected_scopes, strict=True)
+    ):
+        if not isinstance(binding, dict) or set(binding) != {"scope", "token_hash"}:
+            fail(f"NEVO review credential binding {index} is not exact")
+        if binding.get("scope") != {"dataspace": expected_scope}:
+            fail(f"NEVO review credential binding {index} has the wrong scope")
+        token_hashes.append(binding["token_hash"])
+    payload = {
+        "schema": PUBLIC_INPUT_SCHEMA,
+        "onboarding_authority_account_id": identities[
+            "onboarding_authority_account_id"
+        ],
+        "api_signer_account_id": identities["api_signer_account_id"],
+        "is2_onboarding_token_hash": token_hashes[0],
+        "dpn_onboarding_token_hash": token_hashes[1],
+    }
+    return _public_inputs_from_payload(payload, "NEVO review public inputs")
+
+
+def verify_reviewed_payloads(
+    *,
+    unsigned_genesis_bytes: bytes,
+    review_bytes: bytes,
+    base_genesis_bytes: bytes,
+    base_config_bytes: bytes,
+) -> dict[str, Any]:
+    """Recompose and byte-verify one standalone NEVO genesis/review pair."""
+
+    review = _parse_json(review_bytes, "NEVO reset review")
+    inputs = _public_inputs_from_review(review)
+    base_genesis = _parse_base_genesis(base_genesis_bytes)
+    config = _parse_base_config(base_config_bytes, base_genesis)
+    composed = compose_genesis(base_genesis, inputs, config)
+    expected_unsigned = _pretty_json_bytes(composed)
+    if unsigned_genesis_bytes != expected_unsigned:
+        fail("reviewed unsigned genesis differs from deterministic NEVO recomposition")
+    canonical_inputs = _canonical_json_bytes(inputs.as_dict())
+    expected_review = build_review_manifest(
+        inputs=inputs,
+        canonical_inputs=canonical_inputs,
+        config=config,
+        base_genesis_bytes=base_genesis_bytes,
+        base_config_bytes=base_config_bytes,
+        unsigned_genesis_bytes=expected_unsigned,
+        instruction_count=len(composed["transactions"][-1]["instructions"]),
+    )
+    if review != expected_review or review_bytes != _pretty_json_bytes(expected_review):
+        fail("NEVO reset review differs from the deterministic closed review record")
+    return expected_review
+
+
+def verify_reviewed_files(
+    *,
+    unsigned_genesis: Path,
+    review: Path,
+    base_genesis: Path = CHECKED_IN_TAIRA_GENESIS,
+    base_config: Path = REPO_ROOT / "configs/soranexus/taira/config.toml",
+) -> dict[str, Any]:
+    return verify_reviewed_payloads(
+        unsigned_genesis_bytes=_read_bounded_regular(
+            unsigned_genesis, MAX_OUTPUT_BYTES, "reviewed unsigned NEVO genesis"
+        ),
+        review_bytes=_read_bounded_regular(
+            review, MAX_OUTPUT_BYTES, "NEVO reset review"
+        ),
+        base_genesis_bytes=_read_bounded_regular(
+            base_genesis, MAX_BASE_GENESIS_BYTES, "base Taira genesis"
+        ),
+        base_config_bytes=_read_bounded_regular(
+            base_config, MAX_BASE_CONFIG_BYTES, "base Taira config"
+        ),
+    )
+
+
 def _normalized_output_path(path: Path) -> Path:
     try:
         parent = path.parent.resolve(strict=True)
@@ -1039,6 +1158,26 @@ def _publish_outputs(
 def run(args: argparse.Namespace) -> dict[str, Any]:
     """Compose, validate, and optionally publish one unsigned reset candidate."""
 
+    verify_unsigned_genesis = getattr(args, "verify_unsigned_genesis", None)
+    verify_review = getattr(args, "verify_review", None)
+    if verify_unsigned_genesis is not None or verify_review is not None:
+        if verify_unsigned_genesis is None or verify_review is None:
+            fail("review verification requires both --verify-unsigned-genesis and --verify-review")
+        if (
+            args.public_inputs is not None
+            or args.output_genesis is not None
+            or args.review_out is not None
+            or args.dry_run
+        ):
+            fail("review verification cannot be combined with composition arguments")
+        return verify_reviewed_files(
+            unsigned_genesis=verify_unsigned_genesis,
+            review=verify_review,
+            base_genesis=args.base_genesis,
+            base_config=args.base_config,
+        )
+    if args.public_inputs is None:
+        fail("composition requires --public-inputs")
     inputs, canonical_inputs = load_public_inputs(args.public_inputs)
     base_genesis, base_genesis_bytes = load_base_genesis(args.base_genesis)
     config, base_config_bytes = load_base_config(args.base_config, base_genesis)
@@ -1100,8 +1239,17 @@ def parser() -> argparse.ArgumentParser:
     argument_parser.add_argument(
         "--public-inputs",
         type=Path,
-        required=True,
         help="strict public-only JSON input document",
+    )
+    argument_parser.add_argument(
+        "--verify-unsigned-genesis",
+        type=Path,
+        help="existing standalone NEVO unsigned genesis to verify",
+    )
+    argument_parser.add_argument(
+        "--verify-review",
+        type=Path,
+        help="existing deterministic NEVO review manifest to verify",
     )
     argument_parser.add_argument(
         "--base-genesis",
@@ -1142,7 +1290,9 @@ def main(argv: list[str] | None = None) -> int:
     except (CompositionError, OSError) as error:
         print(f"refused: {error}", file=sys.stderr)
         return 2
-    if args.dry_run:
+    if args.verify_review is not None:
+        print(f"verified_nevo_review_sha256={_sha256(_read_bounded_regular(args.verify_review, MAX_OUTPUT_BYTES, 'NEVO reset review'))}")
+    elif args.dry_run:
         print(json.dumps(review, ensure_ascii=False, indent=2))
     else:
         print(f"unsigned_genesis_sha256={review['unsigned_genesis_sha256']}")

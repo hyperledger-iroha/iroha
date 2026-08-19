@@ -477,9 +477,13 @@ def test_deploy_workflow_rejects_weak_or_incomplete_apply_reports() -> None:
         'range(1,5)',
         '"protocol_version":4',
         '"peer_count":4',
-        'int(genesis[-2:],16)&1==0',
+        'manifest.get("genesis_expected_hash")',
+        'canonical_network_id(genesis)',
     ):
         assert token in deploy
+    assert "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94" not in deploy
+    assert 'int(after["end_block_hash"][-2:],16)&1' not in deploy
+    assert "int(genesis[-2:],16)&1" not in deploy
 
 
 def test_deploy_apply_report_gate_accepts_only_exact_bound_identity(
@@ -488,7 +492,7 @@ def test_deploy_apply_report_gate_accepts_only_exact_bound_identity(
     deploy = "\n".join(
         str(step.get("run", "")) for step in _steps(_workflow()["macos-deploy"])
     )
-    marker = 'before,after=(json.load(open(path,encoding="ascii"))'
+    marker = 'before,after,manifest=(json.load(open(path,encoding="ascii"))'
     marker_index = deploy.index(marker)
     start = deploy.rfind("import json,sys\n", 0, marker_index)
     script = deploy[start : deploy.index("\nPY\n", marker_index)]
@@ -501,6 +505,13 @@ def test_deploy_apply_report_gate_accepts_only_exact_bound_identity(
         "public_key": {"algorithm": "secp256k1", "payload_hex": "02" + "4" * 64},
         "runtime_binding_sha256": "5" * 64,
     }
+    genesis_hash = "9" * 62 + "11"
+    crc = 0xFFFF
+    for byte in b"hash:" + genesis_hash.upper().encode("ascii"):
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    network_id = f"hash:{genesis_hash.upper()}#{crc:04X}"
     after = {
         "admission_receipt_id": "receipt",
         "applied": True,
@@ -510,8 +521,8 @@ def test_deploy_apply_report_gate_accepts_only_exact_bound_identity(
         "deployment_completed_at_unix_ms": 1,
         "end_block_hash": "8" * 62 + "11",
         "end_height": 2,
-        "genesis_block_hash": "9" * 62 + "11",
-        "network_id": "hash:82531CE8EAE8BFF6BEECA4698BFD13A3BC8BEC5F0EE0D23D428C97FC17AB0F3B#3E94",
+        "genesis_block_hash": genesis_hash,
+        "network_id": network_id,
         "network_name": "taira",
         "peer_count": 4,
         "protocol_version": 4,
@@ -534,12 +545,32 @@ def test_deploy_apply_report_gate_accepts_only_exact_bound_identity(
     }
     before_path = tmp_path / "before.json"
     after_path = tmp_path / "after.json"
+    manifest_path = tmp_path / "reset-manifest.json"
     before_path.write_text(json.dumps(before), encoding="ascii")
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema": "taira-exact2f-reset-bundle",
+                "chain_id": after["chain_id"],
+                "genesis_expected_hash": genesis_hash,
+                "signed_genesis_sha256": after["signed_genesis_sha256"],
+            }
+        ),
+        encoding="ascii",
+    )
 
     def run(value: dict[str, object]) -> subprocess.CompletedProcess[str]:
         after_path.write_text(json.dumps(value), encoding="ascii")
         return subprocess.run(
-            [sys.executable, "-I", "-S", "-", str(before_path), str(after_path)],
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-",
+                str(before_path),
+                str(after_path),
+                str(manifest_path),
+            ],
             input=script,
             check=False,
             capture_output=True,
@@ -549,9 +580,9 @@ def test_deploy_apply_report_gate_accepts_only_exact_bound_identity(
     assert run(after).returncode == 0
     for field, invalid in (
         ("deployment_completed_at_unix_ms", 0),
-        ("end_block_hash", "8" * 64),
         ("end_height", 1),
         ("genesis_block_hash", "8" * 64),
+        ("network_id", "hash:" + "8" * 64 + "#0000"),
         ("protocol_version", True),
         ("topology_sha256", "C" * 64),
     ):

@@ -77,6 +77,9 @@ pub(super) struct RenderTairaReleaseV1Args {
     /// Canonical Taira genesis without privacy bootstrap instructions.
     #[arg(long)]
     genesis_template: PathBuf,
+    /// Deterministic public NEVO review manifest binding the genesis template.
+    #[arg(long)]
+    nevo_review: PathBuf,
     /// Fresh output path for the complete public release plan.
     #[arg(long)]
     plan_output: PathBuf,
@@ -140,6 +143,11 @@ pub(super) fn render_taira_release_v1<T: Write>(
         MAX_TEMPLATE_BYTES_V1,
         "Taira genesis template",
     )?;
+    let nevo_review = read_bounded(
+        &args.nevo_review,
+        MAX_TEMPLATE_BYTES_V1,
+        "Taira NEVO reset review",
+    )?;
     let artifacts = compose_release_artifacts_v1(
         &activation_instructions,
         &activation_report,
@@ -147,6 +155,7 @@ pub(super) fn render_taira_release_v1<T: Write>(
         &plan_template,
         &config_template,
         &genesis_template,
+        Some(&nevo_review),
     )?;
     write_new_artifact_set_v1([
         (
@@ -194,12 +203,13 @@ fn compose_release_artifacts_v1(
     plan_template: &[u8],
     config_template: &[u8],
     genesis_template: &[u8],
+    nevo_review: Option<&[u8]>,
 ) -> color_eyre::Result<ReleaseArtifactsV1> {
     validate_taira_privacy_bootstrap_v1(activation_instructions, activation_report)?;
     let broker = parse_broker_public_export_v1(broker_export)?;
     let plan = render_release_plan_v1(plan_template, &broker)?;
     let config = render_release_config_v1(config_template, &broker)?;
-    let genesis = render_release_genesis_v1(genesis_template)?;
+    let genesis = render_release_genesis_v1(genesis_template, nevo_review)?;
     Ok(ReleaseArtifactsV1 {
         plan,
         config,
@@ -249,6 +259,198 @@ fn activation_material_v1(
     }
     Ok((hashes, encoded, boxes))
 }
+fn validate_nevo_review_v1(genesis: &[u8], review: &[u8]) -> color_eyre::Result<()> {
+    let value: JsonValue =
+        norito::json::from_slice(review).wrap_err("Taira NEVO review is not strict JSON")?;
+    let root = object_v1(&value, "Taira NEVO review")?;
+    expect_exact_keys_v1(
+        root,
+        &[
+            "schema",
+            "chain",
+            "chain_discriminant",
+            "state",
+            "public_inputs_sha256",
+            "base_genesis_sha256",
+            "base_config_sha256",
+            "unsigned_genesis_sha256",
+            "public_identities",
+            "credential_hash_bindings",
+            "genesis_overlay",
+            "secret_boundary",
+            "required_next_steps",
+        ],
+        "Taira NEVO review",
+    )?;
+    expect_string_v1(
+        root,
+        "schema",
+        "iroha.taira.nevo-reset-review.v1",
+        "Taira NEVO review",
+    )?;
+    expect_string_v1(root, "chain", CHAIN_ID_V1, "Taira NEVO review")?;
+    expect_u64_v1(
+        root,
+        "chain_discriminant",
+        CHAIN_DISCRIMINANT_V1,
+        "Taira NEVO review",
+    )?;
+    expect_string_v1(
+        root,
+        "state",
+        "unsigned_operator_review_required",
+        "Taira NEVO review",
+    )?;
+    let digest_fields = [
+        "public_inputs_sha256",
+        "base_genesis_sha256",
+        "base_config_sha256",
+        "unsigned_genesis_sha256",
+    ];
+    for field in digest_fields {
+        fixed_nonzero_sha256_v1(
+            string_field_v1(root, field, "Taira NEVO review")?,
+            &format!("Taira NEVO review {field}"),
+        )?;
+    }
+    if string_field_v1(root, "base_genesis_sha256", "Taira NEVO review")?
+        != hex::encode(sha256(CANONICAL_GENESIS_TEMPLATE_V1))
+        || string_field_v1(root, "base_config_sha256", "Taira NEVO review")?
+            != hex::encode(sha256(CANONICAL_CONFIG_TEMPLATE_V1))
+        || string_field_v1(root, "unsigned_genesis_sha256", "Taira NEVO review")?
+            != hex::encode(sha256(genesis))
+    {
+        bail!("Taira NEVO review digest chain differs from source templates or genesis");
+    }
+
+    let identities = object_field_v1(root, "public_identities", "Taira NEVO review")?;
+    expect_exact_keys_v1(
+        identities,
+        &["onboarding_authority_account_id", "api_signer_account_id"],
+        "Taira NEVO public identities",
+    )?;
+    let onboarding = string_field_v1(
+        identities,
+        "onboarding_authority_account_id",
+        "Taira NEVO public identities",
+    )?;
+    let api_signer = string_field_v1(
+        identities,
+        "api_signer_account_id",
+        "Taira NEVO public identities",
+    )?;
+    if onboarding.is_empty() || api_signer.is_empty() || onboarding == api_signer {
+        bail!("Taira NEVO review must bind two distinct public account identities");
+    }
+
+    let bindings = root
+        .get("credential_hash_bindings")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| eyre!("Taira NEVO credential bindings must be an array"))?;
+    if bindings.len() != 2 {
+        bail!("Taira NEVO review must bind exactly two onboarding credentials");
+    }
+    let mut token_hashes = BTreeSet::new();
+    for (binding, dataspace) in bindings.iter().zip(["is2", "dpn"]) {
+        let binding = object_v1(binding, "Taira NEVO credential binding")?;
+        expect_exact_keys_v1(
+            binding,
+            &["scope", "token_hash"],
+            "Taira NEVO credential binding",
+        )?;
+        let scope = object_field_v1(binding, "scope", "Taira NEVO credential binding")?;
+        expect_exact_keys_v1(scope, &["dataspace"], "Taira NEVO credential scope")?;
+        expect_string_v1(scope, "dataspace", dataspace, "Taira NEVO credential scope")?;
+        let token_hash = string_field_v1(binding, "token_hash", "Taira NEVO credential binding")?;
+        let Some(digest) = token_hash.strip_prefix("blake3:") else {
+            bail!("Taira NEVO credential hash must use the blake3 prefix");
+        };
+        fixed_nonzero_sha256_v1(digest, "Taira NEVO credential hash")?;
+        token_hashes.insert(token_hash);
+    }
+    if token_hashes.len() != 2 {
+        bail!("Taira NEVO credential hashes must be distinct");
+    }
+
+    let overlay = object_field_v1(root, "genesis_overlay", "Taira NEVO review")?;
+    expect_exact_keys_v1(
+        overlay,
+        &[
+            "transaction_count",
+            "instruction_count",
+            "dataspace_roots",
+            "domain",
+            "fee_asset_definition_id",
+            "account_funding_amount",
+            "fee_sponsor_program_id",
+            "ensure_alias_derived_owner_permissions",
+        ],
+        "Taira NEVO genesis overlay",
+    )?;
+    expect_u64_v1(
+        overlay,
+        "transaction_count",
+        1,
+        "Taira NEVO genesis overlay",
+    )?;
+    expect_u64_v1(
+        overlay,
+        "instruction_count",
+        11,
+        "Taira NEVO genesis overlay",
+    )?;
+    expect_string_v1(overlay, "domain", "nevo.dpn", "Taira NEVO genesis overlay")?;
+    expect_string_v1(
+        overlay,
+        "account_funding_amount",
+        "1000000",
+        "Taira NEVO genesis overlay",
+    )?;
+    let roots = overlay
+        .get("dataspace_roots")
+        .and_then(JsonValue::as_array)
+        .ok_or_else(|| eyre!("Taira NEVO dataspace roots must be an array"))?;
+    let expected_roots = [("dpn", 10_u64), ("is2", 8_477_022_798_449_861_195_u64)];
+    if roots.len() != expected_roots.len() {
+        bail!("Taira NEVO dataspace root inventory is not exact");
+    }
+    for (row, (alias, id)) in roots.iter().zip(expected_roots) {
+        let row = object_v1(row, "Taira NEVO dataspace root")?;
+        expect_exact_keys_v1(row, &["alias", "id"], "Taira NEVO dataspace root")?;
+        expect_string_v1(row, "alias", alias, "Taira NEVO dataspace root")?;
+        expect_u64_v1(row, "id", id, "Taira NEVO dataspace root")?;
+    }
+    if string_array_field_v1(
+        overlay,
+        "ensure_alias_derived_owner_permissions",
+        "Taira NEVO genesis overlay",
+    )? != [
+        "CanManageAccountAlias",
+        "CanDelegateAccountAliasResolution",
+        "CanResolveAccountAlias",
+    ] {
+        bail!("Taira NEVO alias permission inventory is not exact");
+    }
+
+    let boundary = object_field_v1(root, "secret_boundary", "Taira NEVO review")?;
+    expect_exact_keys_v1(
+        boundary,
+        &[
+            "raw_tokens_accepted",
+            "private_keys_accepted",
+            "genesis_signed",
+        ],
+        "Taira NEVO secret boundary",
+    )?;
+    if boundary
+        .values()
+        .any(|value| value.as_bool() != Some(false))
+    {
+        bail!("Taira NEVO review must remain unsigned and secret-free");
+    }
+    Ok(())
+}
+
 #[expect(
     clippy::too_many_lines,
     reason = "broker export admission keeps canonical-byte, identity, digest, policy, and instruction checks in one ordered verification pass"
@@ -1017,7 +1219,10 @@ fn expect_toml_string_v1(
     clippy::too_many_lines,
     reason = "genesis rendering preserves ordered native and JSON-level admission before its deterministic append"
 )]
-fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
+fn render_release_genesis_v1(
+    bytes: &[u8],
+    nevo_review: Option<&[u8]>,
+) -> color_eyre::Result<Vec<u8>> {
     iroha_genesis::init_instruction_registry();
     validate_genesis_manifest_json(bytes)
         .wrap_err("Taira genesis template exceeds fixed resource bounds")?;
@@ -1101,7 +1306,11 @@ fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
             "Taira genesis does not contain the exact ordered privacy governance authority and grant"
         );
     }
-    expect_canonical_template_bytes_v1(bytes, CANONICAL_GENESIS_TEMPLATE_V1, "Taira genesis")?;
+    if let Some(review) = nevo_review {
+        validate_nevo_review_v1(bytes, review)?;
+    } else {
+        expect_canonical_template_bytes_v1(bytes, CANONICAL_GENESIS_TEMPLATE_V1, "Taira genesis")?;
+    }
     let final_transaction = transactions
         .last()
         .and_then(JsonValue::as_object)
@@ -1529,6 +1738,7 @@ mod tests {
                 PLAN_TEMPLATE_V1,
                 CONFIG_TEMPLATE_V1,
                 GENESIS_TEMPLATE_V1,
+                None,
             )
             .expect_err("closed ZK-X509 evidence gate must prevent release composition");
             assert!(
@@ -1544,6 +1754,7 @@ mod tests {
             PLAN_TEMPLATE_V1,
             CONFIG_TEMPLATE_V1,
             GENESIS_TEMPLATE_V1,
+            None,
         )
         .expect("compose complete release");
         let second = compose_release_artifacts_v1(
@@ -1553,6 +1764,7 @@ mod tests {
             PLAN_TEMPLATE_V1,
             CONFIG_TEMPLATE_V1,
             GENESIS_TEMPLATE_V1,
+            None,
         )
         .expect("recompose complete release");
         assert_eq!(first.plan, second.plan);
@@ -1771,7 +1983,7 @@ mod tests {
         let mut genesis = b"\n".to_vec();
         genesis.extend_from_slice(GENESIS_TEMPLATE_V1);
         assert!(
-            render_release_genesis_v1(&genesis)
+            render_release_genesis_v1(&genesis, None)
                 .expect_err("reject whitespace-drifted genesis template")
                 .to_string()
                 .contains("differs byte-for-byte")
@@ -1803,7 +2015,7 @@ mod tests {
             .push(injected);
         let tampered = json_pretty_bytes_v1(&genesis, "tampered genesis").expect("render tamper");
         assert!(
-            render_release_genesis_v1(&tampered)
+            render_release_genesis_v1(&tampered, None)
                 .expect_err("reject pre-existing decoded privacy instruction")
                 .to_string()
                 .contains("already contains a privacy bootstrap instruction")
@@ -1866,8 +2078,8 @@ mod tests {
             }
             let tampered =
                 json_pretty_bytes_v1(&genesis, "tampered genesis").expect("render tamper");
-            let error =
-                render_release_genesis_v1(&tampered).expect_err("reject invalid governance grant");
+            let error = render_release_genesis_v1(&tampered, None)
+                .expect_err("reject invalid governance grant");
             assert!(
                 error.to_string().contains("wrong authority")
                     || error.to_string().contains("must be unscoped")
