@@ -2151,9 +2151,10 @@ impl LifecycleLedgerV1 {
     /// finality artifact reauthenticates the retained replay envelope, and the
     /// ordinary terminal-chain oracle below rechecks every immutable owner,
     /// payload, continuation, and predecessor after staging. A canonical-sync
-    /// height can instead be already retired with no rows; that no-mutation
-    /// classification requires the separate store-minted proof that its exact
-    /// empty frame physically existed.
+    /// height can instead retain unrelated local work without a Decision Apply
+    /// lineage; that classification requires the separate store-minted proof
+    /// that its exact frame physically existed. The consuming all-row retirement
+    /// transaction cancels that superseded work and authenticates Serve payloads.
     fn stage_complete_tip_terminal_apply_recovery(
         &self,
         complete_tip: &crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
@@ -2168,15 +2169,6 @@ impl LifecycleLedgerV1 {
                 self.clone(),
                 false,
                 CompleteTipPredecessorLifecycleEvidenceV1::EmptyGenesis,
-            ));
-        }
-        if let Some(present_frame) = present_frame
-            && present_frame.authorizes_empty_retired_predecessor(self, complete_tip)
-        {
-            return Ok((
-                self.clone(),
-                false,
-                CompleteTipPredecessorLifecycleEvidenceV1::EmptyRetired(present_frame),
             ));
         }
         if let Ok(apply_ordinal) = self.authenticate_complete_tip_terminal_apply(complete_tip) {
@@ -2207,12 +2199,21 @@ impl LifecycleLedgerV1 {
                     && complete_tip.authorizes_terminal_apply_replay(&record.replay_authority))
                 .then_some(index)
             });
-        let apply_index = candidates.next().ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "CompleteTip finality has neither an exact terminal nor live Decision Apply row"
+        let Some(apply_index) = candidates.next() else {
+            if let Some(present_frame) = present_frame
+                && present_frame.authorizes_canonical_retired_predecessor(self, complete_tip)
+            {
+                return Ok((
+                    self.clone(),
+                    false,
+                    CompleteTipPredecessorLifecycleEvidenceV1::CanonicalFrame(present_frame),
+                ));
+            }
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "CompleteTip finality has neither an exact Apply lineage nor a canonical physical predecessor frame"
                     .to_owned(),
-            )
-        })?;
+            ));
+        };
         if candidates.next().is_some() {
             return Err(LifecycleLedgerError::InvalidLedger(
                 "CompleteTip finality names multiple live Decision Apply rows".to_owned(),

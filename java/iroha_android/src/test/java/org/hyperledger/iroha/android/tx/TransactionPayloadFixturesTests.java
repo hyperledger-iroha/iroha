@@ -37,6 +37,10 @@ public final class TransactionPayloadFixturesTests {
     feePayment.put("payer", "authority");
     feePayment.put("value", feePaymentValue);
     payload.put("fee_payment", feePayment);
+    final Map<String, Object> admissionIntent = new LinkedHashMap<>();
+    admissionIntent.put("intent", "ordinary");
+    admissionIntent.put("value", null);
+    payload.put("admission_intent", admissionIntent);
     payload.put("executable", executable);
     payload.put("metadata", new LinkedHashMap<>());
 

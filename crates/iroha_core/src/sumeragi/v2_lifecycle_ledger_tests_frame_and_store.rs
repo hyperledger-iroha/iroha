@@ -877,6 +877,95 @@ fn all_sign_broadcast_continuations_roundtrip_with_canonical_wire_shapes() {
             Some(DurableContinuation::successor(edge, 2))
         );
     }
+
+    let round = wire::ConsensusRound {
+        context_id: wire::HeightContextId(iroha_crypto::HashOf::from_untyped_unchecked(
+            Hash::prehashed(*context().id().as_bytes()),
+        )),
+        height: context().height(),
+        view: 3,
+    };
+    let exact_timeout_pair = |signer, signature| {
+        let unsigned = wire::TimeoutVote {
+            round,
+            highest_prepare_qc: None,
+            signer,
+            signature: Vec::new(),
+        };
+        let mut signed = unsigned.clone();
+        signed.signature = vec![signature];
+        super::super::replay_authority::exact_timeout_sign_broadcast_fixture(
+            context(), unsigned, signed,
+        )
+    };
+    let [parent_case, _] = exact_timeout_pair(0, 0x71);
+    let [_, child_case] = exact_timeout_pair(1, 0x72);
+    let edge = DurableContinuationEdge::SignTimeoutToBroadcast;
+    assert!(durable_continuation_successor_is_exact(
+        edge,
+        parent_case.work_class,
+        parent_case.key,
+        parent_case.stage,
+        child_case.work_class,
+        child_case.key,
+        child_case.stage,
+    ));
+    assert_eq!(
+        signed_broadcast_continuation_is_exact(
+            edge,
+            &parent_case.authority,
+            parent_case.payload,
+            &child_case.authority,
+            child_case.payload,
+        ),
+        Some(false),
+    );
+    let parent = RecoveredLifecycleRecord::new(
+        parent_case.key,
+        owner(1),
+        1,
+        parent_case.work_class,
+        parent_case.stage,
+        Some(TerminalOutcome::Advanced),
+        digest(9),
+        parent_case.payload,
+        parent_case.authority,
+        DurableContinuation::successor(edge, 2),
+        BTreeSet::new(),
+    );
+    let child = RecoveredLifecycleRecord::new(
+        child_case.key,
+        owner(1),
+        2,
+        child_case.work_class,
+        child_case.stage,
+        None,
+        digest(9),
+        child_case.payload,
+        child_case.authority,
+        DurableContinuation::None,
+        BTreeSet::new(),
+    );
+    assert!(parent.replay_authority_is_exact(context()));
+    assert!(child.replay_authority_is_exact(context()));
+    let mut coordinator = LifecycleCoordinator::new(
+        context(),
+        2,
+        super::super::CapacityGeometry::new(
+            super::super::CapacityClass::ALL.map(|class| (class, 8)),
+        ),
+    );
+    coordinator.reconcile_restart(RecoverySnapshot::new(
+        context(),
+        2,
+        vec![parent, child],
+        BTreeMap::new(),
+    ));
+    assert_eq!(
+        coordinator.fault(),
+        Some(super::super::CoordinatorFault::RecoveryRejected)
+    );
+    assert!(coordinator.records.is_empty());
 }
 #[test]
 fn committed_proposal_broadcast_and_next_sign_pair_is_frame_bound() {

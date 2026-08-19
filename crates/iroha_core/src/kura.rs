@@ -412,7 +412,7 @@ fn recovery_control_decode_limits_v1(wire_limit: u64) -> Result<norito::DecodeLi
     ))
 }
 pub(crate) const MAX_PENDING_QUEUE_PLAN_ADMISSION_CERTIFICATE_BYTES: usize =
-    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
+    iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
 /// Release-default aggregate payload-byte bound used by the test-only indexed
 /// rewrite fixture.
 ///

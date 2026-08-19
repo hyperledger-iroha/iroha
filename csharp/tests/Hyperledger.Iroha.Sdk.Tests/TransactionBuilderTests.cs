@@ -1558,7 +1558,7 @@ public sealed class TransactionBuilderTests
             offsetAfterSignature + offsetAfterPayload + offsetAfterMultisig);
 
         var payloadOffset = 0;
-        for (var fieldIndex = 0; fieldIndex < 8; fieldIndex++)
+        for (var fieldIndex = 0; fieldIndex < 9; fieldIndex++)
         {
             _ = ReadField(envelope.PayloadBytes.AsSpan(payloadOffset), out var consumed);
             payloadOffset += consumed;
@@ -2177,10 +2177,16 @@ public sealed class TransactionBuilderTests
                 (offsetAfterNetworkDomain + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable
                     + offsetAfterTimeToLive + offsetAfterNonce)..],
             out var offsetAfterFeePayment);
-        var metadataBytes = ReadField(
+        _ = ReadField(
             payloadBytes[
                 (offsetAfterNetworkDomain + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable
                     + offsetAfterTimeToLive + offsetAfterNonce + offsetAfterFeePayment)..],
+            out var offsetAfterAdmissionIntent);
+        var metadataBytes = ReadField(
+            payloadBytes[
+                (offsetAfterNetworkDomain + offsetAfterAuthority + offsetAfterCreationTime + offsetAfterExecutable
+                    + offsetAfterTimeToLive + offsetAfterNonce + offsetAfterFeePayment
+                    + offsetAfterAdmissionIntent)..],
             out _);
 
         var count = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(metadataBytes[..8]));

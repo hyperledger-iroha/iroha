@@ -38,6 +38,10 @@ public sealed class TransactionBuilder
 
     public FeePaymentIntent FeePayment => feePayment;
 
+    /// <summary>Public submissions always require quorum-certified QueuePlan admission.</summary>
+    public TransactionAdmissionIntent AdmissionIntent =>
+        TransactionAdmissionIntent.QueuePlanSynced;
+
     public ulong? CreationTimeMilliseconds { get; private set; }
 
     public ulong TimeToLiveMilliseconds { get; private set; } = DefaultTimeToLiveMilliseconds;
@@ -427,6 +431,7 @@ public sealed class TransactionBuilder
         payload.WriteField(context.EncodeOption<ulong>(TimeToLiveMilliseconds, context.EncodeUInt64));
         payload.WriteField(context.EncodeOption(Nonce, context.EncodeUInt32));
         payload.WriteField(context.EncodeFeePaymentIntent(feePayment));
+        payload.WriteField(context.EncodeUInt32((uint)AdmissionIntent));
         payload.WriteField(metadata.Count == 0 ? context.EncodeEmptyMetadata() : context.EncodeMetadata(metadata));
         payload.WriteField(new byte[] { 0 });
         return payload.ToArray();
@@ -473,6 +478,7 @@ public sealed class TransactionBuilder
             TimeToLiveMilliseconds,
             Nonce,
             feePayment,
+            AdmissionIntent,
             Metadata);
     }
 

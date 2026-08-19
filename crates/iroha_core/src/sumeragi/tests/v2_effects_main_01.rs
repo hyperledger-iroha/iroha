@@ -105,115 +105,6 @@ fn signed_certified_response(
     .to_vec();
     response
 }
-fn certified_response_ingress_ownership(
-    response: &wire::CertifiedBodyResponse,
-    responder: PeerId,
-) -> FairV2IngressOwnershipEvidence {
-    fair_transport_ingress_ownership(
-        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::CertifiedBodyResponse(
-            response.clone(),
-        )),
-        responder,
-    )
-}
-fn certified_response_runtime_ingress_ownership(
-    fixture: &Fixture,
-    response: &wire::CertifiedBodyResponse,
-    responder: PeerId,
-) -> (
-    TempDir,
-    crate::sumeragi::FairV2Ingress,
-    Arc<super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate>,
-    FairV2IngressOwnershipEvidence,
-) {
-    let roster = fixture
-        .context
-        .roster
-        .iter()
-        .map(|entry| entry.validator.clone())
-        .collect::<Vec<_>>();
-    let directory = TempDir::new().expect("temporary response leader-wire directory");
-    let ingress = crate::sumeragi::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-        64,
-        128 * 1024 * 1024,
-        16 * 1024 * 1024,
-        super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-        4 * 1024 * 1024,
-        4 * 1024 * 1024,
-        usize::MAX,
-        usize::MAX,
-        usize::MAX,
-        usize::MAX,
-        None,
-    );
-    ingress
-        .configure_roster_for_context(
-            roster.clone(),
-            &fixture.context.network_id,
-            fixture.context.da_layout,
-        )
-        .expect("configure response leader-wire ingress");
-    ingress.require_leader_wire_lifecycle_gate();
-    let capacity =
-        super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::derived_capacity(
-            roster.len(),
-            fixture.context.da_layout.max_chunk_count,
-        )
-        .expect("derive response lifecycle capacity");
-    let owner = [0xE5; 32];
-    let recovery_authority =
-        super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-            fixture.context.id(),
-            fixture.context.height,
-            owner,
-            response.manifest.round.view,
-            false,
-        );
-    let (gate, restore) =
-        super::super::serviced_candidate_store::LeaderWireLifecycleStoreGate::open(
-            &directory.path().join("response-leader-wire.wal"),
-            fixture.context.id(),
-            fixture.context.height,
-            owner,
-            roster.iter().cloned().collect(),
-            capacity,
-            fixture.context.da_layout.max_chunk_count,
-            recovery_authority,
-            &[],
-            &[],
-        )
-        .expect("open response leader-wire gate");
-    ingress
-        .bind_leader_wire_lifecycle_gate(
-            Arc::clone(&gate),
-            restore,
-            super::super::v2_runtime::RuntimeLifecycleOrdinalSource::after_high_watermark(64),
-            fixture.context.id(),
-            fixture.context.height,
-        )
-        .expect("bind response leader-wire gate");
-    ingress.open().expect("open response leader-wire ingress");
-    let message = wire::ConsensusMessageV2::new(
-        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response.clone()),
-    );
-    assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
-            BlockMessage::V2(message),
-            Some(responder),
-        )),
-        Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
-    ));
-    let mut inbound = ingress
-        .try_recv()
-        .expect("drain exact response ingress carrier");
-    let mut ownership = inbound
-        .take_ingress_ownership()
-        .expect("response retains fair-ingress ownership");
-    ingress
-        .bind_leader_wire_runtime_ownership(&mut ownership)
-        .expect("bind response leader-wire runtime receipt");
-    (directory, ingress, gate, ownership)
-}
 fn payload_chunk_ingress_ownership(
     chunk: &wire::PayloadChunk,
     sender: PeerId,
@@ -1454,29 +1345,11 @@ fn reconstructible_new_certified_fetch_acquires_ownership_from_retained_admissio
     )
     .payload()
     .to_vec();
-    let response_envelope = wire::ConsensusMessageV2::new(
-        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response_a.clone()),
-    );
     let responder = fixture.context.roster[0].validator.clone();
-    let ingress_ownership = certified_response_ingress_ownership(&response_a, responder.clone());
-    assert!(
-        fixture
-            .executor
-            .can_admit_network_message_with_ingress_ownership(
-                &response_envelope,
-                &ingress_ownership,
-            ),
-        "the exact transport completion remains admissible under request pressure"
-    );
     assert_eq!(
         fixture
             .executor
-            .accept_certified_body_response_with_ingress_ownership(
-                response_a,
-                &responder,
-                &ingress_ownership,
-                &mut services,
-            )
+            .accept_certified_body_response(response_a, &responder, &mut services)
             .expect("exact A response releases certified-request capacity"),
         CompletionDisposition::Accepted
     );
@@ -1777,29 +1650,11 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
     )
     .payload()
     .to_vec();
-    let response_envelope = wire::ConsensusMessageV2::new(
-        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response_a.clone()),
-    );
     let responder = fixture.context.roster[0].validator.clone();
-    let ingress_ownership = certified_response_ingress_ownership(&response_a, responder.clone());
-    assert!(
-        fixture
-            .executor
-            .can_admit_network_message_with_ingress_ownership(
-                &response_envelope,
-                &ingress_ownership,
-            ),
-        "the exact response must cross the full reducer ingress prefix"
-    );
     assert_eq!(
         fixture
             .executor
-            .accept_certified_body_response_with_ingress_ownership(
-                response_a,
-                &responder,
-                &ingress_ownership,
-                &mut services,
-            )
+            .accept_certified_body_response(response_a, &responder, &mut services)
             .expect("reserve and enqueue exact BodyAvailable completion"),
         CompletionDisposition::Accepted
     );

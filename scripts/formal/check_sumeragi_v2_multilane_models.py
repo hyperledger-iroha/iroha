@@ -1784,16 +1784,6 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
     (
         QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
         "fn",
-        "ensure_queue_plan_admission_registry_compatible",
-        (
-            "queue_plan_admission_application_state",
-            "== QueuePlanAdmissionApplicationState::PendingStale",
-            "retired or recreated lane incarnation",
-        ),
-    ),
-    (
-        QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE,
-        "fn",
         "queue_plan_admission_registry_entrypoint_present",
         (
             "queue_plan_registry_owner_application_state_in_view",
@@ -1873,8 +1863,14 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_BINDINGS = (
             "remove_queue_plan_marker(member_key)",
         ),
     ),
+    (QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE, "fn", "stage_queue_plan_admissions_for_carrier", (
+            "ensure_pristine_execution_control_stage",
+            "queue_plan_active_lane_bindings",
+            "stage_queue_plan_admissions",
+            "staged_queue_plan_admissions",
+    )),
     (QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE, "fn", "stage_queue_plan_admissions", (
-            "validate_merge_queue_plan_admissions",
+            "validate_queue_plan_admissions_for_carrier",
             "queue_plan_pending_obligation_from_admission",
             "queue_plan_pending_obligation_matches_active_lifecycle",
             ".collect::<Result<Vec<_>, MergeLedgerCommitError>>()?",
@@ -2001,15 +1997,19 @@ QUEUE_PLAN_PENDING_MEMBERSHIP_ORDERED_SOURCE_CHECKS = (
 QUEUE_PLAN_PENDING_MEMBERSHIP_TEST_BINDINGS = (
     (
         "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs",
-        "queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set",
-        (
-            "a later-route orphan member must abort the whole obligation stage",
-            "failed stage preflight must preserve the orphan marker for diagnosis",
-            "a second admission failure must roll back every earlier admission",
-            "failed whole-list staging must restore the exact prior overlay",
-            "failed whole-list staging leaked marker `{key}`",
-            "the same StateBlock remains reusable after rollback",
-        ),
+        "queue_plan_native_staging_is_an_exact_idempotent_compare_and_set",
+        ("assert_queue_plan_native_exact_compare_and_set()", "assert_queue_plan_native_multi_route_preflight_is_atomic()",
+         "assert_queue_plan_native_batch_rollback_is_atomic()"),
+    ),
+    (
+        "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs", "assert_queue_plan_native_multi_route_preflight_is_atomic",
+        ("a later-route orphan member must abort the whole obligation stage",
+         "failed stage preflight must preserve the orphan marker for diagnosis"),
+    ),
+    (
+        "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs", "assert_queue_plan_native_batch_rollback_is_atomic",
+        ("a second admission failure must roll back every earlier admission", "failed whole-list staging must restore the exact prior overlay",
+         "failed whole-list staging leaked marker `{key}`", "a later proposal-native carrier can retry after the conflict is repaired"),
     ),
     (
         "crates/iroha_core/src/state/autonomous_merge_and_queue_plan_tests.rs",
@@ -4248,13 +4248,13 @@ def _validate_queue_plan_pending_membership_contract(
                 "must be the one exact reviewed 1024-byte declaration"
             )
         route_roster_bound = (
-            "const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize =\n"
-            "    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSIONS;"
+            "const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize = "
+            "MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK;"
         )
         if state_source.count(route_roster_bound) != 1:
             errors.append(
                 f"{state_path}: QueuePlan authoritative route roster must use "
-                "the one exact merge-admission consensus bound"
+                "the one exact block/proposal admission consensus bound"
             )
         for forbidden in (
             "QUEUE_PLAN_PENDING_ROUTE_COUNT_MARKER_PREFIX",

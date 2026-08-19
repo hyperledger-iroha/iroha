@@ -5627,7 +5627,7 @@ state_test! { sync drain_metadata_does_not_change_merge_catalog_or_binding_commi
     );
     let_row! { binding = MergeLaneBinding { lane_id: lane.id, dataspace_id: lane.dataspace_id, lane_config_hash: merge_lane_config_hash(prior_lane), incarnation, activation_height: 1, } };
     let_row! { incarnation_root = iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(&[ iroha_data_model::nexus::LaneLifecycleIncarnationEntry { lane_id: lane.id, incarnation, }, ]) };
-    let_row! { entry = |epoch_id: u64, catalog: &LaneCatalog| MergeLedgerEntry { version: MergeLedgerEntry::VERSION, epoch_id, lane_catalog_hash: merge_lane_catalog_hash(catalog), active_lanes: vec![binding.clone()], incarnation_root, activation_root: crate::merge::merge_activation_root(std::slice::from_ref(&binding)), lane_snapshots: Vec::new(), execution_batch: None, lane_drain_certificates: Vec::new(), queue_plan_admissions: Vec::new(), global_state_root: crate::merge::reduce_merge_hint_roots(&[]), merge_qc: dummy_merge_qc(), } };
+    let_row! { entry = |epoch_id: u64, catalog: &LaneCatalog| MergeLedgerEntry { version: MergeLedgerEntry::VERSION, epoch_id, lane_catalog_hash: merge_lane_catalog_hash(catalog), active_lanes: vec![binding.clone()], incarnation_root, activation_root: crate::merge::merge_activation_root(std::slice::from_ref(&binding)), lane_snapshots: Vec::new(), execution_batch: None, lane_drain_certificates: Vec::new(), global_state_root: crate::merge::reduce_merge_hint_roots(&[]), merge_qc: dummy_merge_qc(), } };
     let prior_entry = entry(1, &prior_catalog);
     let intent_entry = entry(2, &intent_catalog);
     let post_commitment_entry = entry(3, &committed_catalog);
@@ -6387,24 +6387,6 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
     assert!(matches!(
         state.validate_merge_candidate_for_global_round(&mixed_candidate, &parent_header, 7),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(_))
-    ));
-    let mut mixed_queue_plan_candidate = candidate.clone();
-    mixed_queue_plan_candidate.queue_plan_admissions = vec![vec![0x00]];
-    assert!(matches!(
-        state.validate_merge_candidate_for_global_round(
-            &mixed_queue_plan_candidate,
-            &parent_header,
-            7,
-        ),
-        Err(MergeLedgerCommitError::ExecutionBatchInvalid(ref message))
-            if message.contains("QueuePlan admission controls")
-    ));
-    let_row! { mixed_queue_plan_qc = merge_qc_for_candidate( &state, &mixed_queue_plan_candidate, &unrelated_keypairs, &[0, 1, 2], ) };
-    let_row! { mixed_queue_plan_entry = merge_entry_from_candidate(mixed_queue_plan_candidate, mixed_queue_plan_qc) };
-    assert!(matches!(
-        state.validate_certified_merge_entry_for_global_order(&mixed_queue_plan_entry),
-        Err(MergeLedgerCommitError::ExecutionBatchInvalid(ref message))
-            if message.contains("QueuePlan admission controls")
     ));
     let qc = merge_qc_for_candidate(&state, &candidate, &unrelated_keypairs, &[0, 1, 2]);
     let entry = merge_entry_from_candidate(candidate.clone(), qc);
@@ -34780,7 +34762,6 @@ fn merge_candidate_with_lanes(epoch: u64, count: usize) -> crate::merge::MergeLe
         lane_snapshots,
         execution_batch: None,
         lane_drain_certificates: Vec::new(),
-        queue_plan_admissions: Vec::new(),
         global_state_root,
     }
 }
@@ -34823,7 +34804,6 @@ fn merge_candidate_from_relay(
         lane_snapshots,
         execution_batch: None,
         lane_drain_certificates: Vec::new(),
-        queue_plan_admissions: Vec::new(),
         global_state_root,
     }
 }
@@ -35589,7 +35569,7 @@ state_test! { sync same_block_merge_and_lane_replacement_preserves_history_and_p
     );
 }
 state_test! { sync empty_and_zero_activation_merge_entries_fail_live_and_recovery_with_same_rule
-    let_row! { empty = MergeLedgerEntry { version: MergeLedgerEntry::VERSION, epoch_id: 1, lane_catalog_hash: Hash::new(b"catalog"), active_lanes: Vec::new(), incarnation_root: Hash::new(b"incarnations"), activation_root: Hash::new(b"activations"), lane_snapshots: Vec::new(), execution_batch: None, lane_drain_certificates: Vec::new(), queue_plan_admissions: Vec::new(), global_state_root: Hash::new(b"root"), merge_qc: dummy_merge_qc(), } };
+    let_row! { empty = MergeLedgerEntry { version: MergeLedgerEntry::VERSION, epoch_id: 1, lane_catalog_hash: Hash::new(b"catalog"), active_lanes: Vec::new(), incarnation_root: Hash::new(b"incarnations"), activation_root: Hash::new(b"activations"), lane_snapshots: Vec::new(), execution_batch: None, lane_drain_certificates: Vec::new(), global_state_root: Hash::new(b"root"), merge_qc: dummy_merge_qc(), } };
     let_row! { mut zero_activation = merge_entry_from_candidate(merge_candidate_with_lanes(1, 1), dummy_merge_qc()) };
     zero_activation.active_lanes[0].activation_height = 0;
     for (label, entry, expected_live, expected_recovery) in [
@@ -37163,7 +37143,7 @@ state_test! { sync commit_merge_entry_rejects_empty_entry
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);
-    let_row! { entry = MergeLedgerEntry { version: MergeLedgerEntry::VERSION, epoch_id: 1, lane_catalog_hash: Hash::new(b"catalog"), active_lanes: Vec::new(), incarnation_root: Hash::new(b"incarnations"), activation_root: Hash::new(b"activations"), lane_snapshots: Vec::new(), execution_batch: None, lane_drain_certificates: Vec::new(), queue_plan_admissions: Vec::new(), global_state_root: iroha_crypto::Hash::new(b"root"), merge_qc: dummy_merge_qc(), } };
+    let_row! { entry = MergeLedgerEntry { version: MergeLedgerEntry::VERSION, epoch_id: 1, lane_catalog_hash: Hash::new(b"catalog"), active_lanes: Vec::new(), incarnation_root: Hash::new(b"incarnations"), activation_root: Hash::new(b"activations"), lane_snapshots: Vec::new(), execution_batch: None, lane_drain_certificates: Vec::new(), global_state_root: iroha_crypto::Hash::new(b"root"), merge_qc: dummy_merge_qc(), } };
     let_row! { err = state .commit_merge_entry(entry) .expect_err("empty merge entry must be rejected") };
     assert!(matches!(err, MergeLedgerCommitError::EmptyEntry));
 }

@@ -26,7 +26,7 @@ any of these definitions or constructors change.
 
 ## Current proof-ledger status
 
-The checked-in legacy/revision-3-rooted ledger declares 44 `tlaps_proved`, 3
+The checked-in revision-4 ledger declares 44 `tlaps_proved`, 3
 `cross_tool_proved`, 0 `specified_unproved`, 6 `trusted_contract`, and 1
 `out_of_scope`, with `machine_checked_completion: true`. This declaration is
 the byte-exact input to the release proof wave, not proof evidence by itself
@@ -73,19 +73,23 @@ proxy tail, and both sets, and resets fallback before the new view starts.
 
 Every honest Prepare signer must first reconstruct the complete canonical body
 from the mandatory Reed-Solomon-16 layout, check its hashes, durably store it,
-and deterministically validate it. A durable CommitQC plus canonical
-application authorizes successor activation. Retryable finalized-height
-network output, lane sidecars, and cleanup are reconstructed and repaired
-independently; they cannot hold the successor height inactive.
-An unfinished historical lane remains governed by its immutable predecessor
-descriptor, not by the successor global roster. A configured validator removed
-from that roster has no successor global vote, but may continue signing any
-exact frozen lane descriptor which names it. This includes unfinished old
-descriptors and independently pinned current-height Nexus lane descriptors,
-whose committees need not be successor-roster subsets. This adds no safety
-requirement for global-roster overlap; conditional lane-output liveness
-requires each frozen lane committee's honest threshold to remain responsive
-until durable completion.
+and deterministically validate it. A durable CommitQC plus canonical global
+application starts finalization, but does not by itself authorize successor
+activation. The finalized predecessor remains the sole owner while it
+rehydrates late canonical lane bodies, services bounded historical recovery,
+and persists every winning lane certificate and ordinary application receipt
+or autonomous durable record. There is no incomplete-session transfer into the
+successor. Only the complete Kura-backed lane authority may drain and seal
+exact output before successor activation.
+An unfinished lane remains governed by its immutable predecessor descriptor,
+not by the successor global roster. A configured validator removed from that
+roster has no successor global vote, but may continue signing any exact frozen
+lane descriptor which names it. This includes older descriptors and
+independently pinned current-height Nexus lane descriptors, whose committees
+need not be successor-roster subsets. This adds no safety requirement for
+global-roster overlap; conditional lane-output liveness requires each frozen
+lane committee's honest threshold to remain responsive until durable
+completion.
 
 `SumeragiV2Revision4.tla` is the compact revision-4 model.
 `SumeragiV2Revision4.cfg` instantiates the smallest production committee with
@@ -307,7 +311,7 @@ height-context state are not migrated in place.
   `SumeragiV2CertifiedRequestHashAuthorityProofs.tla`,
   `SumeragiV2DurableDecisionRecoveryProofs.tla`, and
   the bounded `SumeragiV2Async*Proofs.tla` shard chain behind the
-  declaration-free `SumeragiV2AsyncLivenessProofs.tla` compatibility façade,
+  declaration-free `SumeragiV2AsyncLivenessProofs.tla` structural façade,
   with
   `SumeragiV2AsyncHistoricalRecoveryLivenessProofs.tla` as its child,
   model the production scheduler and transport abstractions, own the typed
@@ -513,12 +517,12 @@ height-context state are not migrated in place.
   module. It proves action-frame preservation and exit lemmas used by the
   locked-body corridor, but owns no ledger obligation and cannot discharge or
   promote `LockedBodyReproposalProgressObligation`.
-- The theorem-free compatibility shard
+- The theorem-free structural shard
   `SumeragiV2AsyncOutstandingLivenessDebt.tla` and exactly two theorem-bearing
   scratch modules are outside the release-proof surface.
   `SumeragiV2HistoricalLockedBodyRecoveryBridgeScratch.tla` and
   `SumeragiV2ProgressWitnessCrossToolScratch.tla` each recheck one
-  authoritative bridge. These compatibility/scratch modules are structural
+  authoritative bridge. These non-release/scratch modules are structural
   inventory, not release evidence, and none can promote a ledger entry.
 - `proof_coverage.json` is the checked-in theorem/trust-boundary status
   declaration, not independent proof authority. The structural checker binds
@@ -607,7 +611,7 @@ height-context state are not migrated in place.
   wake-up, predecessor drop, successor retry, frozen recipients, and Kura
   revalidation. Fresh isolated Rust 1.93.1 locked/offline slices passed the 18
   exact Kura replica tests and four exact configuration tests; the complete
-  527-test `G-UNIT` run, formal-engine receipts, and network corridors remain
+  530-test `G-UNIT` run, formal-engine receipts, and network corridors remain
   separate release obligations.
   One hundred six `_bug.cfg` controls deliberately weaken one boundary each and
   must produce the named invariant counterexample.
@@ -1036,8 +1040,8 @@ leaves remain source-bound and transitively checked through reviewed top-level
 consumers rather than being promoted into extra ledger rows. Machine-checked
 completion is evaluated over the same 54 obligations and the current ledger
 sets `machine_checked_completion: true`. That checked-in flag closes the
-legacy/revision-3-rooted status inventory, not the separate revision-4 proof
-boundary; release mode still requires fresh source-bound evidence.
+reviewed revision-4 status inventory, not fresh proof evidence by itself;
+release mode still requires source-bound evidence from the frozen candidate.
 `AdequateLeaderExactClosureResidualObligation` and
 `ExactDecisionOffSchedulerResidualConvergenceObligation` now both have pinned
 source proof bodies and are deductively classified support leaves in the
@@ -1127,8 +1131,8 @@ responsive validator's own durable decision must lead to its own durable
 application. Its source proof composes exact Decision-stage service from the
 five off-scheduler leaves and protected finite-runner closure. Its promoted
 status still requires a fresh strict run over that dependency cone for release.
-The legacy-named `LockedBodyReproposalProgressObligation` rejects vacuous view
-movement. Its first-release statement requires every stable available retained
+The historically named `LockedBodyReproposalProgressObligation` rejects
+vacuous view movement. Its first-release statement requires every stable available retained
 lock eventually to commit in its old round, be re-proposed unchanged under a
 later new same-round origin, or be legitimately decided or superseded by a
 higher certified Prepare lock. That promoted TLA+ target must pass its fresh
@@ -1454,7 +1458,7 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 860 named tests
+Before network startup, the executable wrapper inventories 865 named tests
 across 40 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -1575,11 +1579,16 @@ canonical-carrier completion regressions produced that historical 864-test,
 41-module checkpoint. Retiring the duplicate inline network-simulation rows
 brings the historical inventory to the 856-test, 40-module checkpoint. The
 exact retired-attempt accessor, mixed-carrier successor, two-link cold-restart
-hydration, and noncanonical autonomous-output retirement regressions bring the current
-inventory to 860 tests across 43 modules.
+hydration, noncanonical autonomous-output retirement, and the ordinary plus
+record-backed autonomous predecessor-durability regressions, followed by the
+three producer-publication-fence race regressions, bring the current
+inventory to 865 tests across 43 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 91 legs. The
-G-SCALE runner/validator preflight remains part of that sealed corridor.
+G-SCALE runner/validator preflight remains part of that sealed corridor. The
+fence rows prove that an exact lifecycle dequeue serializes both same-wire and
+unrelated producers until publication, and that abandoning an unpublished
+dequeue releases the producer without consuming the queued target.
 The first-release sidecar keeps wire protocol version 1 and uses positive
 `NonZeroU64` responder generation, requester epoch, and per-stream semantic
 sequence coordinates. Canonical request identity binds the version, all three
@@ -1651,7 +1660,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`b6457553bc8d41f74ebc708ea3d4e6187117f0f008da2c2dea697b0771741b44`.
+`9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1688,7 +1697,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The four integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 88 legs, including the governance-
+the complete pre-network corridor now spans 91 legs, including the governance-
 unlock audit module, the autonomous lifecycle-recovery module, and separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, and source-sealed
@@ -1849,8 +1858,8 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and the exact
-860-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 91 pre-network legs and the exact
+865-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer. The protected archived validator first publishes a no-clobber

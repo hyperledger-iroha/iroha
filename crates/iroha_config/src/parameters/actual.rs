@@ -1315,6 +1315,12 @@ impl Default for SoranetPuzzle {
 impl SoranetPow {
     /// Hard ceiling for either direction's puzzle-work capacity.
     pub const MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION: usize = 8;
+    /// Default capacity in each direction.
+    ///
+    /// Three concurrent jobs let every peer in the canonical four-validator
+    /// committee authenticate directly without serializing topology formation.
+    pub const DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION: NonZeroUsize =
+        NonZeroUsize::new(3).unwrap();
     /// Construct a PoW policy with explicit parameters.
     #[allow(clippy::too_many_arguments)]
     pub const fn new(
@@ -1334,8 +1340,8 @@ impl SoranetPow {
             max_future_skew,
             min_ticket_ttl,
             ticket_ttl,
-            outbound_mint_capacity: NonZeroUsize::new(1).unwrap(),
-            inbound_verify_capacity: NonZeroUsize::new(1).unwrap(),
+            outbound_mint_capacity: Self::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
+            inbound_verify_capacity: Self::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
             revocation_store_capacity,
             revocation_max_ttl,
             revocation_store_path,
@@ -1351,8 +1357,8 @@ impl SoranetPow {
             max_future_skew: Duration::from_secs(300),
             min_ticket_ttl: Duration::from_secs(30),
             ticket_ttl: Duration::from_secs(300),
-            outbound_mint_capacity: NonZeroUsize::new(1).unwrap(),
-            inbound_verify_capacity: NonZeroUsize::new(1).unwrap(),
+            outbound_mint_capacity: Self::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
+            inbound_verify_capacity: Self::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
             revocation_store_capacity: 8_192,
             revocation_max_ttl: Duration::from_secs(900),
             revocation_store_path: Cow::Borrowed("./storage/soranet/ticket_revocations.norito"),

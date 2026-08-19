@@ -6350,7 +6350,7 @@ impl SoranetHandshakePow {
         Self::default_max_future_skew()
     }
     const fn default_puzzle_work_capacity() -> NonZeroUsize {
-        nonzero!(1usize)
+        actual::SoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION
     }
     fn bound_puzzle_work_capacity(capacity: NonZeroUsize) -> NonZeroUsize {
         NonZeroUsize::new(

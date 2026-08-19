@@ -2066,33 +2066,6 @@ struct PendingFetch {
     task: BodyFetchTask,
     request_hash: Option<HashOf<wire::CertifiedBodyRequest>>,
 }
-/// One exact receiver-side response retained while its already-owned fetch
-/// completion waits for bounded ready-body or reducer capacity.
-///
-/// Fair ingress stops behind this carrier, so one slot is sufficient and
-/// retries cannot allocate another logical request. The runtime receipt stays
-/// attached until a non-backpressure outcome transfers its volatile terminal
-/// through [`V2EffectServices`].
-#[derive(Clone, Debug)]
-struct RetainedCertifiedBodyResponse {
-    response: wire::CertifiedBodyResponse,
-    authenticated_responder: PeerId,
-    ingress_ownership: FairV2IngressOwnershipEvidence,
-    certified_fence_escape_phase: RetainedCertifiedFenceEscapePhase,
-}
-/// One-shot certificate admission owned by a retained body-response episode.
-///
-/// `Fresh` may admit one new TC/CommitQC into the final physical slot.
-/// `Charged` means that credit is already represented by runtime ownership,
-/// and `Spent` prevents a later certificate from replenishing the same escape
-/// after the credited root drains. The phase disappears with the retained
-/// response, so a later independent response starts a new bounded episode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RetainedCertifiedFenceEscapePhase {
-    Fresh,
-    Charged,
-    Spent,
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StorePurpose {
     Reducer,
@@ -3211,7 +3184,6 @@ pub(crate) trait EffectRuntime {
     }
     fn queued_commands(&self) -> usize;
     fn remaining_completion_capacity(&self) -> usize;
-    fn has_certified_fence_escape_credit(&self) -> bool;
     fn queue_snapshot(&self, now: Instant) -> RuntimeQueueSnapshot;
     fn watchdog_threshold(&self) -> Duration;
 }
@@ -3643,9 +3615,6 @@ impl EffectRuntime for SerializedV2Runtime {
     fn remaining_completion_capacity(&self) -> usize {
         SerializedV2Runtime::remaining_completion_capacity(self)
     }
-    fn has_certified_fence_escape_credit(&self) -> bool {
-        SerializedV2Runtime::has_certified_fence_escape_credit(self)
-    }
     fn queue_snapshot(&self, now: Instant) -> RuntimeQueueSnapshot {
         SerializedV2Runtime::queue_snapshot(self, now)
     }
@@ -3702,7 +3671,6 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
         HashOf<wire::CertifiedBodyRequest>,
         super::v2_lifecycle_coordinator::RecoveredDecisionFetchDispatchKeyV1,
     >,
-    retained_certified_body_response: Option<RetainedCertifiedBodyResponse>,
     ready_bodies: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ReadyBody>,
     /// Last reducer incarnation whose executor-side view transition completed.
     reconciled_tag: Option<EventTag>,
@@ -4120,19 +4088,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         self.runtime
             .prepare_recovered_lifecycle_sign_completion(authority)
     }
-    /// Publish executor-retained owners and compare the retained-response target.
-    pub(crate) fn older_runtime_lifecycle_predates_retained_response(
-        &mut self,
-        now: Instant,
-        target_lifecycle_ordinal: u128,
-    ) -> Result<bool, EffectExecutorError> {
-        self.ensure_open()?;
-        self.publish_external_lifecycle_owners()?;
-        self.runtime
-            .older_lifecycle_predates_retained_response(now, target_lifecycle_ordinal)
-            .map_err(EffectExecutorError::Runtime)
-    }
-
     /// Arm the runtime pacemaker after all height startup work has completed.
     pub(in crate::sumeragi) fn arm_live_clocks(
         &mut self,
@@ -4164,7 +4119,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             || !self.recovered_decision_fetch_request_index_is_exact_and_empty()
             || self.retained_effect_batch.is_some()
             || self.parked_effect_batch.is_some()
-            || self.retained_certified_body_response.is_some()
             || self.pending_tip_recovery.is_some()
             || self.finality_completion.is_some()
             || self.runtime.queued_commands() != 0
@@ -4421,7 +4375,6 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             && self.finality_completion.is_some()
             && self.retained_effect_batch.is_none()
             && self.parked_effect_batch.is_none()
-            && self.retained_certified_body_response.is_none()
             && self.recovered_decision_fetch_request_index_is_exact_and_empty()
             && self.runtime.queued_commands() == 0
             && self.runtime.driver().ready_to_finish()
@@ -4652,23 +4605,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 ));
             }
         }
-        if let Some(retained) = &self.retained_certified_body_response {
-            let request_hash = retained.response.request_hash;
-            if !pending_hashes.contains(&request_hash) {
-                return Err(EffectTransportError::Authentication(
-                    V2TransportError::InconsistentRequestIndex(request_hash),
-                ));
-            }
-            if self
-                .outstanding_requests
-                .response_claim_hash(request_hash)
-                .is_some_and(|claimed| claimed != HashOf::new(&retained.response))
-            {
-                return Err(EffectTransportError::Authentication(
-                    V2TransportError::InconsistentRequestIndex(request_hash),
-                ));
-            }
-        }
         if pending_hashes.len() != self.certified_work.len()
             || pending_hashes.len() != self.outstanding_requests.len()
         {
@@ -4789,9 +4725,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         payload: &wire::ConsensusMessageV2Payload,
     ) -> bool {
         network_ingress_is_certified_fence_escape(payload)
-            || (self.retained_certified_body_response.is_none()
-                && (self.retained_effect_batch.is_none() && self.parked_effect_batch.is_none()
-                    || !Self::network_ingress_requires_reducer_order(payload)))
+            || (self.retained_effect_batch.is_none() && self.parked_effect_batch.is_none()
+                || !Self::network_ingress_requires_reducer_order(payload))
     }
     /// Return whether handling this outer ingress envelope can execute reducer
     /// control and must therefore stay behind retained effect debt. Transport
@@ -4894,7 +4829,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             outstanding_requests,
             recovered_decision_fetches: BTreeMap::new(),
             recovered_decision_fetch_by_request: BTreeMap::new(),
-            retained_certified_body_response: None,
             ready_bodies: BTreeMap::new(),
             reconciled_tag,
             protected_lock: None,
@@ -5011,7 +4945,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             && !self.output_guard.restart_required()
             && self.retained_effect_batch.is_none()
             && self.parked_effect_batch.is_none()
-            && self.retained_certified_body_response.is_none()
             && self.pending_work() < self.config.max_pending_work
     }
     /// Exact runtime FIFO capacity currently available to trusted completions.
@@ -9069,11 +9002,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "fresh selector changed the pending Fetch binding",
             ));
         }
-        if self.retained_certified_body_response.is_some() {
-            return Err(EffectTransportError::FailClosed(
-                "legacy retained response overlaps coordinator Fetch completion".to_owned(),
-            ));
-        }
         let key = (pending.task.round, pending.task.subject);
         if self.ready_bodies.contains_key(&key)
             || self.durable_bodies.contains_key(&key)
@@ -9164,186 +9092,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .remove(&prepared.body_pipeline_key)
             .expect("preflighted body-pipeline owner remains installed");
         assert_eq!(removed_owner, prepared.body_pipeline_owner);
-    }
-    /// Consume one certified response with the exact fair-ingress owner that
-    /// authenticated its semantic responder and canonical envelope.
-    pub(crate) fn accept_certified_body_response_with_ingress_ownership<S: V2EffectServices>(
-        &mut self,
-        response: wire::CertifiedBodyResponse,
-        authenticated_responder: &PeerId,
-        ingress_ownership: &FairV2IngressOwnershipEvidence,
-        services: &mut S,
-    ) -> Result<CompletionDisposition, EffectTransportError> {
-        if self.retained_certified_body_response.is_some() {
-            let result = Err(self.fail_closed_transport(
-                "a second certified body response crossed retained exact ingress ownership",
-                services,
-            ));
-            return self.complete_certified_body_response_ingress(
-                ingress_ownership,
-                result,
-                services,
-            );
-        }
-        let message = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response.clone()),
-        ));
-        if !ingress_ownership.validate_exact()
-            || !ingress_ownership.matches_message(&message)
-            || !ingress_ownership.matches_semantic_origin(Some(authenticated_responder))
-        {
-            let result = Err(self.fail_closed_transport(
-                "certified body response differs from its fair-ingress ownership",
-                services,
-            ));
-            self.complete_certified_body_response_ingress(ingress_ownership, result, services)
-        } else {
-            let carrier = RetainedCertifiedBodyResponse {
-                response: response.clone(),
-                authenticated_responder: authenticated_responder.clone(),
-                ingress_ownership: ingress_ownership.clone(),
-                certified_fence_escape_phase: if self.runtime.has_certified_fence_escape_credit() {
-                    RetainedCertifiedFenceEscapePhase::Charged
-                } else {
-                    RetainedCertifiedFenceEscapePhase::Fresh
-                },
-            };
-            let result = self.accept_certified_body_response_inner(
-                response,
-                authenticated_responder,
-                services,
-            );
-            match result {
-                Err(EffectTransportError::Backpressure) => {
-                    self.retained_certified_body_response = Some(carrier);
-                    Err(EffectTransportError::Backpressure)
-                }
-                result => self.complete_certified_body_response_ingress(
-                    ingress_ownership,
-                    result,
-                    services,
-                ),
-            }
-        }
-    }
-    /// Whether one exact receiver carrier is blocking later ingress while its
-    /// fetch completion waits for local capacity or a typed retryable service
-    /// handoff.
-    pub(crate) const fn has_retained_certified_body_response(&self) -> bool {
-        self.retained_certified_body_response.is_some()
-    }
-    /// Whether this retained response still owns its one opportunity to admit
-    /// a new certified fence escape ahead of the next retry.
-    pub(crate) fn retained_response_may_admit_certified_fence_escape(&mut self) -> bool {
-        self.reconcile_retained_response_certified_fence_escape_phase();
-        self.retained_certified_body_response
-            .as_ref()
-            .is_some_and(|carrier| {
-                carrier.certified_fence_escape_phase == RetainedCertifiedFenceEscapePhase::Fresh
-            })
-    }
-    /// Reconcile the episode latch with exact runtime ownership after an
-    /// ingress or pacemaker turn.
-    ///
-    /// A newly visible certified credit charges the fresh opportunity. Once
-    /// the last credited root disappears while Completion admission remains
-    /// closed, the opportunity is permanently spent for this response. A
-    /// runtime retry may make old certificate ownership visible again, but it
-    /// cannot reset `Spent` and therefore cannot authorize fresh ingress.
-    pub(crate) fn reconcile_retained_response_certified_fence_escape_phase(&mut self) {
-        let Some(carrier) = self.retained_certified_body_response.as_mut() else {
-            return;
-        };
-        let has_credit = self.runtime.has_certified_fence_escape_credit();
-        let completion_blocked = self.runtime.remaining_completion_capacity() == 0;
-        carrier.certified_fence_escape_phase = match carrier.certified_fence_escape_phase {
-            RetainedCertifiedFenceEscapePhase::Fresh if has_credit => {
-                RetainedCertifiedFenceEscapePhase::Charged
-            }
-            RetainedCertifiedFenceEscapePhase::Charged if !has_credit && completion_blocked => {
-                RetainedCertifiedFenceEscapePhase::Spent
-            }
-            phase => phase,
-        };
-    }
-    /// Actor-global position of the retained receiver carrier.
-    ///
-    /// Production ingress binds this receipt before the response leaves the
-    /// fair queue. Its ordinal lets the runner service only the carrier's
-    /// already-frozen completion prefix ahead of a later exact-Serve ticket.
-    pub(crate) fn retained_certified_body_response_scheduler_ordinal(
-        &self,
-    ) -> Result<Option<u128>, EffectExecutorError> {
-        let Some(carrier) = self.retained_certified_body_response.as_ref() else {
-            return Ok(None);
-        };
-        let runtime = carrier
-            .ingress_ownership
-            .leader_wire_runtime_receipt()
-            .ok_or_else(|| {
-                EffectExecutorError::Contract(
-                    "retained certified body response lost its leader-wire runtime receipt"
-                        .to_owned(),
-                )
-            })?;
-        let ordinal = runtime.token().scheduler_ordinal();
-        if runtime.owner().admission_ordinal() != ordinal {
-            return Err(EffectExecutorError::Contract(
-                "retained certified body response changed its shared scheduler ordinal".to_owned(),
-            ));
-        }
-        Ok(Some(ordinal))
-    }
-    /// Retry the sole retained response without admitting another physical
-    /// occurrence.
-    ///
-    /// A repeated capacity rejection or typed retryable service handoff
-    /// restores the byte-for-byte carrier and its immutable runtime receipt.
-    /// Every other outcome retires that receipt before returning, including
-    /// stale/authentication rejection and fail-closed errors.
-    pub(crate) fn retry_retained_certified_body_response<S: V2EffectServices>(
-        &mut self,
-        services: &mut S,
-    ) -> Result<Option<CompletionDisposition>, EffectTransportError> {
-        let Some(carrier) = self.retained_certified_body_response.take() else {
-            return Ok(None);
-        };
-        let result = self.accept_certified_body_response_inner(
-            carrier.response.clone(),
-            &carrier.authenticated_responder,
-            services,
-        );
-        match result {
-            Err(EffectTransportError::Backpressure) => {
-                self.retained_certified_body_response = Some(carrier);
-                Err(EffectTransportError::Backpressure)
-            }
-            result => self
-                .complete_certified_body_response_ingress(
-                    &carrier.ingress_ownership,
-                    result,
-                    services,
-                )
-                .map(Some),
-        }
-    }
-    fn complete_certified_body_response_ingress<S: V2EffectServices>(
-        &mut self,
-        ingress_ownership: &FairV2IngressOwnershipEvidence,
-        result: Result<CompletionDisposition, EffectTransportError>,
-        services: &mut S,
-    ) -> Result<CompletionDisposition, EffectTransportError> {
-        if let Some(runtime) = ingress_ownership.leader_wire_runtime_receipt()
-            && let Err(error) = services.complete_leader_wire_runtime_terminal(
-                LeaderWireRuntimeTerminal::Volatile(runtime.clone()),
-            )
-        {
-            return Err(self.fail_closed_transport(
-                format!("certified body response terminal transfer failed: {error}"),
-                services,
-            ));
-        }
-        result
     }
     /// Authenticate a certified response against the exact outstanding signed
     /// request, rederive its canonical DA manifest, then enqueue body

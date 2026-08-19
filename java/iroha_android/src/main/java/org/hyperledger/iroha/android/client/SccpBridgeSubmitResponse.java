@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sccp.SccpNetworkV1;
@@ -192,6 +193,10 @@ public final class SccpBridgeSubmitResponse {
     if (payload.creationTimeMs() != creationTimeMs) {
       throw new IllegalArgumentException(
           "transaction payload creation time does not match creation_time_ms");
+    }
+    if (payload.admissionIntent() != TransactionAdmissionIntent.QUEUE_PLAN_SYNCED) {
+      throw new IllegalArgumentException(
+          "transaction payload admission intent must be QueuePlanSynced");
     }
     return bytes;
   }

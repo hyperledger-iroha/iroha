@@ -613,7 +613,7 @@ fn applied_height_reconstruction_covers(
         ExactOutputRolloverClaim::DurableCommitCertificateResponse { .. }
             | ExactOutputRolloverClaim::DurableCertifiedBodyResponse { .. }
             | ExactOutputRolloverClaim::DurableLaneCertificateResponse { .. }
-            | ExactOutputRolloverClaim::HistoricalAutonomousLaneCertification { .. }
+            | ExactOutputRolloverClaim::HistoricalLaneCertification { .. }
             | ExactOutputRolloverClaim::HistoricalLaneRecoveryResponse { .. }
     ) {
         return durable_history_source_covers(

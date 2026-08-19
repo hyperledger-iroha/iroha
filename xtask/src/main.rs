@@ -13763,10 +13763,13 @@ async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query_store = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
         World::default(),
         kura.clone(),
         query_store,
+        cfg.common.chain.clone(),
+        network_id,
     ));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: EventsSender = tokio::sync::broadcast::channel(1).0;
@@ -13775,7 +13778,7 @@ async fn generate_router_openapi_async() -> Result<Option<Value>, Box<dyn Error>
     let _peers_tx_guard = peers_tx;
     let torii = iroha_torii::Torii::new_with_handle(
         cfg.common.chain.clone(),
-        iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash),
+        network_id,
         kiso,
         cfg.torii.clone(),
         queue,

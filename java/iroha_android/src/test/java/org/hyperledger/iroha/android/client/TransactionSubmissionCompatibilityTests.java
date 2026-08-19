@@ -16,6 +16,7 @@ import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
@@ -284,6 +285,7 @@ public final class TransactionSubmissionCompatibilityTests {
             .setInstructionBytes(new byte[] {(byte) seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)
             .setNonce(seed + 1L)
+            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
             .setMetadata(
                 Collections.singletonMap("note", "compat-" + seed))
             .build();

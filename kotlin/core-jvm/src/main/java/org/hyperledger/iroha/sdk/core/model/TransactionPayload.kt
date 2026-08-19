@@ -7,6 +7,15 @@ import org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachment
 private const val MAX_U32 = 0xffff_ffffL
 private const val DEFAULT_TRANSACTION_TTL_MS = 100_000L
 
+/** Signature-bound admission protocol required before a transaction may execute. */
+enum class TransactionAdmissionIntent {
+    /** Ordinary queue admission without a globally certified QueuePlan owner. */
+    ORDINARY,
+
+    /** Require an exact quorum-certified QueuePlan registry owner before execution. */
+    QUEUE_PLAN_SYNCED,
+}
+
 /**
  * Representation of a transaction payload prior to Norito encoding.
  *
@@ -25,6 +34,7 @@ class TransactionPayload(
     val timeToLiveMs: Long? = DEFAULT_TRANSACTION_TTL_MS,
     val nonce: Long? = null,
     val feePayment: FeePaymentIntent,
+    val admissionIntent: TransactionAdmissionIntent = TransactionAdmissionIntent.ORDINARY,
     metadata: Map<String, JsonValue> = emptyMap(),
     attachments: List<ProofAttachment>? = null,
 ) {
@@ -63,6 +73,7 @@ class TransactionPayload(
         timeToLiveMs: Long? = this.timeToLiveMs,
         nonce: Long? = this.nonce,
         feePayment: FeePaymentIntent = this.feePayment,
+        admissionIntent: TransactionAdmissionIntent = this.admissionIntent,
         metadata: Map<String, JsonValue> = this.metadata,
         attachments: List<ProofAttachment>? = this.attachments,
     ): TransactionPayload = TransactionPayload(
@@ -73,6 +84,7 @@ class TransactionPayload(
         timeToLiveMs = timeToLiveMs,
         nonce = nonce,
         feePayment = feePayment,
+        admissionIntent = admissionIntent,
         metadata = metadata,
         attachments = attachments,
     )
@@ -87,6 +99,7 @@ class TransactionPayload(
             && timeToLiveMs == other.timeToLiveMs
             && nonce == other.nonce
             && feePayment == other.feePayment
+            && admissionIntent == other.admissionIntent
             && _metadata == other._metadata
             && _attachments == other._attachments
     }
@@ -99,6 +112,7 @@ class TransactionPayload(
         result = 31 * result + (timeToLiveMs?.hashCode() ?: 0)
         result = 31 * result + (nonce?.hashCode() ?: 0)
         result = 31 * result + feePayment.hashCode()
+        result = 31 * result + admissionIntent.hashCode()
         result = 31 * result + _metadata.hashCode()
         result = 31 * result + (_attachments?.hashCode() ?: 0)
         return result

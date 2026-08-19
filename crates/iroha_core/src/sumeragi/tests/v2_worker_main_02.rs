@@ -59,9 +59,9 @@ fn unified_lifecycle_take_restores_an_ordinary_held_head_exactly() {
 
     assert!(matches!(
         service
-            .take_next_recovered_lifecycle_completion()
+            .take_next_lifecycle_completion()
             .expect("ordinary completion classification is non-fatal"),
-        RecoveredLifecycleCompletionTakeV1::PassThrough
+        LifecycleCompletionTakeV1::PassThrough
     ));
     assert!(matches!(
         service.held_io_completion.as_ref(),
@@ -70,9 +70,9 @@ fn unified_lifecycle_take_restores_an_ordinary_held_head_exactly() {
 
     assert!(matches!(
         service
-            .take_next_recovered_lifecycle_completion()
+            .take_next_lifecycle_completion()
             .expect("repeated classification observes the same ordinary head"),
-        RecoveredLifecycleCompletionTakeV1::PassThrough
+        LifecycleCompletionTakeV1::PassThrough
     ));
     assert!(matches!(
         service.held_io_completion.as_ref(),

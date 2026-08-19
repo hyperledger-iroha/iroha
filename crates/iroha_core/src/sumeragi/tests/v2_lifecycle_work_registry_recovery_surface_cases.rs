@@ -612,9 +612,7 @@ fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
             "shared validated authority helper omitted {required}"
         );
     }
-    let recovery_parent = include_str!(
-        "../v2_lifecycle_work_registry_validate_recovery_parent.rs"
-    );
+    let recovery_parent = include_str!("../v2_lifecycle_work_registry_validate_recovery_parent.rs");
     let fixture_only = recovery_parent
         .split("#[cfg(test)]\nimpl super::concrete_admission::LifecycleWorkRegistryHolder {")
         .nth(1)
@@ -632,8 +630,7 @@ fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
         .checked_sub(fixture_helper_uses)
         .expect("test-only helper calls are part of the reviewed expanded source");
     assert_eq!(
-        production_helper_uses,
-        8,
+        production_helper_uses, 8,
         "the shared helper definition and seven production consumers must remain exact"
     );
     let declarations = registry_production
@@ -1216,7 +1213,7 @@ fn recovered_decision_apply_terminal_settlement_is_exact_and_post_fsync_infallib
     assert!(runtime.contains("fn prepare_recovered_decision_apply_completion("));
     assert!(executor.contains("fn commit_recovered_decision_apply_finality("));
     let classifier = worker
-        .split_once("fn take_next_recovered_lifecycle_completion(")
+        .split_once("fn take_next_lifecycle_completion(")
         .expect("the worker has one unified lifecycle completion classifier")
         .1
         .split_once("pub(in crate::sumeragi) fn drain_recovered_lifecycle_sign_completion(")
@@ -1225,7 +1222,7 @@ fn recovered_decision_apply_terminal_settlement_is_exact_and_post_fsync_infallib
     for required in [
         "V2IoCompletion::RecoveredDecisionApply(guarded)",
         "prepare_recovered_decision_apply_ack(key, Arc::clone(&self.output_guard))",
-        "RecoveredLifecycleCompletionTakeV1::Apply(",
+        "LifecycleCompletionTakeV1::Apply(",
     ] {
         assert!(
             classifier.contains(required),
@@ -1233,14 +1230,14 @@ fn recovered_decision_apply_terminal_settlement_is_exact_and_post_fsync_infallib
         );
     }
     let driver = turn_driver
-        .split_once("match self.services.take_next_recovered_lifecycle_completion()")
+        .split_once("match self.services.take_next_lifecycle_completion()")
         .expect("the Completion turn uses the unified physical-head classifier")
         .1
         .split_once("let selected = match self.owner.classify_completion_ready_work()")
         .expect("completion draining precedes fresh Ready-work planning")
         .0;
     for required in [
-        "RecoveredLifecycleCompletionTakeV1::Apply(completion)",
+        "LifecycleCompletionTakeV1::Apply(completion)",
         ".settle_recovered_decision_apply_completion_owner(completion, lane_work)",
         "ProductionRecoveredDecisionApplyCompletionV1::Applied",
     ] {

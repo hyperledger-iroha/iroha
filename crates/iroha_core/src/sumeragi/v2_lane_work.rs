@@ -1492,7 +1492,7 @@ fn lane_fanout_height(message: &BlockMessage) -> Option<u64> {
         _ => None,
     }
 }
-fn validate_winning_lane_output(
+pub(crate) fn validate_winning_lane_output(
     message: &BlockMessage,
     proposal: &LaneBlockProposalV1,
     signer_pops: &BTreeMap<PublicKey, Vec<u8>>,
@@ -1653,11 +1653,11 @@ fn project_lane_session_signer_pops(
 }
 /// Validate an earlier-height lane output against its certified Kura source.
 ///
-/// Once a full Prepare/Commit certificate is durable, proposal and QC output
-/// can be reconstructed directly and any earlier valid vote is superseded by
-/// that stronger exact decision. This lets a later global-height service
-/// retire actor-backpressured historical output without depending on the
-/// already-drained in-memory session cache.
+/// Once a full Prepare/Commit certificate and its application receipt are
+/// durable, proposal and QC output can be reconstructed directly and any
+/// earlier valid vote is superseded by that stronger exact decision. This lets
+/// a later global-height service retire actor-backpressured historical output
+/// without depending on the already-drained in-memory session cache.
 pub(crate) fn durable_historical_lane_output_source_hash(
     kura: &Kura,
     message: &BlockMessage,
@@ -1684,6 +1684,14 @@ pub(crate) fn durable_historical_lane_output_source_hash(
     if durable.proposal.proposal_hash != proposal_hash {
         return Ok(None);
     }
+    let Some(receipt) = kura.read_lane_block_application_receipt(lane_id, lane_block_height) else {
+        return Ok(None);
+    };
+    if receipt.proposal != durable.proposal {
+        return Err(
+            "historical lane application receipt differs from its certified Kura source".to_owned(),
+        );
+    }
     if let Err(retained_error) =
         validate_winning_lane_output(message, &durable.proposal, &durable.signer_pops)
     {
@@ -1697,9 +1705,11 @@ pub(crate) fn durable_historical_lane_output_source_hash(
         validate_winning_lane_output(message, &durable.proposal, &signer_pops)?;
     }
     let durable_hash = HashOf::new(&durable);
+    let receipt_hash = HashOf::new(&receipt);
     Ok(Some(Hash::new_from_chunks(&[
         b"iroha:sumeragi:v2:historical-lane-output-source:v1\0",
         durable_hash.as_ref(),
+        receipt_hash.as_ref(),
         HashOf::new(message).as_ref(),
     ])))
 }
@@ -15746,8 +15756,6 @@ impl V2LaneWorkAdapter {
         }
         let local_is_leader =
             self.local_validator_index() == Some(self.context.leader(active_view));
-        let pending_queue_plan_admissions =
-            self.reconcile_pending_queue_plan_admissions(active_view)?;
         self.drive_lane_drain(active_view)?;
         let expected_epoch = self
             .state
@@ -15834,20 +15842,7 @@ impl V2LaneWorkAdapter {
                         .find(|candidate| candidate.epoch_id == expected_epoch)
                 })
             };
-            self.state
-                .merge_candidate_with_queue_plan_admissions(
-                    &parent_header,
-                    active_view,
-                    base,
-                    pending_queue_plan_admissions,
-                )
-                .map_err(|error| {
-                    V2LaneWorkError::Persistence(format!(
-                        "pending QueuePlan admissions cannot be attached to the canonical merge candidate: {error}"
-                    ))
-                })?
-                .into_iter()
-                .collect()
+            base.into_iter().collect()
         } else {
             Vec::new()
         };
@@ -15928,7 +15923,8 @@ impl V2LaneWorkAdapter {
         &mut self,
         active_view: wire::View,
     ) -> Result<bool, V2LaneWorkError> {
-        self.refresh_merge_candidates(active_view)?;
+        self.queue_plan_admission_handoff_retry_required = false;
+        let _ = self.reconcile_pending_queue_plan_admissions(active_view)?;
         Ok(!self.queue_plan_admission_handoff_retry_required)
     }
 
@@ -17385,13 +17381,25 @@ pub(super) mod tests {
     /// Persist one exact certified lane artifact for worker rollover tests.
     pub(in crate::sumeragi) fn durable_lane_history_fixture() -> DurableLaneHistoryFixture {
         let (adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
-        let (_, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        let (block, proposal) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        adapter
+            .kura
+            .store_block(block.clone())
+            .expect("persist durable lane-history carrier");
+        let committed = ValidBlock::committed_from_replay_signed_block(block);
+        commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
         let session = committed_lane_session(&proposal, &keys);
         let pops = adapter.pops_for_lane_session(&session);
         adapter
             .kura
             .persist_committed_lane_block_session(&session, &pops)
             .expect("persist durable lane-history fixture");
+        assert!(
+            adapter
+                .kura
+                .persist_lane_block_application_receipt_if_ready(&proposal)
+                .expect("persist durable lane-history application receipt")
+        );
         let certificate = LaneBlockCertificateV1 {
             proposal: session.proposal,
             prepare_qc: session.prepare_qc,
@@ -18216,7 +18224,6 @@ pub(super) mod tests {
             activation_root: Hash::new(b"v2 direct-decision sidecar activations"),
             lane_snapshots: Vec::new(),
             lane_drain_certificates: Vec::new(),
-            queue_plan_admissions: Vec::new(),
             execution_batch: None,
             global_state_root: Hash::new(b"v2 direct-decision sidecar state"),
             merge_qc: reference.merge_qc,
@@ -22600,6 +22607,14 @@ pub(super) mod tests {
             .kura
             .persist_committed_lane_block_session(&retained, &lane_signer_pops(&keys[..3]))
             .expect("persist one exact 3-of-4 lane certificate");
+        let committed = ValidBlock::committed_from_replay_signed_block(block);
+        commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
+        assert!(
+            adapter
+                .kura
+                .persist_lane_block_application_receipt_if_ready(&proposal)
+                .expect("persist historical lane application receipt")
+        );
         let alternative = lane_qc_for_phase(&proposal, &keys[1..], CertPhase::Commit);
         assert_ne!(
             retained.commit_qc.signers_bitmap, alternative.signers_bitmap,
@@ -25177,15 +25192,13 @@ pub(super) mod tests {
             "the recovered application witness must unblock the lane frontier"
         );
         let delayed_prepare_qc = lane_qc_for_phase(&proposal, &keys[..3], CertPhase::Prepare);
-        assert_ne!(
-            accept_lane_message_from(
-                &mut successor,
-                BlockMessage::LaneBlockQc(delayed_prepare_qc),
-                PeerId::new(keys[0].public_key().clone()),
-                0,
-            ),
-            V2LaneIngressOutcome::Rejected,
-            "a delayed valid historical QC remains admissible"
+        let delayed_prepare_pops = successor.pops_for_lane_qc(&delayed_prepare_qc);
+        assert_eq!(
+            successor
+                .lane_sessions
+                .insert_qc_with_pops(delayed_prepare_qc, &delayed_prepare_pops),
+            Ok(LaneBlockSessionInsertOutcome::Inserted),
+            "model a terminal QC restored from a bounded volatile cache"
         );
         assert!(
             !successor.has_pending_historical_recovery(),

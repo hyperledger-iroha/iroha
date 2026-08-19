@@ -26,6 +26,10 @@
           "charge_limits": []
         }
       },
+      "admission_intent": {
+        "intent": "queue_plan_synced",
+        "value": null
+      },
       "metadata": {}
     }
   },
@@ -56,6 +60,10 @@
           "charge_limits": []
         }
       },
+      "admission_intent": {
+        "intent": "queue_plan_synced",
+        "value": null
+      },
       "metadata": {}
     }
   },
@@ -85,6 +93,10 @@
         "value": {
           "charge_limits": []
         }
+      },
+      "admission_intent": {
+        "intent": "queue_plan_synced",
+        "value": null
       },
       "metadata": {}
     }

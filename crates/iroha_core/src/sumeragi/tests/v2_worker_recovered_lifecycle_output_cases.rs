@@ -459,9 +459,9 @@ fn recovered_lifecycle_sign_queue_retains_exact_owner_through_opaque_extraction(
     });
     assert!(matches!(
         service
-            .take_next_recovered_lifecycle_completion()
+            .take_next_lifecycle_completion()
             .expect("ordinary head is one lifecycle pass-through"),
-        RecoveredLifecycleCompletionTakeV1::PassThrough
+        LifecycleCompletionTakeV1::PassThrough
     ));
     let mut executor = V2EffectExecutor::with_runtime(
         SaturatedCompletionRuntime::new(0, 8),
@@ -746,8 +746,8 @@ fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extracti
             ownership_position,
         )
         .expect("acknowledge the ordinary predecessor only");
-    let RecoveredLifecycleCompletionTakeV1::DecisionFetch(retained) = service
-        .take_next_recovered_lifecycle_completion()
+    let LifecycleCompletionTakeV1::DecisionFetch(retained) = service
+        .take_next_lifecycle_completion()
         .expect("classify the parked recovered Fetch completion")
     else {
         panic!("the unified completion classifier must retain the recovered Fetch owner");

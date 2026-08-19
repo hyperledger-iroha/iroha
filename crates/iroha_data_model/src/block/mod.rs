@@ -68,7 +68,8 @@ pub use execution_context::{
     AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1, AutonomousLanePayloadEnvelopeV1,
     BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1, BlockExecutionContextBundle,
     CertifiedMergeLedgerReference, ExternalExecutionContext, ExternalExecutionRouteLeg,
-    ExternalExecutionRouteRole,
+    ExternalExecutionRouteRole, MAX_QUEUE_PLAN_ADMISSION_BYTES, MAX_QUEUE_PLAN_ADMISSIONS_BYTES,
+    MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK, queue_plan_admissions_within_limits,
 };
 pub use header::{BlockHeader as Header, BlockHeader, BlockSignature};
 pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
@@ -1817,7 +1818,6 @@ mod tests {
             ),
             execution_batch: None,
             lane_drain_certificates: Vec::new(),
-            queue_plan_admissions: Vec::new(),
         };
         let execution_context = BlockExecutionContextBundle::new(Vec::new())
             .with_merge_entry(CertifiedMergeLedgerReference::new(&entry));

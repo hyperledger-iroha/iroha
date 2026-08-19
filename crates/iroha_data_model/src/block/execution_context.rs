@@ -19,6 +19,28 @@ use norito::codec::{Decode, Encode};
 pub const AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1: u8 = 1;
 /// Current-only first-release block execution-context bundle layout.
 pub const BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1: u8 = 1;
+/// Maximum number of globally ordered queue-plan admission controls in one block.
+pub const MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK: usize = 4_096;
+/// Maximum canonical size of one opaque queue-plan admission certificate.
+pub const MAX_QUEUE_PLAN_ADMISSION_BYTES: usize = 1024 * 1024;
+/// Maximum aggregate queue-plan admission bytes carried by one block.
+pub const MAX_QUEUE_PLAN_ADMISSIONS_BYTES: usize = 4 * 1024 * 1024;
+/// Return whether opaque queue-plan admission bytes fit their block envelope.
+#[must_use]
+pub fn queue_plan_admissions_within_limits(admissions: &[Vec<u8>]) -> bool {
+    if admissions.len() > MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK {
+        return false;
+    }
+    admissions
+        .iter()
+        .try_fold(0_usize, |total, admission| {
+            if admission.is_empty() || admission.len() > MAX_QUEUE_PLAN_ADMISSION_BYTES {
+                return None;
+            }
+            total.checked_add(admission.len())
+        })
+        .is_some_and(|total| total <= MAX_QUEUE_PLAN_ADMISSIONS_BYTES)
+}
 /// Role of one route leg in an external execution plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(tag = "role", content = "detail", rename_all = "snake_case")]
@@ -259,6 +281,13 @@ pub struct BlockExecutionContextBundle {
     pub autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
     /// Lane-local payload ownership and RBC instance identities aligned by block entrypoint index.
     pub lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
+    /// Canonical framed queue-plan admission certificates in strict source order.
+    ///
+    /// The concrete certificate type belongs to `iroha_core`, so the data
+    /// model retains exact canonical bytes without introducing a dependency
+    /// cycle. Runtime admission decodes, authenticates, and stages the
+    /// certificate bindings through an immutable WSV compare-and-set.
+    pub queue_plan_admissions: Vec<Vec<u8>>,
     /// Merge-committee-certified entry applied before ordinary block entrypoints.
     pub merge_entry: Option<CertifiedMergeLedgerReference>,
 }
@@ -278,6 +307,7 @@ impl BlockExecutionContextBundle {
             external,
             autonomous_lane_payloads: Vec::new(),
             lane_payload_ownerships: Vec::new(),
+            queue_plan_admissions: Vec::new(),
             merge_entry: None,
         }
     }
@@ -299,6 +329,17 @@ impl BlockExecutionContextBundle {
         self.lane_payload_ownerships = lane_payload_ownerships;
         self
     }
+    /// Attach globally ordered queue-plan admission certificate bytes.
+    #[must_use]
+    pub fn with_queue_plan_admissions(mut self, queue_plan_admissions: Vec<Vec<u8>>) -> Self {
+        self.queue_plan_admissions = queue_plan_admissions;
+        self
+    }
+    /// Return the exact queue-plan admission certificate bytes carried by this bundle.
+    #[must_use]
+    pub fn queue_plan_admissions(&self) -> &[Vec<u8>] {
+        &self.queue_plan_admissions
+    }
     /// Attach a merge-ledger entry reference to this bundle.
     #[must_use]
     pub fn with_merge_entry(mut self, merge_entry: CertifiedMergeLedgerReference) -> Self {
@@ -311,6 +352,7 @@ impl BlockExecutionContextBundle {
         self.external.is_empty()
             && self.autonomous_lane_payloads.is_empty()
             && self.lane_payload_ownerships.is_empty()
+            && self.queue_plan_admissions.is_empty()
             && self.merge_entry.is_none()
     }
 }
@@ -358,7 +400,6 @@ mod tests {
             ),
             execution_batch: None,
             lane_drain_certificates: Vec::new(),
-            queue_plan_admissions: Vec::new(),
         }
     }
     fn sample_execution_batch() -> MergeExecutionBatch {
@@ -505,11 +546,47 @@ mod tests {
         let bundle = BlockExecutionContextBundle::new(Vec::new());
         assert_eq!(bundle.version, BlockExecutionContextBundle::VERSION);
         assert!(bundle.autonomous_lane_payloads.is_empty());
+        assert!(bundle.queue_plan_admissions().is_empty());
         assert!(bundle.is_empty());
         let encoded = norito::to_bytes(&bundle).expect("empty current bundle encodes");
         let decoded: BlockExecutionContextBundle =
             norito::decode_from_bytes(&encoded).expect("required empty anchor decodes");
         assert_eq!(decoded, bundle);
+    }
+    #[test]
+    fn block_execution_context_bundle_roundtrips_queue_plan_admissions() {
+        let admissions = vec![vec![0xA5, 0x5A], vec![0x01, 0x02, 0x03]];
+        let bundle = BlockExecutionContextBundle::new(Vec::new())
+            .with_queue_plan_admissions(admissions.clone());
+        assert_eq!(bundle.queue_plan_admissions(), admissions.as_slice());
+        assert!(!bundle.is_empty());
+        let encoded = norito::to_bytes(&bundle).expect("queue-plan admission bundle encodes");
+        let decoded: BlockExecutionContextBundle =
+            norito::decode_from_bytes(&encoded).expect("queue-plan admission bundle decodes");
+        assert_eq!(decoded.queue_plan_admissions(), admissions.as_slice());
+        assert_eq!(decoded, bundle);
+    }
+    #[test]
+    fn queue_plan_admission_limits_are_inclusive() {
+        assert!(queue_plan_admissions_within_limits(&[vec![
+            0xA5;
+            MAX_QUEUE_PLAN_ADMISSION_BYTES
+        ]]));
+        assert!(!queue_plan_admissions_within_limits(&[Vec::new()]));
+        assert!(!queue_plan_admissions_within_limits(&[vec![
+            0xA5;
+            MAX_QUEUE_PLAN_ADMISSION_BYTES
+                + 1
+        ]]));
+        assert!(!queue_plan_admissions_within_limits(&vec![
+            vec![0xA5];
+            MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK
+                + 1
+        ]));
+        assert!(!queue_plan_admissions_within_limits(&vec![
+            vec![0xA5; MAX_QUEUE_PLAN_ADMISSION_BYTES];
+            MAX_QUEUE_PLAN_ADMISSIONS_BYTES / MAX_QUEUE_PLAN_ADMISSION_BYTES + 1
+        ]));
     }
     #[test]
     fn block_execution_context_bundle_roundtrips_autonomous_lane_payloads() {
@@ -560,6 +637,7 @@ mod tests {
             external: Vec<ExternalExecutionContext>,
             autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
             lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
+            queue_plan_admissions: Vec<Vec<u8>>,
             merge_entry: Option<CertifiedMergeLedgerReference>,
         }
         #[derive(Encode)]
@@ -567,6 +645,7 @@ mod tests {
             version: u8,
             external: Vec<ExternalExecutionContext>,
             lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
+            queue_plan_admissions: Vec<Vec<u8>>,
             merge_entry: Option<CertifiedMergeLedgerReference>,
         }
         #[derive(Encode)]
@@ -581,6 +660,7 @@ mod tests {
             external: Vec<ExternalExecutionContext>,
             autonomous_lane_payloads: Vec<AutonomousLanePayloadEnvelopeV1>,
             lane_payload_ownerships: Vec<SumeragiLanePayloadOwnership>,
+            merge_entry: Option<CertifiedMergeLedgerReference>,
         }
         let legacy_external = LegacyExternalExecutionContext {
             entrypoint_hash: entrypoint_hash(b"legacy-external"),
@@ -598,6 +678,7 @@ mod tests {
             external: Vec::new(),
             autonomous_lane_payloads: Vec::new(),
             lane_payload_ownerships: Vec::new(),
+            queue_plan_admissions: Vec::new(),
             merge_entry: None,
         }
         .encode();
@@ -609,6 +690,7 @@ mod tests {
             version: BlockExecutionContextBundle::VERSION,
             external: Vec::new(),
             lane_payload_ownerships: Vec::new(),
+            queue_plan_admissions: Vec::new(),
             merge_entry: None,
         }
         .encode();
@@ -631,11 +713,12 @@ mod tests {
             external: Vec::new(),
             autonomous_lane_payloads: Vec::new(),
             lane_payload_ownerships: Vec::new(),
+            merge_entry: None,
         }
         .encode();
         assert!(
             BlockExecutionContextBundle::decode(&mut previous.as_slice()).is_err(),
-            "the bundle layout omitting its merge field must fail closed"
+            "the bundle layout omitting queue-plan admissions must fail closed"
         );
     }
     #[test]

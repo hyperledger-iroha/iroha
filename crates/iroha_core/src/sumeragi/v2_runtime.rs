@@ -11320,12 +11320,6 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     external_lifecycle_owner_capacity: usize,
     schedule: ScheduleState,
     last_scheduler_ownership: Option<RuntimeSchedulerOwnershipEvidence>,
-    /// Retained certified-response target whose older runnable prefix receives
-    /// one bounded opportunity before response handling.
-    retained_response_predecessor_target_ordinal: Option<u128>,
-    /// Whether one older FIFO owner already received its bounded attempt for
-    /// the retained-response target.
-    retained_response_predecessor_retry_attempted: bool,
     fail_closed: bool,
     fail_closed_reason: Option<String>,
 }
@@ -11416,8 +11410,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             external_lifecycle_owner_capacity: MAX_EFFECTS_PER_STEP,
             schedule: ScheduleState::default(),
             last_scheduler_ownership: None,
-            retained_response_predecessor_target_ordinal: None,
-            retained_response_predecessor_retry_attempted: false,
             fail_closed: false,
             fail_closed_reason: None,
         };
@@ -13123,60 +13115,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn minimum_active_lifecycle_ordinal(&self) -> Result<Option<u128>, EnqueueError> {
         self.minimum_active_lifecycle_ordinal_excluding(&[])
     }
-    /// Oldest owner which can actually consume one serialized runner turn.
-    ///
-    /// This deliberately differs from the complete active-owner inventory.
-    /// Proposal reservations, pending asynchronous tasks, reserved completion
-    /// slots, and dormant replay capacity remain exact live capabilities, but
-    /// no call to `step` can service them until their completion is admitted.
-    /// Treating those passive capabilities as Serve predecessors creates an
-    /// unbounded runner `continue` loop around a ticket that no executor turn
-    /// can discharge.
-    fn minimum_runnable_lifecycle_ordinal(
-        &self,
-        now: Instant,
-    ) -> Result<Option<u128>, EnqueueError> {
-        // First validate the complete inventory so excluding passive owners
-        // cannot conceal a forged or internally inconsistent capability.
-        let _ = self.minimum_active_lifecycle_ordinal()?;
-        let mut minimum = self.ingress.oldest_lifecycle_ordinal()?;
-        let mut observe = |owner: &RuntimeLifecycleOwner| {
-            if !owner.validate_exact() {
-                return Err(EnqueueError::FailClosed);
-            }
-            minimum = Some(minimum.map_or(owner.lifecycle_ordinal(), |ordinal| {
-                ordinal.min(owner.lifecycle_ordinal())
-            }));
-            Ok(())
-        };
-        if self.driver.deferred_work_is_serviceable() {
-            for admission_ordinal in self.eligible_deferred_admission_ordinals()? {
-                let owner = self
-                    .deferred_lifecycle_ownership
-                    .get(&admission_ordinal)
-                    .ok_or(EnqueueError::FailClosed)?;
-                observe(owner.owner())?;
-            }
-        }
-        if self.clocks_armed {
-            let timeout_due = !self.timeout_emitted
-                && now.saturating_duration_since(self.round_started_at)
-                    >= round_timeout_for_view(self.base_round_timeout, self.round_tag.view());
-            if timeout_due {
-                let owner = self
-                    .timeout_owner
-                    .as_ref()
-                    .ok_or(EnqueueError::FailClosed)?;
-                observe(owner)?;
-            } else if now.saturating_duration_since(self.retransmit_started_at)
-                >= self.retransmit_interval
-                && let Some(owner) = &self.retransmit_owner
-            {
-                observe(owner)?;
-            }
-        }
-        Ok(minimum)
-    }
     /// Return the oldest exact active owner after removing only aliases of the
     /// supplied blocked adapter-deferred set.
     fn minimum_active_lifecycle_ordinal_excluding(
@@ -13462,66 +13400,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         Ok(false)
     }
 
-    /// Return whether one runnable owner strictly predates a retained
-    /// certified-response target without mutating selected-Serve observation state.
-    pub(crate) fn older_lifecycle_predates_retained_response(
-        &mut self,
-        now: Instant,
-        serve_lifecycle_ordinal: u128,
-    ) -> Result<bool, String> {
-        if self.fail_closed {
-            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
-        }
-        let recognized = match self
-            .ingress
-            .lifecycle_ordinals
-            .recognizes_minted(serve_lifecycle_ordinal)
-        {
-            Ok(recognized) => recognized,
-            Err(reason) => {
-                self.latch_fail_closed(reason.clone());
-                return Err(reason);
-            }
-        };
-        if !recognized {
-            self.latch_fail_closed("exact Serve barrier used an unminted lifecycle ordinal");
-            return Err("Sumeragi v2 exact Serve barrier ordinal was invalid".to_owned());
-        }
-        if self.freeze_due_clock_owners(now).is_err() {
-            self.latch_fail_closed("clock lifecycle ownership could not be frozen for Serve");
-            return Err("Sumeragi v2 clock lifecycle ownership could not be frozen".to_owned());
-        }
-        let collision = match self.active_lifecycle_uses_ordinal(serve_lifecycle_ordinal) {
-            Ok(collision) => collision,
-            Err(_) => {
-                self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
-                return Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned());
-            }
-        };
-        if collision {
-            self.latch_fail_closed("runtime and Serve claimed one lifecycle ordinal");
-            return Err("Sumeragi v2 lifecycle ordinal ownership collided".to_owned());
-        }
-        if self.retained_response_predecessor_target_ordinal != Some(serve_lifecycle_ordinal) {
-            self.retained_response_predecessor_target_ordinal = Some(serve_lifecycle_ordinal);
-            self.retained_response_predecessor_retry_attempted = false;
-        }
-        let minimum = match self.minimum_runnable_lifecycle_ordinal(now) {
-            Ok(minimum) => minimum,
-            Err(_) => {
-                self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
-                return Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned());
-            }
-        };
-        let predecessor_exists = minimum.is_some_and(|ordinal| ordinal < serve_lifecycle_ordinal);
-        if self.retained_response_predecessor_retry_attempted {
-            if !predecessor_exists {
-                self.retained_response_predecessor_retry_attempted = false;
-            }
-            return Ok(false);
-        }
-        Ok(predecessor_exists)
-    }
     fn current_signature_fence_identity(
         &self,
     ) -> Result<Option<D::SignatureFenceIdentity>, EnqueueError> {
@@ -14104,12 +13982,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                         Err(error) => return Err(self.close(error)),
                     };
                 if retry_unadmitted {
-                    if self
-                        .retained_response_predecessor_target_ordinal
-                        .is_some_and(|target| owner.lifecycle_ordinal() < target)
-                    {
-                        self.retained_response_predecessor_retry_attempted = true;
-                    }
                     if self
                         .ingress
                         .restore_selected_command(retry_command, &candidate)
@@ -15431,11 +15303,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     /// regardless of enqueue order.
     pub(crate) fn remaining_completion_capacity(&self) -> usize {
         self.ingress.remaining_capacity()
-    }
-    /// Whether the runtime currently charges one exact authenticated
-    /// certificate to the physical fence-escape slot.
-    pub(crate) fn has_certified_fence_escape_credit(&self) -> bool {
-        self.ingress.certified_fence_escape_credit() == 1
     }
     /// Return whether removing this network head can be coupled to immediate
     /// runtime admission.

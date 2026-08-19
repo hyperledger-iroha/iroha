@@ -2018,7 +2018,7 @@ receipt.owner().admission_ordinal() != parent.lifecycle_ordinal()
         "launch",
         (
             "prepare_leader_wire_launch(launch_storage.wal_path())",
-            "ProductionV2Services::restore_lifecycle_ordinal_source",
+            "RuntimeLifecycleOrdinalSource::after_high_watermark(0)",
             "leader_wire_launch.restored_producer_ordinal_high_watermark()",
             ".advance_past(high_watermark)",
             "leader_wire_launch.open_gate",

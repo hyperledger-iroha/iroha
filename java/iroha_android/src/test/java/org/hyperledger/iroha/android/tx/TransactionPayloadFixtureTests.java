@@ -17,6 +17,7 @@ import org.hyperledger.iroha.android.model.FeeChargeLimit;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.testing.TestEd25519Keys;
@@ -58,6 +59,7 @@ public final class TransactionPayloadFixtureTests {
     payload.put("time_to_live_ms", 100_000L);
     payload.put("nonce", null);
     payload.put("fee_payment", authorityFeePayment());
+    payload.put("admission_intent", admissionIntent("ordinary"));
     payload.put("executable", executable);
     payload.put("metadata", Collections.emptyMap());
 
@@ -102,6 +104,7 @@ public final class TransactionPayloadFixtureTests {
     payload.put("time_to_live_ms", 100_000L);
     payload.put("nonce", null);
     payload.put("fee_payment", authorityFeePayment());
+    payload.put("admission_intent", admissionIntent("ordinary"));
     payload.put("executable", executable);
     payload.put("metadata", Collections.emptyMap());
 
@@ -244,6 +247,47 @@ public final class TransactionPayloadFixtureTests {
         () -> TransactionPayloadFixtures.Fixture.fromObject(missingFeePayment),
         "missing required payload field 'fee_payment'",
         "structured fee payment must be required");
+
+    final Map<String, Object> missingAdmissionIntent = ttlFixture(100_000L, 100_000L);
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> payloadWithoutAdmissionIntent =
+        (Map<String, Object>) missingAdmissionIntent.get("payload");
+    payloadWithoutAdmissionIntent.remove("admission_intent");
+    assertThrowsContaining(
+        () -> TransactionPayloadFixtures.Fixture.fromObject(missingAdmissionIntent),
+        "missing required payload field 'admission_intent'",
+        "structured admission intent must be required");
+  }
+
+  @Test
+  public void fixtureLoaderRequiresExactAdmissionIntent() {
+    final Map<String, Object> queuePlanFixture = ttlFixture(100_000L, 100_000L);
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> queuePlanPayload =
+        (Map<String, Object>) queuePlanFixture.get("payload");
+    queuePlanPayload.put("admission_intent", admissionIntent("queue_plan_synced"));
+    assert TransactionPayloadFixtures.Fixture.fromObject(queuePlanFixture)
+            .toPayload()
+            .admissionIntent()
+        == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED;
+
+    final List<Map<String, Object>> invalid = new ArrayList<>();
+    final Map<String, Object> missingValue = new LinkedHashMap<>();
+    missingValue.put("intent", "ordinary");
+    invalid.add(missingValue);
+    final Map<String, Object> nonNullValue = admissionIntent("ordinary");
+    nonNullValue.put("value", 0L);
+    invalid.add(nonNullValue);
+    invalid.add(admissionIntent("legacy"));
+    for (final Map<String, Object> intent : invalid) {
+      final Map<String, Object> fixture = ttlFixture(100_000L, 100_000L);
+      @SuppressWarnings("unchecked")
+      final Map<String, Object> payload = (Map<String, Object>) fixture.get("payload");
+      payload.put("admission_intent", intent);
+      assertThrows(
+          () -> TransactionPayloadFixtures.Fixture.fromObject(fixture).toPayload(),
+          "non-exact admission intent must be rejected");
+    }
   }
 
   public static void main(final String[] args) throws Exception {
@@ -266,6 +310,8 @@ public final class TransactionPayloadFixtureTests {
           : name + ": TTL mismatch vs fixture metadata";
       assert Objects.equals(fixture.nonce(), payload.nonce())
           : name + ": nonce mismatch vs fixture metadata";
+      assert payload.admissionIntent() == TransactionAdmissionIntent.ORDINARY
+          : name + ": canonical fixture admission intent mismatch";
       if ("typed_fee_payment_gas_limit".equals(name)) {
         assert payload.feePayment() instanceof FeePaymentIntent.Authority
             : name + ": payer must be authority";
@@ -434,6 +480,7 @@ public final class TransactionPayloadFixtureTests {
     payload.put("time_to_live_ms", payloadTtl);
     payload.put("nonce", null);
     payload.put("fee_payment", authorityFeePayment());
+    payload.put("admission_intent", admissionIntent("ordinary"));
     payload.put("metadata", Collections.emptyMap());
     final Map<String, Object> executable = new LinkedHashMap<>();
     executable.put("Instructions", Collections.emptyList());
@@ -468,6 +515,13 @@ public final class TransactionPayloadFixtureTests {
     payment.put("payer", "authority");
     payment.put("value", value);
     return payment;
+  }
+
+  private static Map<String, Object> admissionIntent(final String intent) {
+    final Map<String, Object> value = new LinkedHashMap<>();
+    value.put("intent", intent);
+    value.put("value", null);
+    return value;
   }
 
   private static void assertThrows(final Runnable runnable, final String message) {

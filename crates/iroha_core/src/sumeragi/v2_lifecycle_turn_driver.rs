@@ -90,6 +90,12 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
     ),
     /// One parked recovered Decision Fetch body entered its Store settlement.
     RecoveredDecisionFetchCompletion(ProductionRecoveredDecisionFetchStoreSettlementV1),
+    /// Ordinary certified-Fetch Phase B published its durable Ready carrier.
+    CertifiedFetchBodyPersisted,
+    /// Ordinary certified-Fetch Phase B retained the complete pre-ledger owner.
+    CertifiedFetchBodyPersistenceRetry,
+    /// Ordinary certified-Fetch Phase B crossed the durability boundary and must restart.
+    CertifiedFetchBodyPersistenceRestartRequired,
     /// One claimed Serve reached LedgerV1, reply delivery, and released its live lease.
     CertifiedServeClaimedCompleted,
     /// One terminal Serve replay was verified, delivered, and acknowledged without a live lease.
@@ -111,6 +117,7 @@ impl ProductionLifecycleCompletionSelectionV1 {
         match self {
             Self::RecoveredDecisionApplyRestartRequired
             | Self::RecoveredDecisionApplyCompletionRestartRequired
+            | Self::CertifiedFetchBodyPersistenceRestartRequired
             | Self::RestartRequired => true,
             Self::RecoveredLifecycleSignCompletion(selection) => selection.restart_required(),
             Self::RecoveredIoDispatch(result) => result.is_err(),
@@ -127,6 +134,8 @@ impl ProductionLifecycleCompletionSelectionV1 {
             | Self::RecoveredDecisionApplyRequeued
             | Self::RecoveredDecisionApplyApplied
             | Self::RecoveredDecisionApplyCompletionDeferred
+            | Self::CertifiedFetchBodyPersisted
+            | Self::CertifiedFetchBodyPersistenceRetry
             | Self::CertifiedServeClaimedCompleted
             | Self::CertifiedServeReplayCompleted => false,
         }
@@ -175,6 +184,14 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionPreGateV1<'cursor> {
 /// Closed diagnostic for one lifecycle-selected Ingress turn.
 #[must_use = "the lifecycle-selected Ingress result must be observed"]
 pub(in crate::sumeragi) enum ProductionLifecycleIngressSelectionV1 {
+    /// An ordinary certified-Fetch selector waits on its exact I/O generation.
+    CertifiedFetchCapacityPending,
+    /// Ordinary certified-Fetch Phase A queued one durable body persistence command.
+    CertifiedFetchQueued,
+    /// Ordinary certified-Fetch Phase A retained the queue occurrence for retry.
+    CertifiedFetchRetry,
+    /// Existing Ready lifecycle work retained priority over ordinary Fetch Phase A.
+    CertifiedFetchCompetingReady,
     /// An externally Waiting recovered Fetch retains its selector on the I/O generation.
     RecoveredDecisionFetchCapacityPending,
     /// A Serve request waits for capacity before any lifecycle lease is claimed.
@@ -342,7 +359,7 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
     owner: &mut ProductionLifecycleOwnerV1,
     executor: &V2EffectExecutor<SerializedV2Runtime>,
     services: &ProductionV2Services,
-    capacity_wait: &mut Option<crate::sumeragi::v2_worker::LifecycleCertifiedServeCapacityWaitV1>,
+    pending_capacity: &mut Option<PendingIngressCapacityV1>,
     receiver: &std::sync::Arc<FairV2Ingress>,
     cut: FairIngressTurnCut<'_>,
     runner: LifecycleCurrentRunnerTurn<'cursor>,
@@ -510,8 +527,8 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
         Ok(crate::sumeragi::v2_worker::LifecycleCertifiedServeCapacityCaptureV1::Unavailable(
             wait,
         )) => {
-            assert!(capacity_wait.is_none());
-            *capacity_wait = Some(wait);
+            assert!(pending_capacity.is_none());
+            *pending_capacity = Some(PendingIngressCapacityV1::CertifiedServe(wait));
             drop(dequeue);
             drop(runner);
             return ProductionLifecycleIngressTurnV1::Selected(
@@ -803,6 +820,62 @@ fn dequeue_prepared_ordinary_ingress<'cursor>(
 }
 
 impl LaunchedProductionLifecycleV1 {
+    fn settle_parked_certified_fetch_body_persistence(
+        &mut self,
+    ) -> ProductionLifecycleCompletionSelectionV1 {
+        let Self {
+            owner,
+            executor,
+            services,
+            pending_lifecycle_completion,
+            leader_wire_ingress_binding,
+            ..
+        } = self;
+        let Some(completion) =
+            PendingLifecycleCompletionV1::take_certified_fetch(pending_lifecycle_completion)
+        else {
+            services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
+            return ProductionLifecycleCompletionSelectionV1::RestartRequired;
+        };
+        match owner.coordinator.complete_certified_fetch_body_persistence(
+            &mut owner.registry,
+            executor,
+            services,
+            &leader_wire_ingress_binding.ingress,
+            completion,
+        ) {
+            Ok(()) => ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersisted,
+            Err(CertifiedFetchBodyPersistenceCompletionError::Retry(error)) => {
+                iroha_logger::debug!(
+                    reason = error.reason(),
+                    detail = %error.detail(),
+                    "ordinary certified-Fetch Phase B retained its exact owner"
+                );
+                assert!(pending_lifecycle_completion.is_none());
+                *pending_lifecycle_completion = Some(PendingLifecycleCompletionV1::CertifiedFetch(
+                    error.into_completion(),
+                ));
+                ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRetry
+            }
+            Err(CertifiedFetchBodyPersistenceCompletionError::RestartRequired(error)) => {
+                iroha_logger::error!(
+                    reason = error.reason(),
+                    detail = %error.detail(),
+                    work_id = error.work_id().get(),
+                    physical_admission_ordinal = error.physical_admission_ordinal(),
+                    "ordinary certified-Fetch Phase B crossed its fail-stop boundary"
+                );
+                services
+                    .lifecycle_output_guard()
+                    .close_admission_for_restart();
+                drop(error);
+                ProductionLifecycleCompletionSelectionV1::CertifiedFetchBodyPersistenceRestartRequired
+            }
+        }
+    }
+
     /// Classify parked and physical lifecycle owners before any fresh Ready dispatch.
     ///
     /// Classification precedes cursor consumption. Ordinary work returns the
@@ -821,56 +894,63 @@ impl LaunchedProductionLifecycleV1 {
             return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
         }
 
-        if let Some(deferred) = self.recovered_decision_apply_deferred.take() {
-            let selected = match self.drive_recovered_decision_apply_deferred(deferred, lane_work) {
-                ProductionRecoveredDecisionApplyRetryV1::Requeued => {
-                    ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyRequeued
+        if let Some(pending) = self.pending_lifecycle_completion.take() {
+            let selected = match pending {
+                PendingLifecycleCompletionV1::RecoveredDecisionApplyDeferred(deferred) => {
+                    match self.drive_recovered_decision_apply_deferred(deferred, lane_work) {
+                        ProductionRecoveredDecisionApplyRetryV1::Requeued => {
+                            ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyRequeued
+                        }
+                        ProductionRecoveredDecisionApplyRetryV1::Unavailable(deferred) => {
+                            assert!(self.pending_lifecycle_completion.is_none());
+                            self.pending_lifecycle_completion = Some(
+                                PendingLifecycleCompletionV1::RecoveredDecisionApplyDeferred(
+                                    deferred,
+                                ),
+                            );
+                            ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyDeferred
+                        }
+                        ProductionRecoveredDecisionApplyRetryV1::RestartRequired => {
+                            ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyRestartRequired
+                        }
+                    }
                 }
-                ProductionRecoveredDecisionApplyRetryV1::Unavailable(deferred) => {
-                    assert!(self.recovered_decision_apply_deferred.is_none());
-                    self.recovered_decision_apply_deferred = Some(deferred);
-                    ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyDeferred
+                PendingLifecycleCompletionV1::CertifiedFetch(completion) => {
+                    self.pending_lifecycle_completion =
+                        Some(PendingLifecycleCompletionV1::CertifiedFetch(completion));
+                    self.settle_parked_certified_fetch_body_persistence()
                 }
-                ProductionRecoveredDecisionApplyRetryV1::RestartRequired => {
-                    ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyRestartRequired
+                PendingLifecycleCompletionV1::RecoveredDecisionFetch(completion) => {
+                    self.pending_lifecycle_completion = Some(
+                        PendingLifecycleCompletionV1::RecoveredDecisionFetch(completion),
+                    );
+                    ProductionLifecycleCompletionSelectionV1::RecoveredDecisionFetchCompletion(
+                        self.settle_recovered_decision_fetch_store(),
+                    )
+                }
+                PendingLifecycleCompletionV1::RecoveredSign(completion) => {
+                    self.pending_lifecycle_completion =
+                        Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
+                    ProductionLifecycleCompletionSelectionV1::RecoveredLifecycleSignCompletion(
+                        self.settle_parked_recovered_sign_completion(),
+                    )
                 }
             };
             return ProductionLifecycleCompletionPreGateV1::Selected(selected);
         }
 
-        if self.recovered_lifecycle_sign_completion.is_some()
-            && self.recovered_decision_fetch_body_completion.is_some()
-        {
-            iroha_logger::error!(
-                "Sumeragi v2 lifecycle Completion retained mutually exclusive Sign and Fetch owners"
-            );
-            self.close_output_for_restart();
-            return ProductionLifecycleCompletionPreGateV1::Selected(
-                ProductionLifecycleCompletionSelectionV1::RestartRequired,
-            );
-        }
-        if self.recovered_lifecycle_sign_completion.is_some() {
-            let selected = self.settle_parked_recovered_sign_completion();
-            return ProductionLifecycleCompletionPreGateV1::Selected(
-                ProductionLifecycleCompletionSelectionV1::RecoveredLifecycleSignCompletion(
-                    selected,
-                ),
-            );
-        }
-        if self.recovered_decision_fetch_body_completion.is_some() {
-            let selected = self.settle_recovered_decision_fetch_store();
-            return ProductionLifecycleCompletionPreGateV1::Selected(
-                ProductionLifecycleCompletionSelectionV1::RecoveredDecisionFetchCompletion(
-                    selected,
-                ),
-            );
-        }
-
-        match self.services.take_next_recovered_lifecycle_completion() {
-            Ok(RecoveredLifecycleCompletionTakeV1::PassThrough) => {
+        match self.services.take_next_lifecycle_completion() {
+            Ok(LifecycleCompletionTakeV1::PassThrough) => {
                 return ProductionLifecycleCompletionPreGateV1::Ordinary(runner);
             }
-            Ok(RecoveredLifecycleCompletionTakeV1::Apply(completion)) => {
+            Ok(LifecycleCompletionTakeV1::CertifiedFetch(completion)) => {
+                assert!(self.pending_lifecycle_completion.is_none());
+                self.pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::CertifiedFetch(completion));
+                let selected = self.settle_parked_certified_fetch_body_persistence();
+                return ProductionLifecycleCompletionPreGateV1::Selected(selected);
+            }
+            Ok(LifecycleCompletionTakeV1::Apply(completion)) => {
                 let selected = match self
                     .settle_recovered_decision_apply_completion_owner(completion, lane_work)
                 {
@@ -878,8 +958,10 @@ impl LaunchedProductionLifecycleV1 {
                         ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied
                     }
                     Ok(ProductionRecoveredDecisionApplyCompletionV1::Deferred(deferred)) => {
-                        assert!(self.recovered_decision_apply_deferred.is_none());
-                        self.recovered_decision_apply_deferred = Some(deferred);
+                        assert!(self.pending_lifecycle_completion.is_none());
+                        self.pending_lifecycle_completion = Some(
+                            PendingLifecycleCompletionV1::RecoveredDecisionApplyDeferred(deferred),
+                        );
                         ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyCompletionDeferred
                     }
                     Err(reason) => {
@@ -893,9 +975,10 @@ impl LaunchedProductionLifecycleV1 {
                 };
                 return ProductionLifecycleCompletionPreGateV1::Selected(selected);
             }
-            Ok(RecoveredLifecycleCompletionTakeV1::Sign(completion)) => {
-                assert!(self.recovered_lifecycle_sign_completion.is_none());
-                self.recovered_lifecycle_sign_completion = Some(completion);
+            Ok(LifecycleCompletionTakeV1::Sign(completion)) => {
+                assert!(self.pending_lifecycle_completion.is_none());
+                self.pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::RecoveredSign(completion));
                 let selected = self.settle_parked_recovered_sign_completion();
                 return ProductionLifecycleCompletionPreGateV1::Selected(
                     ProductionLifecycleCompletionSelectionV1::RecoveredLifecycleSignCompletion(
@@ -903,9 +986,11 @@ impl LaunchedProductionLifecycleV1 {
                     ),
                 );
             }
-            Ok(RecoveredLifecycleCompletionTakeV1::DecisionFetch(completion)) => {
-                assert!(self.recovered_decision_fetch_body_completion.is_none());
-                self.recovered_decision_fetch_body_completion = Some(completion);
+            Ok(LifecycleCompletionTakeV1::DecisionFetch(completion)) => {
+                assert!(self.pending_lifecycle_completion.is_none());
+                self.pending_lifecycle_completion = Some(
+                    PendingLifecycleCompletionV1::RecoveredDecisionFetch(completion),
+                );
                 let selected = self.settle_recovered_decision_fetch_store();
                 return ProductionLifecycleCompletionPreGateV1::Selected(
                     ProductionLifecycleCompletionSelectionV1::RecoveredDecisionFetchCompletion(
@@ -913,7 +998,7 @@ impl LaunchedProductionLifecycleV1 {
                     ),
                 );
             }
-            Ok(RecoveredLifecycleCompletionTakeV1::CertifiedServe(completion)) => {
+            Ok(LifecycleCompletionTakeV1::CertifiedServe(completion)) => {
                 let selected = match completion
                     .settle_deliver_and_acknowledge(&mut self.owner, &self.services)
                 {
@@ -934,7 +1019,7 @@ impl LaunchedProductionLifecycleV1 {
                 };
                 return ProductionLifecycleCompletionPreGateV1::Selected(selected);
             }
-            Ok(RecoveredLifecycleCompletionTakeV1::None) => {}
+            Ok(LifecycleCompletionTakeV1::None) => {}
             Err(reason) => {
                 iroha_logger::error!(
                     %reason,
@@ -1056,26 +1141,71 @@ impl LaunchedProductionLifecycleV1 {
         ) {
             return ProductionLifecycleIngressTurnV1::PassThrough(runner);
         }
-        if self.recovered_ingress_capacity_wait.is_some()
-            && self.certified_serve_capacity_wait.is_some()
-        {
-            self.close_output_for_restart();
-            return ProductionLifecycleIngressTurnV1::Selected(
-                ProductionLifecycleIngressSelectionV1::RestartRequired,
-            );
-        }
-
-        if let Some(wait) = self.recovered_ingress_capacity_wait.take() {
-            match wait.retry(&self.services, &self.executor) {
+        if let Some(pending) = self.pending_ingress_capacity.take() {
+            match pending {
+                PendingIngressCapacityV1::CertifiedServe(wait) => match wait.status(&self.services) {
+                    crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::SamePending => {
+                        assert!(self.pending_ingress_capacity.is_none());
+                        self.pending_ingress_capacity =
+                            Some(PendingIngressCapacityV1::CertifiedServe(wait));
+                        return ProductionLifecycleIngressTurnV1::Selected(
+                            ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending,
+                        );
+                    }
+                    crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::Released => {
+                        drop(wait);
+                    }
+                    crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::GenerationExhausted
+                    | crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::ForeignOrDisconnected => {
+                        self.close_output_for_restart();
+                        return ProductionLifecycleIngressTurnV1::Selected(
+                            ProductionLifecycleIngressSelectionV1::RestartRequired,
+                        );
+                    }
+                },
+                pending => {
+                    let (kind, retry) = match pending {
+                        PendingIngressCapacityV1::CertifiedFetch(wait) => (
+                            PendingIngressCapacityKindV1::CertifiedFetch,
+                            wait.retry(&self.services, &self.executor),
+                        ),
+                        PendingIngressCapacityV1::RecoveredDecisionFetch(wait) => (
+                            PendingIngressCapacityKindV1::RecoveredDecisionFetch,
+                            wait.retry(&self.services, &self.executor),
+                        ),
+                        PendingIngressCapacityV1::CertifiedServe(_) => unreachable!(
+                            "the Certified-Serve capacity owner was handled before Fetch retry"
+                        ),
+                    };
+                    match retry {
                 super::super::ProductionIngressCapacityRetry::Pending(wait) => {
-                    assert!(self.recovered_ingress_capacity_wait.is_none());
-                    self.recovered_ingress_capacity_wait = Some(wait);
-                    return ProductionLifecycleIngressTurnV1::Selected(
-                        ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCapacityPending,
-                    );
+                    assert!(self.pending_ingress_capacity.is_none());
+                    self.pending_ingress_capacity = Some(match kind {
+                        PendingIngressCapacityKindV1::CertifiedFetch => {
+                            PendingIngressCapacityV1::CertifiedFetch(wait)
+                        }
+                        PendingIngressCapacityKindV1::RecoveredDecisionFetch => {
+                            PendingIngressCapacityV1::RecoveredDecisionFetch(wait)
+                        }
+                    });
+                    return ProductionLifecycleIngressTurnV1::Selected(match kind {
+                        PendingIngressCapacityKindV1::CertifiedFetch => {
+                            ProductionLifecycleIngressSelectionV1::CertifiedFetchCapacityPending
+                        }
+                        PendingIngressCapacityKindV1::RecoveredDecisionFetch => {
+                            ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCapacityPending
+                        }
+                    });
                 }
                 super::super::ProductionIngressCapacityRetry::Released(selector) => {
-                    return self.drive_recovered_ingress_selector(selector, runner);
+                    return match kind {
+                        PendingIngressCapacityKindV1::CertifiedFetch => {
+                            self.drive_certified_fetch_ingress_selector(selector, runner)
+                        }
+                        PendingIngressCapacityKindV1::RecoveredDecisionFetch => {
+                            self.drive_recovered_ingress_selector(selector, runner)
+                        }
+                    };
                 }
                 super::super::ProductionIngressCapacityRetry::RestartRequired => {
                     self.close_output_for_restart();
@@ -1083,27 +1213,7 @@ impl LaunchedProductionLifecycleV1 {
                         ProductionLifecycleIngressSelectionV1::RestartRequired,
                     );
                 }
-            }
-        }
-
-        if let Some(wait) = self.certified_serve_capacity_wait.take() {
-            match wait.status(&self.services) {
-                crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::SamePending => {
-                    assert!(self.certified_serve_capacity_wait.is_none());
-                    self.certified_serve_capacity_wait = Some(wait);
-                    return ProductionLifecycleIngressTurnV1::Selected(
-                        ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending,
-                    );
-                }
-                crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::Released => {
-                    drop(wait);
-                }
-                crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::GenerationExhausted
-                | crate::sumeragi::v2_worker::LifecycleIoCapacityWaitStatus::ForeignOrDisconnected => {
-                    self.close_output_for_restart();
-                    return ProductionLifecycleIngressTurnV1::Selected(
-                        ProductionLifecycleIngressSelectionV1::RestartRequired,
-                    );
+                    }
                 }
             }
         }
@@ -1169,14 +1279,14 @@ impl LaunchedProductionLifecycleV1 {
                 owner,
                 executor,
                 services,
-                certified_serve_capacity_wait,
+                pending_ingress_capacity,
                 ..
             } = self;
             return prepare_and_dispatch_current_certified_serve(
                 owner,
                 executor,
                 services,
-                certified_serve_capacity_wait,
+                pending_ingress_capacity,
                 &ingress,
                 cut,
                 runner,
@@ -1234,14 +1344,22 @@ impl LaunchedProductionLifecycleV1 {
                     }
                 };
                 if !recovered {
-                    return dequeue_prepared_ordinary_ingress(
-                        &ingress,
-                        cut.into_ordinary_turn_cut(),
-                        runner,
-                        None,
-                        terminal_subject,
-                        &self.services,
-                    );
+                    let selector = match self.executor.capture_lifecycle_ingress_selector(cut) {
+                        Ok(selector) => selector,
+                        Err(error) => {
+                            let reason = error.detail();
+                            iroha_logger::error!(
+                                %reason,
+                                "ordinary certified-Fetch selector capture failed closed"
+                            );
+                            self.close_output_for_restart();
+                            drop(runner);
+                            return ProductionLifecycleIngressTurnV1::Selected(
+                                ProductionLifecycleIngressSelectionV1::RestartRequired,
+                            );
+                        }
+                    };
+                    return self.drive_certified_fetch_ingress_selector(selector, runner);
                 }
                 let selector = match self
                     .executor
@@ -1281,8 +1399,9 @@ impl LaunchedProductionLifecycleV1 {
             );
         let selected = match result {
             Ok(ProductionRecoveredDecisionFetchPersistenceV1::CapacityWait(wait)) => {
-                assert!(self.recovered_ingress_capacity_wait.is_none());
-                self.recovered_ingress_capacity_wait = Some(wait);
+                assert!(self.pending_ingress_capacity.is_none());
+                self.pending_ingress_capacity =
+                    Some(PendingIngressCapacityV1::RecoveredDecisionFetch(wait));
                 ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCapacityPending
             }
             Ok(ProductionRecoveredDecisionFetchPersistenceV1::Queued { ordinal }) => {
@@ -1390,6 +1509,53 @@ impl LaunchedProductionLifecycleV1 {
         ProductionLifecycleIngressTurnV1::Selected(selected)
     }
 
+    fn drive_certified_fetch_ingress_selector<'cursor>(
+        &mut self,
+        selector: PreparedLifecycleIngressSelector,
+        runner: LifecycleCurrentRunnerTurn<'cursor>,
+    ) -> ProductionLifecycleIngressTurnV1<'cursor> {
+        let mode = self.executor.lifecycle_mode_rank_snapshot();
+        let result =
+            self.owner
+                .plan_ingress_turn(&self.services, &self.executor, mode, selector, runner);
+        let selected = match result {
+            Ok(ProductionIngressTurnPreparation::CapacityWait(wait)) => {
+                assert!(self.pending_ingress_capacity.is_none());
+                self.pending_ingress_capacity =
+                    Some(PendingIngressCapacityV1::CertifiedFetch(wait));
+                ProductionLifecycleIngressSelectionV1::CertifiedFetchCapacityPending
+            }
+            Ok(ProductionIngressTurnPreparation::Queued(_queued)) => {
+                ProductionLifecycleIngressSelectionV1::CertifiedFetchQueued
+            }
+            Err(
+                ProductionIngressSchedulerInputsError::UnsettledLease { .. }
+                | ProductionIngressSchedulerInputsError::CompetingReadyWork,
+            ) => ProductionLifecycleIngressSelectionV1::CertifiedFetchCompetingReady,
+            Err(
+                ProductionIngressSchedulerInputsError::StaleModeObservation
+                | ProductionIngressSchedulerInputsError::CommandPreparation { .. }
+                | ProductionIngressSchedulerInputsError::InFlightSelectedWork { .. }
+                | ProductionIngressSchedulerInputsError::Service { .. },
+            ) => ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry,
+            Err(
+                ProductionIngressSchedulerInputsError::CoordinatorFaulted { .. }
+                | ProductionIngressSchedulerInputsError::ForeignModeObservation
+                | ProductionIngressSchedulerInputsError::ForeignOutputGuard
+                | ProductionIngressSchedulerInputsError::ForeignRunnerObservation
+                | ProductionIngressSchedulerInputsError::BodyStoreNotBound
+                | ProductionIngressSchedulerInputsError::InvalidSelectedCarrier
+                | ProductionIngressSchedulerInputsError::InvalidReservedCommand
+                | ProductionIngressSchedulerInputsError::UnexpectedPlan
+                | ProductionIngressSchedulerInputsError::SettlementFault { .. },
+            ) => {
+                self.close_output_for_restart();
+                ProductionLifecycleIngressSelectionV1::RestartRequired
+            }
+        };
+        ProductionLifecycleIngressTurnV1::Selected(selected)
+    }
+
     fn settle_parked_recovered_sign_completion(
         &mut self,
     ) -> ProductionRecoveredLifecycleSignCompletionSelectionV1 {
@@ -1424,7 +1590,10 @@ impl LaunchedProductionLifecycleV1 {
     fn classify_parked_recovered_sign_completion(
         &mut self,
     ) -> Option<crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1> {
-        let completion = self.recovered_lifecycle_sign_completion.as_ref()?;
+        let completion = self
+            .pending_lifecycle_completion
+            .as_ref()?
+            .recovered_sign()?;
         let authority = completion.project_adapter_completion_authority()?;
         let preview = self
             .executor

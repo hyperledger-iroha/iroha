@@ -2216,7 +2216,6 @@ impl ProductionLifecycleOwnerV1 {
     /// The runner supplies its borrow-bound current Ingress turn, so another
     /// cursor observation cannot be retained or minted until this complete
     /// transaction returns. Independently opened worker stores are rejected.
-    #[cfg(not(test))]
     #[allow(clippy::result_large_err)]
     pub(crate) fn plan_ingress_turn(
         &mut self,
@@ -2241,7 +2240,7 @@ impl ProductionLifecycleOwnerV1 {
     /// the borrow-bound current-turn method above.
     #[cfg(test)]
     #[allow(clippy::result_large_err)]
-    pub(crate) fn plan_ingress_turn(
+    pub(crate) fn plan_ingress_turn_for_test(
         &mut self,
         services: &ProductionV2Services,
         executor: &V2EffectExecutor<SerializedV2Runtime>,

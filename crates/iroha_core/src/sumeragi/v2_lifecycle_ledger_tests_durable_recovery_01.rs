@@ -1976,8 +1976,8 @@ fn empty_retired_frame_authority_rejects_foreign_path_context_and_digest_drift()
         ),
     );
     assert!(
-        !wrong_policy.authorizes_empty_retired_lifecycle(fixture.lifecycle_context()),
-        "non-genesis empty retirement requires rotating-leader finality policy"
+        !wrong_policy.authorizes_retired_lifecycle(fixture.lifecycle_context()),
+        "non-genesis frame retirement requires rotating-leader finality policy"
     );
 
     let foreign_directory = TempDir::new().expect("foreign empty-retired frame directory");
@@ -2073,7 +2073,7 @@ fn empty_retired_frame_authority_rejects_foreign_path_context_and_digest_drift()
 }
 
 #[test]
-fn empty_retired_complete_tip_rejects_nonempty_predecessor_without_apply() {
+fn canonical_complete_tip_retires_physical_nonempty_predecessor_without_apply() {
     let fixture = height_three_recovery_fixture("empty-retired-nonempty-negative", 0xA6);
     let (_, projection) = terminal_decision_chain_fixture(&fixture);
     let kura = Kura::blank_kura_for_testing();
@@ -2101,16 +2101,23 @@ fn empty_retired_complete_tip_rejects_nonempty_predecessor_without_apply() {
         .persist_exact_successor(&empty, &unrelated)
         .expect("persist nonempty predecessor negative fixture");
     let before = fs::read(predecessor_root.join(LEDGER_FILE)).expect("read nonempty predecessor");
-    assert!(
-        complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
-            .into_canonical_predecessor_storage(&fixture.keys[0])
-            .is_err(),
-        "physical presence cannot authorize a nonempty ledger without exact Apply lineage"
-    );
+    let retired = complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+        .into_canonical_predecessor_storage(&fixture.keys[0])
+        .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+        .expect("canonical finality retires physically present unrelated local work");
+    let reopened = store
+        .load()
+        .expect("reload canonically retired nonempty predecessor");
+    assert_eq!(retired.retained_high_water(), unrelated.high_water());
+    assert_eq!(reopened.records().len(), 1);
     assert_eq!(
-        fs::read(predecessor_root.join(LEDGER_FILE)).expect("reread nonempty predecessor"),
+        reopened.records()[0].terminal(),
+        Some(Some(TerminalOutcome::Cancelled))
+    );
+    assert_ne!(
+        fs::read(predecessor_root.join(LEDGER_FILE)).expect("reread retired predecessor"),
         before,
-        "failed nonempty authentication must not rewrite storage"
+        "canonical retirement must publish the exact terminal successor frame"
     );
 }
 

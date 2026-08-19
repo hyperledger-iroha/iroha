@@ -59,13 +59,13 @@ impl ProductionV2Services {
                 ),
                 _ => {
                     return Err(
-                        "historical autonomous lane output has no certification identity"
+                        "historical lane output has no certification identity"
                             .to_owned(),
                     );
                 }
             };
             return Ok(
-                ExactOutputRolloverClaim::HistoricalAutonomousLaneCertification {
+                ExactOutputRolloverClaim::HistoricalLaneCertification {
                     scope: self.exact_output_scope(),
                     target: target.clone(),
                     source_height: proposal_height,

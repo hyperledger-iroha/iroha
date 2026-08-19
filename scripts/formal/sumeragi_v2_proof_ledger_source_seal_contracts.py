@@ -1652,7 +1652,7 @@ _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256 = (
     "c4bf44c2f0037ff4d1d4f803bef306501f47344da605f51f20a03e63bc3feeb3"
 )
 _RUNNER_ROLLOVER_FINALIZED_HEIGHT_OUTPUTS_ITEM_SHA256 = (
-    "c5aeb105b87871255d05ead870a60f056dd591e327e8cdeb44d75443885fc33a"
+    "57da29721e6df2151d024228810103c3e65c04789a7ac19b06d8a39b705b6104"
 )
 
 _AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256 = {
@@ -2360,13 +2360,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 860
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 865
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 91
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "b6457553bc8d41f74ebc708ea3d4e6187117f0f008da2c2dea697b0771741b44"
+    "9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "c77850a207fe21dd98cc58e27ec87c6aa8a9140bcfb890e879f4d495ef12902a"
+    "37d89b45597ce3ba1c1ca81a0e58192177c396b53a1c1b305458a45acd4faebd"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2377,10 +2377,10 @@ _SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 = (
 _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
     "75019365bd62839da229b51671071af1b9165f4c08fc06d36be6bc2e4e14b893"
 )
-_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 527
-_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 528
+_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 530
+_PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 531
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "db96b6b781b450c4b04dbe1f6d4068a4a2a4f13cea3f0fbd868f50dbce4baabb"
+    "e7eb7d609b110a421297d740f0a69cc2b01f2083731d29ca604826849bb36474"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -2447,7 +2447,7 @@ _SUCCESSOR_PARENT_BINDING_TEST_SHA256 = {
     ),
 }
 _LATE_LANE_RECOVERY_TEST_SHA256 = (
-    "bf99bfac45fd57a5f8b9e875f183164a3ea72600de485a58c79a0873aa5f7185"
+    "6177766c4b0a57b42fefe2e5725fdc0416e61394b6499de446b00a3eee7e4a47"
 )
 _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ("production-kura-progress-durability", "kura::tests", 18),
@@ -2504,7 +2504,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-v2-lifecycle-coordinator",
         "sumeragi::v2_lifecycle_coordinator",
-        39,
+        42,
     ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
     (
@@ -2512,7 +2512,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::v2_runner::lifecycle_height_driver::tests",
         1,
     ),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 88),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 90),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -2755,6 +2755,8 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_worker::tests::applied_height_handoff_rejects_wrong_height_global_output",
     "sumeragi::v2_worker::tests::applied_height_handoff_accepts_historical_kura_global_responses_atomically",
     "sumeragi::v2_worker::tests::applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate",
+    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output",
+    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certificate",
     "peer::run::tests::dispatch_worker_shutdown_drains_reliable_old_generation_to_actor",
     "peer::run::tests::full_write_without_flush_ack_closes_actor_witness_and_retries_on_replacement",
     "network::handle_update_tests::progress_budget_preserves_fifo_for_three_registered_producers",
@@ -2907,6 +2909,9 @@ _PRODUCTION_LIVENESS_RETIRED_REGRESSIONS = frozenset(
     )
 )
 _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
+    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit",
+    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::locked_publication_fence_serializes_unrelated_append_and_preserves_it",
+    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::dropping_locked_publication_fence_releases_producer_without_dequeue",
     "merge_sidecar::tests::reused_actor_ordinals_under_different_tenures_are_rejected_atomically",
     "merge_sidecar::tests::reply_unwritable_route_parks_inflight_materialization_without_bytes",
     "merge_sidecar::tests::exact_delivery_retry_stays_terminal_beyond_retired_ttl_horizon",
@@ -2973,7 +2978,7 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_effects::tests::deferred_merge_sidecar_accepts_earlier_carrier_and_rejects_future_or_foreign",
     "sumeragi::v2_effects::tests::split_round_commit_signing_is_rejected_before_service_dispatch",
     "sumeragi::v2_runner::tests::exact_locked_body_is_reencoded_at_the_reproposal_round_without_byte_drift",
-    "sumeragi::v2_runner::tests::recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner",
+    "sumeragi::v2_runner::tests::recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade",
     "sumeragi::v2_worker::tests::closed_flush_on_delivery_active_unwritable_route_parks_without_cursor_advance",
     "sumeragi::v2_worker::tests::closed_flush_racing_final_receiver_retirement_is_nonfatal",
     "sumeragi::v2_worker::tests::unavailable_admission_racing_retirement_is_nonfatal",
@@ -3095,7 +3100,7 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
         "3976c357aa3b66c71eac8bf8003bab79e024f76e9e469468bb8fb86c4c58dcfe"
     ),
     "retain_effect_batch_at_frontier": (
-        "1e31788cecc9c7b9240ec50b1943f8db28ae206e2b5df3aca9aeefd054052695"
+        "52ae798c947752e8fb49147e152ffaeb8df5bbc09fffe49aff36cd3460d5f92f"
     ),
     "preflight_effect_batch_frontier": (
         "d2debd37b0ef330c5dba99fd01e483e44edc4be3df5ccee02513ef7203f3f96d"
@@ -3175,7 +3180,7 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
     "drive_bounded_with_ack": (
         "7e630c6be2466fe0980df81ea194e101b70e4abac9546a379ab9f24c8eb23861"
     ),
-    "applied_height_reconstruction_covers": "7b1f00e42fdb34123b8de42c2f0033d96d612b2f4546bca60287cde8502c7770",
+    "applied_height_reconstruction_covers": "503e17c81719e42318527609a2f91701b6feec3e9e96d735f9efd23d6aa9407d",
     "durable_exact_output_handoff_owner_pair": (
         "f848a53734e173e64122e3cf198d6e0adfea99909594e667c56a7e11ea271a84"
     ),
@@ -3187,9 +3192,15 @@ _PRODUCTION_EXACT_OUTPUT_ITEM_SHA256 = {
     ),
 }
 
-_AUTONOMOUS_RETIREMENT_HANDOFF_TEST_SHA256 = {
+_APPLIED_HEIGHT_PREDECESSOR_DURABILITY_HANDOFF_TEST_SHA256 = {
     "applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically": (
         "6180ebcb3f417cf30d175305545bb980449b99f50bcf74ec300198e15bad5881"
+    ),
+    "applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output": (
+        "63da596c965313f6d1670a4dde34f5b4886f7dd8983ac32d8a969f57636d869f"
+    ),
+    "applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certificate": (
+        "64d78dacb9ebb2a99b8d48aff8202bb62aedd080450360bcbccc1d57e9c9cba3"
     ),
 }
 
@@ -3558,10 +3569,13 @@ fn preflight_effect_insertion(
 
 _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "claim_runner_lifecycle_process_generation": "b4bb67413cbfce25355d34b5342d81a96ad7674614e4134b48f7c74cd49af315",
+    "preflight_finalized_lane_rollover": (
+        "883edeefab8ca2ed10e688c58e591949a044e6098b960d6bcf16f1858e42d6ec"
+    ),
     # Approved together with the exact-output alias after the focused
     # non-descent and handoff mutations passed against the reconciled component.
     "rollover_finalized_height_outputs": (
-        "c5aeb105b87871255d05ead870a60f056dd591e327e8cdeb44d75443885fc33a"
+        "57da29721e6df2151d024228810103c3e65c04789a7ac19b06d8a39b705b6104"
     ),
     "require_peeked_lane_work_effect": "bb5763cb4c16586460c17c92f9578a5431c976fb83bc512e94e84646d6e5c1da",
     "lane_work_limits": "6597822785d94c22554d152b4c403b425c7a11aab1a19059fac41368332202b2",
@@ -3582,7 +3596,13 @@ _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "dispatch_lane_work_effect_from_snapshot": "20b07ac620f07eca9a61e14f198473a5beb9fdf77bf5222d34f0d7338791ec47",
 }
 
-_PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {"ordinary_loop": "cf1175fb9703fb722dea4460957dd63847e4a6ec98b5394c66823f8aed0576cf", "pending_loop": "04cec89b8a40983a59dc0eaf425257a9bd9ff1a60f8ea6a2c870cb25c7601b05", "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041", "pending_active": "5ca201b1f8f20512fd218c79ed0eaecd41cf2a42cbd0c5b3e0f6525f3e180c27"}
+_PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {
+    "ordinary_loop": "cf1175fb9703fb722dea4460957dd63847e4a6ec98b5394c66823f8aed0576cf",
+    "pending_loop": "04cec89b8a40983a59dc0eaf425257a9bd9ff1a60f8ea6a2c870cb25c7601b05",
+    "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041",
+    "ordinary_active": "0965aa3a17ce5ae4148a0b216fa0528879fbd92fc5273832e613211f90ea9f5d",
+    "pending_active": "d3a29a470ecb774e1d8e9a8a0c1ff7b1e0cbd862b544e764603045777f4b6387",
+}
 _PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "e3156115c7608e58491724d41dc852b11db86a92617e2d9454049a6dc898a08d"
 
 # `asyncNodeServiceDeadlines` is a proof-only projection of this one explicit
@@ -3621,8 +3641,8 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "body_store:V2BodyStore::read_durable_body_for_certified_serve": "c3e4d12afaa3f18ad1d5b0865eb3a54f4ad892eff4449b9d9d5b72bfd8f26c87",
     "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": "77930bc25fa0078aba267238ba1f3e8016eaa28f9a2d3aa58b4199c3f3333d10",
     "projection:super::ProductionLifecycleOwnerV1::settle_producer_turn_advanced": "d15b6ada19aa19ddd64ce9a23ca4ec06518cb4eb99cfe386976f7f85bc6f3917",
-    "ordinary:run_lifecycle_active_height": "951d96da77e5e5834141747b0865e942d19cecf9cb834c0cee741dcbbc423b6d",
-    "pending:run_pending_active_height": "5ca201b1f8f20512fd218c79ed0eaecd41cf2a42cbd0c5b3e0f6525f3e180c27",
+    "ordinary:run_lifecycle_active_height": "0965aa3a17ce5ae4148a0b216fa0528879fbd92fc5273832e613211f90ea9f5d",
+    "pending:run_pending_active_height": "d3a29a470ecb774e1d8e9a8a0c1ff7b1e0cbd862b544e764603045777f4b6387",
     "height:drain_lifecycle_v2_ingress": "43c08f0351b6372c758800c5fcbe887712de8cc1517b0584a06268528d5514b2",
     "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
     "launch:ProductionLeaderWireIngressBindingV1::retire": "b2aca6532fa807ad78a8cbd4d202152209c53dd5dd8c5a4fd5bba45f7df18c4d",
@@ -3839,7 +3859,7 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
     "ProductionV2Services::can_retain_lane_work_effect_from_snapshot": "8bbf87be5675b7014d08b93630e4426ba77de26915cbfb20cb6cf817e26943ef",
 }
 _PRODUCTION_DURABLE_HISTORY_WORKER_ITEM_SHA256 = {
-    "durable_history_source_covers": "c903d837cc5eec02804ef8913532775b2c4d996c6299cf58cbdef29c4dd4fe16",
+    "durable_history_source_covers": "b49d9bd57e7014963961f563d7e31eb5ebead7d9382a949124ad119602c4adde",
     "queue_plan_admission_reconstruction_covers": "1cd167989e8fca4abb7cf25e9bf470b7fa660a596c7afc3eeb0c819cb2c730e3",
 }
 # Typed semantic claims are the production authority which lets exact output
@@ -3858,9 +3878,9 @@ _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256 = {
     "native_amx_message_body": (
         "90737e4116833fb086b7c1f3a7a04dbb34fc9157385103f3dc1be6e74c127eae"
     ),
-    "scope": "26e07e76ec138dbefb1f64a17b3761a06132fb61b82c4f86ba3b30a5b9b29f21",
+    "scope": "205283e66724f43148cd8c8d7aa0275ccd3cd8b5160d31f46ea836b5364c9ee4",
     "validate_fanout": (
-        "d3cc3d60647dc2790e03613463e1f243308dcaaed3c5b075be08070436d7d4f3"
+        "bf75f7441ed0d4a4bd205ac9347a7882e61c37b0b4355d8c20cc70d7a8b8654c"
     ),
     "validate_non_retireable_lane_transport_fanout": (
         "6f57bc6fc5d7b127d67745f5d042e780aac18e9abce9f4d53c90a1c4ebe934d0"
@@ -3934,10 +3954,10 @@ _EXACT_OUTPUT_ROLLOVER_CLAIM_IMPL_ITEMS = frozenset(
 # reconstruct lane-local output at global-height retirement.  Bind its exact
 # Kura/application source commitment and its winning/non-winning validators.
 _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
-    "durable_historical_lane_output_source_hash": "9d2cee85c5c027238fcc905c74831ec27aecf59b431f3559b0ebe49b6e21a280",
+    "durable_historical_lane_output_source_hash": "d6f14857c39045bdb388095d00ad11d99be5af7aa3cd84c789569eab24148e8b",
     "durable_historical_lane_verification_pops": "090336f96d80a1ea90e51a2ea2cf4161aca46057c6e11c87cefeeb24c18b36ee",
     "covered_source_hash": (
-        "0958a0a7b042dbbd5a86f53caf8aee9aa4e780ee063e22b46b6f31c73a02823a"
+        "3ac2d2397d5fe256dc01b92458007f9e63c25af50b0cff7be83c0e9e830782e8"
     ),
     "persistent": (
         "3e865b8a1b9b7136ab2cf81dd6d33fe84ae9e9b14eab2006156ae9cbc29520ff"
@@ -3946,7 +3966,7 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
         "bf17d20ee94a5023ce4623b31eb333e8d7cb12c1a155d058a2a9f22840430b58"
     ),
     "validate_winning_lane_output": (
-        "d6a5cc077d2e4bcec65b52451771fcfac4f29d8ac82a8b1af0fcfb17daae3114"
+        "df5aef9263e9ef898bc5481e57ecf00c80074a3413a31eb55f3638e77d733900"
     ),
     "validate_winning_lane_qc": (
         "345e7f2f2faadd6dc57195390ce8e711549608ba56f1cb01f962250414f4c011"
@@ -3955,7 +3975,7 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
         "ec480ca71d859f5b27fcc31731a1bc2ebb02ee8d5002475d53d3ed14109c94c2"
     ),
     "durable_lane_rollover_authority": (
-        "9de896c617ad4809199d5b8fc8215ed860a35a96ab028cb2a95eae7f71aa0e8a"
+        "43c30d2794ea46ae16e0c9562b6281c32884f0f69e2aaea57950990e837d4396"
     ),
     "serve_durable_lane_certificate": (
         "bcab2428b4a2d43dd23989bebe917077e84b069c4e120808f6b25ce4503ce52f"
@@ -3993,10 +4013,13 @@ _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     # mutations passed.
     "drain_v2_ingress": _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256,
     "authorize_decided_lane_recovery_drain": "f62eb9f1b38234b28765dafe591bd22098ae66267c90060a812ef37910cbf2eb",
+    "preflight_finalized_lane_rollover": (
+        "883edeefab8ca2ed10e688c58e591949a044e6098b960d6bcf16f1858e42d6ec"
+    ),
     # Bound after the exact-output handoff mutation survived refreshing this
     # helper's own token digest.
     "rollover_finalized_height_outputs": (
-        "c5aeb105b87871255d05ead870a60f056dd591e327e8cdeb44d75443885fc33a"
+        "57da29721e6df2151d024228810103c3e65c04789a7ac19b06d8a39b705b6104"
     ),
     "dispatch_lane_work_effects": "a26b7238a9a62db73e31134d6b6722ccf22577166cfead1d881f863040d4f139",
     "dispatch_lane_work_effects_with_progress": "3eb4bbb2474d45ee9e51283c5165e5a82ee25c9fabd4b90a6e4d4eeaf9d5d9c5",
@@ -4048,7 +4071,7 @@ _PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256 = {
         "b9ad00e3d2ee76b202fa98f53cab9f7264c63a7d9a3050b0c3d57c0449cfb8f5"
     ),
     "user::Root::parse": (
-        "8170e90b0db284bcf347b588a0b0536e0ba438a2eb79562a247e8937c213da73"
+        "8d290fc32e1aa7877b1e2564f8ddf891581ecfa8d0c7aa0708cd968fdff12b6b"
     ),
     "worker::validate_shared_ownership_geometry": (
         "67026793b1424da887ccec0301157480e43b3585d298ab1545fe98e8cb577411"

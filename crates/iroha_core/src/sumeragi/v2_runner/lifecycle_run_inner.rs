@@ -575,89 +575,6 @@ fn recover_canonical_bodies_before_activation(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn service_retained_certified_response(
-    receiver: &Arc<FairV2Ingress>,
-    executor: &mut V2EffectExecutor<SerializedV2Runtime>,
-    services: &mut ProductionV2Services,
-    lane_work: &mut V2LaneWorkAdapter,
-    output_guard: &Arc<ConsensusOutputGuard>,
-    kura: &Kura,
-    key_pair: &KeyPair,
-    block_sync_server: &mut V2BlockSyncServer,
-    block_sync: &mut V2BlockSyncDiscovery,
-    block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
-    npos_vrf: &mut V2NposVrfLifecycle,
-) -> Result<bool, V2RunnerError> {
-    if !executor.has_retained_certified_body_response() {
-        return Ok(false);
-    }
-    let target_ordinal = executor
-        .retained_certified_body_response_scheduler_ordinal()?
-        .ok_or_else(|| {
-            V2RunnerError::Service(
-                "retained certified body response lost its exact scheduler position".to_owned(),
-            )
-        })?;
-    if executor
-        .older_runtime_lifecycle_predates_retained_response(Instant::now(), target_ordinal)?
-    {
-        advance_executor_once_before_exact_serve(receiver, executor, services)?;
-    }
-    if let Some(timeout_recovery_cut) = executor.timeout_recovery_lifecycle_cut()? {
-        services.drain_timeout_recovery_prefix_completion(executor, timeout_recovery_cut)?;
-    }
-    let response_backpressured = match executor.retry_retained_certified_body_response(services) {
-        Ok(_) => false,
-        Err(EffectTransportError::Backpressure) => true,
-        Err(EffectTransportError::FailClosed(reason)) => {
-            return Err(V2RunnerError::Service(reason));
-        }
-        Err(error) => {
-            iroha_logger::debug!(%error, "rejected retained certified body response");
-            false
-        }
-    };
-    if response_backpressured {
-        if executor.retained_response_may_admit_certified_fence_escape() {
-            drain_v2_ingress(
-                receiver,
-                executor,
-                services,
-                lane_work,
-                output_guard,
-                kura,
-                key_pair,
-                block_sync_server,
-                block_sync,
-                block_sync_request,
-                npos_vrf,
-                V2IngressDrainMode::CertifiedFenceEscape,
-                1,
-            )?;
-        }
-        drain_v2_ingress(
-            receiver,
-            executor,
-            services,
-            lane_work,
-            output_guard,
-            kura,
-            key_pair,
-            block_sync_server,
-            block_sync,
-            block_sync_request,
-            npos_vrf,
-            V2IngressDrainMode::TimeoutVoteEpisode,
-            1,
-        )?;
-        executor.reconcile_retained_response_certified_fence_escape_phase();
-        advance_pacemaker_once(receiver, executor, services)?;
-        executor.reconcile_retained_response_certified_fence_escape_phase();
-    }
-    Ok(true)
-}
-
 /// Consume one ready lifecycle height through exact output handoff, store
 /// retirement, and worker cleanup around a caller-authenticated successor.
 pub(in crate::sumeragi) fn finalize_lifecycle_height<T>(
@@ -752,9 +669,9 @@ fn run_lifecycle_active_height(
         }
         liveness_watchdog.poll(Instant::now());
 
-        let retained_response = activated.with_runner_runtime(
+        activated.with_runner_runtime(
             &mut active_runner,
-            |_owner, executor, services, _local_proposal| {
+            |_owner, _executor, services, _local_proposal| {
                 let now = Instant::now();
                 if now >= next_npos_vrf_retransmit {
                     broadcast_npos_vrf_messages(
@@ -764,27 +681,9 @@ fn run_lifecycle_active_height(
                     )?;
                     next_npos_vrf_retransmit = deadline_after(now, retransmit_interval);
                 }
-                let retained_response = service_retained_certified_response(
-                    receiver,
-                    executor,
-                    services,
-                    &mut lane_work,
-                    output_guard,
-                    kura.as_ref(),
-                    &common_config.key_pair,
-                    block_sync_server,
-                    block_sync,
-                    &mut block_sync_request,
-                    npos_vrf,
-                )?;
-                Ok::<_, V2RunnerError>(retained_response)
+                Ok::<_, V2RunnerError>(())
             },
         )?;
-        if retained_response {
-            committed_lane_status_publisher.publish_if_changed(&lane_work);
-            let _ = wake_rx.recv_timeout(IDLE_POLL);
-            continue;
-        }
 
         let discovery_was_outstanding = activated.with_runner_runtime(
             &mut active_runner,
@@ -881,13 +780,7 @@ fn run_lifecycle_active_height(
         if discovery_was_outstanding && block_sync_request.is_none() {
             admitted_discovered_commit_qc = true;
         }
-        let retained_response = activated.with_runner_runtime(
-            &mut active_runner,
-            |_owner, executor, _services, _local_proposal| {
-                executor.has_retained_certified_body_response()
-            },
-        );
-        if drain_disposition.requires_yield() || retained_response {
+        if drain_disposition.requires_yield() {
             committed_lane_status_publisher.publish_if_changed(&lane_work);
             let _ = wake_rx.recv_timeout(IDLE_POLL);
             continue;

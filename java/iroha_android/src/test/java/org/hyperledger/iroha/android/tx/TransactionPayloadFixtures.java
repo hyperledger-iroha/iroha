@@ -27,6 +27,7 @@ import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.testing.SimpleJson;
 import org.hyperledger.iroha.android.util.HashLiteral;
@@ -56,6 +57,7 @@ final class TransactionPayloadFixtures {
               "time_to_live_ms",
               "nonce",
               "fee_payment",
+              "admission_intent",
               "metadata",
               "executable"));
 
@@ -235,6 +237,8 @@ final class TransactionPayloadFixtures {
       final TransactionPayload.Builder builder =
           TransactionPayload.builder()
               .setFeePayment(parseFeePayment(payload.get("fee_payment"), name))
+              .setAdmissionIntent(
+                  parseAdmissionIntent(payload.get("admission_intent"), name))
               .setNetworkId(
                   requireNetworkId(
                       payload.get("network_id"), name + ".payload.network_id"))
@@ -305,6 +309,31 @@ final class TransactionPayloadFixtures {
       metadataRaw.forEach((key, value) -> metadata.put(key, jsonValue(value)));
       builder.setMetadata(metadata);
       return builder.build();
+    }
+
+    private static TransactionAdmissionIntent parseAdmissionIntent(
+        final Object value, final String fixtureName) {
+      final Map<String, Object> intent =
+          asMap(value, "admission_intent", fixtureName);
+      requireExactFields(
+          intent,
+          Arrays.asList("intent", "value"),
+          fixtureName,
+          "admission_intent");
+      if (!intent.containsKey("value") || intent.get("value") != null) {
+        throw new IllegalStateException(
+            fixtureName + ": admission_intent.value must be null");
+      }
+      final String tag =
+          asString(intent.get("intent"), "admission_intent.intent");
+      if ("ordinary".equals(tag)) {
+        return TransactionAdmissionIntent.ORDINARY;
+      }
+      if ("queue_plan_synced".equals(tag)) {
+        return TransactionAdmissionIntent.QUEUE_PLAN_SYNCED;
+      }
+      throw new IllegalStateException(
+          fixtureName + ": admission_intent.intent is unknown");
     }
 
     private static InstructionBox parseInstruction(

@@ -318,28 +318,6 @@ fn queue_plan_pending_obligation_for_test(
     State::queue_plan_pending_obligation_from_admission(&admission)
         .expect("fixture pending QueuePlan obligation")
 }
-fn clear_exact_queue_plan_admission_state_for_test(state: &State, certificate: &[u8]) {
-    let admission = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
-        &state.network_id,
-        certificate,
-    )
-    .expect("fixture QueuePlan admission certificate");
-    let binding = &admission.certificate.binding;
-    let mut world = state.world.block();
-    assert!(
-        State::resolve_queue_plan_pending_obligation_in_storage(
-            &mut world.smart_contract_state,
-            binding.network_id_digest,
-            binding.entrypoint_hash.clone(),
-        )
-        .expect("resolve fixture pending QueuePlan obligation")
-    );
-    world.smart_contract_state.remove(
-        State::queue_plan_admission_registry_marker_key(&admission.registry_key)
-            .expect("fixture registry key"),
-    );
-    world.commit();
-}
 fn persist_merge_carrier_finality_chain_for_state_test(
     state: &State,
     parent: &SignedBlock,
@@ -619,7 +597,6 @@ fn autonomous_merge_commit_authorization_fixture(
         lane_snapshots: Vec::new(),
         execution_batch: Some(batch),
         lane_drain_certificates: Vec::new(),
-        queue_plan_admissions: Vec::new(),
         global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
     };
     state

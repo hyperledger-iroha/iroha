@@ -2066,6 +2066,7 @@ final class SccpV1Tests: XCTestCase {
         ))
         payload.writeField(Data([0]))
         payload.writeField(rawFeePayment)
+        payload.writeField(TransactionAdmissionIntentV1.queuePlanSynced.norito)
         payload.writeField(emptyMetadata.data)
         payload.writeField(Data([0]))
         return payload.data

@@ -523,7 +523,6 @@ fn sample_merge_entry(epoch: u64) -> MergeLedgerEntry {
         activation_root: Hash::new(b"kura-merge-test-activation-root"),
         lane_snapshots,
         execution_batch: None,
-        queue_plan_admissions: Vec::new(),
         lane_drain_certificates: Vec::new(),
         global_state_root,
         merge_qc: MergeQuorumCertificate::new(

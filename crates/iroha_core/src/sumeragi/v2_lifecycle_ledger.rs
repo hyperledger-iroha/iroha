@@ -1387,8 +1387,8 @@ pub(in crate::sumeragi) struct LifecycleLedgerV1 {
 /// CompleteTip, so a copied frame at a caller-selected root cannot enter this
 /// cut. It proves the terminal recovered-Decision body chain, the exact empty
 /// height-one ledger owned by authenticated signed genesis, or an exact
-/// physically present empty non-genesis frame already retired by live
-/// finality. It does not publish the successor or claim that unrelated live
+/// physically present non-genesis frame superseded by canonical finality. It
+/// does not publish the successor or claim that unrelated live
 /// rows, Serve payloads, leases, waits, debts, or capacity have been retired.
 /// The outer canonical predecessor-storage transaction supplies and discharges
 /// those remaining durable owners before it can mint successor activation.
@@ -1409,7 +1409,7 @@ struct AuthenticatedCompleteTipTerminalApplyStoreJoinV1 {
 enum CompleteTipPredecessorLifecycleEvidenceV1 {
     TerminalApply(u128),
     EmptyGenesis,
-    EmptyRetired(AuthenticatedPresentLifecycleFrameV1),
+    CanonicalFrame(AuthenticatedPresentLifecycleFrameV1),
 }
 impl CompleteTipPredecessorLifecycleEvidenceV1 {
     fn exactly_matches(
@@ -1428,16 +1428,44 @@ impl CompleteTipPredecessorLifecycleEvidenceV1 {
                     && ledger.producer_debts.is_empty()
                     && complete_tip.authorizes_empty_genesis_lifecycle(ledger.context())
             }
-            Self::EmptyRetired(present) => {
-                present.authorizes_empty_retired_predecessor(ledger, complete_tip)
+            Self::CanonicalFrame(present) => {
+                present.authorizes_canonical_retired_predecessor(ledger, complete_tip)
                     && present.exactly_matches(store, ledger)
             }
+        }
+    }
+
+    fn authorizes_staged_retirement(
+        &self,
+        store: &LifecycleLedgerStoreV1,
+        current: &LifecycleLedgerV1,
+        retired: &LifecycleLedgerV1,
+        complete_tip: &crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
+    ) -> bool {
+        if !self.exactly_matches(store, current, complete_tip)
+            || current.context() != retired.context()
+            || current.high_water() != retired.high_water()
+            || current.records().len() != retired.records().len()
+            || !retired.producer_debts.is_empty()
+            || retired
+                .records()
+                .iter()
+                .any(|record| record.terminal() == Some(None))
+        {
+            return false;
+        }
+        match self {
+            Self::TerminalApply(apply_ordinal) => retired
+                .authenticate_complete_tip_terminal_apply(complete_tip)
+                .is_ok_and(|retired_ordinal| retired_ordinal == *apply_ordinal),
+            Self::EmptyGenesis => current == retired,
+            Self::CanonicalFrame(_) => true,
         }
     }
 }
 /// Opaque failure while authenticating all canonical CompleteTip predecessor stores.
 #[derive(Debug, Error)]
-#[error("failed to authenticate canonical CompleteTip predecessor lifecycle storage")]
+#[error("failed to authenticate canonical CompleteTip predecessor lifecycle storage: {kind}")]
 pub(in crate::sumeragi) struct CompleteTipPredecessorStorageErrorV1 {
     #[source]
     kind: CompleteTipPredecessorStorageErrorKindV1,
@@ -2173,11 +2201,13 @@ impl AuthenticatedCompleteTipPredecessorStorageV1 {
             retired,
         } = staged;
         debug_assert_eq!(staged_current, terminal.ledger);
-        let retained_predecessor_is_exact = terminal.predecessor_evidence.exactly_matches(
-            &terminal.ledger_store,
-            &retired,
-            &terminal.complete_tip,
-        );
+        let retained_predecessor_is_exact =
+            terminal.predecessor_evidence.authorizes_staged_retirement(
+                &terminal.ledger_store,
+                &terminal.ledger,
+                &retired,
+                &terminal.complete_tip,
+            );
         if !retained_predecessor_is_exact {
             return Err(LifecycleLedgerError::InvalidLedger(
                 "CompleteTip all-row retirement changed its predecessor authority".to_owned(),

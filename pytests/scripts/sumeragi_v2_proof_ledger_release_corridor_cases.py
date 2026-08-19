@@ -6,12 +6,12 @@ def test_release_inventory_constants_match_current_source_seal(
     """Every release consumer binds the current production and focus seals."""
 
     module = load_checker()
-    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 860
+    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 865
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "b6457553bc8d41f74ebc708ea3d4e6187117f0f008da2c2dea697b0771741b44"
+        "9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "c77850a207fe21dd98cc58e27ec87c6aa8a9140bcfb890e879f4d495ef12902a"
+        "37d89b45597ce3ba1c1ca81a0e58192177c396b53a1c1b305458a45acd4faebd"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -19,11 +19,28 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
         "42fc1fb789e115df9f54c230ee6bfc1e1c20504a904aa20f945b6369df6d7679"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 527
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 528
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 530
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 531
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "db96b6b781b450c4b04dbe1f6d4068a4a2a4f13cea3f0fbd868f50dbce4baabb"
+        "e7eb7d609b110a421297d740f0a69cc2b01f2083731d29ca604826849bb36474"
     )
+    assert module._PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256 == {
+        "PreparedFairIngressQueueWitness::lock_exact_dequeue_retaining": (
+            "66d33b07c062bd6dc4a1b879b0b3624bc0403e59305cbc44763d409f97d109fc"
+        ),
+        "LockedPreparedFairIngressExactDequeue::commit": (
+            "2df7516317611dcc3fc0f959cca1e80a7b6aa3670a90d2add798f744cfebbd4c"
+        ),
+        "locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit": (
+            "da01b212e5b3db1163c100f1088e943c074aa124c2f225a4c068052d79e499f9"
+        ),
+        "locked_publication_fence_serializes_unrelated_append_and_preserves_it": (
+            "3f863e16e284ffd980a06b45cd16d3ee4cfd4559a8f7ff23687a55d32ff7481b"
+        ),
+        "dropping_locked_publication_fence_releases_producer_without_dequeue": (
+            "4375aa5205367018773fec586aefb2c44940f502e6de1ae94b8e6e221a350d6f"
+        ),
+    }
     assert (
         "_production_liveness_release_inventory_guard_errors"
         in module._production_liveness_release_inventory_errors.__code__.co_names
@@ -182,9 +199,9 @@ def test_release_inventory_constants_match_current_source_seal(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert receipt_module._PRODUCTION_TEST_COUNT == 860
-    assert receipt_module._G_UNIT_TEST_COUNT == 527
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 860
+    assert receipt_module._PRODUCTION_TEST_COUNT == 865
+    assert receipt_module._G_UNIT_TEST_COUNT == 530
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 865
     receipt_module_counts = {
         module_name: count
         for _leg_id, module_name, count in receipt_module._PRODUCTION_MODULES
@@ -203,7 +220,7 @@ def test_release_inventory_constants_match_current_source_seal(
     assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
-        == 527
+        == 530
     )
 
 @pytest.mark.parametrize(
@@ -2084,8 +2101,8 @@ kura.claim_autonomous_lifecycle_process_generation(
             )
         )
     )
-    assert len(production_inventory) == 860
-    assert len(set(production_inventory)) == 860
+    assert len(production_inventory) == 865
+    assert len(set(production_inventory)) == 865
     native_merge_projection_regressions = {
         "sumeragi::v2_lane_work::tests::native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order",
         "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier",
@@ -2154,6 +2171,9 @@ kura.claim_autonomous_lifecycle_process_generation(
         "sumeragi::v2_lifecycle_coordinator::replay_authority::tests::recovered_serve_states_reconstruct_one_common_source_per_replay_pair",
         "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::post_cut_append_preserves_geometry_but_pre_cut_mutation_fails_cas",
         "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::prepared_commit_preserves_unrelated_post_cut_append",
+        "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit",
+        "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::locked_publication_fence_serializes_unrelated_append_and_preserves_it",
+        "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::dropping_locked_publication_fence_releases_producer_without_dequeue",
         "sumeragi::v2_lifecycle_coordinator::launch::turn_driver::ordinary_ingress_token_tests::armed_token_closes_output_before_releasing_dequeued_carrier_and_serve_result",
         "sumeragi::v2_lifecycle_coordinator::open::recovery_tests::complete_tip_serve_reconciliation_binds_the_exact_source_frame",
         "sumeragi::v2_lifecycle_coordinator::open::recovery_tests::complete_tip_serve_reconciliation_rejects_missing_final_cut_coverage",
@@ -2166,7 +2186,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         "sumeragi::v2_lifecycle_coordinator::tests::serve_and_producer_share_one_reconstruction_source",
         "sumeragi::v2_lifecycle_coordinator::tests::serve_and_producer_terminalization_fail_closed_without_the_atomic_debt",
     }
-    assert len(exact_certified_serve_regressions) == 38
+    assert len(exact_certified_serve_regressions) == 41
     assert exact_certified_serve_regressions <= set(production_inventory)
     assert exact_certified_serve_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
@@ -2207,8 +2227,19 @@ kura.claim_autonomous_lifecycle_process_generation(
         autonomous_retirement_regression
         in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     )
-    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 441
-    assert "readonly expected_production_liveness_test_count=860" in release_source
+    for predecessor_durability_regression in (
+        "sumeragi::v2_worker::tests::"
+        "applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output",
+        "sumeragi::v2_worker::tests::"
+        "applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certificate",
+    ):
+        assert predecessor_durability_regression in production_inventory
+        assert (
+            predecessor_durability_regression
+            in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
+        )
+    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 446
+    assert "readonly expected_production_liveness_test_count=865" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
         in release_source
@@ -2218,7 +2249,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         'root-anchored V3 matrix passed"'
         in release_source
     )
-    assert "_PRODUCTION_TEST_COUNT = 860" in receipt_source
+    assert "_PRODUCTION_TEST_COUNT = 865" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -2228,7 +2259,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 860
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 865
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -3176,64 +3207,59 @@ kura.claim_autonomous_lifecycle_process_generation(
     ), late_lane_baseline_errors
     late_lane_recovery_mutations = (
         (
+            "adapter.proposal_body_available(&proposal)",
+            "!adapter.proposal_body_available(&proposal)",
+            "late canonical lane recovery must distinguish global body application from lane-certificate durability",
+        ),
+        (
+            "0,\n            \"no certificate exists yet to persist\"",
+            "1,\n            \"no certificate exists yet to persist\"",
+            "late canonical lane recovery must retain incomplete certificate progress in the active predecessor",
+        ),
+        (
             "retained_prepare_qc = lane_qc_for_phase("
             "&proposal, &keys[..3], CertPhase::Prepare);",
             "retained_prepare_qc = lane_qc_for_phase("
             "&proposal, &keys[..3], CertPhase::Commit);",
-            "late canonical lane recovery must transfer an exact retained "
-            "PrepareQC owner into successor rollover authority",
+            "late canonical lane recovery must retain incomplete certificate progress in the active predecessor",
         ),
         (
-            "let subsumed_prepare_vote = signed_lane_vote("
-            "&proposal, CertPhase::Prepare, &keys[3]);",
-            "let subsumed_prepare_vote = signed_lane_vote("
-            "&proposal, CertPhase::Commit, &keys[3]);",
-            "late canonical lane recovery must retire only an authenticated "
-            "same-phase vote subsumed by retained quorum evidence",
+            "inspect incomplete decided-lane authority\")\n                .is_none()",
+            "inspect incomplete decided-lane authority\")\n                .is_some()",
+            "late canonical lane recovery must retain incomplete certificate progress in the active predecessor",
         ),
         (
-            "!authority\n                .uses_retained_source",
-            "authority\n                .uses_retained_source",
-            "late canonical lane recovery must retire only an authenticated "
-            "same-phase vote subsumed by retained quorum evidence",
+            ".schedule_retransmission()\n"
+            "            .expect(\"schedule exact missing-certificate discovery\");",
+            "let _ = &adapter;",
+            "late canonical lane recovery must expose one bounded exact certificate-discovery source",
         ),
         (
-            "forged_subsumed_vote.bls_signature[0] ^= 0x80;",
-            "forged_subsumed_vote.bls_signature[0] ^= 0x00;",
-            "late canonical lane recovery must reject forged and phase-distinct "
-            "vote retirement",
+            "message: BlockMessage::LaneBlockProposal(pending),",
+            "message: BlockMessage::LaneBlockVote(pending),",
+            "late canonical lane recovery must expose one bounded exact certificate-discovery source",
         ),
         (
-            "let unique_commit_vote = signed_lane_vote("
-            "&proposal, CertPhase::Commit, &keys[3]);",
-            "let unique_commit_vote = signed_lane_vote("
-            "&proposal, CertPhase::Prepare, &keys[3]);",
-            "late canonical lane recovery must reject forged and phase-distinct "
-            "vote retirement",
+            "V2LaneIngressOutcome::Inserted\n        );",
+            "V2LaneIngressOutcome::Rejected\n        );",
+            "late canonical lane recovery must release successor activation only after the exact certificate",
         ),
         (
-            "&BlockMessage::LaneBlockQc(recovered.prepare_qc.clone()),",
-            "&BlockMessage::LaneBlockQc(retained_prepare_qc.clone()),",
-            "late canonical lane recovery must carry an alternate valid "
-            "PrepareQC while retaining phase-distinct Commit progress",
+            ".expect(\"persist recovered certificate and application receipt\"),\n"
+            "            1\n        );",
+            ".expect(\"persist recovered certificate and application receipt\"),\n"
+            "            0\n        );",
+            "late canonical lane recovery must release successor activation only after the exact certificate",
         ),
         (
-            "&BlockMessage::LaneBlockQc(recovered.commit_qc.clone()),",
-            "&BlockMessage::LaneBlockQc(recovered.prepare_qc.clone()),",
-            "late canonical lane recovery must carry an alternate valid "
-            "PrepareQC while retaining phase-distinct Commit progress",
+            ".lane_block_application_receipt_available(&proposal)",
+            ".lane_block_application_receipt_available(&proposal) && false",
+            "late canonical lane recovery must release successor activation only after the exact certificate",
         ),
         (
-            ".contains(&retained_prepare_qc),",
-            ".contains(&recovered.commit_qc),",
-            "late canonical lane recovery must retain the exact successor-owned "
-            "QC and reject forged aggregate variants",
-        ),
-        (
-            "forged_rollover_qc.bls_aggregate_signature[0] ^= 0x80;",
-            "forged_rollover_qc.bls_aggregate_signature[0] ^= 0x00;",
-            "late canonical lane recovery must retain the exact successor-owned "
-            "QC and reject forged aggregate variants",
+            "build recovered decided-lane rollover authority\")\n                .is_some()",
+            "build recovered decided-lane rollover authority\")\n                .is_none()",
+            "late canonical lane recovery must release successor activation only after the exact certificate",
         ),
     )
     for reviewed_source, mutation, expected_error in late_lane_recovery_mutations:
@@ -3567,7 +3593,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     helper_start = checker_source.index("require_exact_token() {")
     helper_end = checker_source.index("\n}\n", helper_start) + 3
     helper = checker_source[helper_start:helper_end]
-    canonical_declaration = "readonly canonical_production_test_count=860"
+    canonical_declaration = "readonly canonical_production_test_count=865"
     count_guard = (
         "require_exact_token \\\n"
         '  "$release_runner" \\\n'
@@ -3589,7 +3615,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     bash = shutil.which("bash")
     assert bash is not None
     runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
-    canonical = "readonly expected_production_liveness_test_count=860"
+    canonical = "readonly expected_production_liveness_test_count=865"
     weakened = "readonly expected_production_liveness_test_count=859"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
 
@@ -3641,7 +3667,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         (
             canonical_declaration,
             "readonly canonical_production_test_count=859",
-            "must seal exactly 860 production tests",
+            "must seal exactly 865 production tests",
         ),
         (
             '    "sumeragi::v2_effects::tests": 71,',
@@ -3664,7 +3690,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "b6457553bc8d41f74ebc708ea3d4e618"',
+            '    "baf080f72349404d56b6a4eff0c6ad1b"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),

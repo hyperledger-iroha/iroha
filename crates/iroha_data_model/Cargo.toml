@@ -165,6 +165,11 @@ name = "musubi_fixtures"
 path = "src/bin/musubi_fixtures.rs"
 required-features = ["dev-tools", "test-fixtures", "json", "transparent_api"]
 
+[[bin]]
+name = "privacy_exact12_fixtures"
+path = "src/bin/privacy_exact12_fixtures.rs"
+required-features = ["dev-tools", "privacy-exact12-conformance"]
+
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 
 [[test]]

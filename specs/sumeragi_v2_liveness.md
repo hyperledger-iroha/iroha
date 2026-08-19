@@ -11,8 +11,8 @@ The first-release target is therefore conditional:
 > the decision and activates its successor height.
 
 This remains the conditional revision-4 protocol target and paper argument.
-The checked-in `machine_checked_completion: true` flag belongs to the
-legacy/revision-3-rooted deductive ledger. That status declaration is not proof
+The checked-in `machine_checked_completion: true` flag belongs to the reviewed
+revision-4 deductive ledger. That status declaration is not proof
 evidence and does not replace the separate revision-4 exact-cardinality
 TLAPS/TLC/mutation corridor; the claim remains open until fresh same-source
 formal, cross-tool, trace, and release-receipt evidence validates one immutable
@@ -909,18 +909,29 @@ non-winning proposal is explicitly superseded by the finality authority rather
 than described as reconstructible winning output. The winning set is derived
 from the canonical finalized block's lane ownerships, never from the volatile
 output queue. An empty canonical ownership set is already complete, including
-for a result-bearing genesis block with external entries. Missing lane
-certificate or receipt evidence does not keep the finalized global height
-active. Rollover first canonicalizes every bounded unfinished winner against
-Kura, rejects conflicting quorum evidence, prunes proposal-only losers, and
-moves the exact remaining session cache, signing locks, autonomous payload and
-NewView cursors, historical recovery ownership, and retry cursors into the one
-immediate successor. Completed certificates keep their Kura-first source;
-unfinished certificates keep one move-only volatile owner. A block synchronized
-after adapter construction therefore retains its exact proposal as the request
-source for a peer's durable lane certificate while global successor progress
-continues. Duplicate, conflicting, unbounded, or non-canonical evidence fails
-closed. Native AMX
+for a result-bearing genesis block with external entries.
+
+Missing lane-certificate or application evidence keeps the finalized
+predecessor lifecycle active. On each bounded readiness turn the shared
+preflight rehydrates a late canonical lane body once, persists any newly
+complete anchored session, services one historical-recovery step, and checks
+that every winning current-height session is independently complete in Kura.
+If historical recovery remains pending or a winning certificate/application
+witness is absent, ordinary and PendingKura runners publish status, wait for a
+finite wake interval, and retry under the same predecessor owner. They do not
+construct a volatile successor owner.
+
+Only after this preflight succeeds does rollover build the complete durable
+lane authority, reject conflicting quorum evidence, prune proposal-only losers,
+drain exact output, and seal the predecessor handoff. A block synchronized
+after adapter construction therefore retains its exact proposal as the bounded
+certificate-recovery source while successor activation remains closed. During
+the later applied-height output handoff, an earlier-height ordinary lane output
+may use its independently reread Kura certificate plus application receipt,
+and an autonomous historical certificate may use its exact record-backed
+durable source; neither path weakens the current-height winning authority.
+Duplicate, conflicting, unbounded, or non-canonical evidence fails closed.
+Native AMX
 output binds the creation scope, embedded consensus round, and exact message
 hash. A merge share binds its creation scope and exact share hash. Certified
 sidecar requests and chunks bind creation scope, exact target and
@@ -1318,9 +1329,10 @@ test, 41-module checkpoint. The production-adapter activation guard and two
 deferred-canonical-carrier completion regressions produced the historical
 864-test, 41-module checkpoint. Retiring the duplicate inline network-simulation
 rows brings the historical 856-test, 40-module checkpoint. The exact retired-
-attempt accessor, mixed-carrier successor, two-link cold-restart hydration, and
-noncanonical autonomous-output retirement regressions bring the current
-source-bound inventory to 860 exact tests across 43 modules and 91 pre-network
+attempt accessor, mixed-carrier successor, two-link cold-restart hydration,
+noncanonical autonomous-output retirement, and the ordinary plus record-backed
+autonomous predecessor-durability regressions bring the current
+source-bound inventory to 865 exact tests across 43 modules and 91 pre-network
 legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1329,11 +1341,11 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`b6457553bc8d41f74ebc708ea3d4e6187117f0f008da2c2dea697b0771741b44`.
-Nine of those legs execute the separate 527-test G-UNIT focus inventory. Its
-canonical source-derived inventory contains 528 TSV lines and has SHA-256
-`5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d`.
-The 321-test core group includes grouped Native prevote-budget rejection before
+`9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a`.
+Nine of those legs execute the separate 530-test G-UNIT focus inventory. Its
+canonical source-derived inventory contains 531 TSV lines and has SHA-256
+`e7eb7d609b110a421297d740f0a69cc2b01f2083731d29ca604826849bb36474`.
+The 324-test core group includes grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection, atomic grouped reservation commit,
@@ -1576,7 +1588,7 @@ authenticated-non-validator, and two-anonymous owners (`5N+3H+2` total)
 capacity-negative boundary and the exact
 PrepareQC equal-vote quorum regressions. Its four integration tests run
 together under their module filter; the complete pre-network corridor now has
-88 legs, including the governance-unlock audit module, the autonomous
+91 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate exact
 status and atomic lane-certificate decode
 contracts, nine G-UNIT execution-receipt legs, the source-attested Native AMX
@@ -1589,7 +1601,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 860-test inventory is a mechanically checked
+The current 865-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1788,9 +1800,9 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 860 exact production
-liveness tests and executes all 40 owning Rust modules serially. The release
-profile additionally records nine G-UNIT legs executing a separate 527-test
+Before those longer scenarios, the PR gate inventories 865 exact production
+liveness tests and executes all 43 owning Rust modules serially. The release
+profile additionally records nine G-UNIT legs executing a separate 530-test
 focus inventory. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin the native-AMX signing guard's
@@ -1957,9 +1969,14 @@ produced the historical 864-test, 41-module, 89-leg checkpoint. After retirement
 of the duplicate inline network-simulation rows, the historical inventory
 contained 856 tests across 40 modules and 89 legs. The four exact retired-
 attempt, mixed-carrier, cold-restart, and autonomous-output-retirement
-regressions bring the current inventory to 860 tests across those 40 modules.
-Removing the obsolete MKHE lifecycle G-UNIT leg leaves the current corridor at
-88 legs.
+regressions plus the ordinary and record-backed autonomous predecessor-
+durability rows and the three producer-publication-fence race rows bring the
+current inventory to 865 tests across 43 modules. The new rows require the
+post-preflight fence to serialize same-wire retransmission and unrelated append
+producers through the durable publication boundary, while a dropped unpublished
+dequeue must release the fence without consuming its target.
+Removing the obsolete MKHE lifecycle G-UNIT leg and retaining the current
+source-sealed command partition leaves the corridor at 91 legs.
 The rollover slice covers
 historical Kura CommitQC, body, and lane-certificate rereads; current global
 V2; lane proof/supersession; Native AMX; merge-share, certified-sidecar, and
@@ -1991,7 +2008,7 @@ unbounded broadcast admission. The integration filter remains a four-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
 lane-certificate contracts brought that historical aggregate pre-network
 corridor to 61 legs. The current source-bound inventory is the separately
-audited 88-leg, 860-production-test corridor plus 527 G-UNIT tests; execution
+audited 91-leg, 865-production-test corridor plus 530 G-UNIT tests; execution
 against a signed clean candidate remains required before release promotion.
 
 The current reconnect changes supersede older mutable-tree diagnostics that
@@ -2325,8 +2342,8 @@ runner and preserves the active logs and evidence directory for diagnosis;
 without terminal validation it cannot publish external completion.
 
 On success, the private invocation publishes its exact aggregate receipt. That
-receipt binds the 88 pre-network corridor legs and
-their exact 860-test production inventory, the separate 527-test G-UNIT
+receipt binds the 91 pre-network corridor legs and
+their exact 865-test production inventory, the separate 530-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

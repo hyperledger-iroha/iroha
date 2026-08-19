@@ -43,7 +43,10 @@ fn runtime_from_handshake_preserves_puzzle_parameters() {
     assert_eq!(puzzle.lanes().get(), 2);
     assert_eq!(
         runtime.puzzle_work_capacities(),
-        (NonZeroUsize::new(1).unwrap(), NonZeroUsize::new(1).unwrap())
+        (
+            ActualSoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
+            ActualSoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
+        )
     );
 }
 #[test]
@@ -64,7 +67,10 @@ fn runtime_reload_rejects_puzzle_capacity_change_without_replacing_the_gate() {
     );
     assert_eq!(
         runtime.puzzle_work_capacities(),
-        (NonZeroUsize::new(1).unwrap(), NonZeroUsize::new(1).unwrap())
+        (
+            ActualSoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
+            ActualSoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
+        )
     );
 }
 

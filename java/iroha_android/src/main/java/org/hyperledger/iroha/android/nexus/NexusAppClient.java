@@ -13,6 +13,7 @@ import org.hyperledger.iroha.android.client.TransactionFinality;
 import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.instructions.TransferWirePayloadEncoder;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoException;
@@ -121,6 +122,7 @@ public final class NexusAppClient {
         .setTimeToLiveMs(normalized.ttlMs())
         .setNonce(normalized.nonce())
         .setFeePayment(normalized.feePayment())
+        .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
         .setMetadata(normalized.metadata())
         .build();
     final byte[] payloadBytes;

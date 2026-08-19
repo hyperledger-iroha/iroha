@@ -31,6 +31,7 @@ const sourceFixtureFields = new Set([
   "time_to_live_ms",
 ]);
 const payloadFields = new Set([
+  "admission_intent",
   "authority",
   "creation_time_ms",
   "executable",
@@ -280,6 +281,19 @@ function validateSourceFixtureSchema(fixture, context) {
   validateTransactionMetadata(fixture.payload, `${context}.payload`);
   validateExecutable(fixture.payload.executable, `${context}.payload.executable`);
   requireRecord(fixture.payload.fee_payment, `${context}.payload.fee_payment`);
+  requireExactFields(
+    fixture.payload.admission_intent,
+    new Set(["intent", "value"]),
+    `${context}.payload.admission_intent`,
+  );
+  if (
+    fixture.payload.admission_intent.intent !== "ordinary" ||
+    fixture.payload.admission_intent.value !== null
+  ) {
+    throw new Error(
+      `${context}.payload.admission_intent must be exactly ordinary`,
+    );
+  }
   requireRecord(fixture.payload.metadata, `${context}.payload.metadata`);
   for (const field of [
     "authority",
@@ -545,6 +559,7 @@ function makeSourceFixture(name = "alpha") {
         payer: "authority",
         value: { charge_limits: [] },
       },
+      admission_intent: { intent: "ordinary", value: null },
       metadata: {},
     },
     payload_base64: "AA==",

@@ -1740,7 +1740,6 @@ fn install_merge_applied_retirement_work(
         ),
         execution_batch: Some(batch),
         lane_drain_certificates: Vec::new(),
-        queue_plan_admissions: Vec::new(),
     };
     let mut carrier: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
         .chain(0, Some(&genesis))

@@ -349,7 +349,6 @@ impl PreparedPendingKuraLaneRecoveryV1 {
             && launched.recovered_local_proposal_attempt.is_none()
             && launched.executor.lifecycle_live_clocks_are_unarmed()
             && launched.executor.ready_to_finish()
-            && !launched.executor.has_retained_certified_body_response()
             && launched
                 .services
                 .matches_installed_pending_kura_tip(installed.expected())
@@ -525,18 +524,8 @@ impl PendingKuraActivatedProductionLifecycleV1 {
                     evidence.stage()
                         != crate::sumeragi::v2_effects::PendingKuraApplyRecoveryStage::Completed
                 })
-            || self
-                .launched
-                .executor
-                .has_retained_certified_body_response()
-            || self
-                .launched
-                .recovered_decision_fetch_body_completion
-                .is_some()
-            || self.launched.recovered_decision_apply_deferred.is_some()
-            || self.launched.recovered_lifecycle_sign_completion.is_some()
-            || self.launched.recovered_ingress_capacity_wait.is_some()
-            || self.launched.certified_serve_capacity_wait.is_some()
+            || self.launched.pending_lifecycle_completion.is_some()
+            || self.launched.pending_ingress_capacity.is_some()
             || self.launched.completion_observer_activation.is_some()
             || !self
                 .launched
@@ -580,29 +569,20 @@ impl PendingKuraActivatedProductionLifecycleV1 {
             services,
             pending_kura_apply_replay,
             recovered_local_proposal_attempt,
-            recovered_decision_apply_deferred,
-            recovered_decision_fetch_body_completion,
-            recovered_lifecycle_sign_completion,
-            recovered_ingress_capacity_wait,
-            certified_serve_capacity_wait,
+            pending_lifecycle_completion,
+            pending_ingress_capacity,
             completion_observer_activation,
             leader_wire_ingress_binding,
         } = launched;
         debug_assert!(pending_kura_apply_replay.is_none());
         debug_assert!(recovered_local_proposal_attempt.is_none());
-        debug_assert!(recovered_decision_apply_deferred.is_none());
-        debug_assert!(recovered_decision_fetch_body_completion.is_none());
-        debug_assert!(recovered_lifecycle_sign_completion.is_none());
-        debug_assert!(recovered_ingress_capacity_wait.is_none());
-        debug_assert!(certified_serve_capacity_wait.is_none());
+        debug_assert!(pending_lifecycle_completion.is_none());
+        debug_assert!(pending_ingress_capacity.is_none());
         debug_assert!(completion_observer_activation.is_none());
         drop(pending_kura_apply_replay);
         drop(recovered_local_proposal_attempt);
-        drop(recovered_decision_apply_deferred);
-        drop(recovered_decision_fetch_body_completion);
-        drop(recovered_lifecycle_sign_completion);
-        drop(recovered_ingress_capacity_wait);
-        drop(certified_serve_capacity_wait);
+        drop(pending_lifecycle_completion);
+        drop(pending_ingress_capacity);
         drop(completion_observer_activation);
         drop(leader_wire_ingress_binding);
 

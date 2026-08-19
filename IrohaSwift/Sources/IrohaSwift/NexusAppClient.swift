@@ -594,6 +594,7 @@ private enum SwiftNexusTransferPayloadEncoder {
         payload.writeField(try CompactNorito.encodeOption(ttlMs, encode: CompactNorito.encodeUInt64))
         payload.writeField(try CompactNorito.encodeOption(nonce, encode: CompactNorito.encodeUInt32))
         payload.writeField(try feePayment.compactNorito())
+        payload.writeField(TransactionAdmissionIntentV1.queuePlanSynced.norito)
         payload.writeField(try encodeMetadata(metadata))
         payload.writeField(Data([0]))
         return payload.data

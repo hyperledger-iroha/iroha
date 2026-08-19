@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
 import java.util.Base64
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.sccp.SccpNetworkV1
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
@@ -150,6 +151,9 @@ object SccpBridgeSubmitResponseParser {
         require(canonical.contentEquals(bytes)) { "transaction_payload_b64 is not canonical" }
         require(payload.creationTimeMs == creationTimeMs) {
             "transaction payload creation time does not match creation_time_ms"
+        }
+        require(payload.admissionIntent == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED) {
+            "transaction payload admission intent must be QueuePlanSynced"
         }
         return bytes
     }

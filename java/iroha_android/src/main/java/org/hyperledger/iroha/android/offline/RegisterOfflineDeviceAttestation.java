@@ -15,6 +15,7 @@ import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.NetworkId;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
@@ -95,6 +96,7 @@ public final class RegisterOfflineDeviceAttestation {
         .setTimeToLiveMs(timeToLiveMs)
         .setNonce(nonce)
         .setFeePayment(feePayment)
+        .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
         .setMetadata(metadata)
         .build();
   }
@@ -111,6 +113,7 @@ public final class RegisterOfflineDeviceAttestation {
         || !payload.timeToLiveMs().equals(expected.timeToLiveMs())
         || !payload.nonce().equals(expected.nonce())
         || !payload.feePayment().equals(expected.feePayment())
+        || payload.admissionIntent() != expected.admissionIntent()
         || !payload.metadata().equals(expected.metadata())
         || !payload.attachments().equals(expected.attachments())
         || !payload.executable().isInstructions()

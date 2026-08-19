@@ -1136,7 +1136,7 @@ def test_autonomous_retirement_atomic_regression_survives_digest_refresh(
         regression,
         item_name,
         (),
-        ((module._AUTONOMOUS_RETIREMENT_HANDOFF_TEST_SHA256, item_name),),
+        ((module._APPLIED_HEIGHT_PREDECESSOR_DURABILITY_HANDOFF_TEST_SHA256, item_name),),
     )
     try:
         errors = module._autonomous_retirement_source_contract_errors(tmp_path)

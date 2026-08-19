@@ -8,7 +8,9 @@ use crate::sumeragi::{
     v2_chunks::encode_payload,
     v2_core::MAX_EFFECTS_PER_STEP,
     v2_effects::EffectQueueConfig,
-    v2_lane_work::tests::durable_lane_history_fixture,
+    v2_lane_work::tests::{
+        durable_lane_history_fixture, historical_autonomous_lane_certificate_fixture,
+    },
     v2_runtime::{
         BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
         LocalProposalEffectOwnership, RetiredBodyPipelineCompletions, RuntimeEffectOwnership,
@@ -604,9 +606,6 @@ impl EffectRuntime for SaturatedCompletionRuntime {
     }
     fn remaining_completion_capacity(&self) -> usize {
         self.capacity.saturating_sub(self.queued)
-    }
-    fn has_certified_fence_escape_credit(&self) -> bool {
-        false
     }
     fn queue_snapshot(&self, _now: Instant) -> RuntimeQueueSnapshot {
         let empty = RuntimeQueueLaneSnapshot {

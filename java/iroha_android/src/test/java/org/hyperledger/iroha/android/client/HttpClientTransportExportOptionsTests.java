@@ -10,6 +10,7 @@ import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
@@ -60,6 +61,7 @@ public final class HttpClientTransportExportOptionsTests {
             .setInstructionBytes(new byte[] {0x01})
             .setTimeToLiveMs(5_000L)
             .setNonce(1L)
+            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
             .setMetadata(Collections.emptyMap())
             .build();
     final SignedTransaction transaction =

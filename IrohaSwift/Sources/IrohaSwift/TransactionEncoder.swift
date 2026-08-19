@@ -416,8 +416,17 @@ private struct NativeClaimIdentifierReceiptEnvelope: Encodable, Sendable {
 }
 
 private let signedTransactionWireVersion: UInt8 = 1
-let queuePlanSyncedAdmissionMetadataKey =
-    "iroha_transaction_admission_queue_plan_synced"
+
+enum TransactionAdmissionIntentV1: UInt32 {
+    case ordinary = 0
+    case queuePlanSynced = 1
+
+    var norito: Data {
+        var writer = CompactNoritoWriter()
+        writer.writeUInt32LE(rawValue)
+        return writer.data
+    }
+}
 
 private func encodeVersionedSignedTransaction(_ signedTransaction: Data) -> Data {
     var bytes = Data([signedTransactionWireVersion])
@@ -520,7 +529,8 @@ enum SingleInstructionSwiftNoritoEncoder {
             try CompactNorito.encodeOption(nonce, encode: CompactNorito.encodeUInt32)
         )
         transactionPayload.writeField(try feePayment.compactNorito())
-        transactionPayload.writeField(encodeQueuePlanSyncedAdmissionMetadata())
+        transactionPayload.writeField(TransactionAdmissionIntentV1.queuePlanSynced.norito)
+        transactionPayload.writeField(encodeEmptyMetadata())
         transactionPayload.writeField(encodeNoneOption())
 
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload.data))
@@ -733,7 +743,8 @@ enum SingleInstructionSwiftNoritoEncoder {
         )
         transactionPayload.writeField(encodeNoneOption())
         transactionPayload.writeField(try feePayment.compactNorito())
-        transactionPayload.writeField(encodeQueuePlanSyncedAdmissionMetadata())
+        transactionPayload.writeField(TransactionAdmissionIntentV1.queuePlanSynced.norito)
+        transactionPayload.writeField(encodeEmptyMetadata())
         transactionPayload.writeField(encodeNoneOption())
         return transactionPayload.data
     }
@@ -807,16 +818,9 @@ enum SingleInstructionSwiftNoritoEncoder {
         return entrypoint.data
     }
 
-    private static func encodeQueuePlanSyncedAdmissionMetadata() -> Data {
+    private static func encodeEmptyMetadata() -> Data {
         var metadata = CompactNoritoWriter()
-        metadata.writeUInt64LE(1)
-
-        var entry = CompactNoritoWriter()
-        entry.writeField(CompactNorito.encodeString(queuePlanSyncedAdmissionMetadataKey))
-        var json = CompactNoritoWriter()
-        json.writeField(CompactNorito.encodeString("true"))
-        entry.writeField(json.data)
-        metadata.writeField(entry.data)
+        metadata.writeUInt64LE(0)
         return metadata.data
     }
 

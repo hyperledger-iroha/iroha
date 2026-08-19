@@ -14692,12 +14692,12 @@ def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mu
             "the lane-duty regression must retain lane-author work after successor-global roster removal",
         ),
         (
-            "runner_replay_regression_accepts_foreign_subject",
+            "runner_replay_regression_reopens_same_view_after_lock_upgrade",
             "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs",
-            "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner",
-            'let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);',
-            "let foreign_lock = directive(Some(subject), None);",
-            "the recovered-attempt regression must prove exact, affine runner binding and reject foreign locks, rounds, and decisions",
+            "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade",
+            "recovered.exactly_matches_directive(upgraded_lock),",
+            "!recovered.exactly_matches_directive(upgraded_lock),",
+            "the recovered-attempt regression must prove affine same-view suppression across a lock upgrade while rejecting foreign rounds and decisions",
         ),
         (
             "wal_high_subject",
@@ -22049,7 +22049,7 @@ def test_rollover_finalized_outputs_semantics_survive_reviewed_digest_refresh(
     errors = module._exact_output_production_source_fidelity_errors(tmp_path)
 
     assert any(
-        "finalized output rollover must durably reconstruct every predecessor owner"
+        "finalized output rollover must durably settle every predecessor owner"
         in error
         for error in errors
     ), errors

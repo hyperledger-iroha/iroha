@@ -63,17 +63,24 @@ global state order.
 
 ## Durable ingress and proxy admission
 
-Torii proxy wire V3 carries an explicit transaction-admission mode. `Deferred`
-retains ordinary asynchronous queue behavior. `QueuePlanSynced` is the
-production durability boundary: the authoritative peer acknowledges only after
-the exact accepted transaction and routing plan are fsynced in its queue-plan
-journal. The admission mode participates in proxy request identity and survives
-forwarding unchanged; V2/no-mode proxy bytes are not implicitly decoded.
+The first-release Torii proxy request carries one explicit transaction-admission
+mode: `QueuePlanSynced`. The mode and exact `QueuePlanAdmissionBindingV2`
+participate in request identity and survive forwarding unchanged. An
+authoritative coordinator acknowledges only with an exact `f + 1` certificate
+over the accepted transaction, routing plan, admission context, enqueue time,
+and durable journal record. Before returning public `202 Accepted`, the ingress
+node validates that certificate against the exact request and persists its
+canonical bytes in local Kura. That durable certificate is the public
+acceptance boundary; it does not assert that the binding is already in WSV.
+There is no deferred, metadata-marker, or legacy proxy admission branch.
 
 For `QueuePlanSynced`, a failure before network dispatch is definitely
-unavailable. A lost response after P2P or HTTP dispatch is instead returned as
-`queue_plan_journal_outcome_unknown` with the canonical accepted-transaction
-hash so the caller can reconcile ownership. Hedged candidates are reduced
+unavailable. A lost or unverifiable response after P2P or HTTP dispatch is
+returned as `queue_plan_journal_outcome_unknown` with the canonical
+accepted-transaction hash so the caller can reconcile ownership. Once the
+validated certificate is locally durable, later dissemination, Sumeragi wake,
+or proposal-native WSV application failure cannot downgrade the known `202`.
+Hedged candidates are reduced
 deterministically: any valid indeterminate result dominates definite failures,
 non-retryable failures dominate generic retryable failures, and candidate order
 breaks ties. A remote indeterminate response is accepted only when its status,

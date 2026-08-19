@@ -14,7 +14,7 @@ const EXPECTED_REGISTRY_SHA256: &str =
 // Derived from `privacy_exact12_matrix_bytes_v1`; the checked-in cross-SDK
 // matrix and this deployment pin must be regenerated together.
 const EXPECTED_MATRIX_SHA256: &str =
-    "1dd3e975d1fd13bcd8a63a8ea216ea7b8220d52c1d8a867bb64009162b8027e1";
+    "f75eeba824067aaf903fd8060c967190e37073dc07e487c81c265018a1c00f38";
 fn is_canonical_nonzero_sha256_hex(value: &str) -> bool {
     value.len() == 64
         && value

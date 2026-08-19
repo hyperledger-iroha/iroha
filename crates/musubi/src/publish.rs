@@ -1652,6 +1652,7 @@ impl PublicationReleaseSignedEnvelopeV1 {
             time_to_live_ms: Some(self.time_to_live_ms),
             nonce: self.nonce,
             fee_payment: self.fee_payment.clone(),
+            admission_intent: iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
             metadata: Metadata::default(),
             attachments: None,
         };

@@ -30294,6 +30294,42 @@
         ],
         "type": "object"
       },
+      "TransactionAdmissionIntent": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "intent": {
+                "const": "ordinary"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "intent",
+              "value"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "intent": {
+                "const": "queue_plan_synced"
+              },
+              "value": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "intent",
+              "value"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "TransactionDomain": {
         "oneOf": [
           {
@@ -30329,6 +30365,9 @@
       "TransactionPayload": {
         "additionalProperties": false,
         "properties": {
+          "admission_intent": {
+            "$ref": "#/components/schemas/TransactionAdmissionIntent"
+          },
           "attachments": {
             "contentEncoding": "base64",
             "description": "Optional canonical bounded ProofAttachmentList frame encoded as padded base64.",
@@ -30372,6 +30411,7 @@
           "instructions",
           "time_to_live_ms",
           "fee_payment",
+          "admission_intent",
           "metadata"
         ],
         "type": "object"

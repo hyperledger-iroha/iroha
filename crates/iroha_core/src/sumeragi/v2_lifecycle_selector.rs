@@ -436,13 +436,6 @@ pub(crate) struct CertifiedFetchBodyPersistenceRetryError {
     failure: CertifiedFetchBodyPersistenceRetryFailure,
     completion: PreparedCertifiedFetchBodyPersistenceCompletion,
 }
-#[cfg_attr(
-    test,
-    expect(
-        dead_code,
-        reason = "ordinary certified-Fetch Phase B awaits final-runner wiring"
-    )
-)]
 impl CertifiedFetchBodyPersistenceRetryError {
     /// Stable diagnostic category for the retryable pre-ledger rejection.
     pub(crate) const fn reason(&self) -> &'static str {
@@ -617,13 +610,6 @@ pub(crate) struct CertifiedFetchBodyPersistenceRestartError {
     completion: PreparedCertifiedFetchBodyPersistenceCompletion,
     exact_dequeue: PreparedCertifiedFetchExactDequeue,
 }
-#[cfg_attr(
-    test,
-    expect(
-        dead_code,
-        reason = "ordinary certified-Fetch Phase B awaits final-runner wiring"
-    )
-)]
 impl CertifiedFetchBodyPersistenceRestartError {
     /// Stable diagnostic category for the restart-only boundary.
     pub(crate) const fn reason(&self) -> &'static str {
@@ -651,13 +637,6 @@ impl CertifiedFetchBodyPersistenceRestartError {
 /// Closed Phase-B status split at the LedgerV1 durability boundary.
 #[must_use = "retryable and restart-only failures have different ownership rules"]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
-#[cfg_attr(
-    test,
-    expect(
-        dead_code,
-        reason = "ordinary certified-Fetch Phase B awaits final-runner wiring"
-    )
-)]
 pub(crate) enum CertifiedFetchBodyPersistenceCompletionError {
     /// No ledger publication was invoked; the whole completion may be retried.
     Retry(CertifiedFetchBodyPersistenceRetryError),
@@ -1881,13 +1860,6 @@ impl LifecycleCoordinator {
     /// the fail-stop output operation closes admission. A successful ledger
     /// cut is followed by the checked dequeue and an assertion-only registry,
     /// coordinator, executor, service, and work-index commit tail.
-    #[cfg_attr(
-        test,
-        expect(
-            dead_code,
-            reason = "ordinary certified-Fetch Phase B awaits final-runner wiring"
-        )
-    )]
     #[allow(clippy::too_many_arguments, clippy::result_large_err)]
     pub(crate) fn complete_certified_fetch_body_persistence(
         &mut self,

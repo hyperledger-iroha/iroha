@@ -756,14 +756,16 @@ def test_queue_plan_pending_membership_contract_rejects_roster_bound_drift(
     path = tmp_path / module.QUEUE_PLAN_PENDING_MEMBERSHIP_STATE_RELATIVE
     replace_once(
         path,
-        "const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize =\n"
-        "    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSIONS;",
+        "const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize = "
+        "MAX_QUEUE_PLAN_ADMISSIONS_PER_BLOCK;",
         "const MAX_QUEUE_PLAN_PENDING_ROUTE_MEMBERS: usize = usize::MAX;",
     )
     errors = validate_queue_plan_pending_membership_fixture(
         tmp_path, module, models
     )
-    assert any("exact merge-admission consensus bound" in error for error in errors), errors
+    assert any(
+        "exact block/proposal admission consensus bound" in error for error in errors
+    ), errors
 
 
 def test_queue_plan_pending_membership_contract_rejects_unbounded_roster_scan(
@@ -897,7 +899,7 @@ def assert_inflight_order_drift_rejected(
     ("symbol", "token"),
     (
         (
-            "queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set",
+            "assert_queue_plan_native_batch_rollback_is_atomic",
             "failed whole-list staging must restore the exact prior overlay",
         ),
         (

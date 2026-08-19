@@ -29,6 +29,7 @@ public final class TransactionPayload {
   private final Optional<Long> timeToLiveMs;
   private final Optional<Long> nonce;
   private final FeePaymentIntent feePayment;
+  private final TransactionAdmissionIntent admissionIntent;
   private final Map<String, JsonValue> metadata;
   private final Optional<List<ProofAttachment>> attachments;
 
@@ -40,6 +41,8 @@ public final class TransactionPayload {
     this.timeToLiveMs = builder.timeToLiveMs;
     this.nonce = builder.nonce;
     this.feePayment = Objects.requireNonNull(builder.feePayment, "feePayment");
+    this.admissionIntent =
+        Objects.requireNonNull(builder.admissionIntent, "admissionIntent");
     this.metadata = Collections.unmodifiableMap(new LinkedHashMap<>(builder.metadata));
     this.attachments =
         builder.attachments.map(
@@ -75,6 +78,11 @@ public final class TransactionPayload {
     return feePayment;
   }
 
+  /** Returns the signature-bound admission protocol. */
+  public TransactionAdmissionIntent admissionIntent() {
+    return admissionIntent;
+  }
+
   public Map<String, JsonValue> metadata() {
     return metadata;
   }
@@ -93,6 +101,7 @@ public final class TransactionPayload {
         .setTimeToLiveMs(timeToLiveMs.orElse(null))
         .setNonce(nonce.orElse(null))
         .setFeePayment(feePayment)
+        .setAdmissionIntent(admissionIntent)
         .setMetadata(metadata)
         .setAttachments(attachments.orElse(null));
   }
@@ -111,6 +120,7 @@ public final class TransactionPayload {
     private Optional<Long> timeToLiveMs = Optional.of(DEFAULT_TRANSACTION_TTL_MS);
     private Optional<Long> nonce = Optional.empty();
     private FeePaymentIntent feePayment;
+    private TransactionAdmissionIntent admissionIntent = TransactionAdmissionIntent.ORDINARY;
     private final Map<String, JsonValue> metadata = new LinkedHashMap<>();
     private Optional<List<ProofAttachment>> attachments = Optional.empty();
 
@@ -185,6 +195,12 @@ public final class TransactionPayload {
 
     public Builder setFeePayment(final FeePaymentIntent feePayment) {
       this.feePayment = Objects.requireNonNull(feePayment, "feePayment");
+      return this;
+    }
+
+    /** Selects the signature-bound admission protocol. */
+    public Builder setAdmissionIntent(final TransactionAdmissionIntent admissionIntent) {
+      this.admissionIntent = Objects.requireNonNull(admissionIntent, "admissionIntent");
       return this;
     }
 

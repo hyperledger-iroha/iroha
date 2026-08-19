@@ -14,11 +14,11 @@
     "notice_interval_blocks": 300,
     "observation_interval_blocks": 300,
     "rollout_plan_path": "configs/soranexus/taira/privacy_rollout_plan_v1.json",
-    "rollout_plan_sha256": "63f3d331b25e5b240b3e8ac291b1fa64c6901b52f88b2ea2bb7bdb8af0889aa2"
+    "rollout_plan_sha256": "6db9c54ebfa147a57199b02f476929389b0751d59c8387da2e0104d16200ce65"
   },
   "privacy_catalog": {
     "matrix_version": 1,
-    "matrix_file_sha256": "7336d0221fddc51486ee53d4203f5a92d560d0ec9104a49de25896a8b10673d0",
+    "matrix_file_sha256": "f75eeba824067aaf903fd8060c967190e37073dc07e487c81c265018a1c00f38",
     "registry_sha256": "734eafb58f0c54f5319b9cc26557920e564453f689071931393dcdba91123e51",
     "protocols": [
       {

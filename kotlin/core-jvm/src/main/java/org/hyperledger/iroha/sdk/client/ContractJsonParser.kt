@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.client
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
@@ -269,7 +270,10 @@ object ContractJsonParser {
         val transactionPayload = Base64.getDecoder().decode(transactionPayloadB64)
         val signingMessage = Base64.getDecoder().decode(signingMessageB64)
         try {
-            NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(transactionPayload)
+            NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(
+                transactionPayload,
+                TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+            )
         } catch (ex: Exception) {
             throw IllegalStateException(
                 "$context.transaction_payload_b64 must contain one canonical TransactionPayload",

@@ -2017,15 +2017,13 @@ def test_recovered_lifecycle_proposal_owner_semantics_survive_digest_refresh(
         tmp_path
         / "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_02.rs"
     )
-    test_name = (
-        "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner"
-    )
+    test_name = "recovered_lifecycle_proposal_attempt_suppresses_same_view_after_lock_upgrade"
     mutate_rust_item_source(
         module,
         replay_path,
         test_name,
-        'let foreign_lock = directive(Some(proposal_subject(b"foreign replay lock")), None);',
-        "let foreign_lock = directive(Some(subject), None);",
+        "recovered.exactly_matches_directive(upgraded_lock),",
+        "!recovered.exactly_matches_directive(upgraded_lock),",
     )
     item = module.rust_items(
         replay_path.read_text(encoding="utf-8"), test_name
@@ -2039,7 +2037,7 @@ def test_recovered_lifecycle_proposal_owner_semantics_survive_digest_refresh(
     )
 
     assert any(
-        "the recovered-attempt regression must prove exact, affine runner binding and reject foreign locks, rounds, and decisions"
+        "the recovered-attempt regression must prove affine same-view suppression across a lock upgrade while rejecting foreign rounds and decisions"
         in error
         for error in errors
     ), errors

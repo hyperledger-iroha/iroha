@@ -3452,8 +3452,8 @@ mod test {
                         max_future_skew_secs: 300,
                         min_ticket_ttl_secs: 30,
                         ticket_ttl_secs: 300,
-                        outbound_mint_capacity: 1,
-                        inbound_verify_capacity: 1,
+                        outbound_mint_capacity: 3,
+                        inbound_verify_capacity: 3,
                         puzzle: Some(SoranetHandshakePuzzleSummary {
                             memory_kib: 64 * 1024,
                             time_cost: 2,

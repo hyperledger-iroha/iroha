@@ -1646,7 +1646,6 @@ fn merge_entry_from_reference(
         activation_root: Hash::new(b"historical sidecar activations"),
         lane_snapshots: Vec::new(),
         lane_drain_certificates: Vec::new(),
-        queue_plan_admissions: Vec::new(),
         execution_batch: None,
         global_state_root: Hash::new(state_root),
         merge_qc: reference.merge_qc.clone(),

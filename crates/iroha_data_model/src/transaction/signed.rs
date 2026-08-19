@@ -53,18 +53,6 @@ use thiserror::Error;
 /// [`crate::parameter::TransactionParameters::max_time_to_live_ms`]. This
 /// default matches the default client transaction lifetime.
 pub const DEFAULT_TRANSACTION_TIME_TO_LIVE: Duration = Duration::from_secs(100);
-/// Signature-bound metadata marker selecting globally certified QueuePlan admission.
-///
-/// Its absence preserves the canonical V1 transaction layout and means ordinary
-/// admission. Presence selects QueuePlan admission; the marker value is ignored
-/// so relays cannot downgrade intent by rewriting a value without invalidating
-/// the transaction signature.
-pub const TRANSACTION_ADMISSION_INTENT_METADATA_KEY: &str =
-    "iroha_transaction_admission_queue_plan_synced";
-static TRANSACTION_ADMISSION_INTENT_METADATA_NAME: LazyLock<Name> = LazyLock::new(|| {
-    Name::from_str(TRANSACTION_ADMISSION_INTENT_METADATA_KEY)
-        .expect("QueuePlan admission intent metadata key is valid")
-});
 fn verify_typed_signature_for_signer<T: Encode>(
     signature: &SignatureOf<T>,
     signer: &PublicKey,
@@ -233,6 +221,8 @@ mod model {
         pub nonce: Option<NonZeroU32>,
         /// Explicit fee payer, assets, limits, and executable gas bound.
         pub fee_payment: FeePaymentIntent,
+        /// Required signature-bound admission protocol.
+        pub admission_intent: TransactionAdmissionIntent,
         /// Store for additional information.
         pub metadata: Metadata,
         /// Proof attachments whose exact contents affect transaction execution.
@@ -562,6 +552,10 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
             read_aos_field(bytes, &mut offset, flags)?,
             flags,
         )?;
+        let admission_intent = decode_canonical_field::<TransactionAdmissionIntent>(
+            read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
         let metadata =
             decode_canonical_field::<Metadata>(read_aos_field(bytes, &mut offset, flags)?, flags)?;
         let attachments = decode_slice_field::<Option<crate::proof::ProofAttachmentList>>(
@@ -581,6 +575,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for model::TransactionPayload {
                 time_to_live_ms,
                 nonce,
                 fee_payment,
+                admission_intent,
                 metadata,
                 attachments,
             },
@@ -1310,15 +1305,8 @@ impl TransactionPayload {
     }
     /// Return the signature-bound admission protocol.
     #[inline]
-    pub fn admission_intent(&self) -> TransactionAdmissionIntent {
-        if self
-            .metadata
-            .contains(&*TRANSACTION_ADMISSION_INTENT_METADATA_NAME)
-        {
-            TransactionAdmissionIntent::QueuePlanSynced
-        } else {
-            TransactionAdmissionIntent::Ordinary
-        }
+    pub const fn admission_intent(&self) -> TransactionAdmissionIntent {
+        self.admission_intent
     }
     /// Return the exact network identity for an ordinary transaction.
     ///
@@ -2169,6 +2157,7 @@ impl TransactionBuilder {
                 ),
                 instructions: Vec::<InstructionBox>::new().into(),
                 fee_payment,
+                admission_intent: TransactionAdmissionIntent::Ordinary,
                 metadata: Metadata::default(),
                 attachments: None,
             },
@@ -2283,32 +2272,13 @@ impl TransactionBuilder {
     }
     /// Adds metadata to this transaction
     pub fn with_metadata(mut self, metadata: Metadata) -> Self {
-        let admission_intent = self.payload.admission_intent();
         self.payload.metadata = metadata;
-        if admission_intent == TransactionAdmissionIntent::QueuePlanSynced {
-            self.payload.metadata.insert(
-                TRANSACTION_ADMISSION_INTENT_METADATA_NAME.clone(),
-                Json::new(true),
-            );
-        }
         self
     }
     /// Select the signature-bound admission protocol for this transaction.
     #[must_use]
     pub fn with_admission_intent(mut self, intent: TransactionAdmissionIntent) -> Self {
-        match intent {
-            TransactionAdmissionIntent::Ordinary => {
-                self.payload
-                    .metadata
-                    .remove_internal(&TRANSACTION_ADMISSION_INTENT_METADATA_NAME);
-            }
-            TransactionAdmissionIntent::QueuePlanSynced => {
-                self.payload.metadata.insert(
-                    TRANSACTION_ADMISSION_INTENT_METADATA_NAME.clone(),
-                    Json::new(true),
-                );
-            }
-        }
+        self.payload.admission_intent = intent;
         self
     }
     /// Set the required signature-bound fee payer and charge limits.

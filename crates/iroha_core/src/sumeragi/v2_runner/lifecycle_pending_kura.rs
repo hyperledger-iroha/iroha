@@ -455,16 +455,6 @@ fn run_pending_active_height(
             return Ok(None);
         }
         liveness_watchdog.poll(Instant::now());
-        activated.with_runner_runtime(
-            &mut active_runner,
-            |executor, _services, _lane_work| -> Result<_, V2RunnerError> {
-                if executor.has_retained_certified_body_response() {
-                    output_guard.close_admission_for_restart();
-                    return Err(V2RunnerError::RestartRequired);
-                }
-                Ok(())
-            },
-        )?;
         if let Err(error) =
             activated.settle_certified_serve_completion_for_no_clock_recovery(&mut active_runner)
         {

@@ -94,7 +94,7 @@ impl AuthenticatedPresentLifecycleFrameV1 {
                 })
     }
 
-    fn authorizes_empty_retired_predecessor(
+    fn authorizes_canonical_retired_predecessor(
         &self,
         ledger: &LifecycleLedgerV1,
         complete_tip: &crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,
@@ -102,10 +102,8 @@ impl AuthenticatedPresentLifecycleFrameV1 {
         self.store_path.parent().is_some_and(|root| {
             complete_tip.authorizes_predecessor_lifecycle_root(root)
                 && self.store_path == root.join(LEDGER_FILE)
-        }) && ledger.records().is_empty()
-            && ledger.producer_debts.is_empty()
-            && self.binds_ledger(ledger)
-            && complete_tip.authorizes_empty_retired_lifecycle(ledger.context())
+        }) && self.binds_ledger(ledger)
+            && complete_tip.authorizes_retired_lifecycle(ledger.context())
     }
 
     fn exactly_matches(&self, store: &LifecycleLedgerStoreV1, ledger: &LifecycleLedgerV1) -> bool {

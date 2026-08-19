@@ -168,6 +168,7 @@ struct ToriiCanonicalTransactionDraft {
     let timeToLive = try transaction.takeField("\(context).time_to_live_ms")
     let nonce = try transaction.takeField("\(context).nonce")
     let feePayment = try transaction.takeField("\(context).fee_payment")
+    let admissionIntent = try transaction.takeField("\(context).admission_intent")
     let metadata = try transaction.takeField("\(context).metadata")
     let attachments = try transaction.takeField("\(context).attachments")
     guard transaction.isFinished,
@@ -176,7 +177,7 @@ struct ToriiCanonicalTransactionDraft {
       creation.count == MemoryLayout<UInt64>.size
     else {
       throw ToriiClientError.invalidPayload(
-        "\(context).transaction_payload_b64 must contain exactly one canonical nine-field TransactionPayload."
+        "\(context).transaction_payload_b64 must contain exactly one canonical ten-field TransactionPayload."
       )
     }
     let creationTimeMs = creation.withUnsafeBytes {
@@ -189,6 +190,10 @@ struct ToriiCanonicalTransactionDraft {
       try SccpSubmitValidation.requireCanonicalTransactionFeePayment(feePayment)
     } catch {
       throw ToriiClientError.invalidPayload("\(context) fee_payment is not canonical.")
+    }
+    guard admissionIntent == TransactionAdmissionIntentV1.queuePlanSynced.norito else {
+      throw ToriiClientError.invalidPayload(
+        "\(context) admission_intent must be QueuePlanSynced.")
     }
     guard attachments == Data([0]) else {
       throw ToriiClientError.invalidPayload(

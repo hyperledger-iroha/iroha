@@ -18,17 +18,15 @@ pub use receipt::{
 pub use signed::{
     AuthorityFeePayment, DEFAULT_TRANSACTION_TIME_TO_LIVE, ExecutionStep, FeeChargeKind,
     FeeChargeLimit, FeePaymentIntent, FeePaymentIntentError, SignedTransaction, SponsorFeePayment,
-    TRANSACTION_ADMISSION_INTENT_METADATA_KEY, TransactionAdmissionIntent, TransactionBuilder,
-    TransactionDomain, TransactionEntrypoint, TransactionPayload, TransactionResult,
-    TransactionResultInner, TransactionSignature,
+    TransactionAdmissionIntent, TransactionBuilder, TransactionDomain, TransactionEntrypoint,
+    TransactionPayload, TransactionResult, TransactionResultInner, TransactionSignature,
 };
 /// The prelude re-exports most commonly used traits, structs and macros from this module.
 pub mod prelude {
     pub use super::{
         AuthorityFeePayment, DataTriggerSequence, DataTriggerStep, Executable, ExecutableBatchItem,
         ExecutionStep, FeeChargeKind, FeeChargeLimit, FeePaymentIntent, FeePaymentIntentError,
-        IvmBytecode, IvmProved, SignedTransaction, SponsorFeePayment,
-        TRANSACTION_ADMISSION_INTENT_METADATA_KEY, TX_SUBMISSION_RECEIPT_DOMAIN,
+        IvmBytecode, IvmProved, SignedTransaction, SponsorFeePayment, TX_SUBMISSION_RECEIPT_DOMAIN,
         TimeTriggerEntrypoint, TransactionAdmissionIntent, TransactionBuilder, TransactionDomain,
         TransactionEntrypoint, TransactionGasLimitError, TransactionPayload, TransactionResult,
         TransactionResultInner, TransactionSignature, TransactionSubmissionReceipt,

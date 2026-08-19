@@ -16,7 +16,9 @@ fn ingress_selection_retries_before_producer(
 ) -> bool {
     matches!(
         selection,
-        super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCapacityPending
+        super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedFetchCapacityPending
+            | super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry
+            | super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCapacityPending
             | super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry
             | super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending
             | super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeRetry
@@ -173,8 +175,12 @@ impl LifecycleProducerClaimDispositionV1 {
                 Self::AwaitingCompletion,
                 Completion::RecoveredDecisionFetchCompletion(FetchSettlement::Applied),
             )
+            | (Self::AwaitingCompletion, Completion::CertifiedFetchBodyPersisted)
             | (Self::AwaitingCompletion, Completion::CertifiedServeClaimedCompleted) => {
                 Ok(Self::Eligible)
+            }
+            (Self::AwaitingCompletion, Completion::CertifiedFetchBodyPersistenceRetry) => {
+                Ok(Self::AwaitingCompletion)
             }
             (Self::AwaitingReplayCompletion, Completion::CertifiedServeReplayCompleted) => {
                 Ok(Self::Eligible)
@@ -200,6 +206,12 @@ impl LifecycleProducerClaimDispositionV1 {
 
         match (self, selected) {
             (_, Ingress::RestartRequired) => Ok(self),
+            (
+                Self::Eligible,
+                Ingress::CertifiedFetchCapacityPending | Ingress::CertifiedFetchRetry,
+            ) => Ok(Self::Eligible),
+            (Self::Eligible, Ingress::CertifiedFetchCompetingReady) => Ok(Self::Eligible),
+            (Self::Eligible, Ingress::CertifiedFetchQueued) => Ok(Self::AwaitingCompletion),
             (
                 Self::Eligible,
                 Ingress::RecoveredDecisionFetchCapacityPending
@@ -282,20 +294,14 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
     limit: usize,
     mut producer_claim: LifecycleProducerClaimDispositionV1,
 ) -> Result<LifecycleV2IngressDrainDispositionV1, V2RunnerError> {
-    let (context_id, height, retained_response, output_guard) =
+    let (context_id, height, output_guard) =
         activated.with_runner_runtime(runner, |_owner, executor, services, _local_proposal| {
             (
                 executor.context().id(),
                 executor.context().height,
-                executor.has_retained_certified_body_response(),
                 services.lifecycle_output_guard(),
             )
         });
-    if retained_response {
-        return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-            producer_claim,
-        ));
-    }
 
     let mut outer_turns = outer_ingress_turns(limit, context_id, height);
     while let Some(current_turn) = outer_turns.next_current() {
@@ -359,7 +365,7 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                 }
             }
             LifecycleRunnerRankTarget::Runtime => {
-                let (installed_terminal, retained_response) = activated.with_runner_runtime(
+                let installed_terminal = activated.with_runner_runtime(
                     runner,
                     |_owner, executor, services, _local_proposal| {
                         let was_terminal = executor
@@ -371,17 +377,9 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             .local_proposal_directive()?
                             .decided_subject()
                             .is_some();
-                        Ok::<_, V2RunnerError>((
-                            !was_terminal && is_terminal,
-                            executor.has_retained_certified_body_response(),
-                        ))
+                        Ok::<_, V2RunnerError>(!was_terminal && is_terminal)
                     },
                 )?;
-                if retained_response {
-                    return Ok(LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                        producer_claim,
-                    ));
-                }
                 if installed_terminal {
                     return Ok(LifecycleV2IngressDrainDispositionV1::ready(producer_claim));
                 }
@@ -411,22 +409,12 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             block_sync_request,
                             npos_vrf,
                         );
-                        match consumed {
-                            Ok(ProductionPreparedOrdinaryIngressConsumptionV1::Continue) => {}
-                            Ok(ProductionPreparedOrdinaryIngressConsumptionV1::StopBatch) => {
-                                return Ok(
-                                    LifecycleV2IngressDrainDispositionV1::retry_before_producer(
-                                        producer_claim,
-                                    ),
-                                );
-                            }
-                            Err(error) => {
-                                iroha_logger::error!(
-                                    %error,
-                                    "Sumeragi v2 ordinary ingress consumption failed closed"
-                                );
-                                return Err(error);
-                            }
+                        if let Err(error) = consumed {
+                            iroha_logger::error!(
+                                %error,
+                                "Sumeragi v2 ordinary ingress consumption failed closed"
+                            );
+                            return Err(error);
                         }
                     }
                     super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressTurnV1::Selected(
@@ -444,7 +432,9 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             );
                         }
                         match selected {
-                            ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCompetingReady
+                            ProductionLifecycleIngressSelectionV1::CertifiedFetchCompetingReady
+                            | ProductionLifecycleIngressSelectionV1::CertifiedFetchQueued
+                            | ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCompetingReady
                             | ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchQueued
                             | ProductionLifecycleIngressSelectionV1::CertifiedServeCompetingReady
                             | ProductionLifecycleIngressSelectionV1::CertifiedServeQueued
@@ -457,7 +447,9 @@ pub(in crate::sumeragi) fn drain_lifecycle_v2_ingress(
                             ProductionLifecycleIngressSelectionV1::RestartRequired => {
                                 return Err(ingress_restart_error(&output_guard));
                             }
-                            ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCapacityPending
+                            ProductionLifecycleIngressSelectionV1::CertifiedFetchCapacityPending
+                            | ProductionLifecycleIngressSelectionV1::CertifiedFetchRetry
+                            | ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCapacityPending
                             | ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry
                             | ProductionLifecycleIngressSelectionV1::CertifiedServeCapacityPending
                             | ProductionLifecycleIngressSelectionV1::CertifiedServeRetry => {

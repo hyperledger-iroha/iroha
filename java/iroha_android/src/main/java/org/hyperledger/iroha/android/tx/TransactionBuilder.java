@@ -1,13 +1,11 @@
 package org.hyperledger.iroha.android.tx;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.SigningException;
 import org.hyperledger.iroha.android.crypto.Signer;
-import org.hyperledger.iroha.android.model.JsonValue;
+import org.hyperledger.iroha.android.model.TransactionAdmissionIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoException;
@@ -17,10 +15,6 @@ import org.hyperledger.iroha.android.norito.NoritoException;
  * {@link IrohaKeyManager}.
  */
 public final class TransactionBuilder {
-
-  /** Signature-bound metadata key selecting globally certified QueuePlan admission. */
-  public static final String QUEUE_PLAN_SYNCED_ADMISSION_METADATA_KEY =
-      "iroha_transaction_admission_queue_plan_synced";
 
   private final NoritoCodecAdapter codecAdapter;
   private final IrohaKeyManager keyManager;
@@ -34,7 +28,7 @@ public final class TransactionBuilder {
    * Encodes the payload for public Torii submission and signs it using the given alias. Keys are
    * created on demand by the {@link IrohaKeyManager}.
    *
-   * <p>Public submission requires the signature-bound QueuePlan admission marker. The caller's
+   * <p>Public submission requires the signature-bound QueuePlan admission intent. The caller's
    * payload remains unchanged so direct codec users continue to produce ordinary transactions.
    */
   public SignedTransaction encodeAndSign(
@@ -55,9 +49,10 @@ public final class TransactionBuilder {
   private static TransactionPayload withQueuePlanSyncedAdmission(
       final TransactionPayload payload) {
     Objects.requireNonNull(payload, "payload");
-    final Map<String, JsonValue> metadata = new LinkedHashMap<>(payload.metadata());
-    metadata.put(QUEUE_PLAN_SYNCED_ADMISSION_METADATA_KEY, JsonValue.bool(true));
-    return payload.toBuilder().setMetadata(metadata).build();
+    return payload
+        .toBuilder()
+        .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
+        .build();
   }
 
   private SignedTransaction encodeAndSignInternal(

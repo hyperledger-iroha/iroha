@@ -607,16 +607,14 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "exactly_covers_recovered_ready_work(&self.coordinator)",
         ],
     );
-    assert!(launch.contains(
-            "inputs.network.reply_route_source_capacity().max(1),\n            inputs.auxiliary_io_capacity,"
-        ));
+    assert!(!launch.contains("reply_route_source_capacity()"));
     assert_source_tokens_in_order(
         launch,
         &[
             "service.matches_lifecycle_launch(",
             "binding.storage_paths_for_launch(inputs.kura.as_ref())",
             ".prepare_leader_wire_launch(launch_storage.wal_path())",
-            "ProductionV2Services::restore_lifecycle_ordinal_source(",
+            "RuntimeLifecycleOrdinalSource::after_high_watermark(0)",
             "leader_wire_launch.restored_producer_ordinal_high_watermark()",
             ".open_gate(",
             "self.body_store\n                        .as_ref()",
@@ -2246,14 +2244,14 @@ fn recovered_decision_fetch_queue_parks_generic_drain_and_uses_unified_completio
     assert!(generic.contains("V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)"));
     assert!(generic.contains("self.held_io_completion = Some(completion);"));
     let classifier = worker
-        .split_once("fn take_next_recovered_lifecycle_completion(")
+        .split_once("fn take_next_lifecycle_completion(")
         .expect("unified recovered lifecycle classifier exists")
         .1
         .split_once("pub(in crate::sumeragi) fn drain_recovered_lifecycle_sign_completion(")
         .expect("unified classifier stays bounded")
         .0;
     assert!(classifier.contains("V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded)"));
-    assert!(classifier.contains("RecoveredLifecycleCompletionTakeV1::DecisionFetch("));
+    assert!(classifier.contains("LifecycleCompletionTakeV1::DecisionFetch("));
     assert!(worker.contains("tracked.state = V2IoWorkState::Active;"));
     assert!(worker.contains("tracked.state = V2IoWorkState::CompletionPending;"));
     assert!(!worker.contains("drain_recovered_decision_fetch_body_completion"));

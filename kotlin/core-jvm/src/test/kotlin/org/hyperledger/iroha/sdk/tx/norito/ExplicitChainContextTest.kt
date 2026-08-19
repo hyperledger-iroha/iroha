@@ -315,8 +315,8 @@ class ExplicitChainContextTest {
         SignedTransaction(payload, ByteArray(64) { 0x55.toByte() }, ByteArray(0), schemaName)
 
     private fun swapMetadataEntries(canonicalPayload: ByteArray): ByteArray {
-        val fields = decodeSizedFields(canonicalPayload, 9)
-        val metadata = NoritoDecoder(fields[7], NoritoCodec.DEFAULT_FLAGS)
+        val fields = decodeSizedFields(canonicalPayload, 10)
+        val metadata = NoritoDecoder(fields[8], NoritoCodec.DEFAULT_FLAGS)
         assertEquals(2L, metadata.readLength(false))
         val first = readSizedField(metadata)
         val second = readSizedField(metadata)
@@ -326,7 +326,7 @@ class ExplicitChainContextTest {
         swapped.writeLength(2, false)
         writeSizedField(swapped, second)
         writeSizedField(swapped, first)
-        fields[7] = swapped.toByteArray()
+        fields[8] = swapped.toByteArray()
         return encodeSizedFields(fields)
     }
 

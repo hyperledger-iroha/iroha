@@ -158,7 +158,8 @@ use iroha_data_model::{
         pin_registry::StorageClass,
     },
     transaction::{
-        Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, TransactionPayload,
+        Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, TransactionAdmissionIntent,
+        TransactionPayload,
         executable::{ContractArgumentRecord, ContractInvocation},
         signed::{SignedTransaction, TransactionBuilder},
     },
@@ -11136,6 +11137,7 @@ fn configure_transaction_builder(
     ttl_ms: Option<i64>,
     nonce: Option<u32>,
 ) -> napi::Result<TransactionBuilder> {
+    builder = builder.with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
     if let Some(ms) = creation_time_ms {
         let millis = js_number_to_u64(ms, "creation_time_ms")?;
         builder.set_creation_time(Duration::from_millis(millis));
@@ -12038,6 +12040,12 @@ pub fn finalize_signed_transaction(
         &expected_network_id,
         "JavaScript external transaction finalizer",
     )?;
+    if builder.payload().admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "JavaScript external transaction finalizer requires QueuePlanSynced admission intent",
+        ));
+    }
     let payload_hash = builder.payload_hash_bytes();
     if let Some(expected) = input.payload_hash_hex {
         let normalized = expected.strip_prefix("0x").unwrap_or(&expected);
@@ -17745,6 +17753,10 @@ seiyaku Privacy {
         assert_eq!(built.payload_hash.len(), Hash::LENGTH);
         let builder = TransactionBuilder::decode_payload(built.payload_bytes.as_ref())
             .expect("native payload builder must emit canonical bytes");
+        assert_eq!(
+            builder.payload().admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced
+        );
         assert_eq!(builder.encode_payload(), built.payload_bytes.as_ref());
         assert_eq!(
             builder.payload_hash_bytes().as_slice(),

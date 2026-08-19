@@ -6481,7 +6481,7 @@ pub(crate) mod valid {
             ) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if let Err(error) = Self::validate_staged_merge_reference(&block, state_block) {
+            if let Err(error) = Self::validate_staged_execution_controls(&block, state_block) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let exec_witness_guard = (!state_block.replay_compatibility)
@@ -6537,7 +6537,7 @@ pub(crate) mod valid {
                 send_events(ev);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if let Err(error) = Self::validate_staged_merge_reference(&block, state_block) {
+            if let Err(error) = Self::validate_staged_execution_controls(&block, state_block) {
                 let ev = PipelineEventBox::from(BlockEvent {
                     header: block.header(),
                     status: BlockStatus::Rejected(map_block_err_to_reason(&error)),
@@ -6817,7 +6817,7 @@ pub(crate) mod valid {
             mut block: SignedBlock,
             state_block: &mut StateBlock<'_>,
         ) -> Result<Option<[u8; 32]>, BlockValidationError> {
-            Self::validate_staged_merge_reference(&block, state_block)?;
+            Self::validate_staged_execution_controls(&block, state_block)?;
             let exec_witness_guard = (!state_block.replay_compatibility)
                 .then(crate::sumeragi::witness::exec_witness_guard);
             Self::validate_and_record_transactions_with_prepared(
@@ -6842,9 +6842,31 @@ pub(crate) mod valid {
             state: &'state State,
             soft_fork: bool,
         ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
-            let merge_reference = block
-                .execution_context()
-                .and_then(|bundle| bundle.merge_entry.as_ref());
+            let execution_context = block.execution_context();
+            let merge_reference = execution_context.and_then(|bundle| bundle.merge_entry.as_ref());
+            let queue_plan_admissions = execution_context
+                .map(|bundle| bundle.queue_plan_admissions())
+                .unwrap_or_default();
+            if merge_reference.is_some() && !queue_plan_admissions.is_empty() {
+                return Err(Self::execution_context_error(
+                    "a carrier cannot mix proposal-native QueuePlan controls with a certified merge entry",
+                ));
+            }
+            if !queue_plan_admissions.is_empty() {
+                if soft_fork {
+                    return Err(Self::execution_context_error(
+                        "soft-fork replacement cannot safely apply QueuePlan admission controls",
+                    ));
+                }
+                return state
+                    .block_with_queue_plan_admissions(block.header(), queue_plan_admissions)
+                    .map_err(|error| {
+                        Self::execution_context_error(format!(
+                            "QueuePlan admission controls could not be staged: {error}"
+                        ))
+                    })
+                    .map(Box::new);
+            }
             if let Some(reference) = merge_reference {
                 if soft_fork {
                     return Err(Self::execution_context_error(
@@ -6869,13 +6891,25 @@ pub(crate) mod valid {
                 state.block(block.header())
             }))
         }
-        fn validate_staged_merge_reference(
+        fn validate_staged_execution_controls(
             block: &SignedBlock,
             state_block: &StateBlock<'_>,
         ) -> Result<(), BlockValidationError> {
-            let reference = block
-                .execution_context()
-                .and_then(|bundle| bundle.merge_entry.as_ref());
+            let execution_context = block.execution_context();
+            let reference = execution_context.and_then(|bundle| bundle.merge_entry.as_ref());
+            let native_queue_plan_admissions = execution_context
+                .map(|bundle| bundle.queue_plan_admissions())
+                .unwrap_or_default();
+            if reference.is_some() && !native_queue_plan_admissions.is_empty() {
+                return Err(Self::execution_context_error(
+                    "a carrier cannot mix proposal-native QueuePlan controls with a certified merge entry",
+                ));
+            }
+            if native_queue_plan_admissions != state_block.staged_queue_plan_admissions() {
+                return Err(Self::execution_context_error(
+                    "staged QueuePlan admission controls differ from the block execution context",
+                ));
+            }
             let staged = state_block.staged_merge_entry();
             let entry = match (reference, staged) {
                 (None, None) => None,
@@ -7217,7 +7251,7 @@ pub(crate) mod valid {
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_state_block_ms = to_ms(state_block_start.elapsed());
             }
-            if let Err(error) = Self::validate_staged_merge_reference(&block, &state_block) {
+            if let Err(error) = Self::validate_staged_execution_controls(&block, &state_block) {
                 drop(state_block);
                 record_timings(&mut timings, stateless_elapsed, Some(execution_start));
                 emit_rejection(&block, &error);
@@ -15184,7 +15218,7 @@ pub(crate) mod valid {
             mut block: SignedBlock,
             state_block: &mut StateBlock<'_>,
         ) -> WithEvents<ValidBlock> {
-            Self::validate_staged_merge_reference(&block, state_block)
+            Self::validate_staged_execution_controls(&block, state_block)
                 .expect("unchecked certified merge block requires its exact pre-staged sidecar");
             let exec_witness_guard = (!state_block.replay_compatibility)
                 .then(crate::sumeragi::witness::exec_witness_guard);
@@ -26905,7 +26939,7 @@ mod tests {
     #[test]
     fn merge_capable_validation_paths_source_bind_post_effect_authorization() {
         let source = include_str!("block.rs");
-        let staged_reference_needle = ["Self::validate_staged_merge_reference", "("].concat();
+        let staged_reference_needle = ["Self::validate_staged_execution_controls", "("].concat();
         let post_effect_authorization_needle =
             ["Self::validate_staged_merge_execution_authorization", "("].concat();
         let staged_reference_calls = source.matches(&staged_reference_needle).count();

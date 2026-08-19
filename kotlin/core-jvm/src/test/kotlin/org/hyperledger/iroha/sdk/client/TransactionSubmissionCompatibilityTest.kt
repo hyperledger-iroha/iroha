@@ -17,6 +17,7 @@ import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.testing.TestNetworkIds
@@ -248,6 +249,7 @@ class TransactionSubmissionCompatibilityTest {
             timeToLiveMs = 5_000L,
             nonce = seed.toLong() + 1L,
             feePayment = FeePaymentIntent.authority(emptyList(), 1L),
+            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             metadata = mapOf("note" to JsonValue.string("compat-$seed")),
         )
         return SignedTransaction(

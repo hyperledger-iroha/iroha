@@ -23,7 +23,7 @@ use super::{
     replay_authority::{
         CertifiedServeTerminalReplayAuthorityPairV1, LifecycleReplayAuthorityV1,
         PreparedDurableCertifiedFetchStartupV1, RecoveredLifecycleNextWalVoteCandidateProjectionV1,
-        recovered_decision_body_continuation_is_exact,
+        recovered_decision_body_continuation_is_exact, signed_broadcast_continuation_is_exact,
     },
     schema::{
         CausalRoot, DurableContinuation, DurableContinuationEdge, DurableRecordMetadata,
@@ -1356,6 +1356,15 @@ impl LifecycleCoordinator {
                             &child_metadata.replay_authority,
                             child_metadata.payload,
                         )
+                        .or_else(|| {
+                            signed_broadcast_continuation_is_exact(
+                                edge,
+                                &metadata.replay_authority,
+                                metadata.payload,
+                                &child_metadata.replay_authority,
+                                child_metadata.payload,
+                            )
+                        })
                         .unwrap_or_else(|| {
                             durable_continuation_payload_is_exact(
                                 edge,

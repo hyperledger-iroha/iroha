@@ -23421,7 +23421,7 @@ impl std::fmt::Display for ToriiProxyAttemptError {
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2: usize =
-    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
+    iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const QUEUE_PLAN_SYNCED_MAX_HEADERS_V2: usize = 16;
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -23431,18 +23431,12 @@ const QUEUE_PLAN_SYNCED_MAX_HEADER_NAME_BYTES_V2: usize = 128;
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const QUEUE_PLAN_SYNCED_MAX_HEADER_VALUE_BYTES_V2: usize = 512;
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-const QUEUE_PLAN_SYNCED_POLL_DIVISOR: u32 = 4;
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-const QUEUE_PLAN_SYNCED_MIN_POLL_INTERVAL: Duration = Duration::from_millis(25);
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-const QUEUE_PLAN_SYNCED_MAX_POLL_INTERVAL: Duration = Duration::from_millis(250);
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V2: norito::DecodeLimits =
     norito::DecodeLimits::new(
         iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES + 1,
         QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2,
         QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2,
-        iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSIONS_BYTES,
+        iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSIONS_BYTES,
         64,
     );
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -23921,29 +23915,6 @@ fn torii_proxy_request_carries_one_shot_signed_query(request: &ToriiProxyRequest
         ToriiProxyRequestKindV4::SignedQuery { .. }
             | ToriiProxyRequestKindV4::SignedQueryRouteScan { .. }
             | ToriiProxyRequestKindV4::SignedQueryFanout { .. }
-    )
-}
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-fn queue_plan_synced_runtime_timing(
-    block_cadence: Duration,
-    remaining_route_budget: Duration,
-) -> (Duration, Duration) {
-    let poll_interval = block_cadence
-        .checked_div(QUEUE_PLAN_SYNCED_POLL_DIVISOR)
-        .unwrap_or(QUEUE_PLAN_SYNCED_MIN_POLL_INTERVAL)
-        .clamp(
-            QUEUE_PLAN_SYNCED_MIN_POLL_INTERVAL,
-            QUEUE_PLAN_SYNCED_MAX_POLL_INTERVAL,
-        );
-    // A durable certificate can legitimately cross another view before its merge carrier
-    // commits.  A prediction derived from the view in which the certificate was assembled is
-    // therefore not a finality bound and used to produce premature 503 responses.  Reconcile for
-    // the complete request budget that remains, returning immediately on an exact or conflicting
-    // canonical marker.  Reserving one poll interval keeps this wait within the outer route
-    // deadline even when the final observation is absent.
-    (
-        poll_interval,
-        remaining_route_budget.saturating_sub(poll_interval),
     )
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -25101,41 +25072,6 @@ fn queue_plan_admission_registry_conflict_response(
     response
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-#[derive(Debug, PartialEq, Eq)]
-enum QueuePlanAdmissionRegistryWaitOutcome {
-    Exact,
-    Conflict,
-    Malformed(String),
-    TimedOut,
-}
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-async fn wait_for_exact_queue_plan_admission_registry(
-    state: &CoreState,
-    binding: &QueuePlanAdmissionBindingV2,
-    poll_interval: Duration,
-    wait_budget: Duration,
-) -> QueuePlanAdmissionRegistryWaitOutcome {
-    let deadline = tokio::time::Instant::now() + wait_budget;
-    loop {
-        match state.queue_plan_admission_binding_registry_match(binding) {
-            Ok(QueuePlanAdmissionRegistryMatch::Exact) => {
-                return QueuePlanAdmissionRegistryWaitOutcome::Exact;
-            }
-            Ok(QueuePlanAdmissionRegistryMatch::Conflict) => {
-                return QueuePlanAdmissionRegistryWaitOutcome::Conflict;
-            }
-            Err(error) => {
-                return QueuePlanAdmissionRegistryWaitOutcome::Malformed(error);
-            }
-            Ok(QueuePlanAdmissionRegistryMatch::Absent) => {}
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return QueuePlanAdmissionRegistryWaitOutcome::TimedOut;
-        }
-        tokio::time::sleep(poll_interval).await;
-    }
-}
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_admission_publication_targets(
     local_peer_id: &PeerId,
     online_peer_ids: &BTreeSet<PeerId>,
@@ -25320,28 +25256,10 @@ fn ingest_queue_plan_admission_publication(
     })
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DurableQueuePlanWakeDisposition {
-    OwnerMissing,
-    Delivered,
-    Deferred,
-}
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-fn durable_queue_plan_wake_disposition(
-    notification_delivered: Option<bool>,
-) -> DurableQueuePlanWakeDisposition {
-    match notification_delivered {
-        None => DurableQueuePlanWakeDisposition::OwnerMissing,
-        Some(true) => DurableQueuePlanWakeDisposition::Delivered,
-        Some(false) => DurableQueuePlanWakeDisposition::Deferred,
-    }
-}
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-async fn persist_and_wait_for_queue_plan_admission(
+async fn persist_queue_plan_admission_certificate(
     app: &SharedAppState,
     response: Response,
     expected_binding: &QueuePlanAdmissionBindingV2,
-    route_deadline: tokio::time::Instant,
 ) -> Response {
     if response.status() != StatusCode::ACCEPTED {
         return response;
@@ -25378,9 +25296,7 @@ async fn persist_and_wait_for_queue_plan_admission(
         .state
         .queue_plan_admission_binding_registry_match(expected_binding)
     {
-        Ok(QueuePlanAdmissionRegistryMatch::Exact) => {
-            return torii_proxy_snapshot_to_response(snapshot);
-        }
+        Ok(QueuePlanAdmissionRegistryMatch::Exact | QueuePlanAdmissionRegistryMatch::Absent) => {}
         Ok(QueuePlanAdmissionRegistryMatch::Conflict) => {
             return queue_plan_admission_registry_conflict_response(
                 expected_binding.entrypoint_hash.clone(),
@@ -25393,7 +25309,6 @@ async fn persist_and_wait_for_queue_plan_admission(
                 format!("canonical QueuePlan admission marker is malformed: {error}"),
             );
         }
-        Ok(QueuePlanAdmissionRegistryMatch::Absent) => {}
     }
     let certificate_hash = match app
         .kura
@@ -25429,62 +25344,27 @@ async fn persist_and_wait_for_queue_plan_admission(
         .sumeragi
         .as_ref()
         .map(iroha_core::sumeragi::SumeragiHandle::notify_pending_queue_plan_admission);
-    match durable_queue_plan_wake_disposition(notification_delivered) {
-        DurableQueuePlanWakeDisposition::OwnerMissing => {
-            return queue_plan_outcome_unknown_response(
-                expected_binding.entrypoint_hash.clone(),
-                "exact QueuePlan certificate is durable but no Sumeragi owner is attached",
-            );
-        }
-        DurableQueuePlanWakeDisposition::Delivered => {}
-        DurableQueuePlanWakeDisposition::Deferred => {
-            // The certificate is already durable at this point. A false wake only
-            // means that Sumeragi is between ingress owners (for example, during a
-            // height rollover); startup/owner replay still consumes the carrier.
-            // Returning immediately would report an indeterminate 503 even when
-            // the exact transaction is about to become canonical. Reconcile the
-            // WSV for the normal bounded wait instead.
+    match notification_delivered {
+        Some(true) => {}
+        Some(false) => {
+            // The certificate is already durable. A false wake only means that
+            // Sumeragi is between ingress owners; startup/owner replay still
+            // consumes the carrier.
             iroha_logger::warn!(
                 %certificate_hash,
                 entrypoint_hash = %expected_binding.entrypoint_hash,
-                "Sumeragi QueuePlan wake was deferred; waiting for the durable certificate to become canonical"
+                "Sumeragi QueuePlan wake was deferred; preserving the known durable acceptance"
+            );
+        }
+        None => {
+            iroha_logger::warn!(
+                %certificate_hash,
+                entrypoint_hash = %expected_binding.entrypoint_hash,
+                "Sumeragi QueuePlan wake could not be delivered because no owner is attached; preserving the known durable acceptance"
             );
         }
     }
-    let remaining_route_budget =
-        route_deadline.saturating_duration_since(tokio::time::Instant::now());
-    let (poll_interval, wait_budget) = queue_plan_synced_runtime_timing(
-        app.state.sumeragi_block_cadence(),
-        remaining_route_budget,
-    );
-    match wait_for_exact_queue_plan_admission_registry(
-        app.state.as_ref(),
-        expected_binding,
-        poll_interval,
-        wait_budget,
-    )
-    .await
-    {
-        QueuePlanAdmissionRegistryWaitOutcome::Exact => torii_proxy_snapshot_to_response(snapshot),
-        QueuePlanAdmissionRegistryWaitOutcome::Conflict => {
-            queue_plan_admission_registry_conflict_response(
-                expected_binding.entrypoint_hash.clone(),
-                "canonical WSV committed a different QueuePlan admission while this certificate was pending",
-            )
-        }
-        QueuePlanAdmissionRegistryWaitOutcome::Malformed(error) => {
-            queue_plan_admission_registry_conflict_response(
-                expected_binding.entrypoint_hash.clone(),
-                format!("canonical QueuePlan admission marker became malformed: {error}"),
-            )
-        }
-        QueuePlanAdmissionRegistryWaitOutcome::TimedOut => queue_plan_outcome_unknown_response(
-            expected_binding.entrypoint_hash.clone(),
-            format!(
-                "exact QueuePlan certificate is durable but canonical WSV remained absent for {wait_budget:?}"
-            ),
-        ),
-    }
+    torii_proxy_snapshot_to_response(snapshot)
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn normalize_proxied_transaction_submission_response(
@@ -25697,7 +25577,6 @@ async fn execute_torii_transaction_via_proxy(
         return error.into_response();
     }
     let expected_admission_binding = binding.clone();
-    let route_deadline = tokio::time::Instant::now() + DEFAULT_ROUTE_TIMEOUT;
     let mut response = execute_torii_proxy_request_with_fallback(
         app,
         routing_decision,
@@ -25709,13 +25588,8 @@ async fn execute_torii_transaction_via_proxy(
         },
     )
     .await;
-    response = persist_and_wait_for_queue_plan_admission(
-        app,
-        response,
-        &expected_admission_binding,
-        route_deadline,
-    )
-    .await;
+    response =
+        persist_queue_plan_admission_certificate(app, response, &expected_admission_binding).await;
     normalize_proxied_transaction_submission_response(
         app.as_ref(),
         response,
@@ -36107,11 +35981,12 @@ pub(crate) async fn submit_signed_transaction_for_ingress(
     accept: Option<crate::utils::extractors::ExtractAccept>,
     transaction: SignedTransaction,
 ) -> Result<Response, Error> {
-    submit_signed_transaction_for_ingress_globally_synced(app, headers, accept, transaction).await
+    submit_signed_transaction_for_ingress_queue_plan_certified(app, headers, accept, transaction)
+        .await
 }
 /// Admit a caller-signed transaction only after its exact queue plan is durable.
 ///
-/// Dedicated native-command adapters use the same globally synchronized
+/// Dedicated native-command adapters use the same quorum-certified
 /// admission path after validating their one-ISI contract.
 pub(crate) async fn submit_signed_transaction_for_ingress_strict_durable(
     app: SharedAppState,
@@ -36119,9 +35994,10 @@ pub(crate) async fn submit_signed_transaction_for_ingress_strict_durable(
     accept: Option<crate::utils::extractors::ExtractAccept>,
     transaction: SignedTransaction,
 ) -> Result<Response, Error> {
-    submit_signed_transaction_for_ingress_globally_synced(app, headers, accept, transaction).await
+    submit_signed_transaction_for_ingress_queue_plan_certified(app, headers, accept, transaction)
+        .await
 }
-async fn submit_signed_transaction_for_ingress_globally_synced(
+async fn submit_signed_transaction_for_ingress_queue_plan_certified(
     app: SharedAppState,
     headers: axum::http::HeaderMap,
     accept: Option<crate::utils::extractors::ExtractAccept>,
@@ -36224,7 +36100,7 @@ async fn submit_signed_transaction_for_ingress_globally_synced(
         return Err(Error::AppServiceUnavailable {
             code: "queue_plan_synced_transport_unavailable",
             message:
-                "globally synchronized QueuePlan admission requires an authenticated peer transport"
+                "quorum-certified QueuePlan admission requires an authenticated peer transport"
                     .to_owned(),
         });
     }
@@ -36302,7 +36178,7 @@ async fn handler_post_transaction_entrypoint(
         Err::<Response, Error>(Error::AppServiceUnavailable {
             code: "queue_plan_synced_transport_unavailable",
             message:
-                "globally synchronized QueuePlan admission requires an authenticated peer transport"
+                "quorum-certified QueuePlan admission requires an authenticated peer transport"
                     .to_owned(),
         })
     }
@@ -38273,6 +38149,7 @@ async fn handler_alias_setup_plan(
         time_to_live_ms: None,
         nonce: None,
         fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        admission_intent: iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
         metadata: iroha_data_model::metadata::Metadata::default(),
         attachments: None,
     };

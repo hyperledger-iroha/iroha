@@ -13,7 +13,10 @@ fn default_ticket_ttl_uses_full_future_skew_window() {
 
 #[test]
 fn puzzle_work_capacity_is_nonzero_and_bounded() {
-    assert_eq!(SoranetHandshakePow::default_puzzle_work_capacity().get(), 1);
+    assert_eq!(
+        SoranetHandshakePow::default_puzzle_work_capacity(),
+        actual::SoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION
+    );
     assert_eq!(
         SoranetHandshakePow::bound_puzzle_work_capacity(nonzero!(usize::MAX)).get(),
         actual::SoranetPow::MAX_PUZZLE_WORK_CAPACITY_PER_DIRECTION

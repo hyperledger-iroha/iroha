@@ -2308,6 +2308,7 @@ mod exact12_fixture {
             time_to_live_ms: NonZeroU64::new(60_000),
             nonce: Some(nonce),
             fee_payment: FeePaymentIntent::authority(Vec::new(), None),
+            admission_intent: crate::transaction::TransactionAdmissionIntent::Ordinary,
             metadata: Metadata::default(),
             attachments: None,
         };

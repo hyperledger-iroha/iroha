@@ -1917,7 +1917,7 @@ required|adapter_preview|self.last_progress = prior_last_progress|adapter previe
 forbidden|adapter_preview|self.step(|adapter preview reopened direct reducer stepping
 required|runtime|fn prepare_recovered_decision_apply_completion(|runtime lost recovered Decision Apply completion preparation
 required|executor|fn commit_recovered_decision_apply_finality(|executor lost recovered Decision Apply finality commit
-order|completion_dispatch|3|self.services.take_next_recovered_lifecycle_completion()|RecoveredLifecycleCompletionTakeV1::Apply(completion)|settle_recovered_decision_apply_completion_owner(completion, lane_work)|unified completion classification must transfer recovered Apply ownership directly to settlement
+order|completion_dispatch|3|self.services.take_next_lifecycle_completion()|LifecycleCompletionTakeV1::Apply(completion)|settle_recovered_decision_apply_completion_owner(completion, lane_work)|unified completion classification must transfer recovered Apply ownership directly to settlement
 required|settlement|RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference }|settlement omitted RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference }
 required|settlement|completion.authorizes_sidecar_owner(services, lane_work)|settlement omitted completion.authorizes_sidecar_owner(services, lane_work)
 required|settlement|sidecar.register(lane_work)|settlement omitted sidecar.register(lane_work)
@@ -2054,7 +2054,7 @@ region|completion|worker|after|struct RecoveredDecisionApplyWorkAckV1|before|enu
 region|retry|worker|after|fn retry_recovered_decision_apply<|before|fn acknowledge_completion(
 region|generic_take|worker|after|fn take_io_completion(|before|fn take_recovered_lifecycle_sign_completion(
 region|census|worker|after|impl<'service> RecoveredCompletionCapacityCensusV1<'service>|before|impl Drop for RecoveredCompletionCapacityCensusV1<'_>
-region|unified_take|worker|after|pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(|before|/// Drain only the oldest recovered-Sign guard
+region|unified_take|worker|after|pub(in crate::sumeragi) fn take_next_lifecycle_completion(|before|/// Drain only the oldest recovered-Sign guard
 region|runtime_capacity|worker|after|const fn requires_runtime_capacity(&self) -> bool|before|fn acknowledgement(&self)
 required|enqueue|UnreservedRecoveredDecisionApply|generic queue lost the unreserved recovered Apply classification
 required|reservation|prepared.commit_for_worker()|recovered Apply reservation lost its worker commit
@@ -2073,7 +2073,7 @@ required|generic_take|IoCompletionTake::retained_runtime()|generic completion ta
 required|runtime_capacity|Self::RecoveredDecisionApply(_)|recovered Apply completion lost runtime capacity classification
 required|unified_take|V2IoCompletion::RecoveredDecisionApply(guarded)|unified completion classifier lost recovered Apply ownership
 required|unified_take|prepare_recovered_decision_apply_ack|unified completion classifier lost recovered Apply acknowledgement preparation
-required|unified_take|RecoveredLifecycleCompletionTakeV1::Apply(|unified completion classifier lost its typed Apply result
+required|unified_take|LifecycleCompletionTakeV1::Apply(|unified completion classifier lost its typed Apply result
 required|unified_take|PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack }|unified completion classifier lost its guarded Apply handoff
 required|whole|fn authorizes_sidecar_owner(|recovered Apply sidecar owner oracle is missing
 forbidden|whole|_services: &'services mut ProductionV2Services|worker recovered Apply corridor must not borrow production services

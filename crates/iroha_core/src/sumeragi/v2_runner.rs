@@ -1416,6 +1416,8 @@ fn schedule_local_proposal(
         let (_, time_source) =
             iroha_primitives::time::TimeSource::new_mock(carrier_context_header.creation_time());
         let assembler = V2CandidateAssembler::new(candidate_limits, time_source.clone());
+        let queue_plan_admissions =
+            lane_work.reconcile_pending_queue_plan_admissions(directive.tag().view())?;
         let attachments = candidate_attachments(
             context,
             state,
@@ -1423,6 +1425,7 @@ fn schedule_local_proposal(
             directive.tag().view(),
             &carrier_context_header,
             npos_vrf,
+            queue_plan_admissions,
         )?;
         let assembly = assembler.assemble(CandidateRequest {
             context,
@@ -1865,32 +1868,6 @@ fn advance_executor(
     }
     Ok(())
 }
-/// Execute at most one serialized transition from an older lifecycle before
-/// an exact Serve target turn.
-///
-/// Lock reconciliation and every other local producer stay behind the target;
-/// the ordinary runner path performs them after the barrier drains. This is
-/// deliberately not a loop, even when the older causal episode remains live.
-fn advance_executor_once_before_exact_serve(
-    receiver: &FairV2Ingress,
-    executor: &mut V2EffectExecutor,
-    services: &mut ProductionV2Services,
-) -> Result<(), V2RunnerError> {
-    executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
-    let _ = executor.step(Instant::now(), services)?;
-    Ok(())
-}
-/// Execute at most one typed timeout/Progress-root transition while an exact
-/// transport episode retains ordinary ownership.
-fn advance_pacemaker_once(
-    receiver: &FairV2Ingress,
-    executor: &mut V2EffectExecutor,
-    services: &mut ProductionV2Services,
-) -> Result<(), V2RunnerError> {
-    executor.set_ingress_physical_cut(receiver.next_physical_admission_ordinal())?;
-    let _ = executor.step_pacemaker_once(Instant::now(), services)?;
-    Ok(())
-}
 fn reconcile_executor_locked_body(
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
@@ -2135,6 +2112,7 @@ fn candidate_attachments(
     view: wire::View,
     round_header: &BlockHeader,
     npos_vrf: &V2NposVrfLifecycle,
+    queue_plan_admissions: Vec<Vec<u8>>,
 ) -> Result<CandidateAttachments, V2RunnerError> {
     if round_header.height().get() != context.height
         || round_header.prev_block_hash() != Some(parent.hash())
@@ -2174,13 +2152,20 @@ fn candidate_attachments(
         .merge_ledger()
         .latest()
         .map_or(1, |latest| latest.epoch_id.saturating_add(1));
-    let selected_merge_entry = state
-        .select_pending_certified_merge_entry_for_round(
-            round_header,
-            expected_merge_epoch,
-            merge_selection,
-        )
-        .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
+    let selected_merge_entry = if queue_plan_admissions.is_empty() {
+        state
+            .select_pending_certified_merge_entry_for_round(
+                round_header,
+                expected_merge_epoch,
+                merge_selection,
+            )
+            .map_err(|error| V2RunnerError::Candidate(error.to_string()))?
+    } else {
+        // QueuePlan registry writes are ordered by the global Sumeragi QC.
+        // Keep them out of an execution-bearing merge carrier so that the
+        // independent merge write-set remains exact and uncontaminated.
+        None
+    };
     let certified_merge_entry = selected_merge_entry
         .map(|(_, entry, _)| entry)
         .map(|entry| {
@@ -2204,6 +2189,7 @@ fn candidate_attachments(
             .and_then(|entry| entry.execution_batch.as_ref())
             .map(|batch| batch.application_block_header.clone()),
         certified_merge_entry,
+        queue_plan_admissions,
         ..CandidateAttachments::default()
     })
 }

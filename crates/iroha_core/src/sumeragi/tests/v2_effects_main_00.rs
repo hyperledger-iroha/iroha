@@ -94,7 +94,6 @@ struct FakeRuntime {
     locked_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
     fail_enqueue: bool,
     fail_enqueue_hits: usize,
-    certified_fence_escape_credit: bool,
     panic_step: bool,
     scheduler_ownership_ready: bool,
     omit_scheduler_ownership: bool,
@@ -999,9 +998,6 @@ impl EffectRuntime for FakeRuntime {
                 .saturating_add(usize::from(self.reserved_body_available.is_some())),
         )
     }
-    fn has_certified_fence_escape_credit(&self) -> bool {
-        self.certified_fence_escape_credit
-    }
     fn queue_snapshot(&self, _now: Instant) -> RuntimeQueueSnapshot {
         let empty = RuntimeQueueLaneSnapshot {
             depth: 0,
@@ -1486,7 +1482,7 @@ struct ProductionTransportFixture {
     manifest: wire::PayloadManifest,
     canonical_commitment: wire::ExecutionCommitment,
     conflicting_commitment: wire::ExecutionCommitment,
-    lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
+    _lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
     executor: V2EffectExecutor,
 }
 impl ProductionTransportFixture {
@@ -1634,7 +1630,7 @@ impl ProductionTransportFixture {
             manifest,
             canonical_commitment,
             conflicting_commitment,
-            lifecycle_ordinals,
+            _lifecycle_ordinals: lifecycle_ordinals,
             executor,
         }
     }

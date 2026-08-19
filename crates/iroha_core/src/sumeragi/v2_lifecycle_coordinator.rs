@@ -443,13 +443,12 @@ impl LifecycleCoordinator {
     pub(crate) const fn fault(&self) -> Option<CoordinatorFault> {
         self.fault
     }
-    /// Project and admit one exact runtime-bound production adapter effect.
+    /// Project and admit one fixture-owned runtime-bound adapter effect.
     ///
-    /// The live lifecycle runner uses its specialized typed owner paths; this
-    /// generic projection remains a closed compatibility seam for exact
-    /// runtime-effect admission checks.
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn admit_bound_adapter_effect(
+    /// Production has no generic adapter admission surface: every live family
+    /// must enter through its sealed, typed owner transaction.
+    #[cfg(test)]
+    fn admit_bound_adapter_effect_for_test(
         &mut self,
         verified: &crate::sumeragi::v2::VerifiedHeightContext,
         effect: &crate::sumeragi::v2::AdapterEffect,
@@ -458,15 +457,11 @@ impl LifecycleCoordinator {
         let pending = ownership
             .pending_adapter_effect_binding(effect)
             .ok_or(AdapterEffectAdmissionError::UnboundEffect)?;
-        self.admit_pending_adapter_effect(verified, effect, &pending)
+        self.admit_pending_adapter_effect_for_test(verified, effect, &pending)
     }
-    /// Project and admit one sealed ordinal-free adapter-effect binding.
-    ///
-    /// The lifecycle stack already owns the matching concrete-work registry;
-    /// this ordinal-free form remains the internal projection used by the
-    /// generic compatibility seam above.
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn admit_pending_adapter_effect(
+    /// Project and admit one fixture-owned ordinal-free adapter binding.
+    #[cfg(test)]
+    fn admit_pending_adapter_effect_for_test(
         &mut self,
         verified: &crate::sumeragi::v2::VerifiedHeightContext,
         effect: &crate::sumeragi::v2::AdapterEffect,

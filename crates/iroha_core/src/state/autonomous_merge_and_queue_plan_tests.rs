@@ -421,345 +421,8 @@ fn configured_two_lane_merge_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, Sign
     commit_block_metadata_to_state(&state, &parent);
     (state, validator_keypairs, commit_keypairs, parent)
 }
-#[test]
-fn equivalent_queue_plan_quorums_collapse_to_one_deterministic_admission() {
-    let (state, validator_keypairs, _, parent) = configured_single_lane_merge_state();
-    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
-        LaneId::SINGLE,
-        DataSpaceId::UNIVERSAL,
-    ));
-    let (binding, first_certificate) = queue_plan_admission_certificate_for_state_test(
-        &state,
-        routing_plan,
-        &validator_keypairs,
-        1,
-        0x50,
-    );
-    let coordinator = &binding.admission_context.route_incarnations[0];
-    assert_eq!(coordinator.durability_threshold, 2);
-    let alternate_attestations = [2_usize, 3]
-        .into_iter()
-        .map(|index| {
-            let validator = &coordinator.validator_set[index];
-            let keypair = validator_keypairs
-                .iter()
-                .find(|keypair| keypair.public_key() == validator.public_key())
-                .expect("fixture retains alternate quorum signer");
-            let validator_index = u16::try_from(index).expect("validator index fits u16");
-            let signing_bytes =
-                crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v2(
-                    binding.canonical_hash(),
-                    validator_index,
-                )
-                .expect("alternate quorum signing bytes");
-            crate::torii_proxy::QueuePlanAdmissionAttestationV2 {
-                version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V2,
-                validator_index,
-                signature: Signature::try_new(keypair.private_key(), &signing_bytes)
-                    .expect("alternate quorum signature"),
-            }
-        })
-        .collect();
-    let alternate_certificate =
-        norito::to_bytes(&crate::torii_proxy::QueuePlanAdmissionCertificateV2 {
-            version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V2,
-            binding,
-            attestations: alternate_attestations,
-        })
-        .expect("alternate quorum certificate");
-    assert_ne!(first_certificate, alternate_certificate);
-    let expected = first_certificate.clone().min(alternate_certificate.clone());
-    let forward = state
-        .merge_candidate_with_queue_plan_admissions(
-            &parent.header(),
-            0,
-            None,
-            vec![first_certificate.clone(), alternate_certificate.clone()],
-        )
-        .expect("equivalent quorum certificates are idempotent")
-        .expect("QueuePlan controls produce a candidate");
-    let reverse = state
-        .merge_candidate_with_queue_plan_admissions(
-            &parent.header(),
-            0,
-            None,
-            vec![alternate_certificate, first_certificate],
-        )
-        .expect("input order does not affect equivalent quorum collapse")
-        .expect("QueuePlan controls produce a candidate");
-    assert_eq!(forward.queue_plan_admissions, vec![expected]);
-    assert_eq!(forward.canonical_bytes(), reverse.canonical_bytes());
-}
-#[test]
-fn competing_retry_queue_plan_bindings_choose_one_deterministic_admission() {
-    let (state, validator_keypairs, _, parent) = configured_single_lane_merge_state();
-    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
-        LaneId::SINGLE,
-        DataSpaceId::UNIVERSAL,
-    ));
-    let tag = 0x6A;
-    let (first_binding, first_certificate) = queue_plan_admission_certificate_for_state_test(
-        &state,
-        routing_plan.clone(),
-        &validator_keypairs,
-        1,
-        tag,
-    );
-    let retry_binding = crate::torii_proxy::QueuePlanAdmissionBindingV2::new(
-        &state.network_id,
-        &queue_plan_entrypoint_for_state_test(&state, tag),
-        &routing_plan,
-        first_binding.admission_context.clone(),
-        first_binding.enqueue_timestamp_ms.saturating_add(1),
-    )
-    .expect("byte-identical retry has a second canonical admission binding");
-    let retry_certificate =
-        queue_plan_admission_certificate_bytes_for_state_test(&retry_binding, &validator_keypairs);
-    assert_eq!(first_binding.registry_key(), retry_binding.registry_key());
-    assert_ne!(
-        first_binding.registry_value(),
-        retry_binding.registry_value()
-    );
-    assert_eq!(
-        state
-            .classify_pending_queue_plan_admission(&first_certificate, 2)
-            .expect("first retry-era certificate is independently eligible")
-            .1,
-        PendingQueuePlanAdmissionDisposition::EligibleAbsent
-    );
-    assert_eq!(
-        state
-            .classify_pending_queue_plan_admission(&retry_certificate, 2)
-            .expect("second retry-era certificate is independently eligible")
-            .1,
-        PendingQueuePlanAdmissionDisposition::EligibleAbsent
-    );
-    let (expected, winning_binding, losing_certificate) =
-        if (first_binding.registry_value(), first_certificate.as_slice())
-            <= (retry_binding.registry_value(), retry_certificate.as_slice())
-        {
-            (
-                first_certificate.clone(),
-                &first_binding,
-                retry_certificate.clone(),
-            )
-        } else {
-            (
-                retry_certificate.clone(),
-                &retry_binding,
-                first_certificate.clone(),
-            )
-        };
-    let forward = state
-        .merge_candidate_with_queue_plan_admissions(
-            &parent.header(),
-            0,
-            None,
-            vec![first_certificate.clone(), retry_certificate.clone()],
-        )
-        .expect("competing valid retry bindings must not stop merge production")
-        .expect("one QueuePlan control produces a candidate");
-    let reverse = state
-        .merge_candidate_with_queue_plan_admissions(
-            &parent.header(),
-            0,
-            None,
-            vec![retry_certificate, first_certificate],
-        )
-        .expect("retry arrival order must not affect merge production")
-        .expect("one QueuePlan control produces a candidate");
-    assert_eq!(forward.queue_plan_admissions, vec![expected]);
-    assert_eq!(forward.canonical_bytes(), reverse.canonical_bytes());
-    seed_pending_queue_plan_binding_state_for_test(&state, winning_binding);
-    assert_eq!(
-        state
-            .classify_pending_queue_plan_admission(&losing_certificate, 2)
-            .expect("the competing retry is classifiable after its winner commits")
-            .1,
-        PendingQueuePlanAdmissionDisposition::DefinitiveConflict,
-        "post-commit reconciliation must retire only the losing exact queue claim"
-    );
-}
-#[test]
-fn queue_plan_only_carriers_require_exact_committed_active_lane_bindings() {
-    let (state, validator_keypairs, commit_keypairs, parent) = configured_two_lane_merge_state();
-    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
-        LaneId::SINGLE,
-        DataSpaceId::UNIVERSAL,
-    ));
-    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
-        &state,
-        routing_plan,
-        &validator_keypairs,
-        1,
-        0x51,
-    );
-    let candidate = state
-        .merge_candidate_with_queue_plan_admissions(&parent.header(), 0, None, vec![certificate])
-        .expect("canonical QueuePlan candidate construction")
-        .expect("QueuePlan controls produce a standalone candidate");
-    assert!(candidate.execution_batch.is_none());
-    assert!(candidate.lane_snapshots.is_empty());
-    assert!(candidate.lane_drain_certificates.is_empty());
-    let mut stale_incarnation = candidate.clone();
-    stale_incarnation.active_lanes[1].incarnation = Hash::new(b"forged-unrelated-lane-incarnation");
-    let incarnation_entries = stale_incarnation
-        .active_lanes
-        .iter()
-        .map(
-            |binding| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
-                lane_id: binding.lane_id,
-                incarnation: binding.incarnation,
-            },
-        )
-        .collect::<Vec<_>>();
-    stale_incarnation.incarnation_root =
-        iroha_data_model::nexus::LaneLifecycleParameterV1::incarnation_root(&incarnation_entries);
-    stale_incarnation.activation_root =
-        crate::merge::merge_activation_root(&stale_incarnation.active_lanes);
-    assert!(matches!(
-        state.validate_merge_candidate_for_global_round(&stale_incarnation, &parent.header(), 0,),
-        Err(MergeLedgerCommitError::IncarnationContext(_))
-    ));
-    let mut forged_config = candidate;
-    forged_config.active_lanes[1].lane_config_hash = Hash::new(b"forged-unrelated-lane-config");
-    let forged_qc = merge_qc_for_candidate(&state, &forged_config, &commit_keypairs, &[0]);
-    let forged_entry = merge_entry_from_candidate(forged_config, forged_qc);
-    assert!(matches!(
-        state.validate_certified_merge_entry_for_global_order(&forged_entry),
-        Err(MergeLedgerCommitError::IncarnationContext(_))
-    ));
-}
-#[test]
-fn restart_authenticates_queue_plan_predecessor_from_durable_kura_before_state_replay() {
-    let (state, validator_keypairs, commit_keypairs, parent) = configured_single_lane_merge_state();
-    let kura = Arc::clone(&state.kura);
-    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
-        LaneId::SINGLE,
-        DataSpaceId::UNIVERSAL,
-    ));
-    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
-        &state,
-        routing_plan,
-        &validator_keypairs,
-        1,
-        0x52,
-    );
-    let candidate = state
-        .merge_candidate_with_queue_plan_admissions(&parent.header(), 0, None, vec![certificate])
-        .expect("canonical QueuePlan candidate construction")
-        .expect("QueuePlan controls produce a standalone candidate");
-    let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
-    let entry = merge_entry_from_candidate(candidate, qc);
-    let carrier = certified_merge_carrier_after(&parent, &entry);
-    kura.store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
-        .expect("persist QueuePlan merge carrier before State publication");
-    drop(state);
-    let mut restarted = State::try_new_with_chain(
-        World::default(),
-        Arc::clone(&kura),
-        LiveQueryStore::start_test(),
-        (*DEFAULT_TEST_CHAIN_ID).clone(),
-        #[cfg(feature = "telemetry")]
-        <_>::default(),
-    )
-    .expect("durable QueuePlan predecessor authenticates before State block replay");
-    assert_eq!(
-        restarted.committed_height(),
-        0,
-        "startup recovery must not pretend future Kura carriers are in State"
-    );
-    assert!(
-        restarted.merge_ledger().is_empty(),
-        "the future carrier remains unpublished until exact State replay"
-    );
-    restarted.push_block_hash_for_testing(parent.hash());
-    restarted.push_block_hash_for_testing(carrier.hash());
-    restarted
-        .recover_merge_ledger_from_kura()
-        .expect("exact State replay hydrates the authenticated QueuePlan carrier");
-    assert_eq!(restarted.merge_ledger().snapshot()[0].as_ref(), &entry);
-}
-#[test]
-fn restart_rejects_queue_plan_predecessor_conflicting_with_durable_kura() {
-    let (state, validator_keypairs, commit_keypairs, parent) = configured_single_lane_merge_state();
-    let kura = Arc::clone(&state.kura);
-    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
-        LaneId::SINGLE,
-        DataSpaceId::UNIVERSAL,
-    ));
-    let (_, valid_certificate) = queue_plan_admission_certificate_for_state_test(
-        &state,
-        routing_plan.clone(),
-        &validator_keypairs,
-        1,
-        0x53,
-    );
-    let mut candidate = state
-        .merge_candidate_with_queue_plan_admissions(
-            &parent.header(),
-            0,
-            None,
-            vec![valid_certificate],
-        )
-        .expect("canonical QueuePlan candidate construction")
-        .expect("QueuePlan controls produce a standalone candidate");
-    let conflicting_predecessor = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-        b"conflicting-queue-plan-restart-predecessor",
-    ));
-    {
-        let mut block_hashes = state.block_hashes.block_and_revert();
-        block_hashes.push(conflicting_predecessor);
-        block_hashes.commit();
-    }
-    let (_, conflicting_certificate) = queue_plan_admission_certificate_for_state_test(
-        &state,
-        routing_plan,
-        &validator_keypairs,
-        1,
-        0x54,
-    );
-    {
-        let mut block_hashes = state.block_hashes.block_and_revert();
-        block_hashes.push(parent.hash());
-        block_hashes.commit();
-    }
-    candidate.queue_plan_admissions = vec![conflicting_certificate];
-    let qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
-    let entry = merge_entry_from_candidate(candidate, qc);
-    let carrier = certified_merge_carrier_after(&parent, &entry);
-    kura.store_block_with_merge_entry(Arc::new(carrier), &entry)
-        .expect("persist cryptographically valid conflicting QueuePlan carrier");
-    drop(state);
-    let recovery = State::try_new_with_chain(
-        World::default(),
-        kura,
-        LiveQueryStore::start_test(),
-        (*DEFAULT_TEST_CHAIN_ID).clone(),
-        #[cfg(feature = "telemetry")]
-        <_>::default(),
-    );
-    let error = match recovery {
-        Ok(_) => panic!("durable Kura history must reject a conflicting QueuePlan predecessor"),
-        Err(error) => error,
-    };
-    assert!(
-        matches!(
-            error,
-            MergeLedgerCommitError::ExecutionBatchInvalid(ref message)
-                if message.contains(
-                    "queue-plan admission predecessor is absent or differs from canonical history"
-                )
-        ),
-        "unexpected conflicting predecessor rejection: {error}"
-    );
-}
-#[test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "one CAS test covers idempotence, conflicting ownership, and multi-route atomic preflight"
-)]
-fn queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set() {
+#[inline(never)]
+fn assert_queue_plan_native_exact_compare_and_set() {
     let (state, validator_keypairs, _, parent) = configured_two_lane_merge_state();
     let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
         LaneId::SINGLE,
@@ -778,28 +441,32 @@ fn queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set() {
             .expect("absent registry lookup"),
         QueuePlanAdmissionRegistryMatch::Absent
     );
-    let candidate = state
-        .merge_candidate_with_queue_plan_admissions(
-            &parent.header(),
-            0,
-            None,
-            vec![certificate.clone()],
-        )
-        .expect("canonical QueuePlan candidate")
-        .expect("standalone QueuePlan candidate");
+    let active_lanes = state
+        .queue_plan_active_lane_bindings()
+        .expect("resolve proposal-native QueuePlan lane bindings");
     let carrier = empty_global_block_after(Some(&parent));
-    let mut state_block = state.block(carrier.header());
-    let write_set_before = state_block.merge_execution_write_set_root();
-    state_block
-        .stage_queue_plan_admissions(&[certificate.clone()], &candidate.active_lanes, 2)
-        .expect("absent registry marker is inserted");
+    let write_set_before = state
+        .lane_application_block(carrier.header().clone())
+        .merge_execution_write_set_root();
+    let mut state_block = state
+        .block_with_queue_plan_admissions(carrier.header().clone(), &[certificate.clone()])
+        .expect("proposal-native admission inserts an absent registry marker");
+    assert_eq!(
+        state_block.staged_queue_plan_admissions(),
+        core::slice::from_ref(&certificate),
+        "the carrier must retain the exact proposal-native certificate bytes"
+    );
     let write_set_after_insert = state_block.merge_execution_write_set_root();
     assert_ne!(
         write_set_after_insert, write_set_before,
         "QueuePlan registry writes must enter the signed final WSV write-set commitment"
     );
     state_block
-        .stage_queue_plan_admissions(&[certificate.clone()], &candidate.active_lanes, 2)
+        .stage_queue_plan_admissions(
+            &[certificate.clone()],
+            &active_lanes,
+            carrier.header().height().get(),
+        )
         .expect("the exact marker is idempotent");
     assert_eq!(
         state_block.merge_execution_write_set_root(),
@@ -818,21 +485,26 @@ fn queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set() {
     // `StateBlock` owns exclusive MV storage transactions. Release this
     // overlay before opening an independent one for the conflict case.
     drop(state_block);
-    let mut conflicting_block = state.block(carrier.header());
     let conflicting_value = crate::torii_proxy::QueuePlanAdmissionRegistryValueV2 {
         version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V2,
         binding_hash: Hash::new(b"conflicting-cas-value"),
     };
-    conflicting_block.world.smart_contract_state.insert(
-        key,
-        State::queue_plan_admission_registry_marker_payload(&conflicting_value)
-            .expect("well-formed conflicting registry value"),
-    );
+    {
+        let mut world = state.world.block();
+        world.smart_contract_state.insert(
+            key,
+            State::queue_plan_admission_registry_marker_payload(&conflicting_value)
+                .expect("well-formed conflicting registry value"),
+        );
+        world.commit();
+    }
     assert!(matches!(
-        conflicting_block.stage_queue_plan_admissions(&[certificate], &candidate.active_lanes, 2,),
+        state.block_with_queue_plan_admissions(carrier.header().clone(), &[certificate]),
         Err(MergeLedgerCommitError::ExecutionMarkerConflict(_))
     ));
-    drop(conflicting_block);
+}
+#[inline(never)]
+fn assert_queue_plan_native_multi_route_preflight_is_atomic() {
     let (state, validator_keypairs, _, _) = configured_two_lane_merge_state();
     let participant_lane = LaneId::new(1);
     let routing_plan = crate::queue::RoutingPlan::native_amx(
@@ -920,6 +592,13 @@ fn queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set() {
         "failed stage preflight must preserve the orphan marker for diagnosis"
     );
     drop(world);
+}
+#[inline(never)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the whole-list rollback proof checks every registry, obligation, and route-member marker"
+)]
+fn assert_queue_plan_native_batch_rollback_is_atomic() {
     let (state, validator_keypairs, _, parent) = configured_two_lane_merge_state();
     let first_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
         LaneId::SINGLE,
@@ -943,17 +622,29 @@ fn queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set() {
         1,
         0x7A,
     );
-    let candidate = state
-        .merge_candidate_with_queue_plan_admissions(
-            &parent.header(),
-            0,
-            None,
-            vec![first_certificate, second_certificate],
+    let first_registry_key_for_order =
+        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+            &state.network_id,
+            &first_certificate,
         )
-        .expect("fixture two-admission candidate")
-        .expect("two QueuePlan admissions produce a candidate");
-    assert_eq!(candidate.queue_plan_admissions.len(), 2);
-    let ordered_certificates = candidate.queue_plan_admissions.clone();
+        .expect("fixture first batch admission")
+        .registry_key;
+    let second_registry_key_for_order =
+        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
+            &state.network_id,
+            &second_certificate,
+        )
+        .expect("fixture second batch admission")
+        .registry_key;
+    let mut ordered_admissions = [
+        (first_registry_key_for_order, first_certificate),
+        (second_registry_key_for_order, second_certificate),
+    ];
+    ordered_admissions.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let ordered_certificates = ordered_admissions
+        .into_iter()
+        .map(|(_, certificate)| certificate)
+        .collect::<Vec<_>>();
     let first_admission =
         crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v2(
             &state.network_id,
@@ -1014,15 +705,18 @@ fn queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set() {
         State::queue_plan_pending_route_member_marker_payload(&second_member)
             .expect("fixture second batch orphan member payload");
     let carrier = empty_global_block_after(Some(&parent));
-    let mut state_block = state.block(carrier.header());
-    state_block
-        .world
-        .smart_contract_state
-        .insert(second_member_key.clone(), second_member_payload.clone());
+    {
+        let mut world = state.world.block();
+        world
+            .smart_contract_state
+            .insert(second_member_key.clone(), second_member_payload.clone());
+        world.commit();
+    }
+    let mut state_block = state.lane_application_block(carrier.header().clone());
     let write_set_before_batch = state_block.merge_execution_write_set_root();
     assert!(
         state_block
-            .stage_queue_plan_admissions(&ordered_certificates, &candidate.active_lanes, 2,)
+            .stage_queue_plan_admissions_for_carrier(&ordered_certificates)
             .is_err(),
         "a second admission failure must roll back every earlier admission"
     );
@@ -1051,20 +745,29 @@ fn queue_plan_registry_staging_is_an_exact_idempotent_compare_and_set() {
         Some(&second_member_payload),
         "rollback must preserve the pre-existing orphan evidence"
     );
-    state_block
-        .world
-        .smart_contract_state
-        .remove(second_member_key);
-    state_block
-        .stage_queue_plan_admissions(&ordered_certificates[..1], &candidate.active_lanes, 2)
-        .expect("the same StateBlock remains reusable after rollback");
+    assert!(state_block.staged_queue_plan_admissions().is_empty());
+    drop(state_block);
+    {
+        let mut world = state.world.block();
+        world.smart_contract_state.remove(second_member_key);
+        world.commit();
+    }
+    let retry_block = state
+        .block_with_queue_plan_admissions(carrier.header().clone(), &ordered_certificates[..1])
+        .expect("a later proposal-native carrier can retry after the conflict is repaired");
     for key in [
         &first_registry_key,
         &first_obligation_key,
         &first_member_key,
     ] {
-        assert!(state_block.world.smart_contract_state.get(key).is_some());
+        assert!(retry_block.world.smart_contract_state.get(key).is_some());
     }
+}
+#[test]
+fn queue_plan_native_staging_is_an_exact_idempotent_compare_and_set() {
+    assert_queue_plan_native_exact_compare_and_set();
+    assert_queue_plan_native_multi_route_preflight_is_atomic();
+    assert_queue_plan_native_batch_rollback_is_atomic();
 }
 #[test]
 fn queue_plan_registry_absence_rejects_an_orphan_pending_obligation() {
@@ -2524,7 +2227,7 @@ fn queue_plan_registry_presence_is_bounded_and_malformed_markers_fail_closed() {
     );
 }
 #[test]
-fn pending_queue_plan_admission_uses_legacy_topology_when_nexus_is_disabled() {
+fn pending_queue_plan_admission_uses_single_lane_authority_when_nexus_is_disabled() {
     let kura = Kura::blank_kura_for_testing();
     let mut state = State::new_for_testing(
         World::default(),
@@ -2535,18 +2238,17 @@ fn pending_queue_plan_admission_uses_legacy_topology_when_nexus_is_disabled() {
     nexus.enabled = false;
     state
         .set_nexus(nexus)
-        .expect("apply disabled Nexus state for legacy QueuePlan route");
+        .expect("apply canonical single-lane Nexus-disabled state");
     let validator_keypairs = configure_commit_topology(&state, 1);
     let parent = empty_global_block_after(None);
     kura.store_block(Arc::new(parent.clone()))
-        .expect("store legacy QueuePlan carrier parent");
+        .expect("store single-lane QueuePlan carrier parent");
     commit_block_metadata_to_state(&state, &parent);
     let route = crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-    assert!(
-        state
-            .authoritative_lane_peer_ids_at_height(route.lane_id, 2)
-            .is_empty(),
-        "disabled Nexus has no lane-registry authority; QueuePlan must use commit topology"
+    assert_eq!(
+        state.authoritative_lane_peer_ids_at_height(route.lane_id, 2),
+        state.commit_topology_snapshot(),
+        "Nexus-disabled V1 uses the canonical single-lane commit committee"
     );
     let routing_plan = crate::queue::RoutingPlan::single(route);
     let (_, certificate) = queue_plan_admission_certificate_for_state_test(
@@ -2559,126 +2261,29 @@ fn pending_queue_plan_admission_uses_legacy_topology_when_nexus_is_disabled() {
     assert_eq!(
         state
             .classify_pending_queue_plan_admission(&certificate, 2)
-            .expect("legacy QueuePlan certificate is classifiable")
+            .expect("single-lane QueuePlan certificate is classifiable")
             .1,
         PendingQueuePlanAdmissionDisposition::EligibleAbsent
     );
-    let candidate = state
-        .merge_candidate_with_queue_plan_admissions(&parent.header(), 0, None, vec![certificate])
-        .expect("legacy QueuePlan candidate construction")
-        .expect("legacy QueuePlan controls produce a standalone candidate");
-    let qc = merge_qc_for_candidate(&state, &candidate, &validator_keypairs, &[0]);
-    let entry = merge_entry_from_candidate(candidate, qc);
-    let carrier = certified_merge_carrier_after(&parent, &entry);
-    let staged = state
-        .block_with_certified_merge_entry(carrier.header().clone(), &entry)
-        .expect("QueuePlan-only certified merge entry remains legal with Nexus disabled");
-    assert!(
-        staged.canonical_wsv_merge_commit_authorization.is_none()
-            && staged
-                .canonical_carrier_commit_metadata_authorization
-                .is_none(),
-        "control-only merge entries must never mint autonomous WSV or carrier metadata authority"
-    );
-    drop(staged);
-    let mut non_control_entry = entry;
-    non_control_entry.queue_plan_admissions.clear();
-    assert!(matches!(
-        state.block_with_certified_merge_entry(
-            carrier.header().clone(),
-            &non_control_entry,
-        ),
-        Err(MergeLedgerCommitError::ExecutionBatchInvalid(ref message))
-            if message.contains("requires Nexus multilane mode")
-    ));
-}
-fn assert_control_only_pending_selection_skips_execution(
-    state: &State,
-    parent: &SignedBlock,
-    application_header: &BlockHeader,
-    execution_candidate: &crate::merge::MergeLedgerCandidate,
-    validator_keypairs: &[KeyPair],
-    commit_keypairs: &[KeyPair],
-) {
-    let execution_qc = merge_qc_for_candidate(state, execution_candidate, commit_keypairs, &[0]);
-    let execution_entry = merge_entry_from_candidate(execution_candidate.clone(), execution_qc);
-    let execution_hash = execution_entry.canonical_hash();
-    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
-        LaneId::SINGLE,
-        DataSpaceId::UNIVERSAL,
-    ));
-    let control_entry = (0x62_u8..=u8::MAX)
-        .find_map(|tag| {
-            let (_, certificate) = queue_plan_admission_certificate_for_state_test(
-                state,
-                routing_plan.clone(),
-                validator_keypairs,
-                1,
-                tag,
-            );
-            let candidate = state
-                .merge_candidate_with_queue_plan_admissions(
-                    &parent.header(),
-                    application_header.view_change_index(),
-                    None,
-                    vec![certificate],
-                )
-                .expect("construct a control-only pending selection candidate")
-                .expect("an absent QueuePlan admission produces control-only merge work");
-            let qc = merge_qc_for_candidate(state, &candidate, commit_keypairs, &[0]);
-            let entry = merge_entry_from_candidate(candidate, qc);
-            (execution_hash < entry.canonical_hash()).then_some(entry)
-        })
-        .expect("fixture must find a control-only entry ordered after the execution entry");
-    let control_hash = control_entry.canonical_hash();
-    assert!(
-        execution_hash < control_hash,
-        "the execution-bearing fixture must be the earlier canonical pending entry"
-    );
+    let carrier = empty_global_block_after(Some(&parent));
+    let state_block = state
+        .block_with_queue_plan_admissions(carrier.header().clone(), &[certificate.clone()])
+        .expect("proposal-native QueuePlan control stages in single-lane mode");
     assert_eq!(
-        state
-            .kura
-            .persist_pending_certified_merge_entry(&execution_entry)
-            .expect("persist earlier execution-bearing pending entry"),
-        execution_hash
+        state_block.staged_queue_plan_admissions(),
+        core::slice::from_ref(&certificate)
     );
-    assert_eq!(
-        state
-            .kura
-            .persist_pending_certified_merge_entry(&control_entry)
-            .expect("persist later control-only pending entry"),
-        control_hash
+    assert!(state_block.staged_merge_entry().is_none());
+    assert!(
+        state_block
+            .canonical_wsv_merge_commit_authorization
+            .is_none()
     );
-    let (selected_hash, selected_entry, selected_header) = state
-        .select_pending_certified_merge_entry_for_round(
-            application_header,
-            1,
-            PendingCertifiedMergeSelection::Any,
-        )
-        .expect("scan all pending merge-entry shapes")
-        .expect("the earlier execution entry is eligible");
-    assert_eq!(selected_hash, execution_hash);
-    assert_eq!(&selected_entry, &execution_entry);
-    assert_eq!(&selected_header, application_header);
-    let (selected_hash, selected_entry, selected_header) = state
-        .select_pending_certified_merge_entry_for_round(
-            application_header,
-            1,
-            PendingCertifiedMergeSelection::ControlOnly,
-        )
-        .expect("scan only control-compatible pending merge entries")
-        .expect("the later control-only entry remains eligible");
-    assert_eq!(selected_hash, control_hash);
-    assert_eq!(&selected_entry, &control_entry);
-    assert_eq!(&selected_header, application_header);
-    state
-        .kura
-        .remove_pending_certified_merge_entry(execution_hash)
-        .expect("remove execution selection fixture");
-    state
-        .kura
-        .remove_pending_certified_merge_entry(control_hash)
-        .expect("remove control-only selection fixture");
+    assert!(
+        state_block
+            .canonical_carrier_commit_metadata_authorization
+            .is_none()
+    );
 }
 #[test]
 fn pending_queue_plan_admission_keeps_historical_eligibility_after_frontier_advance() {
@@ -2862,132 +2467,5 @@ fn pending_queue_plan_admission_keeps_mutated_history_roster_and_incarnation_sta
         .lane_incarnations
         .write()
         .insert(LaneId::SINGLE, original_incarnation);
-}
-#[test]
-fn same_carrier_queue_plan_certificate_cannot_authorize_autonomous_execution() {
-    let (state, validator_keypairs, commit_keypairs, parent) = configured_single_lane_merge_state();
-    let tag = 0x61;
-    let entrypoint = queue_plan_entrypoint_for_state_test(&state, tag);
-    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
-        LaneId::SINGLE,
-        DataSpaceId::UNIVERSAL,
-    ));
-    let (binding, certificate) = queue_plan_admission_certificate_for_state_test(
-        &state,
-        routing_plan.clone(),
-        &validator_keypairs,
-        1,
-        tag,
-    );
-    binding
-        .validate_for_request(&state.network_id, &entrypoint, &routing_plan)
-        .expect("fixture certificate binds the autonomous transaction");
-    {
-        let mut world = state.world.block();
-        world.accounts.insert(
-            entrypoint.authority().clone(),
-            AccountValue::new(AccountDetails::default()),
-        );
-        world.commit();
-    }
-    let source = autonomous_merge_source_for_queue_plan_admission_test(
-        &state,
-        &binding,
-        entrypoint,
-        routing_plan,
-        &commit_keypairs,
-    );
-    let application_header = BlockHeader::new(
-        nonzero!(2_u64),
-        Some(parent.hash()),
-        None,
-        None,
-        u64::try_from(parent.header().creation_time().as_millis())
-            .expect("fixture parent time fits u64")
-            .saturating_add(1),
-        0,
-    );
-    assert!(
-        state
-            .build_merge_execution_batch_from_source_prefix(
-                1,
-                application_header.clone(),
-                vec![source.clone()],
-            )
-            .is_none(),
-        "an availability-certified source remains ineligible while its binding is absent from pre-carrier WSV"
-    );
-    seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
-    let batch = state
-        .build_merge_execution_batch_from_source_prefix(1, application_header.clone(), vec![source])
-        .expect("the otherwise-identical source is eligible with exact pre-carrier authority");
-    let lifecycle = state.lane_consensus_lifecycle_snapshot();
-    let active_lanes = lifecycle
-        .nexus
-        .lane_catalog
-        .lanes()
-        .iter()
-        .map(|lane| MergeLaneBinding {
-            lane_id: lane.id,
-            dataspace_id: lane.dataspace_id,
-            lane_config_hash: merge_lane_config_hash(lane),
-            incarnation: lifecycle.incarnations[&lane.id],
-            activation_height: lifecycle.activation_heights[&lane.id].saturating_add(1),
-        })
-        .collect::<Vec<_>>();
-    let incarnation_entries = active_lanes
-        .iter()
-        .map(
-            |lane| iroha_data_model::nexus::LaneLifecycleIncarnationEntry {
-                lane_id: lane.lane_id,
-                incarnation: lane.incarnation,
-            },
-        )
-        .collect::<Vec<_>>();
-    let base = crate::merge::MergeLedgerCandidate {
-        version: crate::merge::MergeLedgerCandidate::VERSION,
-        epoch_id: 1,
-        view: 0,
-        carrier_height: 2,
-        carrier_parent_hash: parent.hash(),
-        lane_catalog_hash: merge_lane_catalog_hash(&lifecycle.nexus.lane_catalog),
-        active_lanes: active_lanes.clone(),
-        incarnation_root: LaneLifecycleParameterV1::incarnation_root(&incarnation_entries),
-        activation_root: crate::merge::merge_activation_root(&active_lanes),
-        lane_snapshots: Vec::new(),
-        execution_batch: Some(batch),
-        lane_drain_certificates: Vec::new(),
-        queue_plan_admissions: Vec::new(),
-        global_state_root: crate::merge::reduce_merge_hint_roots(&[]),
-    };
-    state
-        .validate_merge_candidate_for_global_round(&base, &parent.header(), 0)
-        .expect("fixture base candidate is valid with committed pre-carrier authority");
-    assert_control_only_pending_selection_skips_execution(
-        &state,
-        &parent,
-        &application_header,
-        &base,
-        &validator_keypairs,
-        &commit_keypairs,
-    );
-    clear_exact_queue_plan_admission_state_for_test(&state, &certificate);
-    assert!(matches!(
-        state.merge_candidate_with_queue_plan_admissions(
-            &parent.header(),
-            0,
-            Some(base),
-            vec![certificate],
-        ),
-        Err(MergeLedgerCommitError::ExecutionBatchInvalid(_))
-            | Err(MergeLedgerCommitError::ExecutionDivergence(_))
-    ));
-    assert_eq!(
-        state
-            .queue_plan_admission_binding_registry_match(&binding)
-            .expect("post-negative registry lookup"),
-        QueuePlanAdmissionRegistryMatch::Absent,
-        "the rejected same-carrier control must not leak an admission marker into WSV"
-    );
 }
 include!("autonomous_merge_and_queue_plan_native_diagnostic_tests.rs");

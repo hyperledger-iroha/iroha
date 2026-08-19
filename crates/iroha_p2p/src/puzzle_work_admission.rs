@@ -5,16 +5,17 @@ use std::{
     sync::{Arc, LazyLock, Mutex, Weak},
 };
 
+use iroha_config::parameters::actual::SoranetPow as ActualSoranetPow;
 use tokio::sync::Semaphore;
 
 use crate::Error;
 
 /// Default number of concurrent outbound puzzle mints.
 pub(crate) const DEFAULT_OUTBOUND_MINT_CAPACITY: NonZeroUsize =
-    NonZeroUsize::new(1).expect("one is non-zero");
+    ActualSoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION;
 /// Default number of concurrent inbound puzzle verifications.
 pub(crate) const DEFAULT_INBOUND_VERIFY_CAPACITY: NonZeroUsize =
-    NonZeroUsize::new(1).expect("one is non-zero");
+    ActualSoranetPow::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION;
 
 /// Direction-aware process admission for Argon2 handshake jobs.
 #[derive(Debug)]

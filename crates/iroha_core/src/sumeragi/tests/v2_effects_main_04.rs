@@ -994,15 +994,9 @@ fn certified_response_is_bound_to_exact_request_and_consumed_once() {
     .payload()
     .to_vec();
     let responder = fixture.context.roster[0].validator.clone();
-    let ingress_ownership = certified_response_ingress_ownership(&response, responder.clone());
     assert_eq!(
         executor
-            .accept_certified_body_response_with_ingress_ownership(
-                response.clone(),
-                &responder,
-                &ingress_ownership,
-                &mut services,
-            )
+            .accept_certified_body_response(response.clone(), &responder, &mut services)
             .expect("authenticated certified response"),
         CompletionDisposition::Accepted
     );
@@ -1016,57 +1010,6 @@ fn certified_response_is_bound_to_exact_request_and_consumed_once() {
             V2TransportError::UnsolicitedResponse(_)
         ))
     ));
-}
-#[test]
-fn certified_body_response_carrier_swap_fails_closed_before_fetch_mutation() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-    let sources = certified_sources(&fixture, &prepare);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: sources,
-                certificate: Some(prepare),
-            }],
-            &mut services,
-        )
-        .expect("certified fetch");
-    let task = services.fetch_tasks[0].clone();
-    let response = signed_certified_response(
-        &fixture,
-        &task,
-        fixture.manifest.clone(),
-        fixture.body.clone(),
-        0,
-    );
-    let mut other = response.clone();
-    other.body.push(0xFF);
-    let responder = fixture.context.roster[0].validator.clone();
-    let swapped_ownership = certified_response_ingress_ownership(&other, responder.clone());
-    let pending_before = executor.pending_fetches.clone();
-    let certified_before = executor.certified_work.clone();
-    let outstanding_before = executor.outstanding_requests.hashes();
-    assert!(matches!(
-        executor.accept_certified_body_response_with_ingress_ownership(
-            response,
-            &responder,
-            &swapped_ownership,
-            &mut services,
-        ),
-        Err(EffectTransportError::FailClosed(reason))
-            if reason.contains("fair-ingress ownership")
-    ));
-    assert_eq!(executor.pending_fetches, pending_before);
-    assert_eq!(executor.certified_work, certified_before);
-    assert_eq!(executor.outstanding_requests.hashes(), outstanding_before);
-    assert!(services.completed_certified_fetches.is_empty());
-    assert!(executor.status().fail_closed);
 }
 #[test]
 fn certified_manifest_mismatch_is_recoverable_in_both_authority_orders() {
@@ -2029,7 +1972,7 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         "a non-Completion runner cursor cannot claim or mutate a recovered Sign owner",
     );
     let before_unbound = owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
-    let unbound_result = owner.plan_ingress_turn(
+    let unbound_result = owner.plan_ingress_turn_for_test(
         &production_services,
         &fixture.executor,
         fixture.executor.lifecycle_mode_rank_snapshot(),
@@ -2057,7 +2000,7 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         .expect("the exact winner remains selectable for the guard mismatch");
     let before_guard_mismatch =
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
-    let guard_mismatch = owner.plan_ingress_turn(
+    let guard_mismatch = owner.plan_ingress_turn_for_test(
         &production_services,
         &fixture.executor,
         fixture.executor.lifecycle_mode_rank_snapshot(),
@@ -2092,7 +2035,7 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         .expect("the exact winner remains selectable for a capacity wait");
     let before_capacity_wait =
         owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
-    let capacity_result = owner.plan_ingress_turn(
+    let capacity_result = owner.plan_ingress_turn_for_test(
         &production_services,
         &fixture.executor,
         fixture.executor.lifecycle_mode_rank_snapshot(),
@@ -2147,7 +2090,7 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
     let mode = fixture.executor.lifecycle_mode_rank_snapshot();
     let runner =
         crate::sumeragi::v2_runner::lifecycle_ingress_rank_snapshot_for_test(&fixture.context);
-    let planned = owner.plan_ingress_turn(
+    let planned = owner.plan_ingress_turn_for_test(
         &production_services,
         &fixture.executor,
         mode,
@@ -2177,7 +2120,7 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         .prepare_lifecycle_ingress_selector(&ingress, first_ordinal)
         .expect("the queued physical winner remains selectable before Phase B");
     let before_repeat = owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source);
-    let repeated_result = owner.plan_ingress_turn(
+    let repeated_result = owner.plan_ingress_turn_for_test(
         &production_services,
         &fixture.executor,
         fixture.executor.lifecycle_mode_rank_snapshot(),

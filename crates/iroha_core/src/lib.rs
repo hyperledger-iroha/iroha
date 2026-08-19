@@ -246,7 +246,7 @@ const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG: u32 = 20;
 const NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG: u32 = 21;
 /// Hard Norito frame bound for one QueuePlan admission-certificate handoff.
 pub const MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES: usize =
-    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES + 64 * 1024;
+    iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES + 64 * 1024;
 const MAX_LANE_DRAIN_VOTE_DECODE_ELEMENTS: usize = MAX_LANE_DRAIN_VOTE_WIRE_BYTES;
 // A canonical 128-member BLS committee needs just over 256 KiB under Norito's
 // conservative nested alignment-copy accounting. Keep deterministic headroom
@@ -837,7 +837,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
             NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_PUBLICATION_TAG => {
                 const WIRE_OVERHEAD_BYTES: usize = 64 * 1024;
                 const MAX_CERTIFICATE_BYTES: usize =
-                    iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
+                    iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
                 const MAX_WIRE_BYTES: usize = MAX_CERTIFICATE_BYTES + WIRE_OVERHEAD_BYTES;
                 if framed_len > MAX_WIRE_BYTES {
                     return Err(norito::core::Error::ArchiveLengthExceeded {
@@ -854,7 +854,7 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
                 )))
             }
             NETWORK_MESSAGE_QUEUE_PLAN_ADMISSION_CERTIFICATE_TAG => {
-                let max_body = iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
+                let max_body = iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
                 if framed_len > MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES {
                     return Err(norito::core::Error::ArchiveLengthExceeded {
                         length: u64::try_from(framed_len).unwrap_or(u64::MAX),

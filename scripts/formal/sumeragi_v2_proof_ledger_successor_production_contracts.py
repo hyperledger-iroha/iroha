@@ -1319,6 +1319,7 @@ if publish_initial_status {
             (("impl", "PreparedReadyDurableValidatePersistedSign", "<", "'", "_", ">"),),
             "Ready-Validate direct status publication",
             errors,
+            expected_attributes=("#[inline(never)]",),
         )
         _require_rust_token_sequence(
             adapter_path,

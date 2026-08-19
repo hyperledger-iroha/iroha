@@ -514,34 +514,18 @@ final class TxBuilderTests: XCTestCase {
         _ = try payloadReader.readCompactField()
         _ = try payloadReader.readCompactField()
         _ = try payloadReader.readCompactField()
+        var admissionIntentReader = CanonicalNoritoReader(
+            data: try payloadReader.readCompactField()
+        )
+        XCTAssertEqual(
+            try admissionIntentReader.readUInt32LE(),
+            TransactionAdmissionIntentV1.queuePlanSynced.rawValue
+        )
+        XCTAssertEqual(admissionIntentReader.remaining(), 0)
         var metadataReader = CanonicalNoritoReader(
             data: try payloadReader.readCompactField()
         )
-        XCTAssertEqual(try metadataReader.readUInt64LE(), 1)
-        var metadataEntry = CanonicalNoritoReader(
-            data: try metadataReader.readCompactField()
-        )
-        var metadataKey = CanonicalNoritoReader(
-            data: try metadataEntry.readCompactField()
-        )
-        XCTAssertEqual(
-            String(data: try metadataKey.readCompactField(), encoding: .utf8),
-            queuePlanSyncedAdmissionMetadataKey
-        )
-        XCTAssertEqual(metadataKey.remaining(), 0)
-        var metadataJson = CanonicalNoritoReader(
-            data: try metadataEntry.readCompactField()
-        )
-        var metadataJsonString = CanonicalNoritoReader(
-            data: try metadataJson.readCompactField()
-        )
-        XCTAssertEqual(
-            String(data: try metadataJsonString.readCompactField(), encoding: .utf8),
-            "true"
-        )
-        XCTAssertEqual(metadataJsonString.remaining(), 0)
-        XCTAssertEqual(metadataJson.remaining(), 0)
-        XCTAssertEqual(metadataEntry.remaining(), 0)
+        XCTAssertEqual(try metadataReader.readUInt64LE(), 0)
         XCTAssertEqual(metadataReader.remaining(), 0)
         XCTAssertEqual(try payloadReader.readCompactField(), Data([0]))
         XCTAssertEqual(payloadReader.remaining(), 0)

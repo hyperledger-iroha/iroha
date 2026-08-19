@@ -20,6 +20,8 @@ use super::v2_core::{
     Generation, production_reliable_flush_trace_refines_outbound_ownership_kernel,
 };
 #[cfg(test)]
+use super::v2_runtime::RuntimeLifecycleOrdinalSource;
+#[cfg(test)]
 use super::v2_runtime::RuntimeQueueSnapshot;
 use super::{
     FairV2Ingress, FairV2IngressOwnershipEvidence, InboundBlockMessage,
@@ -52,6 +54,7 @@ use super::{
     v2_lane_work::{
         DurableLaneRolloverAuthority, V2LaneWorkAdapter, V2LaneWorkEffect,
         durable_historical_lane_output_source_hash, lane_output_identity,
+        validate_winning_lane_output,
     },
     v2_lifecycle_coordinator::{
         AuthenticatedSchedulerInputsFactory, CertifiedFetchBodyPersistenceCompletion,
@@ -66,10 +69,7 @@ use super::{
         RecoveredDecisionFetchBodyPersistenceTaskV1, RecoveredDecisionFetchDispatchKeyV1,
         RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1, TurnLease,
     },
-    v2_runtime::{
-        LeaderWireRuntimeTerminal, RuntimeLifecycleOrdinalSource, RuntimeQueueLaneSnapshot,
-        SerializedV2Runtime,
-    },
+    v2_runtime::{LeaderWireRuntimeTerminal, RuntimeQueueLaneSnapshot, SerializedV2Runtime},
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk, V2TransportError,
         authenticate_certified_body_request_with_validator_pops,
@@ -4015,14 +4015,16 @@ pub(in crate::sumeragi) struct LifecycleCertifiedServeCompletionDrainV1 {
 /// Ordinary I/O and local reconstruction work is never exposed. An ordinary
 /// I/O head is restored into the service's sole held slot before
 /// `PassThrough` returns, so the ordinary drain observes the same FIFO item.
-/// Recovered variants transfer only their guarded, class-specific owner.
+/// Lifecycle variants transfer only their guarded, class-specific owner.
 #[allow(variant_size_differences)]
 #[must_use = "a selected recovered completion must remain lifecycle-owned"]
-pub(in crate::sumeragi) enum RecoveredLifecycleCompletionTakeV1 {
+pub(in crate::sumeragi) enum LifecycleCompletionTakeV1 {
     /// No physical I/O completion is currently available.
     None,
     /// The ordinary completion owner must service the current turn.
     PassThrough,
+    /// The exact persisted ordinary certified-Fetch body left the FIFO owner.
+    CertifiedFetch(PreparedCertifiedFetchBodyPersistenceCompletion),
     /// The exact recovered Decision Apply completion left the FIFO owner.
     Apply(PreparedRecoveredDecisionApplyCompletionV1),
     /// The exact recovered Sign completion left the FIFO owner.
@@ -10161,7 +10163,7 @@ fn durable_history_source_covers(
             Ok(())
         }
         (
-            ExactOutputRolloverClaim::HistoricalAutonomousLaneCertification {
+            ExactOutputRolloverClaim::HistoricalLaneCertification {
                 source_height,
                 lane_id,
                 lane_block_height,
@@ -10173,8 +10175,7 @@ fn durable_history_source_covers(
         ) => {
             if *source_height >= maximum_source_height || HashOf::new(message) != *message_hash {
                 return Err(
-                    "historical autonomous certification has an invalid source height or hash"
-                        .to_owned(),
+                    "historical lane certification has an invalid source height or hash".to_owned(),
                 );
             }
             let records = kura
@@ -10182,54 +10183,33 @@ fn durable_history_source_covers(
                     crate::kura::HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS,
                 )
                 .map_err(|error| error.to_string())?;
-            let record = records
-                .into_iter()
-                .find(|record| {
-                    let proposal = &record.payload.origin_proposal;
-                    proposal.descriptor.proposal_height == *source_height
-                        && proposal.descriptor.lane_id == *lane_id
-                        && proposal.descriptor.lane_block_height == *lane_block_height
-                        && proposal.proposal_hash == *proposal_hash
-                })
-                .ok_or_else(|| {
-                    "historical autonomous certification lost its immutable Kura record".to_owned()
-                })?;
+            let record = records.into_iter().find(|record| {
+                let proposal = &record.payload.origin_proposal;
+                proposal.descriptor.proposal_height == *source_height
+                    && proposal.descriptor.lane_id == *lane_id
+                    && proposal.descriptor.lane_block_height == *lane_block_height
+                    && proposal.proposal_hash == *proposal_hash
+            });
+            let Some(record) = record else {
+                return durable_historical_lane_output_source_hash(kura, message).and_then(
+                    |source| {
+                        source.map(|_| ()).ok_or_else(|| {
+                            "historical lane certification lost its exact Kura source".to_owned()
+                        })
+                    },
+                );
+            };
             kura.validate_historical_autonomous_lane_recovery_record_dependencies(&record)
                 .map_err(|error| error.to_string())?;
             let proposal = &record.payload.origin_proposal;
-            match message {
-                BlockMessage::LaneBlockProposal(candidate) if candidate == proposal => Ok(()),
-                BlockMessage::LaneBlockVote(vote)
-                    if vote.body == proposal.vote_body(vote.body.phase)
-                        && proposal.descriptor.validator_set.contains(&vote.signer) =>
-                {
-                    vote.validate_ingress(vote.body.phase)
-                        .map_err(|error| error.to_string())
-                }
-                BlockMessage::LaneBlockQc(qc)
-                    if qc.body == proposal.vote_body(qc.body.phase)
-                        && qc.validator_set == proposal.descriptor.validator_set =>
-                {
-                    let pops = qc
-                        .validator_set
-                        .iter()
-                        .zip(&record.validator_pops)
-                        .enumerate()
-                        .filter(|(index, _)| {
-                            qc.signers_bitmap
-                                .get(index / 8)
-                                .is_some_and(|byte| byte & (1_u8 << (index % 8)) != 0)
-                        })
-                        .map(|(_, (peer, pop))| (peer.public_key().clone(), pop.clone()))
-                        .collect();
-                    crate::lane_consensus::validate_lane_block_qc_aggregate(qc, &pops)
-                        .map_err(|error| error.to_string())
-                }
-                _ => Err(
-                    "historical autonomous certification differs from its immutable proposal"
-                        .to_owned(),
-                ),
-            }
+            let validator_pops = proposal
+                .descriptor
+                .validator_set
+                .iter()
+                .zip(&record.validator_pops)
+                .map(|(validator, pop)| (validator.public_key().clone(), pop.clone()))
+                .collect();
+            validate_winning_lane_output(message, proposal, &validator_pops)
         }
         (
             ExactOutputRolloverClaim::HistoricalLaneRecoveryResponse {
@@ -11656,22 +11636,6 @@ impl ProductionV2Services {
         io.command_tx
             .queue
             .capture_recovered_lifecycle_sign_capacity(operation, key)
-    }
-    /// Create the actor-global lifecycle source before leader-wire recovery.
-    ///
-    /// The retired worker-owned Serve journal is deliberately not a first-release
-    /// production input. Launch immediately advances this source through the
-    /// durable leader-wire high-watermarks before opening ingress.
-    pub(crate) fn restore_lifecycle_ordinal_source(
-        _context: &wire::HeightContext,
-        _chunk_root: impl AsRef<Path>,
-        _observer_source_capacity: usize,
-        _observer_per_source_capacity: usize,
-    ) -> Result<RuntimeLifecycleOrdinalSource, String> {
-        // First-release production no longer restores the retired worker-owned
-        // Serve scheduler. Leader-wire recovery advances this fresh shared
-        // source past every durable actor-global producer before ingress opens.
-        Ok(RuntimeLifecycleOrdinalSource::after_high_watermark(0))
     }
     /// Start the ordered I/O adapter for one immutable height context.
     #[allow(clippy::too_many_arguments, dead_code)]
@@ -13371,9 +13335,9 @@ impl ProductionV2Services {
     /// or an ordinary I/O head, returns `PassThrough` without acknowledgement
     /// or ownership-position removal. A recovered result transfers exactly its
     /// dedicated guarded token and advances completion-source rotation once.
-    pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(
+    pub(in crate::sumeragi) fn take_next_lifecycle_completion(
         &mut self,
-    ) -> Result<RecoveredLifecycleCompletionTakeV1, String> {
+    ) -> Result<LifecycleCompletionTakeV1, String> {
         if self.output_guard.restart_required() {
             return Err("Sumeragi v2 consensus requires process restart".to_owned());
         }
@@ -13381,26 +13345,66 @@ impl ProductionV2Services {
             && self.next_completion_source == CompletionSource::Local
             && !self.local_completions.is_empty()
         {
-            return Ok(RecoveredLifecycleCompletionTakeV1::PassThrough);
+            return Ok(LifecycleCompletionTakeV1::PassThrough);
         }
 
         let completion = if let Some(completion) = self.held_io_completion.take() {
             completion
         } else {
             let Some(io) = self.io.as_ref() else {
-                return Ok(RecoveredLifecycleCompletionTakeV1::None);
+                return Ok(LifecycleCompletionTakeV1::None);
             };
             let Ok(completion) = io.try_recv_completion_unacknowledged() else {
                 return if self.local_completions.is_empty() {
-                    Ok(RecoveredLifecycleCompletionTakeV1::None)
+                    Ok(LifecycleCompletionTakeV1::None)
                 } else {
-                    Ok(RecoveredLifecycleCompletionTakeV1::PassThrough)
+                    Ok(LifecycleCompletionTakeV1::PassThrough)
                 };
             };
             completion
         };
 
         match completion {
+            V2IoCompletion::CertifiedFetchBodyPersisted(guarded) => {
+                let work_ack = match self.io.as_ref().ok_or_else(|| {
+                    "persisted certified-Fetch body lost its I/O command owner".to_owned()
+                }) {
+                    Ok(io) => match io.prepare_certified_fetch_body_persistence_ack(
+                        guarded.completion(),
+                        Arc::clone(&self.output_guard),
+                    ) {
+                        Ok(work_ack) => work_ack,
+                        Err(error) => {
+                            self.held_io_completion =
+                                Some(V2IoCompletion::CertifiedFetchBodyPersisted(guarded));
+                            return Err(error);
+                        }
+                    },
+                    Err(error) => {
+                        self.held_io_completion =
+                            Some(V2IoCompletion::CertifiedFetchBodyPersisted(guarded));
+                        return Err(error);
+                    }
+                };
+                let Some(io) = self.io.as_ref() else {
+                    unreachable!("prepared certified-Fetch work ack retains its I/O owner")
+                };
+                if let Err(error) = io.acknowledge_completion_at(
+                    V2IoCompletionAcknowledgement::LifecycleWorkRetained,
+                    0,
+                ) {
+                    self.held_io_completion =
+                        Some(V2IoCompletion::CertifiedFetchBodyPersisted(guarded));
+                    return Err(error);
+                }
+                self.next_completion_source = CompletionSource::Local;
+                Ok(LifecycleCompletionTakeV1::CertifiedFetch(
+                    PreparedCertifiedFetchBodyPersistenceCompletion {
+                        completion: guarded.into_completion(),
+                        work_ack,
+                    },
+                ))
+            }
             V2IoCompletion::RecoveredDecisionApply(guarded) => {
                 let key = guarded.result().dispatch_key();
                 let work_ack = match self.io.as_ref().ok_or_else(|| {
@@ -13423,7 +13427,7 @@ impl ProductionV2Services {
                     }
                 };
                 self.next_completion_source = CompletionSource::Local;
-                Ok(RecoveredLifecycleCompletionTakeV1::Apply(
+                Ok(LifecycleCompletionTakeV1::Apply(
                     PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack },
                 ))
             }
@@ -13436,7 +13440,7 @@ impl ProductionV2Services {
                         "recovered Sign completion lost its exact dedicated owner".to_owned()
                     })?;
                 self.next_completion_source = CompletionSource::Local;
-                Ok(RecoveredLifecycleCompletionTakeV1::Sign(completion))
+                Ok(LifecycleCompletionTakeV1::Sign(completion))
             }
             V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded) => {
                 let completion = self
@@ -13448,9 +13452,7 @@ impl ProductionV2Services {
                             .to_owned()
                     })?;
                 self.next_completion_source = CompletionSource::Local;
-                Ok(RecoveredLifecycleCompletionTakeV1::DecisionFetch(
-                    completion,
-                ))
+                Ok(LifecycleCompletionTakeV1::DecisionFetch(completion))
             }
             V2IoCompletion::LifecycleCertifiedServe(guarded) => {
                 let completion = self
@@ -13462,9 +13464,7 @@ impl ProductionV2Services {
                             .to_owned()
                     })?;
                 self.next_completion_source = CompletionSource::Local;
-                Ok(RecoveredLifecycleCompletionTakeV1::CertifiedServe(
-                    completion,
-                ))
+                Ok(LifecycleCompletionTakeV1::CertifiedServe(completion))
             }
             ordinary => {
                 assert!(
@@ -13472,7 +13472,7 @@ impl ProductionV2Services {
                     "ordinary pass-through must restore the sole held completion slot"
                 );
                 self.held_io_completion = Some(ordinary);
-                Ok(RecoveredLifecycleCompletionTakeV1::PassThrough)
+                Ok(LifecycleCompletionTakeV1::PassThrough)
             }
         }
     }

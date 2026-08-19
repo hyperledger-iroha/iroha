@@ -49,7 +49,7 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "63f3d331b25e5b240b3e8ac291b1fa64c6901b52f88b2ea2bb7bdb8af0889aa2";
+    "6db9c54ebfa147a57199b02f476929389b0751d59c8387da2e0104d16200ce65";
 const CANONICAL_PLAN_TEMPLATE_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_bootstrap_plan.json");
 const CANONICAL_CONFIG_TEMPLATE_V1: &[u8] =
@@ -1148,7 +1148,7 @@ fn governance_grant_destination_v1(instruction: &JsonValue) -> color_eyre::Resul
     if object.get("name").and_then(JsonValue::as_str) != Some("CanEnactGovernance") {
         return Ok(None);
     }
-    if object.len() != 1 {
+    if object.len() != 2 || !object.get("payload").is_some_and(JsonValue::is_null) {
         bail!("Taira CanEnactGovernance genesis grant must be unscoped");
     }
     let destination = permission

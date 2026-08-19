@@ -1010,7 +1010,7 @@ async fn direct_transaction_ingress_fails_closed_before_queue_or_rate_work() {
     )
     .sign(keypair.private_key());
     let queue_len = app.queue.active_len();
-    let error = submit_signed_transaction_for_ingress_globally_synced(
+    let error = submit_signed_transaction_for_ingress_queue_plan_certified(
         Arc::clone(&app),
         HeaderMap::new(),
         None,

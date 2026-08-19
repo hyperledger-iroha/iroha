@@ -5,6 +5,7 @@ import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.address.AccountAddressException
 import org.hyperledger.iroha.sdk.address.requireCanonicalI105Address
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 import org.hyperledger.iroha.sdk.sccp.SccpV1
@@ -224,6 +225,9 @@ internal fun normalizeOptionalTransactionPayload(
     }
     require(sameSccpFeePayerAndGasBound(expectedFeePayment, payload.feePayment)) {
         "transaction payload changed the requested payer, sponsor revision, or gas bound"
+    }
+    require(payload.admissionIntent == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED) {
+        "transaction payload admission intent must be QueuePlanSynced"
     }
     if (creationTimeMs != null) {
         require(payload.creationTimeMs == creationTimeMs) {

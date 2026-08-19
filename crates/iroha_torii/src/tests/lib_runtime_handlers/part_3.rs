@@ -319,59 +319,6 @@ fn torii_proxy_hosted_http_request_kind_uses_route_timeout() {
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[test]
-fn queue_plan_synced_runtime_timing_uses_the_complete_remaining_route_budget() {
-    assert_eq!(
-        super::queue_plan_synced_runtime_timing(Duration::from_millis(1), DEFAULT_ROUTE_TIMEOUT,),
-        (
-            Duration::from_millis(25),
-            DEFAULT_ROUTE_TIMEOUT.saturating_sub(Duration::from_millis(25)),
-        ),
-    );
-    assert_eq!(
-        super::queue_plan_synced_runtime_timing(Duration::from_secs(1), DEFAULT_ROUTE_TIMEOUT,),
-        (
-            Duration::from_millis(250),
-            DEFAULT_ROUTE_TIMEOUT.saturating_sub(Duration::from_millis(250)),
-        ),
-    );
-    assert_eq!(
-        super::queue_plan_synced_runtime_timing(Duration::from_secs(1), Duration::from_secs(13),),
-        (Duration::from_millis(250), Duration::from_millis(12_750)),
-    );
-    let (poll_interval, carrier_wait) =
-        super::queue_plan_synced_runtime_timing(Duration::MAX, DEFAULT_ROUTE_TIMEOUT);
-    assert!(
-        DEFAULT_ROUTE_TIMEOUT >= carrier_wait.saturating_add(poll_interval),
-        "the request deadline must outlive the canonical carrier wait and its final poll"
-    );
-    assert!(
-        carrier_wait > Duration::from_secs(12),
-        "a one-round prediction must not cause a premature 503 while finality is progressing"
-    );
-    assert_eq!(
-        super::queue_plan_synced_runtime_timing(Duration::from_secs(1), Duration::ZERO),
-        (Duration::from_millis(250), Duration::ZERO),
-    );
-}
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-#[test]
-fn durable_queue_plan_carrier_waits_when_owner_wake_is_deferred() {
-    assert_eq!(
-        super::durable_queue_plan_wake_disposition(Some(false)),
-        super::DurableQueuePlanWakeDisposition::Deferred,
-        "a transient missed wake must not turn a durable certificate into an immediate 503"
-    );
-    assert_eq!(
-        super::durable_queue_plan_wake_disposition(Some(true)),
-        super::DurableQueuePlanWakeDisposition::Delivered
-    );
-    assert_eq!(
-        super::durable_queue_plan_wake_disposition(None),
-        super::DurableQueuePlanWakeDisposition::OwnerMissing
-    );
-}
-#[cfg(any(feature = "p2p_ws", feature = "connect"))]
-#[test]
 fn queue_plan_synced_max_roster_is_not_serialized_by_proxy_hedging() {
     let roster_len = iroha_data_model::consensus::MAX_LANE_CONSENSUS_VALIDATORS;
     let byzantine_prefix = roster_len.saturating_sub(1) / 3;
@@ -722,6 +669,11 @@ fn incoming_proxy_submit_fixture_with_validator_signers(
             &[(LaneId::SINGLE, validator_bindings)],
         );
     }
+    let admission_intent = if admission == ToriiProxyTransactionAdmissionV2::QueuePlanSynced {
+        iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
+    } else {
+        iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
+    };
     let transaction = TransactionEntrypoint::External(
         TransactionBuilder::new(
             *app.state.network_id_ref(),
@@ -732,6 +684,7 @@ fn incoming_proxy_submit_fixture_with_validator_signers(
             Level::INFO,
             format!("incoming-proxy-submit-{seed:02x}"),
         )])
+        .with_admission_intent(admission_intent)
         .sign(keypair.private_key()),
     );
     let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
@@ -2425,30 +2378,47 @@ fn queue_plan_synced_reconciliation_hash_matches_accepted_queue_identity() {
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]
-async fn queue_plan_synced_registry_timeout_never_returns_accepted() {
+async fn queue_plan_quorum_is_accepted_before_registry_application() {
     let (app, request) =
         incoming_proxy_submit_fixture(0xde, ToriiProxyTransactionAdmissionV2::QueuePlanSynced);
     let expected = super::queue_plan_synced_acceptance_expectation(&request)
-        .expect("timeout fixture must be valid")
-        .expect("timeout fixture must require synchronized admission");
-    let outcome = super::wait_for_exact_queue_plan_admission_registry(
-        app.state.as_ref(),
-        &expected.admission_binding,
-        Duration::from_millis(1),
-        Duration::ZERO,
-    )
-    .await;
+        .expect("durable-acceptance fixture must be valid")
+        .expect("durable-acceptance fixture must require QueuePlan admission");
     assert_eq!(
-        outcome,
-        super::QueuePlanAdmissionRegistryWaitOutcome::TimedOut
+        app.state
+            .queue_plan_admission_binding_registry_match(&expected.admission_binding)
+            .expect("inspect pristine QueuePlan registry"),
+        QueuePlanAdmissionRegistryMatch::Absent,
+        "the fixture must prove acceptance before block application"
     );
-    let response = super::queue_plan_outcome_unknown_response(
-        expected.entrypoint_hash,
-        "test timeout before canonical WSV publication",
+    let receipt =
+        exact_queue_plan_synced_test_receipt(&request, &app.torii_proxy_bridge_signer, 40_003);
+    let snapshot = queue_plan_synced_test_certificate_snapshot(&request, vec![receipt]);
+    let certificate_hash = Hash::new(&snapshot.body);
+    let response = super::persist_queue_plan_admission_certificate(
+        &app,
+        super::torii_proxy_snapshot_to_response(snapshot.clone()),
+        &expected.admission_binding,
     );
-    assert_ne!(response.status(), StatusCode::ACCEPTED);
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    assert!(super::is_queue_plan_outcome_unknown_response(&response));
+    let response = response.await;
+    assert_eq!(
+        response.status(),
+        StatusCode::ACCEPTED,
+        "a locally durable f+1 certificate is Accepted even without WSV application or a Sumeragi owner"
+    );
+    assert_eq!(
+        app.kura
+            .pending_queue_plan_admission_certificate(certificate_hash)
+            .expect("read durable QueuePlan certificate"),
+        Some(snapshot.body),
+    );
+    assert_eq!(
+        app.state
+            .queue_plan_admission_binding_registry_match(&expected.admission_binding)
+            .expect("inspect unapplied QueuePlan registry"),
+        QueuePlanAdmissionRegistryMatch::Absent,
+        "Accepted is a durable-admission receipt, not an Applied receipt"
+    );
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[tokio::test]

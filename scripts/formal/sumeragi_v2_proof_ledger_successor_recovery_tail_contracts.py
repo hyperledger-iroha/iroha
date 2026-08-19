@@ -1960,6 +1960,131 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
                 f"forbidden ordinary-height authority {observed!r}"
             )
 
+    publication_fence_struct = rust_code_tokens(
+        """
+pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
+    queue: &'a FairV2Ingress,
+    _service_guard: MutexGuard<'a, ()>,
+    _producer_publication_guard: MutexGuard<'a, ()>,
+    witness: PreparedFairIngressQueueWitness,
+    selection: PreparedFairIngressQueueSelection,
+}
+"""
+    )
+    ingress_tokens = rust_code_tokens(sources["ingress"])
+    if _token_sequence_count(ingress_tokens, publication_fence_struct) != 1:
+        errors.append(
+            f"{paths['ingress']}: lifecycle publication fence must retain one "
+            "move-only service/producer guard carrier"
+        )
+
+    lock_publication_fence = _require_qualified_rust_item(
+        paths["ingress"],
+        sources["ingress"],
+        "PreparedFairIngressQueueWitness",
+        "lock_exact_dequeue_retaining",
+        errors,
+        "pre-LedgerV1 exact dequeue publication fence",
+        expected_attributes=("#[allow(clippy::result_large_err)]",),
+    )
+    _require_rust_item_token_sha256(
+        paths["ingress"],
+        lock_publication_fence,
+        _PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256[
+            "PreparedFairIngressQueueWitness::lock_exact_dequeue_retaining"
+        ],
+        "pre-LedgerV1 exact dequeue publication fence",
+        errors,
+    )
+    require_order(
+        "ingress",
+        lock_publication_fence,
+        "service then producer publication lock before final queue preflight",
+        (
+            "if !self.is_internally_exact()",
+            "let service_guard = queue.service_lock.lock()",
+            "let producer_publication_guard = queue.producer_publication_lock.lock()",
+            "self.revalidate_for_commit(queue)",
+            "let state = queue.state.lock()",
+            "self.metadata_matches_locked(&state)",
+            "LockedPreparedFairIngressExactDequeue {",
+            "_service_guard: service_guard",
+            "_producer_publication_guard: producer_publication_guard",
+        ),
+    )
+
+    publication_commit_candidates = [
+        rust_item
+        for rust_item in rust_items(sources["ingress"], "commit")
+        if rust_item.brace_context
+        == (("impl", "LockedPreparedFairIngressExactDequeue", "<", "'", "_", ">"),)
+    ]
+    if len(publication_commit_candidates) != 1:
+        errors.append(
+            f"{paths['ingress']}: require exactly one assertion-only "
+            "LockedPreparedFairIngressExactDequeue::commit; found "
+            f"{len(publication_commit_candidates)}"
+        )
+        publication_commit = None
+    else:
+        publication_commit = publication_commit_candidates[0]
+        _require_rust_item_context(
+            paths["ingress"],
+            publication_commit,
+            (("impl", "LockedPreparedFairIngressExactDequeue", "<", "'", "_", ">"),),
+            "post-LedgerV1 assertion-only exact dequeue",
+            errors,
+        )
+    _require_rust_item_token_sha256(
+        paths["ingress"],
+        publication_commit,
+        _PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256[
+            "LockedPreparedFairIngressExactDequeue::commit"
+        ],
+        "post-LedgerV1 assertion-only exact dequeue",
+        errors,
+    )
+    require_order(
+        "ingress",
+        publication_commit,
+        "post-publication assertion dequeue before producer release",
+        (
+            "_producer_publication_guard",
+            "let mut state = queue.state.lock()",
+            "witness.metadata_matches_locked(&state)",
+            "queue.dequeue_selected_locked(",
+            ".expect(\"prevalidated lifecycle dequeue is infallible after publication\")",
+            "drop(state)",
+            "drop(_producer_publication_guard)",
+            "drop(_service_guard)",
+        ),
+    )
+
+    publication_fence_test_context = (
+        ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
+    )
+    for test_name in (
+        "locked_publication_fence_serializes_same_wire_and_reenqueues_after_commit",
+        "locked_publication_fence_serializes_unrelated_append_and_preserves_it",
+        "dropping_locked_publication_fence_releases_producer_without_dequeue",
+    ):
+        regression = item("ingress", test_name)
+        _require_rust_item_context(
+            paths["ingress"],
+            regression,
+            publication_fence_test_context,
+            f"producer-publication-fence regression {test_name}",
+            errors,
+            expected_attributes=("#[test]",),
+        )
+        _require_rust_item_token_sha256(
+            paths["ingress"],
+            regression,
+            _PRODUCTION_LIFECYCLE_INGRESS_PUBLICATION_FENCE_ITEM_SHA256[test_name],
+            f"producer-publication-fence regression {test_name}",
+            errors,
+        )
+
     launched_fields = sources["launch"]
     launched_start = launched_fields.find(
         "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1"
@@ -2292,20 +2417,33 @@ def _lifecycle_turn_driver_ordinary_ingress_source_fidelity_errors(
     )
     complete_tip_shutdown_behavior = item(
         "startup_test",
-        "complete_tip_launched_lifecycle_shuts_down_without_publishing_successor",
+        "production_empty_genesis_complete_tip_adopts_control_repair_and_launches",
     )
     require_order(
         "startup_test",
         complete_tip_shutdown_behavior,
         "production CompleteTip lifecycle clean-shutdown behavior",
         (
-            "complete_tip_lifecycle_shutdown_fixture()",
-            "launch_non_pending_lifecycle_height_and_shutdown_for_test(",
-            "Some(retirement)",
+            "production_empty_genesis_complete_tip_fixture_for_test()",
+            "adapter.timeout_elapsed(adapter.current_tag())",
+            "open_recovered_startup_with_aggregator(",
+            "authenticated.has_recovered_control_sign_for_test()",
+            "open_production_lifecycle_owner_v1(",
+            "assert_ne!( repaired_successor, empty_successor",
+            "launch_non_pending_lifecycle_height_and_activate_for_test(",
+            "drain_lifecycle_v2_ingress(",
+            "LifecycleProducerClaimDispositionV1::AwaitingCompletion",
+            "loop",
+            "drain_lifecycle_v2_ingress(",
+            "LifecycleProducerClaimDispositionV1::Eligible",
+            "assert_ne!( broadcast_successor, repaired_successor",
+            ".into_clean_shutdown(&mut active_runner)",
             "assert!(!ingress_ready.load(Ordering::Acquire))",
             "assert!(!ingress_state.open)",
             "assert!(ingress_state.leader_wire_lifecycle_gate.is_none())",
             "assert!(!output_guard.restart_required())",
+            "assert!(crate::sumeragi::status::v2_status().is_some())",
+            "crate::sumeragi::status::clear_v2_status()",
             "assert!(crate::sumeragi::status::v2_status().is_none())",
         ),
     )
@@ -3011,7 +3149,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "census.select_apply(ordinal)",
             "census.select_sign(ordinal)",
             "census.select_fetch(ordinal)",
-            "registration.commit(prepared)",
+            "registration.commit(prepared, wait_source)",
             "output.commit()",
         ),
     )
@@ -3853,6 +3991,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "tag: reducer::EventTag",
         "round: wire::ConsensusRound",
         "subject: wire::BlockSubject",
+        "fn from_authenticated_durable_current_round(",
+        "adapter.reducer.durable_state().proposal_intent(round)",
         "fn from_control(control: &RecoveredWalControlSign) -> Option<Self>",
         "request: SignRequest::Proposal(proposal)",
         "fn exactly_matches_directive(",
@@ -3891,9 +4031,10 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         proposal_factory,
         "recovered local-Proposal owner factory dispatch",
         (
+            "RecoveredLifecycleLocalProposalAttemptV1::from_authenticated_durable_current_round( &adapter, )",
             "RecoveredWalStartupAuthorityV1::ControlSign(control)",
             "Self::open_recovered_control_authority_branch(",
-            "verified, adapter, effects, control, body_store,",
+            "verified, adapter, effects, control, local_proposal_attempt, body_store,",
         ),
     )
     proposal_control = item(

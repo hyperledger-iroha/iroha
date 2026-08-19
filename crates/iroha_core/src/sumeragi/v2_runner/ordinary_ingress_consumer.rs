@@ -130,8 +130,6 @@ pub(in crate::sumeragi) enum ProductionPreparedCertifiedServeV1 {
 pub(in crate::sumeragi) enum ProductionPreparedOrdinaryIngressConsumptionV1 {
     /// The row reached its exact terminal and the outer cursor may continue.
     Continue,
-    /// A retained transport owner requires the current outer batch to stop.
-    StopBatch,
 }
 
 /// Test-only closed settlement of one prepared current-height Serve handoff.
@@ -593,28 +591,12 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
             }
         }
         wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) => {
-            let Some(sender) = sender else {
-                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-                finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-            };
-            let admission = executor.accept_certified_body_response_with_ingress_ownership(
-                response,
-                &sender,
-                &ingress_ownership,
-                services,
+            iroha_logger::debug!(
+                request_hash = %response.request_hash,
+                active_height = executor.context().height,
+                "retired certified body response outside lifecycle selection"
             );
-            match admission {
-                Ok(_) => {}
-                Err(EffectTransportError::Backpressure) => {
-                    finish!(ProductionPreparedOrdinaryIngressConsumptionV1::StopBatch);
-                }
-                Err(EffectTransportError::FailClosed(reason)) => {
-                    return Err(V2RunnerError::Service(reason));
-                }
-                Err(error) => {
-                    iroha_logger::debug!(%error, "rejected certified body response");
-                }
-            }
+            mark_leader_wire_volatile(receiver, &ingress_ownership)?;
         }
         wire::ConsensusMessageV2Payload::CommitCertificateRequest(request) => {
             let Some(sender) = sender else {

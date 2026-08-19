@@ -2167,6 +2167,14 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
       );
     }
   }
+  if (
+    unsignedFields.admission_intent.length !== 4 ||
+    unsignedFields.admission_intent.readUInt32LE(0) !== 0
+  ) {
+    throw new TypeError(
+      `${context}.unsignedTransactionPayloadNorito.admission_intent must be TransactionAdmissionIntent::Ordinary`,
+    );
+  }
   const expectedCreationTime = 1_700_000_000_000n + BigInt(rowIndex);
   if (
     decodeU64Value(

@@ -2,7 +2,7 @@
 
 ## Current proof-ledger status
 
-The checked-in legacy/revision-3-rooted ledger declares 44 `tlaps_proved`, 3
+The checked-in revision-4 ledger declares 44 `tlaps_proved`, 3
 `cross_tool_proved`, 0 `specified_unproved`, 6 `trusted_contract`, and 1
 `out_of_scope`, with `machine_checked_completion: true`. This declaration is
 the byte-exact input to the release proof wave, not proof evidence by itself
@@ -184,24 +184,30 @@ the exact body, and activates its successor height.
 
 Failed views either decide or collect `q` timeout votes and rotate. Lemma 6
 eventually supplies a usable view; Lemma 5 completes both voting phases there.
-The full-body gate provides the body needed for application. Successor
-activation depends on durable application, not on completion of retryable
-old-height network output, lane sidecars, or cleanup.
-Those retryable historical lane obligations retain their predecessor
-descriptor and committee. A removed configured validator is an observer for
-successor global consensus and has no successor vote, while remaining eligible
-for a lane vote only when that exact frozen descriptor explicitly names it.
-The same rule applies to unfinished old descriptors and independently pinned
-current-height Nexus lane descriptors; neither borrows successor-global
-authority. A proof-carrying historical response from such a signer is bounded
-at successor ingress and revalidated against the exact outstanding request and
-old certificate before persistence.
+The full-body gate provides the body needed for global application. Successor
+activation additionally depends on the finalized predecessor completing its
+lane-durability preflight: late canonical ownership is rehydrated, bounded
+historical recovery is serviced, and every winning current-height lane has an
+exact Kura certificate plus its ordinary application receipt or autonomous
+durable record. Incomplete lane progress remains active-height-owned; the
+implementation has no volatile successor-owner alternative. Only then can the
+complete durable lane authority drain and seal exact output and transfer the
+remaining successor-owned sidecar state.
+Those lane obligations retain their predecessor descriptor and committee. A
+removed configured validator is an observer for successor global consensus and
+has no successor vote, while remaining eligible for a lane vote only when that
+exact frozen descriptor explicitly names it. The same rule applies to older
+descriptors and independently pinned current-height Nexus lane descriptors;
+neither borrows successor-global authority. During applied-height handoff, an
+already completed earlier-height lane output may be retired only after Kura
+independently rereads its exact certificate and application receipt (or the
+record-backed autonomous equivalent).
 
 This theorem does not cover a permanent partition, more than `f` Byzantine or
 unresponsive validators, nonterminating local work, exhausted finite counters,
-or a scheduler that never services an enabled action. Finalized-output repair
-remains required and retryable; it is removed only from the successor
-activation dependency.
+or a scheduler that never services an enabled action. Finalized-output and
+lane-durability repair remain required, bounded, retryable predecessor work;
+they are not discarded to make successor activation appear live.
 
 ### Revision-4 model status
 
@@ -854,7 +860,7 @@ chunks if needed, reconstructs and validates the exact body, applies it, and
 advances its own height. None of these local transitions waits for every other
 correct node.
 
-The mechanization records the missing step under the legacy symbol
+The mechanization records the missing step under the historically retained symbol
 `LockedBodyReproposalProgressObligation`. Its first-release obligation is that
 a stable available retained lock must eventually commit in its old round, be
 re-proposed unchanged under a later new same-round origin, or be legitimately
@@ -993,7 +999,7 @@ The reviewed top-level inventory contains exactly 54 obligations: 44
 `out_of_scope`, with no `specified_unproved` rows. Sixteen source-bound
 proof/evidence decomposition leaves remain checked transitively through those
 top-level obligations and are not additional ledger rows.
-`machine_checked_completion` is true for this legacy/revision-3-rooted status
+`machine_checked_completion` is true for this reviewed revision-4 status
 inventory. It is not a deductive proof of revision 4, and the flag is not
 independent proof authority: release mode still requires fresh strict TLAPS,
 pinned Verus, derived cross-tool evidence, and the separate revision-4
@@ -1163,10 +1169,12 @@ startup and does not join; only exact
 Applied or Recovered publication joins. Production's earlier internal State
 application maps to that abstract Applied boundary only after canonical lane
 completion. If block sync installs that canonical ownership after adapter
-construction, production rehydrates its exact bounded proposal at rollover so
-the missing lane certificate remains recoverable. That delayed mapping is part
-of the promoted cross-tool target and still requires fresh exact-source release
-evidence. The concrete effect executor now coalesces
+construction, production rehydrates its exact bounded proposal while the
+finalized predecessor is still active, retransmits it as the certificate
+recovery source, and refuses to mint rollover authority until the recovered
+certificate and application receipt are durable. That delayed mapping is part
+of the promoted cross-tool target and still requires fresh exact-source
+release evidence. The concrete effect executor now coalesces
 every exact in-flight `Apply` rediscovery and retains the typed Kura finality
 receipt, exact artifact, and original reducer tag as a completion tombstone.
 An exact post-drain retry is absorbed; tag, subject, context, or CommitQC drift
@@ -1203,7 +1211,7 @@ No top-level assumption, axiom, or unledgered omitted proof can satisfy the
 release checker. A proofless release theorem is accepted only when its exact
 module and symbol are pinned as `specified_unproved`; it must be discharged by
 TLAPS before machine-checked completion can become true. This is a structural
-rule even outside release mode. The theorem-free compatibility shard
+rule even outside release mode. The theorem-free structural shard
 `SumeragiV2AsyncOutstandingLivenessDebt` and exactly two theorem-bearing
 scratch modules are non-release inventory.
 `SumeragiV2HistoricalLockedBodyRecoveryBridgeScratch` and
@@ -1483,7 +1491,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable regression evidence, not independent
 proof of the promoted obligations.
 
-The current pre-network release inventory names 860 tests across forty Rust
+The current pre-network release inventory names 865 tests across 43 Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1600,9 +1608,10 @@ Kura recovery regressions and the governance-unlock audit yield the 861-test,
 canonical-carrier completion regressions produced that historical 864-test,
 41-module checkpoint. Retiring the duplicate inline network-simulation rows
 yields the historical 856-test, 40-module checkpoint. The exact retired-attempt
-accessor, mixed-carrier successor, two-link cold-restart hydration, and
-noncanonical autonomous-output retirement regressions yield the
-current 860-test, 43-module inventory. The complete source-sealed
+accessor, mixed-carrier successor, two-link cold-restart hydration,
+noncanonical autonomous-output retirement, and the ordinary plus record-backed
+autonomous predecessor-durability regressions yield the
+current 865-test, 43-module inventory. The complete source-sealed
 pre-network corridor
 contains 91 legs. Six source-
 sealed command legs and the G-SCALE
@@ -1674,11 +1683,11 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`b6457553bc8d41f74ebc708ea3d4e6187117f0f008da2c2dea697b0771741b44`.
-The separate source-sealed G-UNIT inventory contains 527 focused tests,
-including 321 `iroha_core` tests. Its 528-line
+`9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a`.
+The separate source-sealed G-UNIT inventory contains 530 focused tests,
+including 324 `iroha_core` tests. Its 531-line
 canonical TSV has SHA-256
-`5fa05b6066f16ef0e1478234452ac924ddaf3d44b659bf18f751b3c4ce56788d`;
+`e7eb7d609b110a421297d740f0a69cc2b01f2083731d29ca604826849bb36474`;
 the sealed Native rows cover exact per-route prevote-byte accounting,
 empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through
@@ -1716,7 +1725,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The four integration names share a module-filtered leg; the pre-network corridor
-now has 88 legs, including the governance-unlock audit module, the autonomous
+now has 91 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate
 exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
@@ -1805,7 +1814,7 @@ atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
 earlier 168-name inventory. The latest fresh discovery checkpoint covered 738
-names; the current 860-name tree still requires a clean committed, detached,
+names; the current 865-name tree still requires a clean committed, detached,
 source-sealed serial release execution. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither

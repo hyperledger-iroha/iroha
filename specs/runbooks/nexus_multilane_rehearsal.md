@@ -157,7 +157,7 @@ The ordered operation inventories are exact:
   `aba5987e1a69dba70c8ef47478ecbf748165f13c3131045594473d47a5a9e95f`):
   `offline-rustc-version`,
   `offline-cargo-version`, `offline-workspace-build`,
-  `g-unit-production-860`, `g-unit-focused-527`,
+  `g-unit-production-865`, `g-unit-focused-530`,
   `offline-workspace-clippy`, `offline-workspace-format`,
   `offline-no-legacy-codec`, `sdk-rust-regeneration-first`,
   `sdk-rust-regeneration-second`, `sdk-regeneration-byte-identity`,

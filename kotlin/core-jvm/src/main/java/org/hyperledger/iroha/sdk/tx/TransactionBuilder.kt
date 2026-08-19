@@ -2,7 +2,7 @@ package org.hyperledger.iroha.sdk.tx
 
 import org.hyperledger.iroha.sdk.crypto.SigningException
 import org.hyperledger.iroha.sdk.crypto.Signer
-import org.hyperledger.iroha.sdk.core.model.JsonValue
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.tx.norito.NoritoCodecAdapter
 import org.hyperledger.iroha.sdk.tx.norito.NoritoException
@@ -17,7 +17,7 @@ class TransactionBuilder(
     /**
      * Encodes the payload for public Torii submission and signs it using the provided signer.
      *
-     * Public submission requires the signature-bound QueuePlan admission marker. The caller's
+     * Public submission requires the signature-bound QueuePlan admission intent. The caller's
      * payload remains unchanged so direct codec users continue to produce ordinary transactions.
      */
     @Throws(NoritoException::class, SigningException::class)
@@ -47,14 +47,6 @@ class TransactionBuilder(
     }
 
     private fun TransactionPayload.withQueuePlanSyncedAdmission(): TransactionPayload {
-        val signedMetadata = LinkedHashMap(metadata)
-        signedMetadata[QUEUE_PLAN_SYNCED_ADMISSION_METADATA_KEY] = JsonValue.bool(true)
-        return copy(metadata = signedMetadata)
-    }
-
-    companion object {
-        /** Signature-bound metadata key selecting globally certified QueuePlan admission. */
-        const val QUEUE_PLAN_SYNCED_ADMISSION_METADATA_KEY =
-            "iroha_transaction_admission_queue_plan_synced"
+        return copy(admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
     }
 }

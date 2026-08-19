@@ -4011,6 +4011,15 @@ pub(crate) struct FairV2Ingress {
     /// Serializes consumers while allowing expensive admission checks to run
     /// without blocking producers on the ingress-state mutex.
     service_lock: Mutex<()>,
+    /// Excludes producer mutation only while an exact dequeue crosses durable
+    /// lifecycle publication.
+    ///
+    /// Lock order is `service_lock`, then `producer_publication_lock`, then
+    /// `state`. Producers acquire only `producer_publication_lock`, then
+    /// `state`. Ordinary selector preparation deliberately does not acquire
+    /// this fence, so a concurrent producer can still invalidate its
+    /// pre-publication compare-and-swap witness.
+    producer_publication_lock: Mutex<()>,
     state: Mutex<FairV2IngressState>,
 }
 impl FairV2Ingress {
@@ -4089,6 +4098,7 @@ impl FairV2Ingress {
             outbound_high_frame_byte_capacity,
             authenticated_non_validator_source_capacity,
             service_lock: Mutex::new(()),
+            producer_publication_lock: Mutex::new(()),
             state: Mutex::new(FairV2IngressState {
                 roster: BTreeSet::new(),
                 lanes,
@@ -5414,6 +5424,12 @@ impl FairV2Ingress {
             origin: inbound.sender.clone(),
             hash: wire_hash,
         });
+        // The exact lifecycle dequeue retains this fence from its final
+        // pre-publication comparison through LedgerV1 fsync and physical
+        // removal. Encoding and protocol-shape validation above remain
+        // outside the fence; every queue-state mutation below is serialized
+        // with that durable publication window.
+        let _producer_publication_guard = self.producer_publication_lock.lock();
         let mut state = self.state.lock();
         if !state.open {
             return Err(FairV2IngressPushError::Closed(inbound));
@@ -6826,8 +6842,7 @@ impl SumeragiHandle {
         }
         if let LaneRelayMessage::QueuePlanAdmissionCertificate { certificate, .. } = &message
             && (certificate.is_empty()
-                || certificate.len()
-                    > iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES)
+                || certificate.len() > iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES)
         {
             iroha_logger::debug!(
                 bytes = certificate.len(),

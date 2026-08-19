@@ -1300,15 +1300,16 @@ impl RecoveredCompleteTipActivationAuthority {
             && context.height() == 1
             && context.id().as_bytes() == self.artifact.context_id().0.as_ref()
     }
-    /// Return whether an exact physically present empty non-genesis frame may
-    /// be treated as an already-retired CompleteTip predecessor.
+    /// Return whether an exact physically present non-genesis frame may be
+    /// retired behind this canonical CompleteTip.
     ///
-    /// Live height retirement can legitimately leave no lifecycle rows when a
-    /// canonical-sync node performed no local work. Unlike signed genesis, this
-    /// path requires rotating-leader finality and is useful only together with
-    /// the store-minted physical-frame capability retained by the lifecycle
-    /// ledger. A missing path therefore cannot borrow this Kura authority.
-    pub(in crate::sumeragi) fn authorizes_empty_retired_lifecycle(
+    /// A canonical-sync node can retain unrelated height-local work without
+    /// ever owning the Decision Apply path for the block that finalized. Unlike
+    /// signed genesis, this path requires rotating-leader finality and is useful
+    /// only together with the store-minted physical-frame capability retained by
+    /// the lifecycle ledger. A missing path therefore cannot borrow this Kura
+    /// authority.
+    pub(in crate::sumeragi) fn authorizes_retired_lifecycle(
         &self,
         context: LifecycleContext,
     ) -> bool {

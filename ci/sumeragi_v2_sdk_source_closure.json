@@ -411,6 +411,7 @@
       "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/InstructionBox.java",
       "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/JsonValue.java",
       "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/NetworkId.java",
+      "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/TransactionAdmissionIntent.java",
       "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/TransactionPayload.java",
       "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ActivateRuntimeUpgradeInstruction.java",
       "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ApprovePinManifestInstruction.java",

@@ -10,6 +10,7 @@ import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
 import org.hyperledger.iroha.sdk.core.model.FeeChargeKind
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
@@ -52,6 +53,11 @@ class TransactionFixtureParityTest {
                 "${fixture.name}: TTL mismatch",
             )
             assertEquals(fixture.nonce, payload.nonce, "${fixture.name}: nonce mismatch")
+            assertEquals(
+                TransactionAdmissionIntent.ORDINARY,
+                payload.admissionIntent,
+                "${fixture.name}: admission intent mismatch",
+            )
 
             val encoded = adapter.encodeTransaction(payload)
             assertEquals(
@@ -312,6 +318,39 @@ class TransactionFixtureParityTest {
             AndroidFixtureSupport.payloadFixtureFromValue(descriptor)
         }
         assertEquals(true, error.message?.contains("retired encoded alias"), error.message)
+
+        val missingAdmissionIntent = payloadSourceDescriptor()
+        payloadObject(missingAdmissionIntent).remove("admission_intent")
+        val missingIntentError = assertFailsWith<IllegalArgumentException> {
+            AndroidFixtureSupport.payloadFixtureFromValue(missingAdmissionIntent)
+        }
+        assertTrue(
+            missingIntentError.message.orEmpty().contains("admission_intent"),
+            missingIntentError.message,
+        )
+
+        val queuePlanDescriptor = payloadSourceDescriptor()
+        payloadObject(queuePlanDescriptor)["admission_intent"] =
+            admissionIntent("queue_plan_synced")
+        assertEquals(
+            TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+            AndroidFixtureSupport.payloadFixtureFromValue(queuePlanDescriptor)
+                .materializePayload()
+                .admissionIntent,
+        )
+
+        for (invalidIntent in listOf(
+            mapOf("intent" to "ordinary"),
+            mapOf("intent" to "ordinary", "value" to 0L),
+            admissionIntent("legacy"),
+        )) {
+            val invalidDescriptor = payloadSourceDescriptor()
+            payloadObject(invalidDescriptor)["admission_intent"] = invalidIntent
+            assertFailsWith<RuntimeException> {
+                AndroidFixtureSupport.payloadFixtureFromValue(invalidDescriptor)
+                    .materializePayload()
+            }
+        }
     }
 
     @Test
@@ -618,6 +657,7 @@ class TransactionFixtureParityTest {
                             "charge_limits" to emptyList<Map<String, Any?>>(),
                         ),
                     ),
+                    "admission_intent" to admissionIntent("ordinary"),
                     "metadata" to emptyMap<String, JsonValue>(),
                     "executable" to mapOf(
                         "Instructions" to listOf(
@@ -670,6 +710,7 @@ class TransactionFixtureParityTest {
                             "charge_limits" to emptyList<Map<String, Any?>>(),
                         ),
                     ),
+                    "admission_intent" to admissionIntent("ordinary"),
                     "metadata" to emptyMap<String, JsonValue>(),
                     "executable" to mapOf(
                         "Instructions" to listOf(
@@ -716,6 +757,7 @@ class TransactionFixtureParityTest {
                             "charge_limits" to emptyList<Map<String, Any?>>(),
                         ),
                     ),
+                    "admission_intent" to admissionIntent("ordinary"),
                     "metadata" to emptyMap<String, JsonValue>(),
                     "executable" to mapOf(
                         "Instructions" to listOf(
@@ -755,9 +797,15 @@ class TransactionFixtureParityTest {
                     "gas_limit" to 1_000L,
                 ),
             ),
+            "admission_intent" to admissionIntent("ordinary"),
             "metadata" to emptyMap<String, Any?>(),
             "executable" to mapOf("Ivm" to "AA=="),
         ),
+    )
+
+    private fun admissionIntent(intent: String): Map<String, Any?> = mapOf(
+        "intent" to intent,
+        "value" to null,
     )
 
     private fun manifestDescriptor(): MutableMap<String, Any?> = mutableMapOf(
