@@ -4012,12 +4012,12 @@ pub(in crate::sumeragi) struct LifecycleCertifiedServeCompletionDrainV1 {
 
 /// Opaque result of taking the physical completion head exactly once.
 ///
-/// Ordinary I/O and local reconstruction work is never exposed. An ordinary
-/// I/O head is restored into the service's sole held slot before
-/// `PassThrough` returns, so the ordinary drain observes the same FIFO item.
-/// Lifecycle variants transfer only their guarded, class-specific owner.
+/// Non-lifecycle I/O and local reconstruction work is never exposed. Such a
+/// head is restored into the service's sole held slot before `PassThrough`
+/// returns, so the ordinary drain observes the same FIFO item. Lifecycle
+/// variants transfer only their guarded, class-specific owner.
 #[allow(variant_size_differences)]
-#[must_use = "a selected recovered completion must remain lifecycle-owned"]
+#[must_use = "a selected lifecycle completion must remain lifecycle-owned"]
 pub(in crate::sumeragi) enum LifecycleCompletionTakeV1 {
     /// No physical I/O completion is currently available.
     None,
@@ -5187,13 +5187,6 @@ enum LocalCompletion {
         body: Arc<[u8]>,
     },
 }
-impl LocalCompletion {
-    const fn runtime_lifecycle_ordinal(&self) -> u128 {
-        match self {
-            Self::Reconstructed { task, .. } => task.lifecycle_ordinal(),
-        }
-    }
-}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BodyFetchServiceOwner {
     None,
@@ -5225,11 +5218,6 @@ impl PreparedCertifiedBodyFetchOwnerRemoval<'_> {
 enum CompletionSource {
     Io,
     Local,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum CompletionDrainPolicy {
-    Fair,
-    TimeoutRecoveryPrefix { inclusive_lifecycle_cut: u128 },
 }
 enum PendingServiceCompletion {
     Io {
@@ -13203,89 +13191,6 @@ impl ProductionV2Services {
         }
         completion
     }
-    fn take_timeout_recovery_prefix_completion(
-        &mut self,
-        runtime_capacity_available: bool,
-        inclusive_lifecycle_cut: u128,
-    ) -> IoCompletionTake {
-        self.take_lifecycle_prefix_completion(
-            runtime_capacity_available,
-            inclusive_lifecycle_cut,
-            true,
-        )
-    }
-    fn take_lifecycle_prefix_completion(
-        &mut self,
-        runtime_capacity_available: bool,
-        lifecycle_cut: u128,
-        inclusive: bool,
-    ) -> IoCompletionTake {
-        let within_cut = |ordinal: u128| {
-            if inclusive {
-                ordinal <= lifecycle_cut
-            } else {
-                ordinal < lifecycle_cut
-            }
-        };
-        let ownership_position =
-            usize::from(!runtime_capacity_available && self.held_io_completion.is_some());
-        let io_ownership = self
-            .io
-            .as_ref()
-            .and_then(|io| io.completion_ownership_at(ownership_position))
-            .filter(|owned| {
-                owned.runtime_lifecycle_ordinal.is_some_and(|ordinal| {
-                    within_cut(ordinal)
-                        && (runtime_capacity_available || !owned.requires_runtime_capacity)
-                })
-            });
-        let local = if runtime_capacity_available {
-            self.local_completions
-                .iter()
-                .filter(|completion| within_cut(completion.runtime_lifecycle_ordinal()))
-                .min_by_key(|completion| completion.runtime_lifecycle_ordinal())
-                .cloned()
-        } else {
-            None
-        };
-        let source = match (
-            io_ownership.and_then(|owned| owned.runtime_lifecycle_ordinal),
-            local
-                .as_ref()
-                .map(LocalCompletion::runtime_lifecycle_ordinal),
-        ) {
-            (Some(io), Some(local)) if io < local => Some(CompletionSource::Io),
-            (Some(io), Some(local)) if local < io => Some(CompletionSource::Local),
-            (Some(_), Some(_)) => Some(self.next_completion_source),
-            (Some(_), None) => Some(CompletionSource::Io),
-            (None, Some(_)) => Some(CompletionSource::Local),
-            (None, None) => None,
-        };
-        let completion = match source {
-            Some(CompletionSource::Io) => {
-                let take = self.take_io_completion(runtime_capacity_available);
-                if take.completion.is_none()
-                    && !take.retained_runtime
-                    && let Some(local) = local
-                {
-                    IoCompletionTake::ready(PendingServiceCompletion::Local(local))
-                } else {
-                    take
-                }
-            }
-            Some(CompletionSource::Local) => IoCompletionTake::ready(
-                PendingServiceCompletion::Local(local.expect("selected local completion exists")),
-            ),
-            None => IoCompletionTake::unavailable(),
-        };
-        if let Some(completion) = &completion.completion {
-            self.next_completion_source = match completion {
-                PendingServiceCompletion::Io { .. } => CompletionSource::Local,
-                PendingServiceCompletion::Local(_) => CompletionSource::Io,
-            };
-        }
-        completion
-    }
     fn retire_held_io_completion(&mut self) {
         let Some(completion) = self.held_io_completion.take() else {
             return;
@@ -13325,7 +13230,7 @@ impl ProductionV2Services {
         &mut self,
         executor: &mut V2EffectExecutor<R>,
     ) -> Result<usize, EffectExecutorError> {
-        let outcome = self.drain_completions_inner(executor, 1, CompletionDrainPolicy::Fair)?;
+        let outcome = self.drain_completions_inner(executor, 1)?;
         self.require_no_unowned_lifecycle_completion(executor, outcome)
     }
     /// Take and classify the oldest Completion-lane owner in one operation.
@@ -13535,42 +13440,18 @@ impl ProductionV2Services {
     /// Drain the ordinary bounded completion source while returning a
     /// persisted certified-Fetch body directly to its serialized owner.
     ///
-    /// TODO: Give the final runner one `LifecycleCoordinator`/registry owner and
-    /// consume this typed outcome only after restart recovery can rebuild the
-    /// exact Ready-Fetch response occurrence from a typed durable locator (or
-    /// this transaction durably advances directly to the BodyFrame-bound Store
-    /// stage). Until then, the count-only caller fail-stops on this outcome.
+    /// The lifecycle driver consumes the typed certified-Fetch outcome through
+    /// its Phase-B LedgerV1 publication before an ordinary drain can continue.
     pub(crate) fn drain_completions_with_lifecycle<R: EffectRuntime>(
         &mut self,
         executor: &mut V2EffectExecutor<R>,
     ) -> Result<V2CompletionDrainOutcome, EffectExecutorError> {
-        self.drain_completions_inner(
-            executor,
-            MAX_COMPLETION_DRAIN_BATCH,
-            CompletionDrainPolicy::Fair,
-        )
-    }
-    /// Admit one completed owner from the inclusive timeout prefix (`<=`), while
-    /// fresh producers receive larger ordinals behind the retained response.
-    pub(crate) fn drain_timeout_recovery_prefix_completion<R: EffectRuntime>(
-        &mut self,
-        executor: &mut V2EffectExecutor<R>,
-        inclusive_lifecycle_cut: u128,
-    ) -> Result<usize, EffectExecutorError> {
-        let outcome = self.drain_completions_inner(
-            executor,
-            1,
-            CompletionDrainPolicy::TimeoutRecoveryPrefix {
-                inclusive_lifecycle_cut,
-            },
-        )?;
-        self.require_no_unowned_lifecycle_completion(executor, outcome)
+        self.drain_completions_inner(executor, MAX_COMPLETION_DRAIN_BATCH)
     }
     fn drain_completions_inner<R: EffectRuntime>(
         &mut self,
         executor: &mut V2EffectExecutor<R>,
         limit: usize,
-        policy: CompletionDrainPolicy,
     ) -> Result<V2CompletionDrainOutcome, EffectExecutorError> {
         if self.output_guard.restart_required() {
             return Err(executor
@@ -13583,17 +13464,7 @@ impl ProductionV2Services {
         let mut certified_fetch_body = None;
         while attempts < limit {
             let runtime_capacity_available = executor.remaining_completion_capacity() != 0;
-            let take = match policy {
-                CompletionDrainPolicy::Fair => {
-                    self.take_next_completion(runtime_capacity_available)
-                }
-                CompletionDrainPolicy::TimeoutRecoveryPrefix {
-                    inclusive_lifecycle_cut,
-                } => self.take_timeout_recovery_prefix_completion(
-                    runtime_capacity_available,
-                    inclusive_lifecycle_cut,
-                ),
-            };
+            let take = self.take_next_completion(runtime_capacity_available);
             let completion = match take.completion {
                 Some(completion) => completion,
                 None if take.retained_runtime => {

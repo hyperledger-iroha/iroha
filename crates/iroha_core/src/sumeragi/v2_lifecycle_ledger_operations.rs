@@ -613,42 +613,79 @@ impl LifecycleLedgerV1 {
             DurableContinuation::None,
         )
     }
-    /// Authenticate every live BodyFrame-backed Fetch against this exact frame.
+    /// Authenticate every live ordinary certified-body stage against this frame.
     ///
     /// Unlike the consuming storage-cut constructor, this internal phase keeps
     /// the ledger and body store borrowed. Recovered-WAL startup uses it only
     /// after the exact Validate-to-Sign repair is fsynced, so the resulting
     /// census is bound to the final frame which the coordinator will open.
-    pub(super) fn authenticate_durable_certified_fetch_startup(
+    pub(super) fn authenticate_durable_certified_body_pipeline_startup(
         &self,
         verified: &VerifiedHeightContext,
         store: &V2BodyStore,
     ) -> Result<
-        super::replay_authority::PreparedDurableCertifiedFetchStartupV1,
-        DurableCertifiedFetchRecoveryError,
+        super::replay_authority::PreparedDurableCertifiedBodyPipelineStartupV1,
+        DurableCertifiedBodyPipelineRecoveryError,
     > {
-        self.authenticate_durable_certified_fetch_census(verified, store)?
+        self.authenticate_durable_certified_body_pipeline_census(verified, store)?
             .into_startup(self)
-            .ok_or(DurableCertifiedFetchRecoveryError::InvalidStorageCut)
+            .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidStorageCut)
     }
-    fn authenticate_durable_certified_fetch_census(
+    fn authenticate_durable_certified_body_pipeline_census(
         &self,
         verified: &VerifiedHeightContext,
         store: &V2BodyStore,
     ) -> Result<
-        AuthenticatedRecoveredDurableCertifiedFetchCensusV1,
-        DurableCertifiedFetchRecoveryError,
+        AuthenticatedRecoveredDurableCertifiedBodyPipelineCensusV1,
+        DurableCertifiedBodyPipelineRecoveryError,
     > {
         if self.context() != projection::lifecycle_context(verified.context()) {
-            return Err(DurableCertifiedFetchRecoveryError::InvalidVerifiedContext);
+            return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidVerifiedContext);
         }
         if !store.matches_context(verified.context()) {
-            return Err(DurableCertifiedFetchRecoveryError::InvalidBodyStoreContext);
+            return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidBodyStoreContext);
+        }
+        let record_at = |ordinal| {
+            self.records
+                .binary_search_by_key(&ordinal, LifecycleLedgerRecordV1::ordinal)
+                .ok()
+                .and_then(|index| self.records.get(index))
+        };
+        fn unique_parent<'a>(
+            records: &'a [LifecycleLedgerRecordV1],
+            child: &LifecycleLedgerRecordV1,
+            edge: DurableContinuationEdge,
+            work_class: LifecycleWorkClass,
+        ) -> Result<&'a LifecycleLedgerRecordV1, DurableCertifiedBodyPipelineRecoveryError>
+        {
+            let mut parents = records.iter().filter(|candidate| {
+                candidate.owner() == child.owner()
+                    && candidate.work_class() == Some(work_class)
+                    && candidate.terminal() == Some(Some(TerminalOutcome::Advanced))
+                    && candidate
+                        .continuation()
+                        .and_then(DurableContinuation::successor_parts)
+                        == Some((edge, child.ordinal()))
+            });
+            let parent = parents
+                .next()
+                .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow)?;
+            if parents.next().is_some() {
+                return Err(DurableCertifiedBodyPipelineRecoveryError::AmbiguousCensus);
+            }
+            Ok(parent)
         }
         let mut entries = Vec::new();
+        let mut live_ordinals = BTreeSet::new();
         for record in self.records.iter().filter(|record| {
-            record.work_class() == Some(LifecycleWorkClass::Fetch)
-                && record.terminal() == Some(None)
+            matches!(
+                record.work_class(),
+                Some(
+                    LifecycleWorkClass::Fetch
+                        | LifecycleWorkClass::Store
+                        | LifecycleWorkClass::Validate
+                )
+            ) && record.terminal() == Some(None)
                 && matches!(
                     record.durable_payload(),
                     Some(DurablePayloadReference::BodyFrame(_))
@@ -656,30 +693,114 @@ impl LifecycleLedgerV1 {
         }) {
             let Some(DurablePayloadReference::BodyFrame(reference)) = record.durable_payload()
             else {
-                return Err(DurableCertifiedFetchRecoveryError::InvalidLedgerRow);
+                return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow);
             };
-            entries.push(
-                record
-                    .authenticate_durable_certified_fetch(verified, || {
-                        projection::authenticate_durable_body_frame_recovery(
-                            self.context(),
-                            store,
-                            reference,
-                        )
-                    })?
-                    .ok_or(DurableCertifiedFetchRecoveryError::InvalidReplayJoin)?,
-            );
+            if record.continuation() != Some(DurableContinuation::None) {
+                return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow);
+            }
+            let (fetch, store_parent) = match record.work_class() {
+                Some(LifecycleWorkClass::Fetch) => (record, None),
+                Some(LifecycleWorkClass::Store) => {
+                    let fetch = unique_parent(
+                        &self.records,
+                        record,
+                        DurableContinuationEdge::FetchToStore,
+                        LifecycleWorkClass::Fetch,
+                    )?;
+                    (fetch, None)
+                }
+                Some(LifecycleWorkClass::Validate) => {
+                    let store_parent = unique_parent(
+                        &self.records,
+                        record,
+                        DurableContinuationEdge::StoreToValidate,
+                        LifecycleWorkClass::Store,
+                    )?;
+                    let fetch = unique_parent(
+                        &self.records,
+                        store_parent,
+                        DurableContinuationEdge::FetchToStore,
+                        LifecycleWorkClass::Fetch,
+                    )?;
+                    (fetch, Some(store_parent))
+                }
+                _ => return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow),
+            };
+            if fetch.durable_payload() == Some(DurablePayloadReference::None) {
+                let Some(store) = store_parent.or_else(|| {
+                    fetch
+                        .continuation()
+                        .and_then(DurableContinuation::successor_parts)
+                        .and_then(|(_, ordinal)| record_at(ordinal))
+                }) else {
+                    return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow);
+                };
+                if recovered_decision_body_continuation_is_exact(
+                    DurableContinuationEdge::FetchToStore,
+                    &fetch.replay_authority,
+                    DurablePayloadReference::None,
+                    &store.replay_authority,
+                    store
+                        .durable_payload()
+                        .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow)?,
+                ) != Some(true)
+                {
+                    return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow);
+                }
+                continue;
+            }
+            if fetch.durable_payload() != Some(DurablePayloadReference::BodyFrame(reference)) {
+                return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidReplayJoin);
+            }
+            let authenticated = fetch
+                .authenticate_durable_certified_fetch_origin(verified, || {
+                    projection::authenticate_durable_body_frame_recovery(
+                        self.context(),
+                        store,
+                        reference,
+                    )
+                })?
+                .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidReplayJoin)?;
+            let entry = match record.work_class() {
+                Some(LifecycleWorkClass::Fetch) => {
+                    AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1::Fetch(authenticated)
+                }
+                Some(LifecycleWorkClass::Store) => {
+                    let store = authenticated
+                        .into_store(verified, record.ordinal())
+                        .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidReplayJoin)?;
+                    AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1::Store(store)
+                }
+                Some(LifecycleWorkClass::Validate) => {
+                    let store_parent = store_parent
+                        .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow)?;
+                    let store = authenticated
+                        .into_store(verified, store_parent.ordinal())
+                        .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidReplayJoin)?;
+                    if !store.exactly_matches_terminal_parent(store_parent, record.ordinal()) {
+                        return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidReplayJoin);
+                    }
+                    let validate = store
+                        .into_validate(verified, record.ordinal())
+                        .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidReplayJoin)?;
+                    AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1::Validate(validate)
+                }
+                _ => return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow),
+            };
+            if !live_ordinals.insert(record.ordinal()) {
+                return Err(DurableCertifiedBodyPipelineRecoveryError::AmbiguousCensus);
+            }
+            entries.push(entry);
         }
-        let census = seal_recovered_durable_certified_fetch_census(
-            DurableCertifiedFetchLedgerCensusPermit::new(self),
-            entries,
-        )
-        .ok_or(DurableCertifiedFetchRecoveryError::AmbiguousCensus)?;
+        let permit = DurableCertifiedBodyPipelineLedgerCensusPermit::new(self, live_ordinals)
+            .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow)?;
+        let census = seal_recovered_durable_certified_body_pipeline_census(permit, entries)
+            .ok_or(DurableCertifiedBodyPipelineRecoveryError::AmbiguousCensus)?;
         Ok(census)
     }
-    /// Consume this exact opened ledger and body store into one Ready-Fetch cut.
+    /// Consume this exact opened ledger and body store into one body-pipeline cut.
     ///
-    /// Authentication censes every live BodyFrame-backed Fetch row before
+    /// Authentication censes every live ordinary BodyFrame-backed pipeline row before
     /// either storage owner is moved. Success retains both owners and the
     /// verified context beside the opaque census, preventing a caller from
     /// reminting individual rows or swapping a foreign store before the future
@@ -688,28 +809,28 @@ impl LifecycleLedgerV1 {
     /// both storage owners; callers must abort this process startup rather than
     /// reopen either path and retry in-process with partially observed state.
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(super) fn into_durable_certified_fetch_storage_recovery_cut(
+    pub(super) fn into_durable_certified_body_pipeline_storage_recovery_cut(
         self,
         verified: VerifiedHeightContext,
         ledger_store: LifecycleLedgerStoreV1,
         store: V2BodyStore,
     ) -> Result<
-        AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1,
-        DurableCertifiedFetchRecoveryError,
+        AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1,
+        DurableCertifiedBodyPipelineRecoveryError,
     > {
         if self.context() != projection::lifecycle_context(verified.context()) {
-            return Err(DurableCertifiedFetchRecoveryError::InvalidVerifiedContext);
+            return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidVerifiedContext);
         }
         if ledger_store.context != self.context()
             || !ledger_store.load().is_ok_and(|opened| opened == self)
         {
-            return Err(DurableCertifiedFetchRecoveryError::InvalidLedgerStore);
+            return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerStore);
         }
         if !store.matches_context(verified.context()) {
-            return Err(DurableCertifiedFetchRecoveryError::InvalidBodyStoreContext);
+            return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidBodyStoreContext);
         }
-        let census = self.authenticate_durable_certified_fetch_census(&verified, &store)?;
-        let cut = AuthenticatedDurableCertifiedFetchStorageRecoveryCutV1 {
+        let census = self.authenticate_durable_certified_body_pipeline_census(&verified, &store)?;
+        let cut = AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1 {
             verified,
             ledger_store,
             ledger: self,
@@ -718,7 +839,7 @@ impl LifecycleLedgerV1 {
         };
         cut.is_exact()
             .then_some(cut)
-            .ok_or(DurableCertifiedFetchRecoveryError::InvalidStorageCut)
+            .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidStorageCut)
     }
     #[cfg(test)]
     /// Substitute one structurally valid but foreign replay origin generation.

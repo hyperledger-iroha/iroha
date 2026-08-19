@@ -1235,6 +1235,7 @@ impl<'registry> InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'regis
             installed,
         } = self;
         let opened = match installed.open_production_lifecycle(
+            adapter_startup,
             &verified,
             config,
             reply_route_source_capacity,
@@ -1245,21 +1246,15 @@ impl<'registry> InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'regis
             Ok(opened) => opened,
             Err(error) => {
                 return Err(StorageRecoveredWalOpenError {
-                    failure: StorageRecoveredWalOpenFailure::Storage {
-                        _adapter_startup: adapter_startup,
-                        error,
-                    },
+                    failure: StorageRecoveredWalOpenFailure::Storage { error },
                 });
             }
         };
-        let opened = match opened.into_production_owner_open() {
-            Ok(opened) => opened,
+        let (adapter_startup, opened) = match opened.into_production_owner_open() {
+            Ok(parts) => parts,
             Err(opened) => {
                 return Err(StorageRecoveredWalOpenError {
-                    failure: StorageRecoveredWalOpenFailure::OwnerSeal {
-                        _adapter_startup: adapter_startup,
-                        _opened: opened,
-                    },
+                    failure: StorageRecoveredWalOpenFailure::OwnerSeal { _opened: opened },
                 });
             }
         };

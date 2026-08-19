@@ -502,21 +502,13 @@ let discovery_was_outstanding = activated.with_runner_runtime(
                     "true",
                 ),
             )
-        historical_ingress = region(
-            runner_path,
-            runner_source,
-            "drain_v2_ingress",
-            "fn drain_v2_ingress(",
-            "\n#[derive(Clone, Copy, Debug, PartialEq, Eq)]\nenum OuterIngressTurn",
-        )
-        historical_ingress += ordinary_consumer_source
+        historical_ingress = ordinary_consumer_source
         require_tokens(
             ordinary_consumer_path,
             "historical ingress routing",
             historical_ingress,
             (
                 "block_sync_server.serve_historical_body( kura, request, &sender, local_key )",
-                "executor.accept_certified_body_response_with_ingress_ownership( response, &sender, &ingress_ownership, services, )",
                 "block_sync.authenticate_response(response, &sender)",
                 "block_sync.enqueue_and_complete(discovered, |message| { executor.enqueue_discovered_commit_certificate(message, ingress_ownership) })",
             ),
@@ -526,7 +518,7 @@ let discovery_was_outstanding = activated.with_runner_runtime(
             "historical ingress routing omits production refinement tokens when either reviewed route changes",
             historical_ingress,
             "block_sync_server.serve_historical_body(kura, request, &sender, local_key)",
-            2,
+            1,
         )
     status_path, status_source = load(
         "crates/iroha_core/src/sumeragi/status.rs"

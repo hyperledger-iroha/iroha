@@ -1281,22 +1281,20 @@ pub(super) struct PreparedBodyStageTransition<'a> {
     child_slot: PhysicalSlotId,
     child_digest: super::LifecycleDigest,
 }
-#[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
-enum SealedBodyStageSuccessor<'registry> {
-    CertifiedFetchStore(PreparedCertifiedFetchStoreSuccessor<'registry>),
-    DurableStoreValidate(PreparedDurableStoreValidateSuccessor<'registry>),
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+enum SealedBodyStageSuccessor<'registry, 'adapter> {
+    CertifiedFetchStore(PreparedCertifiedFetchStoreSuccessor<'registry, 'adapter>),
+    DurableStoreValidate(PreparedDurableStoreValidateSuccessor<'registry, 'adapter>),
 }
 /// Fully reduced coordinator copy retaining its move-only registry successor.
 ///
 /// The candidate was projected inside the closed successor token before the
-/// coordinator copy was cloned. This value keeps both exclusive borrows alive
-/// and exposes no commit, candidate, receipt, or state-extraction surface.
+/// coordinator copy was cloned. Registry and adapter authority remain
+/// exclusively borrowed until the exact LedgerV1 successor is fsynced.
 #[must_use = "a sealed body-pipeline coordinator cut has not been published"]
-#[cfg_attr(not(test), allow(dead_code))]
-#[cfg_attr(test, expect(dead_code, reason = "composite body-publication gap"))]
-pub(super) struct PreparedSealedBodyStageTransition<'coordinator, 'registry> {
-    _coordinator: &'coordinator mut LifecycleCoordinator,
-    _successor: SealedBodyStageSuccessor<'registry>,
+pub(super) struct PreparedSealedBodyStageTransition<'coordinator, 'registry, 'adapter> {
+    coordinator: &'coordinator mut LifecycleCoordinator,
+    successor: SealedBodyStageSuccessor<'registry, 'adapter>,
     staged: LifecycleCoordinator,
     edge: DurableContinuationEdge,
     parent_ordinal: u128,
@@ -1304,6 +1302,54 @@ pub(super) struct PreparedSealedBodyStageTransition<'coordinator, 'registry> {
     owner: OwnerId,
     child_slot: PhysicalSlotId,
     child_digest: super::LifecycleDigest,
+}
+impl PreparedSealedBodyStageTransition<'_, '_, '_> {
+    /// Fsync the exact parent-to-child LedgerV1 successor.
+    pub(super) fn persist_exact_successor(
+        &self,
+    ) -> Result<(), super::ledger::LifecycleLedgerError> {
+        self.coordinator
+            .persist_exact_staged_successor(&self.staged)
+    }
+    /// Publish registry, coordinator, and adapter state after successful fsync.
+    pub(super) fn commit_after_publication(self) {
+        let Self {
+            coordinator,
+            successor,
+            staged,
+            edge,
+            parent_ordinal,
+            child_ordinal,
+            owner,
+            child_slot,
+            child_digest,
+            ..
+        } = self;
+        assert!(staged.records.get(&parent_ordinal).is_some_and(|record| {
+            record.state == LifecycleState::Terminal(TerminalOutcome::Advanced)
+        }));
+        assert!(staged.records.get(&child_ordinal).is_some_and(|record| {
+            record.owner == owner
+                && record.state == LifecycleState::Ready
+                && record.physical_slots.get(&child_slot) == Some(&child_digest)
+        }));
+        match successor {
+            SealedBodyStageSuccessor::CertifiedFetchStore(successor) => {
+                assert_eq!(edge, DurableContinuationEdge::FetchToStore);
+                let adapter =
+                    successor.commit_after_publication(child_ordinal, child_slot, child_digest);
+                *coordinator = staged;
+                adapter.commit_after_durable_publication();
+            }
+            SealedBodyStageSuccessor::DurableStoreValidate(successor) => {
+                assert_eq!(edge, DurableContinuationEdge::StoreToValidate);
+                let adapter =
+                    successor.commit_after_publication(child_ordinal, child_slot, child_digest);
+                *coordinator = staged;
+                adapter.commit_after_durable_publication();
+            }
+        }
+    }
 }
 /// Fully staged recovered WAL Fetch-to-Store publication.
 ///
@@ -1916,15 +1962,15 @@ impl LifecycleCoordinator {
     /// The move-only successor owns the installed Fetch address, exact durable
     /// frame, child effect and pending binding, projected digest, and mandatory
     /// replay authority. No raw successor input crosses this production seam.
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[cfg_attr(test, expect(dead_code, reason = "composite body-publication gap"))]
-    pub(super) fn prepare_sealed_fetch_store_transition<'coordinator, 'registry>(
+    pub(super) fn prepare_sealed_fetch_store_transition<'coordinator, 'registry, 'adapter>(
         &'coordinator mut self,
         lease: &TurnLease,
         verified: &VerifiedHeightContext,
-        successor: PreparedCertifiedFetchStoreSuccessor<'registry>,
-    ) -> Result<PreparedSealedBodyStageTransition<'coordinator, 'registry>, BodyStageTransitionError>
-    {
+        successor: PreparedCertifiedFetchStoreSuccessor<'registry, 'adapter>,
+    ) -> Result<
+        PreparedSealedBodyStageTransition<'coordinator, 'registry, 'adapter>,
+        BodyStageTransitionError,
+    > {
         let candidate = successor
             .project_for_body_transition(lease, verified)
             .map_err(map_sealed_successor_projection_error)?;
@@ -1937,8 +1983,8 @@ impl LifecycleCoordinator {
             DurableContinuationEdge::FetchToStore,
         )?;
         Ok(PreparedSealedBodyStageTransition {
-            _coordinator: self,
-            _successor: SealedBodyStageSuccessor::CertifiedFetchStore(successor),
+            coordinator: self,
+            successor: SealedBodyStageSuccessor::CertifiedFetchStore(successor),
             staged: transition.staged,
             edge: DurableContinuationEdge::FetchToStore,
             parent_ordinal: transition.parent_ordinal,
@@ -1953,15 +1999,15 @@ impl LifecycleCoordinator {
     /// The Store token retains its registry borrow while it projects the child
     /// from the exact certified family and BodyFrame. The candidate's sealed
     /// payload is also the required parent payload and is never overwritten.
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[cfg_attr(test, expect(dead_code, reason = "composite body-publication gap"))]
-    pub(super) fn prepare_sealed_store_validate_transition<'coordinator, 'registry>(
+    pub(super) fn prepare_sealed_store_validate_transition<'coordinator, 'registry, 'adapter>(
         &'coordinator mut self,
         lease: &TurnLease,
         verified: &VerifiedHeightContext,
-        successor: PreparedDurableStoreValidateSuccessor<'registry>,
-    ) -> Result<PreparedSealedBodyStageTransition<'coordinator, 'registry>, BodyStageTransitionError>
-    {
+        successor: PreparedDurableStoreValidateSuccessor<'registry, 'adapter>,
+    ) -> Result<
+        PreparedSealedBodyStageTransition<'coordinator, 'registry, 'adapter>,
+        BodyStageTransitionError,
+    > {
         let candidate = successor
             .project_for_body_transition(lease, verified)
             .map_err(map_sealed_successor_projection_error)?;
@@ -1974,8 +2020,8 @@ impl LifecycleCoordinator {
             DurableContinuationEdge::StoreToValidate,
         )?;
         Ok(PreparedSealedBodyStageTransition {
-            _coordinator: self,
-            _successor: SealedBodyStageSuccessor::DurableStoreValidate(successor),
+            coordinator: self,
+            successor: SealedBodyStageSuccessor::DurableStoreValidate(successor),
             staged: transition.staged,
             edge: DurableContinuationEdge::StoreToValidate,
             parent_ordinal: transition.parent_ordinal,

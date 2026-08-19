@@ -790,6 +790,129 @@ impl RecoveredLifecycleLocalProposalAttemptV1 {
 pub(crate) struct ProductionLifecycleAdapterStartupV1 {
     state: ProductionLifecycleAdapterStartupStateV1,
 }
+/// One exact reducer input that must be replayed before a durable ordinary
+/// certified-body successor can become executable after restart.
+///
+/// The lifecycle storage join constructs these steps from the authenticated
+/// terminal parent rows and their sealed body frames. They are deliberately
+/// ordinal-bearing so cold replay has one canonical order even when Fetch,
+/// Store, and Validate capacity classes contain different owners.
+#[derive(Clone, Debug)]
+pub(in crate::sumeragi) struct CertifiedBodyPipelineColdReplayStepV1 {
+    ordinal: u128,
+    kind: CertifiedBodyPipelineColdReplayKindV1,
+}
+#[derive(Clone, Debug)]
+enum CertifiedBodyPipelineColdReplayKindV1 {
+    BodyAvailable {
+        tag: reducer::EventTag,
+        manifest: wire::PayloadManifest,
+        expected_store: AdapterEffect,
+    },
+    BodyStored {
+        tag: reducer::EventTag,
+        durable: DurableBodyReceipt,
+        expected_validate: AdapterEffect,
+    },
+}
+impl CertifiedBodyPipelineColdReplayStepV1 {
+    /// Seal one terminal Fetch input and its exact live Store effect.
+    pub(in crate::sumeragi) fn body_available(
+        ordinal: u128,
+        tag: reducer::EventTag,
+        manifest: wire::PayloadManifest,
+        expected_store: AdapterEffect,
+    ) -> Option<Self> {
+        let AdapterEffect::StoreBody {
+            tag: store_tag,
+            round,
+            subject,
+        } = &expected_store
+        else {
+            return None;
+        };
+        (ordinal != 0
+            && *store_tag == tag
+            && *round == manifest.round
+            && *subject == manifest.subject)
+            .then_some(Self {
+                ordinal,
+                kind: CertifiedBodyPipelineColdReplayKindV1::BodyAvailable {
+                    tag,
+                    manifest,
+                    expected_store,
+                },
+            })
+    }
+
+    /// Seal one terminal Store input and its exact live Validate effect.
+    pub(in crate::sumeragi) fn body_stored(
+        ordinal: u128,
+        tag: reducer::EventTag,
+        durable: DurableBodyReceipt,
+        expected_validate: AdapterEffect,
+    ) -> Option<Self> {
+        let AdapterEffect::ValidateBody {
+            tag: validate_tag,
+            round,
+            subject,
+        } = &expected_validate
+        else {
+            return None;
+        };
+        (ordinal != 0
+            && *validate_tag == tag
+            && *round == durable.round()
+            && *subject == durable.subject())
+        .then_some(Self {
+            ordinal,
+            kind: CertifiedBodyPipelineColdReplayKindV1::BodyStored {
+                tag,
+                durable,
+                expected_validate,
+            },
+        })
+    }
+
+    /// Return the terminal parent ordinal that orders this replay input.
+    pub(in crate::sumeragi) const fn ordinal(&self) -> u128 {
+        self.ordinal
+    }
+
+    #[cfg(test)]
+    fn is_structurally_exact_for_test(&self) -> bool {
+        match &self.kind {
+            CertifiedBodyPipelineColdReplayKindV1::BodyAvailable {
+                tag,
+                manifest,
+                expected_store,
+            } => matches!(
+                expected_store,
+                AdapterEffect::StoreBody {
+                    tag: store_tag,
+                    round,
+                    subject,
+                } if store_tag == tag
+                    && *round == manifest.round
+                    && *subject == manifest.subject
+            ),
+            CertifiedBodyPipelineColdReplayKindV1::BodyStored {
+                tag,
+                durable,
+                expected_validate,
+            } => matches!(
+                expected_validate,
+                AdapterEffect::ValidateBody {
+                    tag: validate_tag,
+                    round,
+                    subject,
+                } if validate_tag == tag
+                    && *round == durable.round()
+                    && *subject == durable.subject()
+            ),
+        }
+    }
+}
 /// Move-only Kura- and recovery-bound lifecycle storage authority.
 ///
 /// Recovery is the sole production mint. It freezes the exact Kura instance,
@@ -876,6 +999,7 @@ impl RecoveredLifecycleLaunchStoragePathsV1 {
         &self.wal_path
     }
     /// Borrow the exact recovery-derived chunk root for durable Serve restore.
+    #[cfg(test)]
     pub(in crate::sumeragi) fn chunk_root(&self) -> &std::path::Path {
         &self.chunk_root
     }
@@ -1174,6 +1298,128 @@ impl ProductionLifecycleAdapterStartupV1 {
                 leader_wire_launch_prepared: false,
             },
         }
+    }
+    /// Replay the exact terminal ordinary certified-body prefix retained by
+    /// LedgerV1 before any Store or Validate successor is exposed as Ready.
+    ///
+    /// Each input is prepared on cloned reducer state and must apply with the
+    /// exact effect already authenticated by the lifecycle/body-store join.
+    /// Busy, stale, duplicate, missing-work, or effect-shape outcomes are all
+    /// startup-fatal: accepting any of them would publish a concrete carrier
+    /// whose reducer predecessor was not reconstructed in this process.
+    pub(in crate::sumeragi) fn replay_certified_body_pipeline(
+        self,
+        steps: &[CertifiedBodyPipelineColdReplayStepV1],
+    ) -> Result<Self, &'static str> {
+        if steps
+            .windows(2)
+            .any(|pair| pair[0].ordinal() >= pair[1].ordinal())
+        {
+            return Err("certified body cold replay steps are not canonically ordered");
+        }
+        if steps.is_empty() {
+            return Ok(self);
+        }
+        let (
+            mut adapter,
+            effects,
+            pending_kura_apply,
+            local_proposal_attempt,
+            leader_wire_launch_prepared,
+        ) = match self.state {
+            ProductionLifecycleAdapterStartupStateV1::Recovered {
+                adapter,
+                effects,
+                pending_kura_apply,
+                local_proposal_attempt,
+                leader_wire_launch_prepared,
+            } => (
+                adapter,
+                effects,
+                pending_kura_apply,
+                local_proposal_attempt,
+                leader_wire_launch_prepared,
+            ),
+            #[cfg(test)]
+            ProductionLifecycleAdapterStartupStateV1::Fixture => {
+                if steps
+                    .iter()
+                    .all(CertifiedBodyPipelineColdReplayStepV1::is_structurally_exact_for_test)
+                {
+                    return Ok(Self {
+                        state: ProductionLifecycleAdapterStartupStateV1::Fixture,
+                    });
+                }
+                return Err("fixture adapter cannot replay certified body pipeline");
+            }
+        };
+        if !effects.is_empty()
+            || leader_wire_launch_prepared
+            || adapter.pending_persistence_id.is_some()
+            || !adapter.deferred_completions.is_empty()
+            || !adapter.deferred_progress_inputs.is_empty()
+            || !adapter.deferred_inputs.is_empty()
+            || adapter.ensure_ingress().is_err()
+        {
+            return Err("certified body cold replay adapter is not pristine");
+        }
+        for step in steps {
+            match &step.kind {
+                CertifiedBodyPipelineColdReplayKindV1::BodyAvailable {
+                    tag,
+                    manifest,
+                    expected_store,
+                } => {
+                    let prepared = adapter
+                        .prepare_direct_certified_body_available(*tag, manifest)
+                        .map_err(|_| "certified body cold BodyAvailable replay failed")?;
+                    let DirectCertifiedBodyAvailablePreparation::Applied(prepared) = prepared
+                    else {
+                        return Err("certified body cold BodyAvailable replay did not apply");
+                    };
+                    if prepared.store_effect() != expected_store {
+                        return Err("certified body cold BodyAvailable emitted a foreign Store");
+                    }
+                    let emitted = prepared.commit();
+                    if emitted != *expected_store {
+                        return Err("certified body cold BodyAvailable commit changed Store");
+                    }
+                }
+                CertifiedBodyPipelineColdReplayKindV1::BodyStored {
+                    tag,
+                    durable,
+                    expected_validate,
+                } => {
+                    let prepared = adapter
+                        .prepare_direct_body_stored(
+                            *tag,
+                            durable.round(),
+                            durable.subject(),
+                            durable,
+                        )
+                        .map_err(|_| "certified body cold BodyStored replay failed")?;
+                    let DirectBodyStoredPreparation::Applied(prepared) = prepared else {
+                        return Err("certified body cold BodyStored replay did not apply");
+                    };
+                    if prepared.validate_effect() != expected_validate {
+                        return Err("certified body cold BodyStored emitted a foreign Validate");
+                    }
+                    let emitted = prepared.commit();
+                    if emitted != *expected_validate {
+                        return Err("certified body cold BodyStored commit changed Validate");
+                    }
+                }
+            }
+        }
+        Ok(Self {
+            state: ProductionLifecycleAdapterStartupStateV1::Recovered {
+                adapter,
+                effects,
+                pending_kura_apply,
+                local_proposal_attempt,
+                leader_wire_launch_prepared,
+            },
+        })
     }
     /// Compare the sealed adapter startup with one exact verified owner.
     pub(in crate::sumeragi) fn authorizes_verified_context(
@@ -1775,9 +2021,9 @@ impl ProductionLifecycleAdapterStartupV1 {
         }
     }
 }
-// TODO: The lifecycle completion transaction must consume the current recovered
-// Sign, execute its reducer acknowledgement through this retained adapter, and
-// authenticate only the next `awaiting_signature` emitted by that step. Queued
+// The lifecycle completion transaction consumes the current recovered Sign,
+// executes its reducer acknowledgement through this retained adapter, and
+// authenticates only the next `awaiting_signature` emitted by that step. Queued
 // signatures deliberately have no eager lifecycle token or pre-bound event tag.
 struct ProductionRecoveredLifecycleOwnerAssemblyLinearity;
 impl Drop for ProductionRecoveredLifecycleOwnerAssemblyLinearity {
@@ -1980,6 +2226,7 @@ struct StorageRecoveredWalSignInstallError<'registry> {
     _startup: ProductionLifecycleAdapterStartupV1,
     error: ExactStoreRecoveredWalSignInstallError<'registry>,
 }
+/// Fail-stop recovered lifecycle-open diagnostic with no retry authority.
 #[must_use = "failed exact-store lifecycle open requires process restart"]
 struct StorageRecoveredWalOpenError<'registry> {
     failure: StorageRecoveredWalOpenFailure<'registry>,
@@ -1987,11 +2234,9 @@ struct StorageRecoveredWalOpenError<'registry> {
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum StorageRecoveredWalOpenFailure<'registry> {
     Storage {
-        _adapter_startup: ProductionLifecycleAdapterStartupV1,
         error: ProductionRecoveredWalStorageError,
     },
     OwnerSeal {
-        _adapter_startup: ProductionLifecycleAdapterStartupV1,
         _opened: ProductionOpenedRecoveredWalSignLifecycleCut<'registry>,
     },
 }
@@ -3223,6 +3468,27 @@ struct ReducerFenceProjection {
     awaiting_signature: Option<reducer::SignableMessage>,
     replay_complete: bool,
 }
+/// Exact process-local generation which wakes direct lifecycle body work.
+///
+/// The source is derived from the adapter's immutable height context and the
+/// generation is sampled from the same serialized runtime.  Callers may feed
+/// this opaque pair only into the lifecycle scheduler; no raw generation mint
+/// is exposed outside the adapter/executor boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) struct LifecycleReducerFenceObservationV1 {
+    source: super::v2_lifecycle_coordinator::WaitSource,
+    generation: u64,
+}
+impl LifecycleReducerFenceObservationV1 {
+    /// Return the context-scoped external wait source.
+    pub(in crate::sumeragi) const fn source(self) -> super::v2_lifecycle_coordinator::WaitSource {
+        self.source
+    }
+    /// Return the exact sampled reducer-fence generation.
+    pub(in crate::sumeragi) const fn generation(self) -> u64 {
+        self.generation
+    }
+}
 /// Borrow-bound generation snapshot for one direct completion blocked by the
 /// reducer's persistence or signature fence.
 ///
@@ -3231,7 +3497,7 @@ struct ReducerFenceProjection {
 /// external-generation wait.
 #[cfg_attr(not(test), allow(dead_code))]
 #[must_use = "the sampled reducer fence must be settled or deliberately abandoned"]
-struct PreparedReducerFenceWait<'a> {
+pub(in crate::sumeragi) struct PreparedReducerFenceWait<'a> {
     _adapter: &'a mut SumeragiV2Adapter,
     context_id: wire::HeightContextId,
     generation: u64,
@@ -3240,12 +3506,12 @@ struct PreparedReducerFenceWait<'a> {
 impl PreparedReducerFenceWait<'_> {
     /// Return the authenticated height-context identity used to derive the
     /// coordinator's domain-separated external wait source.
-    const fn context_id(&self) -> wire::HeightContextId {
+    pub(in crate::sumeragi) const fn context_id(&self) -> wire::HeightContextId {
         self.context_id
     }
     /// Return the exact monotone reducer-fence generation observed by this
     /// blocked attempt.
-    const fn generation(&self) -> u64 {
+    pub(in crate::sumeragi) const fn generation(&self) -> u64 {
         self.generation
     }
 }
@@ -3264,8 +3530,6 @@ enum DirectCertifiedBodyAvailableInactive {
     Stutter(DirectCertifiedBodyAvailableStutter),
     /// The effect belongs to a stale reducer incarnation or view.
     Superseded(reducer::IgnoreReason),
-    /// A conflicting Busy-deferred proposal still owns registry state.
-    DeferredConflict,
 }
 /// Borrow-bound non-applied direct-completion classification.
 ///
@@ -3288,7 +3552,7 @@ impl PreparedDirectCertifiedBodyAvailableInactive<'_> {
 /// Fully checked direct `BodyAvailable -> StoreBody` transition.
 ///
 /// Preparation executes the reducer transition only on cloned state and holds
-/// the exclusive adapter borrow. Consequently the future post-dequeue tail can
+/// the exclusive adapter borrow. Consequently the post-publication tail can
 /// install this exact state without another fallible reducer call or a parallel
 /// producer-continuation reservation.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -3301,6 +3565,38 @@ struct PreparedDirectCertifiedBodyAvailable<'a> {
     core_effect: reducer::Effect,
     store_effect: AdapterEffect,
     next_fence_generation: u64,
+}
+/// Closed adapter half of one ordinary certified Fetch-to-Store transaction.
+///
+/// The derived Store effect stays nested beside the cloned reducer state.  It
+/// can be inspected only by the exact registry successor and committed only
+/// after LedgerV1 publication.
+#[must_use = "the certified Fetch adapter successor has not been published"]
+pub(in crate::sumeragi) struct PreparedCertifiedFetchStoreAdapterV1<'a> {
+    preview: PreparedDirectCertifiedBodyAvailable<'a>,
+}
+impl PreparedCertifiedFetchStoreAdapterV1<'_> {
+    /// Borrow the exact Store effect for registry successor projection.
+    pub(in crate::sumeragi) const fn store_effect(&self) -> &AdapterEffect {
+        self.preview.store_effect()
+    }
+    /// Install the already-checked reducer transition after durable publication.
+    pub(in crate::sumeragi) fn commit_after_durable_publication(self) {
+        let expected = self.preview.store_effect().clone();
+        let committed = self.preview.commit();
+        assert_eq!(committed, expected);
+    }
+}
+/// Outcome of previewing one ordinary certified Fetch completion.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+#[must_use = "the direct certified Fetch preview must be settled"]
+pub(in crate::sumeragi) enum CertifiedFetchStoreAdapterPreparationV1<'a> {
+    /// The exact Fetch-to-Store reducer transition is ready for publication.
+    Applied(PreparedCertifiedFetchStoreAdapterV1<'a>),
+    /// A reducer persistence/signature fence must advance before retry.
+    Blocked(PreparedReducerFenceWait<'a>),
+    /// The lifecycle carrier and reducer no longer describe the same live edge.
+    Inactive,
 }
 /// Borrow-bound direct adapter preview for recovered Decision Fetch settlement.
 ///
@@ -3340,7 +3636,7 @@ impl PreparedDirectCertifiedBodyAvailable<'_> {
     /// Install the already-checked reducer and registry state.
     ///
     /// This method performs only infallible in-memory moves and accounting. The
-    /// future composite transaction must call it only after every fallible
+    /// lifecycle transaction calls it only after every fallible
     /// lifecycle/registry/service preflight succeeds and the selected ingress
     /// occurrence is committed under the output fail-stop guard.
     // Recovered Decision Fetch settlement now reaches this commit only while
@@ -3378,12 +3674,7 @@ enum DirectCertifiedBodyAvailablePreparation<'a> {
     Applied(PreparedDirectCertifiedBodyAvailable<'a>),
     /// A reducer-owned persistence/signature fence must advance before retry.
     Blocked(PreparedReducerFenceWait<'a>),
-    /// The exact attempt was an idempotent stutter, a superseded incarnation,
-    /// or a transitional deferred conflict.
-    ///
-    /// TODO: Remove the deferred-conflict member with the deferred producer store.
-    /// The production lifecycle cut must never call that store merely to make a
-    /// direct completion executable.
+    /// The exact attempt was an idempotent stutter or a superseded incarnation.
     Inactive(PreparedDirectCertifiedBodyAvailableInactive<'a>),
 }
 /// Exact idempotent disposition of one direct durable-body completion.
@@ -3423,7 +3714,7 @@ impl PreparedDirectBodyStoredInactive<'_> {
 /// Fully checked direct `BodyStored -> ValidateBody` transition.
 ///
 /// Preparation executes the reducer transition only on cloned state and holds
-/// the exclusive adapter borrow. The future Store lifecycle transaction can
+/// the exclusive adapter borrow. The Store lifecycle transaction can
 /// therefore install the exact transition without consulting deferred,
 /// serviced-candidate, producer-continuation, or WAL helper machinery.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -3437,6 +3728,34 @@ struct PreparedDirectBodyStored<'a> {
     validate_effect: AdapterEffect,
     next_fence_generation: u64,
 }
+/// Closed adapter half of one ordinary Store-to-Validate transaction.
+#[must_use = "the durable Store adapter successor has not been published"]
+pub(in crate::sumeragi) struct PreparedDurableStoreValidateAdapterV1<'a> {
+    preview: PreparedDirectBodyStored<'a>,
+}
+impl PreparedDurableStoreValidateAdapterV1<'_> {
+    /// Borrow the exact Validate effect for registry successor projection.
+    pub(in crate::sumeragi) const fn validate_effect(&self) -> &AdapterEffect {
+        self.preview.validate_effect()
+    }
+    /// Install the already-checked reducer transition after durable publication.
+    pub(in crate::sumeragi) fn commit_after_durable_publication(self) {
+        let expected = self.preview.validate_effect().clone();
+        let committed = self.preview.commit();
+        assert_eq!(committed, expected);
+    }
+}
+/// Outcome of previewing one ordinary durable Store completion.
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+#[must_use = "the direct durable Store preview must be settled"]
+pub(in crate::sumeragi) enum DurableStoreValidateAdapterPreparationV1<'a> {
+    /// The exact Store-to-Validate reducer transition is ready for publication.
+    Applied(PreparedDurableStoreValidateAdapterV1<'a>),
+    /// A reducer persistence/signature fence must advance before retry.
+    Blocked(PreparedReducerFenceWait<'a>),
+    /// The lifecycle carrier and reducer no longer describe the same live edge.
+    Inactive,
+}
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectBodyStored<'_> {
     /// Borrow the single exact Validate effect derived by the staged reducer.
@@ -3445,12 +3764,10 @@ impl PreparedDirectBodyStored<'_> {
     }
     /// Install the already-checked reducer and registry state.
     ///
-    /// This method performs only infallible in-memory moves and accounting. It
-    /// remains private and unreachable from production until the composite
-    /// lifecycle transaction owns the durable body catalog and successor
-    /// publication atomically enough for fail-stop recovery.
-    // TODO: Expose this only to the move-only Store parent-to-child registry
-    // transaction once ledger publication and restart replay are one cut.
+    /// This method performs only infallible in-memory moves and accounting. The
+    /// move-only Store parent-to-child registry transaction calls it only after
+    /// LedgerV1 publication; cold open replays the same body-stage edge before
+    /// exposing the child carrier.
     fn commit(self) -> AdapterEffect {
         let Self {
             adapter,
@@ -12952,6 +13269,56 @@ impl SumeragiV2Adapter {
             body: authority.into_body(),
         })
     }
+    /// Preview one ordinary certified Fetch-to-Store lifecycle transition.
+    ///
+    /// The result never exposes raw reducer state.  Applied work remains
+    /// borrow-bound until the registry and LedgerV1 transaction publish it;
+    /// Busy returns the exact reducer-fence generation; every other inactive
+    /// disposition is fail-closed because cold open reconstructed this carrier
+    /// as live before scheduling it.
+    pub(in crate::sumeragi) fn prepare_certified_fetch_store(
+        &mut self,
+        tag: reducer::EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> Result<CertifiedFetchStoreAdapterPreparationV1<'_>, AdapterError> {
+        match self.prepare_direct_certified_body_available(tag, manifest)? {
+            DirectCertifiedBodyAvailablePreparation::Applied(preview) => {
+                Ok(CertifiedFetchStoreAdapterPreparationV1::Applied(
+                    PreparedCertifiedFetchStoreAdapterV1 { preview },
+                ))
+            }
+            DirectCertifiedBodyAvailablePreparation::Blocked(wait) => {
+                Ok(CertifiedFetchStoreAdapterPreparationV1::Blocked(wait))
+            }
+            DirectCertifiedBodyAvailablePreparation::Inactive(inactive) => {
+                drop(inactive);
+                Ok(CertifiedFetchStoreAdapterPreparationV1::Inactive)
+            }
+        }
+    }
+    /// Preview one ordinary durable Store-to-Validate lifecycle transition.
+    pub(in crate::sumeragi) fn prepare_durable_store_validate(
+        &mut self,
+        tag: reducer::EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<DurableStoreValidateAdapterPreparationV1<'_>, AdapterError> {
+        match self.prepare_direct_body_stored(tag, round, subject, receipt)? {
+            DirectBodyStoredPreparation::Applied(preview) => {
+                Ok(DurableStoreValidateAdapterPreparationV1::Applied(
+                    PreparedDurableStoreValidateAdapterV1 { preview },
+                ))
+            }
+            DirectBodyStoredPreparation::Blocked(wait) => {
+                Ok(DurableStoreValidateAdapterPreparationV1::Blocked(wait))
+            }
+            DirectBodyStoredPreparation::Inactive(inactive) => {
+                drop(inactive);
+                Ok(DurableStoreValidateAdapterPreparationV1::Inactive)
+            }
+        }
+    }
     /// Preview a certified Fetch completion directly against the sole reducer.
     ///
     /// No adapter-owned deferred queue, serviced-candidate marker, producer
@@ -12978,17 +13345,6 @@ impl SumeragiV2Adapter {
         let mut next_registry = self.registry.clone();
         let round = next_registry.round_to_core(manifest.round, &self.wire_context)?;
         let subject = next_registry.register_subject(manifest.subject)?;
-        if self
-            .deferred_conflicting_proposal_owner(round, subject, manifest)
-            .is_some()
-        {
-            return Ok(DirectCertifiedBodyAvailablePreparation::Inactive(
-                PreparedDirectCertifiedBodyAvailableInactive {
-                    _adapter: self,
-                    disposition: DirectCertifiedBodyAvailableInactive::DeferredConflict,
-                },
-            ));
-        }
         let core_manifest = next_registry.manifest_to_core(manifest, &self.wire_context)?;
         if core_manifest.subject() != subject {
             return Err(AdapterError::DurableBodyMismatch);
@@ -17228,6 +17584,19 @@ impl SumeragiV2Adapter {
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn reducer_fence_generation(&self) -> u64 {
         self.reducer_fence_generation
+    }
+    /// Seal the current reducer-fence source and generation for lifecycle planning.
+    pub(in crate::sumeragi) fn lifecycle_reducer_fence_observation(
+        &self,
+    ) -> LifecycleReducerFenceObservationV1 {
+        let mut context_id = [0_u8; 32];
+        context_id.copy_from_slice(self.wire_context.id().0.as_ref());
+        let context =
+            LifecycleContext::new(LifecycleDigest::new(context_id), self.wire_context.height);
+        LifecycleReducerFenceObservationV1 {
+            source: super::v2_lifecycle_coordinator::reducer_fence_wait_source(context),
+            generation: self.reducer_fence_generation,
+        }
     }
     fn ensure_ingress(&self) -> Result<(), AdapterError> {
         if self.fail_closed {

@@ -183,7 +183,7 @@ fn completion_sources_alternate_under_simultaneous_bursts() {
     drop(service.io.take());
 }
 #[test]
-fn timeout_recovery_completion_prefix_includes_cut_and_excludes_successor() {
+fn completion_fifo_drains_in_physical_order_without_timeout_prefix_mode() {
     let (mut service, _) = fixture();
     let (command_tx, _command_rx, admission) = test_io_command_channel(2);
     let (completion_tx, completion_rx) = mpsc::sync_channel(2);
@@ -214,7 +214,7 @@ fn timeout_recovery_completion_prefix_includes_cut_and_excludes_successor() {
         admission,
     });
     assert!(matches!(
-        service.take_timeout_recovery_prefix_completion(true, timeout_ordinal),
+        service.take_next_completion(true),
         IoCompletionTake {
             completion: Some(PendingServiceCompletion::Io {
                 completion: V2IoCompletion::Signature { work_id, .. },
@@ -230,24 +230,7 @@ fn timeout_recovery_completion_prefix_includes_cut_and_excludes_successor() {
         .admission
         .acknowledge_completion_at(0);
     assert!(matches!(
-        service.take_timeout_recovery_prefix_completion(true, timeout_ordinal),
-        IoCompletionTake {
-            completion: None,
-            retained_runtime: false,
-        }
-    ));
-    assert_eq!(
-        service
-            .io
-            .as_ref()
-            .expect("attached completion corridor")
-            .completion_snapshot(Instant::now())
-            .depth,
-        1,
-        "the T+1 producer stays outside the inclusive T prefix"
-    );
-    assert!(matches!(
-        service.take_timeout_recovery_prefix_completion(true, timeout_ordinal + 1),
+        service.take_next_completion(true),
         IoCompletionTake {
             completion: Some(PendingServiceCompletion::Io {
                 completion: V2IoCompletion::Signature { work_id, .. },
@@ -262,6 +245,13 @@ fn timeout_recovery_completion_prefix_includes_cut_and_excludes_successor() {
         .expect("attached completion corridor")
         .admission
         .acknowledge_completion_at(0);
+    assert!(matches!(
+        service.take_next_completion(true),
+        IoCompletionTake {
+            completion: None,
+            retained_runtime: false,
+        }
+    ));
     drop(service.io.take());
 }
 #[test]

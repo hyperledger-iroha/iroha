@@ -735,7 +735,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         ".with_runner_setup(&mut setup_runner",
                         "services.set_exact_output_admission_hook(|_post, _ticket| Ok(()))",
                         "launched.drive_completion_turn(runner, &mut lane_work)",
-                        "ProductionRecoveredCompletionDispatchV1::ApplyQueued",
+                        "ProductionCompletionDispatchV1::ApplyQueued",
                         "launched.drive_completion_turn(runner, &mut lane_work)",
                         "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
                         ".initialize_recovered_local_proposal(setup_runner)",
@@ -3849,7 +3849,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 scheduler_path,
                 scheduler_source,
                 "lifecycle-owned recovered Decision Fetch dispatch",
-                "fn dispatch_recovered_completion_with_runner_debt(",
+                "fn dispatch_completion_with_runner_debt(",
                 "/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.",
             )
             require_order(
@@ -4298,7 +4298,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 worker_path,
                 worker_source,
                 "unified recovered Decision Fetch completion classifier",
-                "pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(",
+                "pub(in crate::sumeragi) fn take_next_lifecycle_completion(",
                 "/// Drain only the oldest recovered-Sign guard;",
             )
             require_order(
@@ -4308,7 +4308,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 (
                     "V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded)",
                     "prepare_recovered_decision_fetch_body_completion(guarded, 0)",
-                    "RecoveredLifecycleCompletionTakeV1::DecisionFetch(",
+                    "LifecycleCompletionTakeV1::DecisionFetch(",
                 ),
             )
             require_tokens(
@@ -4320,7 +4320,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "recovered_decision_fetch_bodies: BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>",
                     "V2IoCompletion::RecoveredDecisionFetchBodyPersisted",
                     "V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained",
-                    "fn take_next_recovered_lifecycle_completion(",
+                    "fn take_next_lifecycle_completion(",
                     "fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extraction()",
                 ),
             )

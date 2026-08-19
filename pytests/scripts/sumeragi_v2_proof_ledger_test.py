@@ -4088,56 +4088,6 @@ def _superseded_progress_witness_legacy_builder_mutations(
         )
 
 
-def test_body_service_runtime_step_source_seal_is_canonical() -> None:
-    """The body-service step seal binds both reviewed retry-latch expressions."""
-
-    module = load_checker()
-    claim = next(
-        claim
-        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
-        for claim in contract.claims
-        if claim.constant == "ProductionBodyServiceRefinesAsyncFairness"
-    )
-    step_seals = tuple(
-        seal
-        for seal in claim.source_item_seals
-        if seal.source == "crates/iroha_core/src/sumeragi/v2_runtime.rs"
-        and seal.item == "step"
-    )
-    assert len(step_seals) == 1
-    step_seal = step_seals[0]
-    assert not step_seal.item_token_sha256.startswith("PENDING")
-    assert len(step_seal.required_expressions) == 2
-
-    source = (ROOT_DIR / step_seal.source).read_text(encoding="utf-8")
-    items = tuple(
-        item
-        for item in module.rust_items(source, step_seal.item)
-        if item.brace_context == step_seal.brace_context
-    )
-    assert len(items) == 1
-    observed_sha256 = module._rust_sealed_item_token_sha256(items[0])
-    assert step_seal.item_token_sha256 == observed_sha256
-
-    payload_claim = replace(claim, source_item_seals=(step_seal,))
-    assert module._cross_tool_source_item_seal_payload(
-        payload_claim,
-        root_dir=ROOT_DIR,
-    ) == [
-        {
-            "source": step_seal.source,
-            "item": step_seal.item,
-            "kind": step_seal.kind,
-            "brace_context": [list(header) for header in step_seal.brace_context],
-            "item_token_sha256": observed_sha256,
-            "required_expressions": [
-                module._normalized_rust_contract(expression)
-                for expression in step_seal.required_expressions
-            ],
-        }
-    ]
-
-
 @pytest.mark.parametrize(
     ("mutation", "expected_error"),
     (
@@ -5140,94 +5090,6 @@ def test_body_service_cross_tool_claim_requires_live_production_dequeue(
         module._cross_tool_claim_payload(
             claim,
             verus_evidence=verus_evidence,
-            root_dir=tmp_path,
-        )
-
-
-@pytest.mark.parametrize(
-    ("old", "new"),
-    (
-        (
-            """if self
-                        .retained_response_predecessor_target_ordinal
-                        .is_some_and(|target| owner.lifecycle_ordinal() < target)
-                    {
-                        self.retained_response_predecessor_retry_attempted = true;
-                    }""",
-            """if self
-                        .retained_response_predecessor_target_ordinal
-                        .is_some_and(|target| owner.lifecycle_ordinal() > target)
-                    {
-                        self.retained_response_predecessor_retry_attempted = true;
-                    }""",
-        ),
-    ),
-)
-def test_body_service_retry_latches_survive_source_seal_digest_refresh(
-    tmp_path: Path,
-    old: str,
-    new: str,
-) -> None:
-    """Body-service fairness binds the retained-response retry episode."""
-
-    module = load_checker()
-    claim = next(
-        claim
-        for contract in module.CROSS_TOOL_REFINEMENT_CONTRACTS
-        for claim in contract.claims
-        if claim.constant == "ProductionBodyServiceRefinesAsyncFairness"
-    )
-    step_seals = tuple(
-        seal
-        for seal in claim.source_item_seals
-        if seal.source == "crates/iroha_core/src/sumeragi/v2_runtime.rs"
-        and seal.item == "step"
-    )
-    assert len(step_seals) == 1
-    step_seal = step_seals[0]
-    assert len(step_seal.required_expressions) == 1
-    relative = Path("crates/iroha_core/src/sumeragi/v2_runtime.rs")
-    path = tmp_path / relative
-    path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(ROOT_DIR / relative, path)
-    context = (
-        (
-            "impl",
-            "<",
-            "D",
-            ":",
-            "RuntimeDriver",
-            ">",
-            "SerializedV2Runtime",
-            "<",
-            "D",
-            ">",
-        ),
-    )
-    mutate_rust_item_source_in_context(
-        module,
-        path,
-        "step",
-        context,
-        old,
-        new,
-    )
-    source = path.read_text(encoding="utf-8")
-    items = tuple(
-        item
-        for item in module.rust_items(source, "step")
-        if item.brace_context == context
-    )
-    assert len(items) == 1
-    live_seal = replace(
-        step_seal,
-        item_token_sha256=module._rust_sealed_item_token_sha256(items[0]),
-    )
-    live_claim = replace(claim, source_item_seals=(live_seal,))
-
-    with pytest.raises(ValueError, match="exact required expression"):
-        module._cross_tool_source_item_seal_payload(
-            live_claim,
             root_dir=tmp_path,
         )
 
@@ -21817,10 +21679,10 @@ def test_terminal_authority_batch_commit_waits_for_complete_macro_step_after_dig
         ),
         (
             "fair_v2_ingress_queue_gate_verdict",
-            "let dependency_bypass = !ingress_barrier_allows",
-            "let dependency_bypass = ingress_barrier_allows",
+            "let timeout_control_dependency = leader_wire_barrier.is_some_and(|owner| {",
+            "let timeout_control_dependency = leader_wire_barrier.is_none_or(|owner| {",
             "timeout_vote_episode",
-            "TimeoutVote bypass must be mode-scoped, direct-source checked, limited to a CertifiedResponse leader owner, and subordinate to a blocked ordinary barrier",
+            "TimeoutVote dependency classification must derive solely from the current durable owner",
         ),
     ),
 )
@@ -21880,120 +21742,6 @@ def test_classified_ingress_semantics_survive_all_pending_alias_digest_refreshes
         errors = module._timeout_vote_episode_source_fidelity_errors(
             tmp_path, formal_dir
         )
-
-    assert any(expected_error in error for error in errors), errors
-
-
-def test_current_serve_retention_survives_all_reviewed_alias_digest_refreshes(
-    tmp_path: Path,
-) -> None:
-    """A refreshed drain seal still leaves current Serve to the lifecycle."""
-
-    module = load_checker()
-    local_runner_service_fixture(tmp_path, module)
-    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
-    mutate_rust_item_source(
-        module,
-        runner_path,
-        "drain_v2_ingress",
-        "let current_serve = matches!(",
-        "let current_serve = false && matches!(",
-    )
-    mutated_items = module.rust_items(
-        runner_path.read_text(encoding="utf-8"), "drain_v2_ingress"
-    )
-    assert len(mutated_items) == 1
-    digest = module._rust_item_token_sha256(mutated_items[0])
-    module._PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256[
-        "drain_v2_ingress"
-    ] = digest
-    module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[
-        "runner::drain_v2_ingress"
-    ] = digest
-
-    errors = module._exact_output_production_source_fidelity_errors(tmp_path)
-
-    assert any(
-        "terminal recovery drain must retain current-height Serve for the lifecycle selector"
-        in error
-        for error in errors
-    ), errors
-
-
-@pytest.mark.parametrize(
-    ("old", "new", "expected_error"),
-    (
-        (
-            ".try_recv_if_checked_retiring_obsolete_with_barrier_bypass(barrier_bypass, |inbound|",
-            ".try_recv_if_checked_retiring_obsolete(|inbound|",
-            "ingress drain must use the checked retiring selector",
-        ),
-        (
-            "FairV2IngressBarrierBypass::TimeoutVoteEpisode",
-            "FairV2IngressBarrierBypass::None",
-            "only TimeoutVoteEpisode mode may carry the timeout-vote barrier bypass",
-        ),
-        (
-            "executor.can_admit_timeout_vote_recovery_episode(message, ownership)",
-            "false",
-            "only TimeoutVoteEpisode mode may admit the runtime-checked timeout-vote episode",
-        ),
-        (
-            "if !selected_mode_matches {",
-            "if false {",
-            "non-Ordinary drain must reject every item outside its selected reviewed predicate",
-        ),
-        (
-            "if mode != V2IngressDrainMode::Ordinary && turn != OuterIngressTurn::Ingress {",
-            "if false {",
-            "non-Ordinary modes must skip Completion and Runtime turns",
-        ),
-        (
-            "network_ingress_is_certified_fence_escape(&message.payload)",
-            "true",
-            "only CertifiedFenceEscape mode may admit certified ingress",
-        ),
-    ),
-)
-def test_async_drain_three_mode_policy_mutations_fail_closed(
-    tmp_path: Path,
-    old: str,
-    new: str,
-    expected_error: str,
-) -> None:
-    """The async source seam binds the checked three-mode ingress policy."""
-
-    module = load_checker()
-    formal_dir = local_runner_service_fixture(tmp_path, module)
-    baseline = module._async_source_fidelity_errors(formal_dir)
-    assert not any(expected_error in error for error in baseline), baseline
-
-    runner_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
-    mutate_rust_item_source(
-        module,
-        runner_path,
-        "drain_v2_ingress",
-        old,
-        new,
-    )
-    mutated_items = module.rust_items(
-        runner_path.read_text(encoding="utf-8"), "drain_v2_ingress"
-    )
-    assert len(mutated_items) == 1
-    digest = module._rust_item_token_sha256(mutated_items[0])
-    module._PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256[
-        "drain_v2_ingress"
-    ] = digest
-    module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[
-        "runner::drain_v2_ingress"
-    ] = digest
-
-    errors = [
-        *module._async_source_fidelity_errors(formal_dir),
-        *module._timeout_vote_episode_source_fidelity_errors(
-            tmp_path, formal_dir
-        ),
-    ]
 
     assert any(expected_error in error for error in errors), errors
 
@@ -22088,7 +21836,6 @@ def test_rollover_runner_ack_inventory_is_exact_and_non_crashing(
 @pytest.mark.parametrize(
     ("operation", "key"),
     (
-        ("remove", "drain_v2_ingress"),
         ("add", "unexpected_exact_output_runner_item"),
     ),
 )
@@ -22298,177 +22045,50 @@ def test_production_causal_fifo_source_fidelity_is_current() -> None:
     )
 
 
-def test_retained_response_escape_latch_source_fidelity_is_current(
-    tmp_path: Path,
-) -> None:
-    """The retained-response run-loop alias matches the canonical source."""
-
-    module = load_checker()
-    local_runner_service_fixture(tmp_path, module)
-    assert module._retained_response_escape_latch_source_fidelity_errors(
-        tmp_path
-    ) == []
-
-
 @pytest.mark.parametrize(
     ("relative", "item_name", "old", "new", "expected_error"),
     (
         (
             Path("crates/iroha_core/src/sumeragi/mod.rs"),
             "try_recv_if_checked_retiring_obsolete",
-            "FairV2IngressBarrierBypass::None,",
-            "FairV2IngressBarrierBypass::TimeoutVoteEpisode,",
-            "test-only ordinary retirement baseline must pass",
+            "self.try_recv_if_at_checked_classified(Instant::now(), true, predicate)",
+            "self.try_recv_if_at_checked_classified(Instant::now(), false, predicate)",
+            "test-only ordinary retirement must use the same classifier without a bypass policy",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/mod.rs"),
             "try_recv_if_checked",
             "self.try_recv_if_at_checked(Instant::now(), predicate)",
             "self.try_recv_if_at_checked(Instant::now(), |_| true)",
-            "ordinary checked ingress must reach only the wrapper which hard-codes no bypass",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "try_recv_if_checked_retiring_obsolete_with_barrier_bypass",
-            "self.try_recv_if_at_checked_classified(Instant::now(), true, barrier_bypass, predicate)",
-            "self.try_recv_if_at_checked_classified(\n"
-            "            Instant::now(),\n"
-            "            true,\n"
-            "            FairV2IngressBarrierBypass::None,\n"
-            "            predicate,\n"
-            "        )",
-            "only the explicitly named internal wrapper may forward a bypass policy",
+            "ordinary checked ingress must delegate to the single classified selector",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/mod.rs"),
             "try_recv_if_at_checked",
-            "FairV2IngressBarrierBypass::None,",
-            "FairV2IngressBarrierBypass::TimeoutVoteEpisode,",
-            "ordinary timestamped ingress must pass FairV2IngressBarrierBypass::None",
+            "self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)",
+            "self.try_recv_if_at_checked_classified(service_attempt_at, true, predicate)",
+            "ordinary timestamped ingress must use the same classifier without a bypass policy",
         ),
         (
-            Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
-            "let FairV2IngressSource::Validator(authenticated_source) = source else {\n"
-            "        return false;\n"
-            "    };",
-            "let authenticated_source = match source {\n"
-            "        FairV2IngressSource::Validator(source)\n"
-            "        | FairV2IngressSource::Authenticated(source) => source,\n"
-            "        FairV2IngressSource::Anonymous => return false,\n"
-            "    };",
-            "barrier bypass must require a direct validator",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
-            "entry.inbound.sender() == Some(authenticated_source)",
-            "entry.inbound.sender().is_some()",
-            "barrier bypass must require a direct validator",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
-            "entry.inbound.via() == Some(authenticated_source)",
-            "entry.inbound.via().is_some()",
-            "barrier bypass must require a direct validator",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
-            "token.identity.semantic_origin == *authenticated_source",
-            "token.identity.semantic_origin == token.slot.semantic_origin",
-            "barrier bypass must require a direct validator",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
-            "token.slot.semantic_origin == *authenticated_source",
-            "token.slot.semantic_origin == token.identity.semantic_origin",
-            "barrier bypass must require a direct validator",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
-            "ownership.leader_wire_runtime_receipt().is_none()",
-            "ownership.leader_wire_runtime_receipt().is_some()",
-            "barrier bypass must require a direct validator",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
-            "ownership.runtime_physical_cut().is_none()",
-            "ownership.runtime_physical_cut().is_some()",
-            "barrier bypass must require a direct validator",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
-            "ownership.physical_admission_ordinal() == Some(entry.admission_ordinal)",
-            "ownership.physical_admission_ordinal() != Some(entry.admission_ordinal)",
-            "barrier bypass must require a direct validator",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "fair_v2_ingress_is_direct_validator_timeout_vote_owner",
-            "&& ownership.physical_admission_ordinal() == Some(entry.admission_ordinal)",
-            "&& ownership.physical_admission_ordinal() == Some(entry.admission_ordinal)\n"
-            "        || true",
-            "barrier bypass must require a direct validator",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            Path("crates/iroha_core/src/sumeragi/fair_v2_ingress_selector.rs"),
             "fair_v2_ingress_queue_gate_verdict",
-            "owner.token.identity.phase == FairV2IngressLeaderWirePhase::CertifiedResponse",
-            "owner.token.identity.phase == FairV2IngressLeaderWirePhase::TimeoutVote",
-            "limited to a CertifiedResponse leader owner",
+            "let timeout_control_dependency = leader_wire_barrier.is_some_and(|owner| {",
+            "let timeout_control_dependency = true || leader_wire_barrier.is_some_and(|owner| {",
+            "TimeoutVote dependency classification must derive solely from the current durable owner",
+        ),
+        (
+            Path("crates/iroha_core/src/sumeragi/fair_v2_ingress_selector.rs"),
+            "fair_v2_ingress_queue_gate_verdict",
+            "if has_live_control_predecessor || (!ingress_barrier_allows && !dependency_bypass) {",
+            "if false || (!ingress_barrier_allows && !dependency_bypass) {",
+            "a live same-slot control predecessor must block every later control occurrence",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "fair_v2_ingress_queue_gate_verdict",
-            "== FairV2IngressLeaderWirePhase::CertifiedResponse\n",
-            "== FairV2IngressLeaderWirePhase::CertifiedResponse\n"
-            "            && CertifiedResponseClaimMatches\n",
-            "may not require a response claim",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "fair_v2_ingress_queue_gate_verdict",
-            "let dependency_bypass = !ingress_barrier_allows",
-            "let dependency_bypass = ingress_barrier_allows",
-            "subordinate to a blocked ordinary barrier",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-            "drain_v2_ingress",
-            "V2IngressDrainMode::Ordinary | V2IngressDrainMode::CertifiedFenceEscape => {\n"
-            "                FairV2IngressBarrierBypass::None\n"
-            "            }",
-            "V2IngressDrainMode::Ordinary | V2IngressDrainMode::CertifiedFenceEscape => {\n"
-            "                FairV2IngressBarrierBypass::TimeoutVoteEpisode\n"
-            "            }",
-            "only TimeoutVoteEpisode mode may use",
-        ),
-        (
-            Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-            "drain_v2_ingress",
-            "V2IngressDrainMode::CertifiedFenceEscape => {\n"
-            "                            network_ingress_is_certified_fence_escape(&message.payload)\n"
-            "                        }\n"
-            "                        V2IngressDrainMode::TimeoutVoteEpisode => {\n"
-            "                            inbound.ingress_ownership().is_some_and(|ownership| {\n"
-            "                                executor.can_admit_timeout_vote_recovery_episode(message, ownership)\n"
-            "                            })\n"
-            "                        }",
-            "V2IngressDrainMode::CertifiedFenceEscape => {\n"
-            "                            inbound.ingress_ownership().is_some_and(|ownership| {\n"
-            "                                executor.can_admit_timeout_vote_recovery_episode(message, ownership)\n"
-            "                            })\n"
-            "                        }\n"
-            "                        V2IngressDrainMode::TimeoutVoteEpisode => {\n"
-            "                            network_ingress_is_certified_fence_escape(&message.payload)\n"
-            "                        }",
-            "pure disjoint drains",
+            "select_fair_v2_ingress_candidate",
+            "for dependency_pass in [false, true]",
+            "for dependency_pass in [true, false]",
+            "strict candidates must remain ahead of all dependency candidates",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
@@ -22613,13 +22233,16 @@ def test_retained_response_escape_latch_source_fidelity_is_current(
             "P at or above the physical cut",
         ),
         (
-            Path("crates/iroha_core/src/sumeragi/mod.rs"),
-            "timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier",
-            "earliest.token.identity.phase,\n"
-            "            super::FairV2IngressLeaderWirePhase::CertifiedResponse",
-            "earliest.token.identity.phase,\n"
-            "            super::FairV2IngressLeaderWirePhase::TimeoutVote",
-            "freeze an exact CertifiedResponse-phase owner",
+            Path(
+                "crates/iroha_core/src/sumeragi/tests/"
+                "mod_authoritative_runtime_gate_03_admission_and_fairness.rs"
+            ),
+            "ordinary_selector_preserves_certified_response_before_timeout_vote",
+            ".expect(\"ordinary selection preserves the response barrier\")\n"
+            "            .is_none()",
+            ".expect(\"ordinary selection preserves the response barrier\")\n"
+            "            .is_some()",
+            "the later TimeoutVote must remain blocked while its response predecessor is live",
         ),
     ),
 )
@@ -22660,73 +22283,6 @@ def test_timeout_vote_episode_rust_mutations_survive_digest_refresh(
     )
 
     assert any(expected_error in error for error in errors), errors
-
-
-def test_timeout_vote_episode_runner_mode_inventory_mutation(
-    tmp_path: Path,
-) -> None:
-    """The runner cannot collapse the reviewed three-mode ingress policy."""
-
-    module = load_checker()
-    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
-    runner = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
-    mutate_source_once(
-        runner,
-        "    CertifiedFenceEscape,\n",
-        "",
-    )
-
-    errors = module._timeout_vote_episode_source_fidelity_errors(
-        tmp_path, formal_dir
-    )
-    assert any("exactly Ordinary, CertifiedFenceEscape" in error for error in errors)
-
-
-def test_timeout_vote_episode_runner_schedule_mutations(
-    tmp_path: Path,
-) -> None:
-    """Retained-response backpressure keeps its independent TimeoutVote turn."""
-
-    module = load_checker()
-    formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
-    relative = Path(
-        "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
-    )
-    runner = tmp_path / relative
-    item_name = "service_retained_certified_response"
-    old = """        drain_v2_ingress(
-            receiver,
-            executor,
-            services,
-            lane_work,
-            output_guard,
-            kura,
-            key_pair,
-            block_sync_server,
-            block_sync,
-            block_sync_request,
-            npos_vrf,
-            V2IngressDrainMode::TimeoutVoteEpisode,
-            1,
-        )?;
-"""
-    mutate_rust_item_source(module, runner, item_name, old, "")
-    rebind_timeout_vote_episode_rust_item_seal(
-        module,
-        tmp_path,
-        relative,
-        item_name,
-    )
-
-    errors = module._timeout_vote_episode_source_fidelity_errors(
-        tmp_path, formal_dir
-    )
-
-    assert any(
-        "retained-response backpressure must give a conditional one-shot"
-        in error
-        for error in errors
-    ), errors
 
 
 @pytest.mark.parametrize(
@@ -23091,41 +22647,28 @@ def test_timeout_vote_episode_runner_schedule_mutations(
             "current timeout-recovery episode boundary",
         ),
         (
-            "AsyncTimeoutRecoveryVoteBarrierException",
-            "source = item.source",
-            "TRUE",
-            "direct-validator finite TimeoutVote barrier exception",
+            "AsyncTimeoutControlDependencyAdvancesLeaderWire",
+            '"PrepareQC", "CommitQC", "TimeoutVote"}',
+            '"PrepareQC", "CommitQC", "TimeoutVote", "CertifiedResponse"}',
+            "owner-relative timeout-control dependency predicate",
         ),
         (
-            "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier",
-            'owner.phase = "CertifiedResponse"',
-            'owner.phase = "TimeoutVote"',
-            "exact Ingress CertifiedResponse phase",
-        ),
-        (
-            "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier",
-            "/\\ owner.status = \"Ingress\"",
-            "/\\ owner.status = \"Ingress\"\n"
-            "  /\\ CertifiedResponseClaimMatches(owner)",
-            "cannot require a response claim",
+            "AsyncTimeoutControlDependencyAdvancesLeaderWire",
+            "DeliveryView(item) \\in owner.view..(owner.view + 1)",
+            "DeliveryView(item) \\in 0..MaxRank",
+            "owner-relative timeout-control dependency predicate",
         ),
         (
             "AsyncServeIngressIndexMayPrecedeAdmittedTarget",
             "IN \\/ index <=",
             "IN \\/ TRUE\n          \\/ index <=",
-            "exact selected-Serve timeout-vote exception placement",
+            "strict selected-Serve ingress ordering",
         ),
         (
             "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget",
             "IN \\/ index <= owner.ingressPredecessors[source]",
             "IN \\/ TRUE\n          \\/ index <= owner.ingressPredecessors[source]",
-            "exact CertifiedResponse-only leader-wire timeout-vote exception placement",
-        ),
-        (
-            "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget",
-            "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier(",
-            "AsyncTimeoutRecoveryVoteBarrierException(",
-            "general TimeoutVote barrier exception directly",
+            "owner-relative leader-wire dependency placement",
         ),
         (
             "AsyncTimeoutRecoveryVoteAdmissionOccursThisStep",
@@ -23243,6 +22786,12 @@ def test_timeout_vote_episode_formal_mutations_survive_digest_refresh(
 @pytest.mark.parametrize(
     ("symbol", "old", "new", "expected_error"),
     (
+        (
+            "AsyncOrdinarySelectorPreservesCertifiedResponseBeforeTimeoutVote",
+            'owner.phase = "CertifiedResponse"',
+            'owner.phase = "Proposal"',
+            "strict CertifiedResponse-before-TimeoutVote FIFO theorem",
+        ),
         (
             "AsyncTimeoutRecoveryNonCandidateCreatesNoAdmission",
             "LET item == AsyncSelectedFairIngressItem(node)",

@@ -291,7 +291,7 @@
         let registry = ConcreteLifecycleWorkRegistry::default();
 
         assert!(!registry.exactly_covers_recovered_ready_work(&coordinator));
-        assert!(!registry.exactly_covers_recovered_ready_fetches(&coordinator));
+        assert!(!registry.exactly_covers_recovered_ready_body_pipeline(&coordinator));
     }
 
     fn key(seed: u8) -> super::super::LifecycleKey {

@@ -40,6 +40,7 @@ mod ledger;
 mod open;
 #[path = "v2_lifecycle_projection.rs"]
 mod projection;
+pub(in crate::sumeragi) use projection::reducer_fence_wait_source;
 /// Closed codec prerequisite for restart-authenticated lifecycle replay.
 #[path = "v2_lifecycle_replay_authority.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -206,7 +207,7 @@ pub(in crate::sumeragi) use scheduler_inputs::{
     CertifiedServeSchedulerObservationV1, claim_certified_serve_turn_v1,
 };
 pub(in crate::sumeragi) use scheduler_inputs::{
-    ProductionRecoveredCompletionDispatchErrorV1, ProductionRecoveredCompletionDispatchV1,
+    ProductionCompletionDispatchErrorV1, ProductionCompletionDispatchV1,
     ProductionRecoveredDecisionFetchPersistenceErrorV1,
     ProductionRecoveredDecisionFetchPersistenceV1, ProductionRecoveredLifecycleSignDispatchErrorV1,
     ProductionRecoveredLifecycleSignDispatchV1,
@@ -242,10 +243,9 @@ pub(crate) use selector::CertifiedFetchReadyPublicationError;
 #[allow(unused_imports, reason = "reviewed persistence selector namespace")]
 pub(crate) use selector::{
     CertifiedFetchBodyPersistenceCompletion, CertifiedFetchBodyPersistenceCompletionError,
-    CertifiedFetchBodyPersistencePreparationError, CertifiedFetchBodyPersistencePreparationFailure,
-    CertifiedFetchBodyPersistenceRestartError, CertifiedFetchBodyPersistenceRetryError,
-    LifecycleIngressIoTargetKind, LifecycleIngressIoTargetSeal, LifecycleIngressSelectorError,
-    PreparedLifecycleIngressSelector,
+    CertifiedFetchBodyPersistencePreparationError, CertifiedFetchBodyPersistenceRestartError,
+    CertifiedFetchBodyPersistenceRetryError, LifecycleIngressIoTargetKind,
+    LifecycleIngressIoTargetSeal, LifecycleIngressSelectorError, PreparedLifecycleIngressSelector,
 };
 #[allow(unused_imports, reason = "reviewed recovered-fetch selector namespace")]
 pub(in crate::sumeragi) use selector::{
@@ -491,6 +491,7 @@ impl LifecycleCoordinator {
         Ok(self.admit(request))
     }
     /// Atomically validate and reserve a logical lifecycle admission.
+    #[cfg(test)]
     pub(crate) fn admit(&mut self, request: AdmissionRequest) -> AdmissionDecision {
         if self.ledger_store.is_none() {
             return self.reduce_admit(request);

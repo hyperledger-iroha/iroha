@@ -892,7 +892,7 @@ fn production_lifecycle_owner_factory_opens_the_private_no_vote_branch() {
             &local_signer,
         )
         .unwrap_or_else(|error| panic!("open complete no-vote lifecycle owner: {error}"));
-    assert!(owner.exact_recovered_fetch_join_for_test());
+    assert!(owner.exact_recovered_body_pipeline_join_for_test());
     assert!(
         crate::sumeragi::status::v2_status().is_none(),
         "owner construction must keep status sealed until runner activation"
@@ -1730,9 +1730,9 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         super::super::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
         assert_eq!(
             first
-                .dispatch_recovered_completion_for_test(&services, &mut executor, 0)
+                .dispatch_completion_for_test(&services, &mut executor, 0)
                 .expect("rank the genuine WAL-backed Sign beside recovered Fetch"),
-            super::super::v2_lifecycle_coordinator::ProductionRecoveredCompletionDispatchV1::SignQueued {
+            super::super::v2_lifecycle_coordinator::ProductionCompletionDispatchV1::SignQueued {
                 ordinal: mixed_sign_ordinal,
             }
         );
@@ -1852,9 +1852,9 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         super::super::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
         assert_eq!(
             reopened
-                .dispatch_recovered_completion_for_test(&services, &mut executor, 0)
+                .dispatch_completion_for_test(&services, &mut executor, 0)
                 .expect("dispatch the genuine WAL-backed recovered Fetch"),
-            super::super::v2_lifecycle_coordinator::ProductionRecoveredCompletionDispatchV1::FetchDispatched {
+            super::super::v2_lifecycle_coordinator::ProductionCompletionDispatchV1::FetchDispatched {
                 ordinal: first_summary.0,
             }
         );
@@ -2006,9 +2006,9 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         );
         super::super::v2_worker::tests::install_local_signer_for_test(&mut services, &keys[0]);
         assert_eq!(
-            cold.dispatch_recovered_completion_for_test(&services, &mut executor, 0)
+            cold.dispatch_completion_for_test(&services, &mut executor, 0)
                 .expect("redispatch the cold-opened recovered Fetch"),
-            super::super::v2_lifecycle_coordinator::ProductionRecoveredCompletionDispatchV1::FetchDispatched {
+            super::super::v2_lifecycle_coordinator::ProductionCompletionDispatchV1::FetchDispatched {
                 ordinal: first_summary.0,
             }
         );

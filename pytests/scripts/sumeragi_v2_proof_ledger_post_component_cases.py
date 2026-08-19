@@ -294,11 +294,12 @@ def copy_timeout_vote_episode_fixture(tmp_path: Path, module) -> Path:
 
     for relative in (
         Path("crates/iroha_core/src/sumeragi/mod.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"),
+        Path("crates/iroha_core/src/sumeragi/fair_v2_ingress_selector.rs"),
+        Path(
+            "crates/iroha_core/src/sumeragi/tests/"
+            "mod_authoritative_runtime_gate_03_admission_and_fairness.rs"
+        ),
         Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
-        Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
         Path("formal/sumeragi_v2/SumeragiV2AsyncNetwork.tla"),
         Path(
             "formal/sumeragi_v2/"
@@ -332,7 +333,7 @@ def test_timeout_vote_episode_source_fidelity_rejects_missing_reviewed_include_c
     module = load_checker()
     formal_dir = copy_timeout_vote_episode_fixture(tmp_path, module)
     missing_relative = Path(
-        "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
+        "crates/iroha_core/src/sumeragi/fair_v2_ingress_selector.rs"
     )
     missing_component = tmp_path / missing_relative
     canonical_component = ROOT_DIR / missing_relative
@@ -342,11 +343,10 @@ def test_timeout_vote_episode_source_fidelity_rejects_missing_reviewed_include_c
     missing_errors = module._timeout_vote_episode_source_fidelity_errors(
         tmp_path, formal_dir
     )
-    runner_parent = tmp_path / "crates/iroha_core/src/sumeragi/v2_runner.rs"
-    assert (
-        f"{missing_component}: reviewed Rust include component for "
-        f"{runner_parent} must be a regular non-symlink file"
-        in missing_errors
+    assert any(
+        f"{missing_component}: timeout-vote episode selector source must be a regular file"
+        in error
+        for error in missing_errors
     ), missing_errors
 
 
@@ -382,8 +382,7 @@ def test_timeout_vote_episode_selector_preserves_strict_before_dependency_after_
         tmp_path, formal_dir
     )
     assert any(
-        "shared TimeoutVote selector must preserve strict-before-dependency, "
-        "Blocked exclusion, downstream predicate, and exact disposition"
+        "strict candidates must remain ahead of all dependency candidates"
         in error
         for error in errors
     ), errors
@@ -407,19 +406,17 @@ def rebind_timeout_vote_episode_rust_item_seal(
     rebound: list[str] = []
     role_relatives = {
         "ingress": Path("crates/iroha_core/src/sumeragi/mod.rs"),
-        "runner": Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-        "lifecycle_runner": Path(
-            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"
-        ),
-        "pending_runner": Path(
-            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs"
-        ),
         "runtime": Path("crates/iroha_core/src/sumeragi/v2_runtime.rs"),
     }
     for key in module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256:
         role, qualified_name = key.split("::", 1)
+        role_relative = role_relatives[role]
+        if qualified_name == "fair_v2_ingress_queue_gate_verdict":
+            role_relative = Path(
+                "crates/iroha_core/src/sumeragi/fair_v2_ingress_selector.rs"
+            )
         if (
-            role_relatives[role] == relative
+            role_relative == relative
             and qualified_name.rsplit("::", 1)[-1] == item_name
         ):
             module._TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256[key] = digest
@@ -432,7 +429,10 @@ def rebind_timeout_vote_episode_rust_item_seal(
         ),
         (
             module._TIMEOUT_VOTE_EPISODE_INGRESS_REGRESSION_SHA256,
-            Path("crates/iroha_core/src/sumeragi/mod.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/tests/"
+                "mod_authoritative_runtime_gate_03_admission_and_fairness.rs"
+            ),
         ),
         (
             module._TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256,

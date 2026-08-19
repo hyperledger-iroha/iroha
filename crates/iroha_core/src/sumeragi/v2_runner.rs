@@ -28,9 +28,8 @@ use super::v2_core::{
 #[cfg(test)]
 use super::v2_recovery::RecoveredCompleteTipActivationAuthority;
 use super::{
-    FairV2Ingress, FairV2IngressBarrierBypass, FairV2IngressCapacityError,
-    FairV2IngressDequeueDisposition, FairV2IngressOwnershipEvidence, GenesisWithPubKey,
-    InboundBlockMessage, SumeragiWorker,
+    FairV2Ingress, FairV2IngressCapacityError, FairV2IngressDequeueDisposition,
+    FairV2IngressOwnershipEvidence, GenesisWithPubKey, InboundBlockMessage, SumeragiWorker,
     message::{BlockMessage, CanonicalExecutedBlockNeedV1},
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     v2::{
@@ -54,10 +53,9 @@ use super::{
     },
     v2_chunks::{EncodedV2Payload, encode_payload},
     v2_effects::{
-        EffectExecutorStep, EffectQueueConfig, EffectTransportError, PendingKuraApplyRecoveryStage,
+        EffectExecutorStep, EffectQueueConfig, PendingKuraApplyRecoveryStage,
         PostFinalityCleanupTarget, V2EffectExecutor,
         certified_body_request_is_superseded_after_decision,
-        network_ingress_is_certified_fence_escape, v2_ingress_head_can_drain,
     },
     v2_first_release_recovery::{
         CompleteTipPredecessorStorageErrorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
@@ -134,10 +132,6 @@ pub(in crate::sumeragi) use lifecycle_runner_authority::{
     ProductionLifecycleCompleteTipRunnerActivationV1,
     ProductionLifecyclePendingKuraRunnerActivationV1, ProductionLifecycleRunnerActivationV1,
     RecoveredLifecycleOwnerFactoryDependencyPermitV1,
-};
-use ordinary_ingress_consumer::{
-    PreparedDequeuedV2IngressV1, ProductionPreparedOrdinaryIngressConsumptionV1,
-    consume_prepared_dequeued_v2_ingress,
 };
 pub(in crate::sumeragi) use preactivation_ingress::ProductionLifecycleCanonicalRecoveryIngressV1;
 

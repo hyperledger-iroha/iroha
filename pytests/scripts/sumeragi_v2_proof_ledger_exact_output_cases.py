@@ -2010,13 +2010,6 @@
             "payload chunk effect consumption must reject a changed envelope or semantic origin before mutation",
         ),
         (
-            "crates/iroha_core/src/sumeragi/v2_effects.rs",
-            "pub(crate) fn accept_certified_body_response_with_ingress_ownership",
-            "|| !ingress_ownership.matches_semantic_origin(Some(authenticated_responder))",
-            "|| false",
-            "certified body response effect consumption must reject a changed envelope or semantic origin before mutation",
-        ),
-        (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
             "fn claimed_with_reply_routes_and_ingress_ownership(",
             "if !ownership.validate_exact() || !ownership.matches_reply_routes(Some(routes)) {",
@@ -2066,20 +2059,6 @@
             "|| !ownership.matches_semantic_origin(sender.as_ref())",
             "|| false",
             "lane ingress must bind semantic origin, canonical message, and the complete source route set before service",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-            "fn drain_v2_ingress(",
-            "|| !ingress_ownership.matches_semantic_origin(inbound.sender())",
-            "|| false",
-            "runner ingress must retain canonical message, semantic origin, and source-isolated routes in one exact ownership carrier",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-            "fn drain_v2_ingress(",
-            ".try_recv_if_checked_retiring_obsolete_with_barrier_bypass(barrier_bypass, |inbound| {",
-            ".try_recv_if_at_checked_classified(|inbound| {",
-            "ingress drain must use the gate-bound checked selector",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
@@ -2617,13 +2596,6 @@ def _apply_exact_output_non_runtime_extended_mutations(
             "lifecycle_process_generation.clone(),",
             "None,",
             "each lane adapter must receive the same process-lifetime generation claim",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-            "fn drain_v2_ingress(",
-            "executor.can_admit_timeout_vote_recovery_episode(message, ownership)",
-            "executor.can_admit_timeout_vote_recovery_episode(message, ownership,)",
-            "ingress drain must use the gate-bound checked selector, keep the TimeoutVote bypass explicit, and revalidate runtime capacity before physical removal",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker/exact_output_rollover_claim.rs",

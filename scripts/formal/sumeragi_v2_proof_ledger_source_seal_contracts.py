@@ -1648,9 +1648,6 @@ _RUNTIME_ENQUEUE_NETWORK_WITH_INGRESS_OWNERSHIP_ITEM_SHA256 = (
 _RUNTIME_RESTORED_PRE_RUNTIME_TC_CANNOT_DEADLOCK_ITEM_SHA256 = (
     "b80fda2727730a33aa51875e3681e9cf355fc0394943b170a4793c2a78f46e23"
 )
-_RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256 = (
-    "c4bf44c2f0037ff4d1d4f803bef306501f47344da605f51f20a03e63bc3feeb3"
-)
 _RUNNER_ROLLOVER_FINALIZED_HEIGHT_OUTPUTS_ITEM_SHA256 = (
     "57da29721e6df2151d024228810103c3e65c04789a7ac19b06d8a39b705b6104"
 )
@@ -1804,11 +1801,8 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
 # positive baseline and negative mutations pass together; no digest in this
 # inventory may be bulk-refreshed.
 _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
-    "ingress::fair_v2_ingress_is_direct_validator_timeout_vote_owner": (
-        "be2e39948e3696646e15c3331e020351b8f5065ecb25d9aef466674afc18b648"
-    ),
     "ingress::fair_v2_ingress_queue_gate_verdict": (
-        "d4bd27c607b63e39c37499f79cf9fbf3a678f52c392985bb1ffd8bf71a13e675"
+        "a6d4a56fb74fe95a5d681e9899df1865ee83741e47685e4c4681cd2b4c5e2526"
     ),
     "ingress::select_fair_v2_ingress_candidate": (
         "9d12522aa0b65a229efc08e35feae5d887c7656366fa074e05b14c2c370a6068"
@@ -1817,20 +1811,13 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
         "091f57ccb6adaafd50864565891f636b364658cb8ed70cc5254d521901779a82"
     ),
     "ingress::try_recv_if_checked_retiring_obsolete": (
-        "06c5d041e60dd73dbddb63a9e4600772d7ff1e80d250255612a18a3ecb7b7733"
-    ),
-    "ingress::try_recv_if_checked_retiring_obsolete_with_barrier_bypass": (
-        "36e0d2de5bd03d5f3547ab4e7b9be43a74d51b7abfb2f4ca72753171f8605bf6"
+        "302a0eeb2fe71397da4eefd0141eeca02b3f0087e508d7dfe94d2d7c4da9c5bb"
     ),
     "ingress::try_recv_if_at_checked": (
-        "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
+        "7b3b4b907715d56dba2dcc36dee64db07ef61cd7a456d039e24146cf4d60d20d"
     ),
     "ingress::try_recv_if_at_checked_classified": (
-        "8867eda9f132eefd0510e3aa1cc70fad7ed02b27df25deec9c7f35046a339f32"
-    ),
-    "lifecycle_runner::service_retained_certified_response": "900626da0502f65f262766e815878ce5e3d7bdb196a89657e89413159f83c30f",
-    "runner::drain_v2_ingress": (
-        _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256
+        "5f6184b1089ce6fee2ccb7f1ad8dadc5d47b8b017dfec383f7211eaec6fe9060"
     ),
     "runtime::RuntimeTimeoutVoteEpisodeOwner::validate_against": (
         "fb2a98e36b7014a4199ae78eda34119f69cec26fc25fff2d4ce5758f41d74777"
@@ -1985,17 +1972,14 @@ _TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256 = {
         "AsyncTimeoutRecoveryVoteAdmissionAllowed": (
             "8dd0ff9ee7a45c7bd12d8cee1c0ba3c155115b1ec6f8cc83bbdfc237fe14b7d9"
         ),
-        "AsyncTimeoutRecoveryVoteBarrierException": (
-            "d8522b9b23b8314bdbbe6b6a81d601dfab6d3fbaa389e51e76029b33db0f5b5e"
-        ),
-        "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier": (
-            "085073b59232d8c3e930b7fead0151ac8d6a37602452c556ad4174a98b734988"
+        "AsyncTimeoutControlDependencyAdvancesLeaderWire": (
+            "fc8c50a29cf3a52c5ceccccf383c03b7b9d8e5d63670fb774d212c2049e1c0a2"
         ),
         "AsyncServeIngressIndexMayPrecedeAdmittedTarget": (
-            "d2f99c02442f82c8ae6041155b28d431bc38821ca3bb7b5420e032930baa6145"
+            "836fb332ad28f0f0a5a5afa54ac9e14d1c0e74200427327d2a5c9dc2f328887e"
         ),
         "AsyncLeaderWireIngressIndexMayPrecedeAdmittedTarget": (
-            "86ad64b20c4ec9626b9fc1221b15c3d51a67187d0664a0c41bcd22b48c66a94b"
+            "56bfdf30d6624ac2f8561e250c3072cb350123e4a2742effa0ef8068b65410eb"
         ),
         "AsyncTimeoutRecoveryVoteAdmissionOccursThisStep": (
             "28f5c1e16034f5dd5c3cae9ccf22c81cb02e1d9ffc1eb20aa04f04e6b915b385"
@@ -2078,6 +2062,9 @@ _TIMEOUT_VOTE_EPISODE_TLA_OPERATOR_SHA256 = {
 # downstream-provider mutation fails after its local digest is refreshed.
 _TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": {
+        "AsyncOrdinarySelectorPreservesCertifiedResponseBeforeTimeoutVote": (
+            "03f998f79bfcc6c1fedad6a3b984f0404e5c45628430a7497575835fca42c7eb"
+        ),
         "AsyncTimeoutRecoveryProducerEpisodeMeasureIsFinite": (
             "1df06952a3664f7770385d6d4175e73bfbeddc53200715e3ccd627ac925a39f9"
         ),
@@ -2325,9 +2312,6 @@ _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
     "production_capacity_saturation_admits_response_and_reconstructible_fetch": (
         "a97f5cab5c218297c5df0dbc3c9aa803c9a0284b50fc7c8ad960c2314e56b861"
     ),
-    "ready_body_backpressure_retains_exact_ingress_until_capacity_retry": (
-        "ecadc5af1fc748393bfeb99ac01513e84b3eb51bd59453524257441ee65de126"
-    ),
     "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner": (
         "920f70f6d4ebf90ce3f9a4365e99bc88da19671d80e4f716aa57bc08caece7fd"
     ),
@@ -2360,13 +2344,13 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
     ),
 }
 
-_PRODUCTION_LIVENESS_RELEASE_COUNT = 865
+_PRODUCTION_LIVENESS_RELEASE_COUNT = 864
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 91
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a"
+    "c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "37d89b45597ce3ba1c1ca81a0e58192177c396b53a1c1b305458a45acd4faebd"
+    "82eea9b45230bc55cc8aa6ddf9b7c9e5abc4e9d0de4c87ae622e5995876a5939"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2491,7 +2475,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     ),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 71),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 70),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 65),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
@@ -2829,7 +2813,6 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "merge_sidecar::tests::authenticated_source_limits_are_fixed_at_four_gates_two_sessions_and_sixteen_mibibytes",
     "sumeragi::v2::tests::authenticated_deferred_service_rejects_same_kind_envelope_swap_before_reducer",
     "sumeragi::v2_effects::tests::owned_payload_chunk_rejects_source_swap_before_service_and_keeps_unknown_work_nonfatal",
-    "sumeragi::v2_effects::tests::certified_body_response_carrier_swap_fails_closed_before_fetch_mutation",
     "sumeragi::v2_runtime::tests::runtime_merges_alternate_sources_for_one_semantic_request",
     "sumeragi::v2_runtime::tests::runtime_keeps_identical_wire_requests_from_distinct_semantic_origins_independent",
     "sumeragi::v2_runtime::tests::busy_deferred_request_merges_alternate_source_and_services_exact_carrier",
@@ -3665,10 +3648,10 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
         "bda06e6c542397e50d18cde8fd85fb568e619de471719967a594cfbdfc850350"
     ),
     "try_recv_if_at_checked": (
-        "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
+        "7b3b4b907715d56dba2dcc36dee64db07ef61cd7a456d039e24146cf4d60d20d"
     ),
     "try_recv_if_at_checked_classified": (
-        "8867eda9f132eefd0510e3aa1cc70fad7ed02b27df25deec9c7f35046a339f32"
+        "5f6184b1089ce6fee2ccb7f1ad8dadc5d47b8b017dfec383f7211eaec6fe9060"
     ),
     "fair_v2_ingress_leader_wire_selector_projection": (
         "08ce0575f38ec671cff556b343d981536dd24fb5bc6c49874b76508cd9cd8104"
@@ -4009,9 +3992,6 @@ _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256 = {
     ),
 }
 _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
-    # drain_v2_ingress was approved separately after its three-mode drain
-    # mutations passed.
-    "drain_v2_ingress": _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256,
     "authorize_decided_lane_recovery_drain": "f62eb9f1b38234b28765dafe591bd22098ae66267c90060a812ef37910cbf2eb",
     "preflight_finalized_lane_rollover": (
         "883edeefab8ca2ed10e688c58e591949a044e6098b960d6bcf16f1858e42d6ec"
@@ -4137,153 +4117,6 @@ _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256 = {
     ),
 }
 
-# Exact source seals for the retained certified-body response's one-shot
-# pacemaker escape.  The carrier phase is process-local and deliberately not
-# serialized: Fresh may admit one direct authenticated root, Charged records
-# an already-owned root, and Spent is absorbing until this carrier retires.
-_PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256 = {
-    "effects::RetainedCertifiedBodyResponse": (
-        "a02346d6e21ac701d7019d6eb235e23d4bdf9551ab01da5123680c9602df0512"
-    ),
-    "effects::accept_certified_body_response_with_ingress_ownership": (
-        "d05e901df51cb12ad89eaeb87a38771d24874288e933604253dad046198216d1"
-    ),
-    "effects::retained_response_may_admit_certified_fence_escape": (
-        "f29a3e106087c871ba0f5f684b4bd47974b783d81085c7751da2c9d314e6c635"
-    ),
-    "effects::reconcile_retained_response_certified_fence_escape_phase": (
-        "4fcb519c7dfd10f164301a0f2342f8be3a771ce9cd6937d8f49f461334762f42"
-    ),
-    "runtime::has_certified_fence_escape_credit": (
-        "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
-    ),
-    "lifecycle_runner::service_retained_certified_response": (
-        "900626da0502f65f262766e815878ce5e3d7bdb196a89657e89413159f83c30f"
-    ),
-    "test::retained_response_certificate_escape_is_charged_only_once": (
-        "e02e3d3dcd687669c86ec284919831836d03986292eab84974d6f3896d0d0aca"
-    ),
-}
-
-# Comment-normalized TLA+ seals for the production-corresponding latch,
-# direct-certificate classifier, runner case split, and strictly descending
-# retained-response rank.  File qualification prevents an identically named
-# helper in another shard from satisfying the contract.
-_PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_OPERATOR_SHA256 = {
-    "SumeragiV2AsyncNetwork.tla": {
-        "AsyncCertifiedFenceEscapeKinds": (
-            "786d33483ab9bf86aaa0136d745ff96c8328d8d9e36350ec747f1b382966c7ca"
-        ),
-        "AsyncCertifiedFenceEscapeItem": (
-            "bd98c586610ed4fb438fefa1ec50c77d35e7cb79e9761aa648bddbf08893ffad"
-        ),
-        "AsyncAuthenticatedCertifiedFenceEscapeAuthorities": (
-            "7a26804157995e484ebf8f7915a7cde93edf5a14b3a3a94bae59e5a805bdedb5"
-        ),
-        "AsyncQueuedCandidateIsCertifiedFenceEscape": (
-            "5d63ceac0c420a599ff962b17a038a2366deef93f8835fe1d9b9d756a0fbf26b"
-        ),
-        "AsyncCandidateHasCertifiedFenceRoot": (
-            "a3f22434b15e088720a58cf37b7afa9c9b5d90451878440b64eec1646eb23037"
-        ),
-        "RetainedCertifiedBodyResponseMayAdmitCertifiedFenceEscape": (
-            "6f0f721bafbac4ec2aec426010344a5baa9ca4af56b4a13ce6bc3b26151164d9"
-        ),
-        "AsyncCertifiedResponseClaimStateAfterRetirement": (
-            "a7aff8755d881b501f36057d9afca78185d642821f1cfdeaae7a4c50f7254048"
-        ),
-        "AsyncCertifiedResponseClaimStateAfterAdmission": (
-            "8717fca0467d129da9478a981f060b7648d8a62449d91b19546a9b7192c98d60"
-        ),
-        "RetainedCertifiedFenceEscapePhaseAfter": (
-            "c1dd6b64617c5eee7b4e801985323cd3e43f647a548f8a95fb70c2b08c403508"
-        ),
-        "AsyncCertifiedFenceEscapeStateAfterRuntime": (
-            "f7f3c06acfd57dc457b8abc7487a0e4e1bc9d7d350c7323460a2ab8f900a78bc"
-        ),
-        "EnqueueCandidate": (
-            "8d58a005cea2550753196f96cacc3ed54e62bf2eb1a3e4195215d3b8062754f9"
-        ),
-        "SerializedCertifiedPacemakerStep": (
-            "c1d1fdaf28b0451f5daebde2f068fab93debcdaa77cde0b97c8b69e1cc9b8813"
-        ),
-        "RunNodeWork": (
-            "551f97e97f2ecb6ba67053464f480e2fe1cd6d59290a2b1fed261182e2fd1aab"
-        ),
-        "AsyncControlServiceStateTypeInvariant": (
-            "c23f80802359d9f5ed4d7a5e3c148f37da646e4783ec7557a950515aa28ab989"
-        ),
-        "AsyncControlServiceSlotTransition": (
-            "d7398b0e68c3abd377c5cc36554b47c172e6bb22980c83e324fbccf58d3470e6"
-        ),
-        "AsyncTransportInit": (
-            "f2590d8d4066646f438a372fb1051995ea9839487aa882fc841bb0cd3ea88974"
-        ),
-        "AsyncCompletionReserveInvariant": (
-            "b7756857d8b495cb29494dc89dd3ee626f5999418ec3e37c01dc1ee1216a58c1"
-        ),
-        "AsyncCertifiedFenceEscapeEpisodeInvariant": (
-            "f1a0278402350d50b71621bb4db20ca3b5b785c9243fa5024295983c366351fc"
-        ),
-    },
-    "SumeragiV2AsyncTemporalRankProofs.tla": {
-        "CertifiedResponseClaimDirectPacemakerWorkTokens": (
-            "4d91f823b39ba6a742f3ff33bcce7c7c1aa770d6b1756b8319232c726a6a3410"
-        ),
-        "CertifiedResponseClaimCausalPacemakerWorkTokens": (
-            "c86cef0ce88f5a7dfd586fc2c21788e8bc3e913350b5a625c42e4b448a980bff"
-        ),
-        "CertifiedResponseClaimPacemakerWorkDebt": (
-            "c2215cbc829f79413da4eda26729f6c024d2af7f304ec2ea5754eb14acb39b2b"
-        ),
-        "CertifiedResponseClaimFreshEscapePotential": (
-            "2e58407806507852a2cb2baa1f2c40c27991c04f73cdfa8f200ef43839ba496b"
-        ),
-        "CertifiedResponseClaimPacemakerDebtBound": (
-            "426bfa46b5f8a8421bfa0832d5343f3b2725ef86d38fd794f7d67faf2f884c8b"
-        ),
-        "CertifiedResponseClaimCapacityDebt": (
-            "d9ad22b46691768a71fe0014fc65eb72aafebc37dc620ab556e78e313480a789"
-        ),
-        "CertifiedResponseClaimAuxRank": (
-            "8e2c0484e46949f9dc137b134b621f17d280ef487e581cee7a392422be76a820"
-        ),
-        "CertifiedResponseClaimAuxCarrier": (
-            "31495b77a98cbe265801912add8b51eeff6f99e371598b3cb9e44d65f4a4b731"
-        ),
-        "CertifiedResponseClaimAuxOrdering": (
-            "1d50cd09000834fdc169eff83eb20d88b4e4a79d2d9caa643e7b97bc02e22a90"
-        ),
-    },
-}
-
-_PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_TLA_THEOREM_SHA256 = {
-    "SumeragiV2AsyncNetwork.tla": {
-        "AsyncInternalCertificateSuccessorsCannotRetainFenceCredit": (
-            "eb6f36a361852fda4e1bf31b4e45efdb28ced19a05d0a0f4dd61a9f3f4264bd7"
-        ),
-    },
-    "SumeragiV2AsyncInstallRunnerProofs.tla": {
-        "SerializedCertifiedPacemakerPreservesClaimIngressOwnership": (
-            "8943a6e12fe98c7a816a0f8229964c2304b0e48a208ad672264ee75329f29890"
-        ),
-        "SerializedCertifiedPacemakerRefinesCoreBracketNext": (
-            "b7352d2bf625ed6732277874a52e357bd4188a37d475da900799cdbe231e34d8"
-        ),
-        "SerializedCertifiedPacemakerPreservesSchedulerType": (
-            "72ab5903561b098a378ef39a395f0b0d42a989aec2ff5a7874c056aac43351f0"
-        ),
-        "RunNodeWorkConcreteActionCaseSplit": (
-            "35bd614265c192fb0d22201c20fde0ec55ffc461c449c932c94dfe8088875792"
-        ),
-    },
-    "SumeragiV2AsyncTemporalRankProofs.tla": {
-        "ClaimedResponseSerializedCertifiedPacemakerDecreasesAux": (
-            "4f38a2ed305c71bc8c80ad245dbb4626bf0954e094d4238259509c97abd2b42d"
-        ),
-    },
-}
-
 # Complete token seals for the process-local fair-ingress carrier and every
 # exact-output consumer which must retain it.  These close the route-only gap:
 # equal payload bytes cannot substitute a different semantic origin, and
@@ -4328,9 +4161,6 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
     ),
     "effects::accept_payload_chunk_with_ingress_ownership": (
         "04c48786b1db18841d32be400432570fcd268452506af9735c2dc5354a72e5db"
-    ),
-    "effects::accept_certified_body_response_with_ingress_ownership": (
-        "d05e901df51cb12ad89eaeb87a38771d24874288e933604253dad046198216d1"
     ),
     "effects::classify_payload_chunk_lifecycle": (
         "1593a2bcd882c7054cb3e176631931ee8cda5a385c25af3ca510dbf2aaddb787"

@@ -2536,7 +2536,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "self.recovered_decision_apply_deferred.take()",
             "self.recovered_lifecycle_sign_completion.is_some()",
             "self.recovered_decision_fetch_body_completion.is_some()",
-            "self.services.take_next_recovered_lifecycle_completion()",
+            "self.services.take_next_lifecycle_completion()",
             "ProductionLifecycleCompletionPreGateV1::Ready(",
         ),
     )
@@ -2545,8 +2545,8 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         completion_pre_gate,
         "lifecycle Completion physical-head ownership",
         (
-            "RecoveredLifecycleCompletionTakeV1::PassThrough",
-            "RecoveredLifecycleCompletionTakeV1::CertifiedServe(completion)",
+            "LifecycleCompletionTakeV1::PassThrough",
+            "LifecycleCompletionTakeV1::CertifiedServe(completion)",
         ),
     )
     if completion_pre_gate is not None:
@@ -2568,8 +2568,8 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "self.owner.classify_completion_ready_work()",
             "ProductionCompletionReadyWorkV1::PassThrough",
             "ProductionLifecycleCompletionTurnV1::PassThrough(runner)",
-            "ProductionCompletionReadyWorkV1::RecoveredIo",
-            "dispatch_recovered_completion_with_runner_debt",
+            "ProductionCompletionReadyWorkV1::CompletionIo",
+            "dispatch_completion_with_runner_debt",
             "ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast",
             "refanout_recovered_lifecycle_signed_broadcast_with_runner_debt",
         ),
@@ -2589,7 +2589,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
     for target, token, count, label in (
         (
             completion_pre_gate,
-            "self.services.take_next_recovered_lifecycle_completion()",
+            "self.services.take_next_lifecycle_completion()",
             1,
             "lifecycle Completion single physical-head classifier",
         ),
@@ -2623,7 +2623,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
                 f"exactly {count} time(s); found {observed}"
             )
 
-    completion_head = item("worker", "take_next_recovered_lifecycle_completion")
+    completion_head = item("worker", "take_next_lifecycle_completion")
     require_order(
         "worker",
         completion_head,
@@ -2633,7 +2633,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "match completion",
             "ordinary =>",
             "self.held_io_completion = Some(ordinary)",
-            "RecoveredLifecycleCompletionTakeV1::PassThrough",
+            "LifecycleCompletionTakeV1::PassThrough",
         ),
     )
     if completion_head is not None:
@@ -2767,7 +2767,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "if classes.iter().all(|class|",
             "LifecycleWorkClass::Apply",
             "LifecycleWorkClass::Fetch",
-            "ProductionCompletionReadyWorkV1::RecoveredIo",
+            "ProductionCompletionReadyWorkV1::CompletionIo",
         ),
     )
 
@@ -3083,16 +3083,16 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "mixed_sign_ordinal > first_summary.0",
             "bind_body_store_to_recovered_completion_io_for_test(",
             "install_local_signer_for_test(",
-            "dispatch_recovered_completion_for_test(",
-            "ProductionRecoveredCompletionDispatchV1::SignQueued",
+            "dispatch_completion_for_test(",
+            "ProductionCompletionDispatchV1::SignQueued",
             "recovered_completion_selection_is_exact_for_test(",
             "output_guard.close_admission_for_restart()",
             "output_guard.restart_required()",
             "drop(first)",
             "let mut reopened = reopened",
             "bind_body_store_to_recovered_completion_io_for_test(",
-            "dispatch_recovered_completion_for_test(",
-            "ProductionRecoveredCompletionDispatchV1::FetchDispatched",
+            "dispatch_completion_for_test(",
+            "ProductionCompletionDispatchV1::FetchDispatched",
             "services.has_pending_exact_output()",
             "planner_io.detach(&mut services)",
         ),
@@ -3123,7 +3123,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ),
     )
     composite_dispatch = item(
-        "scheduler", "dispatch_recovered_completion_with_runner_debt"
+        "scheduler", "dispatch_completion_with_runner_debt"
     )
     require_order(
         "scheduler",
@@ -3190,10 +3190,10 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ready_completion,
         "fresh lifecycle Completion Ready composite dispatch",
         (
-            "ProductionCompletionReadyWorkV1::RecoveredIo",
-            "owner.dispatch_recovered_completion_with_runner_debt(",
+            "ProductionCompletionReadyWorkV1::CompletionIo",
+            "owner.dispatch_completion_with_runner_debt(",
             "if let Err(error) = &result",
-            "ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(result)",
+            "ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(result)",
         ),
     )
     behavior_items = {}
@@ -3223,8 +3223,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ],
         "composite recovered Completion Sign selection behavior",
         (
-            "dispatch_recovered_completion_with_runner_debt(&services, &mut executor, 0,)",
-            "ProductionRecoveredCompletionDispatchV1::SignQueued { ordinal: paired }",
+            "dispatch_completion_with_runner_debt(&services, &mut executor, 0,)",
+            "ProductionCompletionDispatchV1::SignQueued { ordinal: paired }",
             "state.records[&paired].state",
             "LifecycleState::Claimed(_)",
             "state.records[&unrelated].state",
@@ -3243,7 +3243,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         (
             "planner_io.saturate_consensus_prefix(&services)",
             "let before = owner.recovered_broadcast_scheduler_state_for_test(broadcast)",
-            "ProductionRecoveredCompletionDispatchV1::CapacityUnavailable",
+            "ProductionCompletionDispatchV1::CapacityUnavailable",
             "owner.recovered_broadcast_scheduler_state_for_test(broadcast)",
             "before.records[&paired].state",
             "LifecycleState::Ready",
@@ -3403,7 +3403,6 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request)",
             "ProductionPreparedCertifiedServeV1::Rejected(reason)",
             "wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response)",
-            "ProductionPreparedOrdinaryIngressConsumptionV1::StopBatch",
             "wire::ConsensusMessageV2Payload::CommitCertificateRequest(request)",
             "wire::ConsensusMessageV2Payload::CommitCertificateResponse(response)",
         ),
@@ -3416,22 +3415,6 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
                     f"{paths['ordinary_consumer']}:{ordinary_consumer.line}: "
                     f"ordinary runner tail exposes forbidden seam {forbidden!r}"
                 )
-
-    legacy_drain = item("runner", "drain_v2_ingress")
-    require_order(
-        "runner",
-        legacy_drain,
-        "decided-lane drain retains current Serve for the lifecycle coordinator",
-        (
-            "let prepared_serve = None",
-            "try_recv_if_checked_retiring_obsolete_with_barrier_bypass(",
-            "let current_serve = matches!(",
-            "if current_serve",
-            "return false",
-            "PreparedDequeuedV2IngressV1::new(",
-            "consume_prepared_dequeued_v2_ingress(",
-        ),
-    )
 
     decided_pre_admission = item("runner", "prepare_decided_lane_recovery_ingress")
     require_order(
@@ -3525,7 +3508,6 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         lifecycle_height_driver,
         "activated lifecycle ordinary Completion/Runtime/Ingress batch",
         (
-            "executor.has_retained_certified_body_response()",
             "outer_ingress_turns(limit, context_id, height)",
             "LifecycleRunnerRankTarget::Completion",
             "activated.drive_completion_pre_gate(current_turn, lane_work)",
@@ -3554,8 +3536,6 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "CompletionTurn::PassThrough(empty_turn)",
             "CompletionTurn::Selected(selected)",
             "selected.restart_required()",
-            "ProductionPreparedOrdinaryIngressConsumptionV1::Continue",
-            "ProductionPreparedOrdinaryIngressConsumptionV1::StopBatch",
             "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCapacityPending",
             "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchPreparationRetry",
             "ProductionLifecycleIngressSelectionV1::RecoveredDecisionFetchCompetingReady",
@@ -3939,7 +3919,6 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         lifecycle_active,
         "coordinator ProducerTurn claim, attempt, and durable settlement",
         (
-            "service_retained_certified_response(",
             "let ready_to_finish = activated.with_runner_runtime(",
             "claim_producer_turn_for_local_proposal(&mut active_runner)",
             "if !ready_to_finish || producer_turn.is_some()",
@@ -3952,12 +3931,6 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "finalize_lifecycle_height(",
         ),
     )
-    if lifecycle_active is not None and "V2IngressDrainMode::Ordinary" in lifecycle_active.source:
-        errors.append(
-            f"{paths['lifecycle_run_inner']}:{lifecycle_active.line}: lifecycle "
-            "live height must not bypass owner settlement through the legacy "
-            "ordinary ingress mode"
-        )
     startup_setup = item(
         "startup_test",
         "production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
@@ -4567,7 +4540,6 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         pending_live,
         "restricted pending-Kura live recovery and finalization",
         (
-            "executor.has_retained_certified_body_response()",
             "settle_certified_serve_completion_for_no_clock_recovery(&mut active_runner)",
             "claim_producer_turn_for_no_clock_recovery(&mut active_runner)",
             "retry_exact_output_and_apply_sidecar_admissions(",

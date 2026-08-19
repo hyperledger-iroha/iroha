@@ -555,8 +555,8 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
         "fn composite_recovered_completion_dispatches_one_ranked_sign_and_preserves_the_other()",
-        "ProductionRecoveredCompletionDispatchV1::SignQueued { ordinal: paired }",
-        "ProductionRecoveredCompletionDispatchV1::CapacityUnavailable",
+        "ProductionCompletionDispatchV1::SignQueued { ordinal: paired }",
+        "ProductionCompletionDispatchV1::CapacityUnavailable",
         "composite recovered Completion Sign selection behavior",
     ),
     (
@@ -596,28 +596,28 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_recovered_completion_with_runner_debt(",
+        "fn dispatch_completion_with_runner_debt(",
         "for ordinal in &exact_ready {",
         "for ordinal in exact_ready.iter().take(1) {",
         "all-row recovered Completion authentication and selection",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_recovered_completion_with_runner_debt(",
+        "fn dispatch_completion_with_runner_debt(",
         "capture_recovered_completion_capacity_census(probes)",
         "capture_recovered_completion_capacity_census_removed(probes)",
         "all-row recovered Completion authentication and selection",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_recovered_completion_with_runner_debt(",
+        "fn dispatch_completion_with_runner_debt(",
         "authenticated_ready_row_with_physical_capacity(",
         "authenticated_ready_row(",
         "all-row recovered Completion authentication and selection",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_recovered_completion_with_runner_debt(",
+        "fn dispatch_completion_with_runner_debt(",
         "census.select_fetch(ordinal)",
         "census.select_sign(ordinal)",
         "all-row recovered Completion authentication and selection",
@@ -625,7 +625,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
         "pub(in crate::sumeragi) fn drive_ready_completion_turn<'cursor>(",
-        "owner.dispatch_recovered_completion_with_runner_debt(",
+        "owner.dispatch_completion_with_runner_debt(",
         "owner.dispatch_recovered_decision_apply_with_runner_debt(",
         "fresh lifecycle Completion Ready-work dispatch",
     ),
@@ -653,8 +653,8 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
         "fn bls_decision_fetch_repairs_and_coalesces_without_rewrite()",
-        "ProductionRecoveredCompletionDispatchV1::SignQueued",
-        "ProductionRecoveredCompletionDispatchV1::FetchDispatched",
+        "ProductionCompletionDispatchV1::SignQueued",
+        "ProductionCompletionDispatchV1::FetchDispatched",
         "genuine recovered Fetch composite-dispatch behavior",
     ),
     (
@@ -667,15 +667,15 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
         "fn bls_decision_fetch_repairs_and_coalesces_without_rewrite()",
-        "dispatch_recovered_completion_for_test(",
+        "dispatch_completion_for_test(",
         "dispatch_recovered_decision_fetch(",
         "genuine recovered Fetch composite-dispatch behavior",
     ),
     (
         "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
         "fn bls_decision_fetch_repairs_and_coalesces_without_rewrite()",
-        "ProductionRecoveredCompletionDispatchV1::FetchDispatched",
-        "ProductionRecoveredCompletionDispatchV1::CapacityUnavailable",
+        "ProductionCompletionDispatchV1::FetchDispatched",
+        "ProductionCompletionDispatchV1::CapacityUnavailable",
         "genuine recovered Fetch composite-dispatch behavior",
     ),
     (
@@ -1052,13 +1052,6 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "fn consume_prepared_dequeued_v2_ingress(",
         ".serve_historical_body(kura, request, &sender, local_key)",
         ".serve_historical_body(kura, context_store, request, &sender, local_key)",
-        "historical ingress routing omits production refinement tokens",
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
-        "fn consume_prepared_dequeued_v2_ingress(",
-        "executor.accept_certified_body_response_with_ingress_ownership(\n                response,\n                &sender,\n                &ingress_ownership,\n                services,\n            )",
-        "executor.accept_certified_body_response_with_ingress_ownership(\n                response,\n                &sender,\n                ingress_ownership,\n                services,\n            )",
         "historical ingress routing omits production refinement tokens",
     ),
     (
@@ -1763,7 +1756,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_recovered_completion_with_runner_debt(",
+        "fn dispatch_completion_with_runner_debt(",
         "registration.commit(prepared, wait_source)",
         "registration.abort(prepared)",
         "lifecycle-owned recovered Decision Fetch dispatch must preserve exact production order",
@@ -2734,32 +2727,34 @@ def test_borrow_bound_outer_ingress_cursor_mutations_fail_closed(
 
 
 def test_borrow_bound_outer_ingress_reordering_fails_closed(tmp_path: Path) -> None:
-    """The checked ingress receive cannot move before serialized Runtime service."""
+    """Ingress cannot replace the serialized Runtime lifecycle target."""
 
     module = load_checker()
     local_runner_service_fixture(tmp_path, module)
     drain_path = (
         tmp_path
-        / "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
+        / "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs"
     )
     source = drain_path.read_text(encoding="utf-8")
-    (drain,) = module.rust_items(source, "drain_v2_ingress")
+    (drain,) = module.rust_items(source, "drain_lifecycle_v2_ingress")
     assert module._borrow_bound_outer_ingress_order_errors(drain_path, drain) == []
-    selector = "try_recv_if_checked_retiring_obsolete_with_barrier_bypass"
-    advance = "advance_executor(receiver, executor, services, 1)?;"
-    mutated = drain.source.replace(selector, "removed_checked_selector", 1)
-    mutated = mutated.replace(
-        advance,
-        "receiver.try_recv_if_checked_retiring_obsolete_with_barrier_bypass("
-        "FairV2IngressBarrierBypass::None, |_| false);\n            " + advance,
+    mutated = drain.source.replace(
+        "LifecycleRunnerRankTarget::Runtime =>",
+        "LifecycleRunnerRankTarget::Ingress =>",
         1,
     )
-    drain_path.write_text(source.replace(drain.source, mutated, 1), encoding="utf-8")
+    drain_path.write_text(
+        source.replace(drain.source, mutated, 1), encoding="utf-8"
+    )
     (mutated_drain,) = module.rust_items(
-        drain_path.read_text(encoding="utf-8"), "drain_v2_ingress"
+        drain_path.read_text(encoding="utf-8"),
+        "drain_lifecycle_v2_ingress",
     )
 
     errors = module._borrow_bound_outer_ingress_order_errors(
         drain_path, mutated_drain
     )
-    assert any("serialized advance_executor turn" in error for error in errors), errors
+    assert any(
+        "serialized advance_executor turn before the single ingress owner" in error
+        for error in errors
+    ), errors

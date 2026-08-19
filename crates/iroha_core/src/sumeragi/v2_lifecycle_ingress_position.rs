@@ -1274,13 +1274,8 @@ fn freeze_live_geometry(
             if u128::from(entry.admission_ordinal) >= physical_cut {
                 continue;
             }
-            let queue_gate = fair_v2_ingress_queue_gate_verdict(
-                source,
-                lane,
-                index,
-                leader_wire_projection,
-                super::super::FairV2IngressBarrierBypass::None,
-            );
+            let queue_gate =
+                fair_v2_ingress_queue_gate_verdict(source, lane, index, leader_wire_projection);
             let obsolete = entry
                 .leader_wire_token
                 .as_ref()

@@ -72,19 +72,17 @@ use super::v2_core::{
     EFFECTIVE_LOCK_TRACE_RETIRE, EffectiveLockTraceProjection, EventTag, ExactBodyOwnerProjection,
     ExactBodyRetirementAccounting, IDENTITY_DOMAIN_CONTEXT, IDENTITY_DOMAIN_DURABLE_ARTIFACT,
     IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_BLOCK_HEADER,
-    IDENTITY_KIND_CANONICAL_PAYLOAD, IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
-    IDENTITY_KIND_CONSENSUS_MESSAGE, IDENTITY_KIND_DURABLE_BODY_FRAME,
-    IDENTITY_KIND_EXECUTED_BLOCK_WIRE, IDENTITY_KIND_EXECUTION_COMMITMENT,
-    IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_QUORUM_CERTIFICATE,
-    IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, MAX_EFFECTS_PER_STEP,
-    ProductionDecisionIdentityProjection, ProductionDecisionRecoveryTraceProjection,
-    ProductionDurableBodyIdentityProjection, ProductionHistoricalBodyPipelineTraceProjection,
+    IDENTITY_KIND_CANONICAL_PAYLOAD, IDENTITY_KIND_CONSENSUS_MESSAGE,
+    IDENTITY_KIND_DURABLE_BODY_FRAME, IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
+    IDENTITY_KIND_EXECUTION_COMMITMENT, IDENTITY_KIND_PAYLOAD_MANIFEST,
+    IDENTITY_KIND_QUORUM_CERTIFICATE, IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+    IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, MAX_EFFECTS_PER_STEP, ProductionDecisionIdentityProjection,
+    ProductionDecisionRecoveryTraceProjection, ProductionDurableBodyIdentityProjection,
     ProductionQuorumCertificateIdentityProjection, SERVICE_CLASS_PROGRESS, TagProjection,
     check_production_body_capacity_retirement_effective_lock_transition,
     check_production_body_ownership_effective_lock_transition,
     check_production_decision_recovery_transition, check_production_effect_to_candidate_transition,
-    check_production_historical_body_pipeline_transition, exact_body_stage_is_owned,
-    plan_exact_body_owner_binding, plan_exact_body_owner_rebind,
+    exact_body_stage_is_owned, plan_exact_body_owner_binding, plan_exact_body_owner_rebind,
     plan_exact_body_retirement_accounting,
 };
 #[cfg(test)]
@@ -128,11 +126,19 @@ use super::{
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, AuthenticatedCertifiedBodyResponse,
         AuthenticatedPayloadChunk, CertifiedBodyRequestRegistrationPlan,
-        CertifiedBodyRequestRetirementPlan, CertifiedBodyResponseClaimDisposition,
-        CertifiedBodyResponseClaimPreflight, OutstandingCertifiedBodyRequests, V2TransportError,
+        CertifiedBodyRequestRetirementPlan, CertifiedBodyResponseClaimPreflight,
+        OutstandingCertifiedBodyRequests, V2TransportError,
         authenticate_certified_body_request_with_live_adapter, authenticate_payload_chunk,
     },
     v2_worker::RecoveredDecisionFetchRequestOwnerV1,
+};
+#[cfg(test)]
+use super::{
+    v2_core::{
+        IDENTITY_KIND_CERTIFIED_BODY_REQUEST, ProductionHistoricalBodyPipelineTraceProjection,
+        check_production_historical_body_pipeline_transition,
+    },
+    v2_transport::CertifiedBodyResponseClaimDisposition,
 };
 use crate::kura::KuraV2CommitReceipt;
 use iroha_crypto::{Hash, HashOf, Signature};
@@ -1020,6 +1026,7 @@ impl BodyFetchTask {
         }
     }
     /// Immutable actor-global lifecycle ordinal retained through reconstruction.
+    #[cfg(test)]
     pub(crate) const fn lifecycle_ordinal(&self) -> u128 {
         self.ownership.owner().lifecycle_ordinal()
     }
@@ -1408,12 +1415,8 @@ pub(crate) trait V2EffectServices {
         &mut self,
         task: &BodyFetchTask,
     ) -> Result<(), Self::Error>;
+    #[cfg(test)]
     /// Retire the exact service owner after a certified response wins acquisition.
-    ///
-    /// Implementations must validate the complete task before mutation. Every
-    /// returned error leaves the exact service owner unchanged. A transient
-    /// handoff must be resolved before this boundary; a missing, conflicting,
-    /// or corrupt owner returns an error so the executor fails closed.
     fn complete_certified_body_fetch(
         &mut self,
         task: &BodyFetchTask,
@@ -2202,6 +2205,7 @@ struct BodyPipelineOwnerBindingPlan {
     already_owned: bool,
     checked_effective_lock: CheckedProductionTransition<EffectiveLockTraceProjection>,
 }
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn historical_body_pipeline_projection(
     context: &wire::HeightContext,
@@ -2838,10 +2842,6 @@ pub(crate) trait EffectRuntime {
     fn set_ingress_physical_cut(&mut self, _physical_cut: u128) -> Result<(), String> {
         Ok(())
     }
-    /// Inclusive lifecycle cut of the active post-timeout recovery episode.
-    fn timeout_recovery_lifecycle_cut(&self) -> Result<Option<u128>, String> {
-        Ok(None)
-    }
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String>;
     /// Run at most one absolute-timeout or authenticated Progress-root turn.
     fn step_pacemaker_effects(
@@ -3214,9 +3214,6 @@ impl EffectRuntime for SerializedV2Runtime {
 
     fn set_ingress_physical_cut(&mut self, physical_cut: u128) -> Result<(), String> {
         SerializedV2Runtime::set_ingress_physical_cut(self, physical_cut)
-    }
-    fn timeout_recovery_lifecycle_cut(&self) -> Result<Option<u128>, String> {
-        SerializedV2Runtime::timeout_recovery_lifecycle_cut(self)
     }
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
         self.step(now).map_err(|error| error.to_string())
@@ -4077,6 +4074,33 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         self.runtime
             .prepare_recovered_decision_fetch_store(authority)
     }
+    /// Seal the serialized adapter's current reducer-fence generation.
+    pub(in crate::sumeragi) fn lifecycle_reducer_fence_observation(
+        &self,
+    ) -> super::v2::LifecycleReducerFenceObservationV1 {
+        self.runtime.lifecycle_reducer_fence_observation()
+    }
+    /// Preview one ordinary certified Fetch-to-Store reducer transition.
+    pub(in crate::sumeragi) fn prepare_certified_fetch_store_adapter(
+        &mut self,
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> Result<super::v2::CertifiedFetchStoreAdapterPreparationV1<'_>, super::v2::AdapterError>
+    {
+        self.runtime.prepare_certified_fetch_store(tag, manifest)
+    }
+    /// Preview one ordinary durable Store-to-Validate reducer transition.
+    pub(in crate::sumeragi) fn prepare_durable_store_validate_adapter(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<super::v2::DurableStoreValidateAdapterPreparationV1<'_>, super::v2::AdapterError>
+    {
+        self.runtime
+            .prepare_durable_store_validate(tag, round, subject, receipt)
+    }
     /// Preview one exact lifecycle-owned signature on the serialized adapter.
     pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(
         &mut self,
@@ -4453,20 +4477,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .can_admit_network_message_with_ingress_ownership(message, ingress_ownership)
     }
 
-    /// Whether this fair-ingress head may cross retained reducer debt solely
-    /// to close an absolute-timeout restart cycle.
-    pub(crate) fn can_admit_timeout_vote_recovery_episode(
-        &self,
-        message: &wire::ConsensusMessageV2,
-        ingress_ownership: &FairV2IngressOwnershipEvidence,
-    ) -> bool {
-        self.fatal_reason.is_none()
-            && !self.output_guard.restart_required()
-            && self
-                .runtime
-                .can_admit_timeout_vote_recovery_episode(message, ingress_ownership)
-    }
-
     /// Rejoin one launched service to this executor's exact body-store owner.
     ///
     /// Context/root equality is insufficient: a reopened store at the same
@@ -4623,16 +4633,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.ensure_open()?;
         self.runtime
             .set_ingress_physical_cut(physical_cut)
-            .map_err(EffectExecutorError::Runtime)
-    }
-    /// Inclusive causal-root cut whose completed work may drain during the
-    /// finite post-timeout replay episode.
-    pub(crate) fn timeout_recovery_lifecycle_cut(
-        &self,
-    ) -> Result<Option<u128>, EffectExecutorError> {
-        self.ensure_open()?;
-        self.runtime
-            .timeout_recovery_lifecycle_cut()
             .map_err(EffectExecutorError::Runtime)
     }
     /// Return the immutable archive fanout in frozen roster order.
@@ -9105,6 +9105,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ) -> Result<CompletionDisposition, EffectTransportError> {
         self.accept_certified_body_response_inner(response, authenticated_responder, services)
     }
+    #[cfg(test)]
     fn accept_certified_body_response_inner<S: V2EffectServices>(
         &mut self,
         response: wire::CertifiedBodyResponse,

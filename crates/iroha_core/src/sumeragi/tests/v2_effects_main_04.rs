@@ -1989,7 +1989,7 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         "an owner retaining its startup store cannot plan against an independent service",
     );
     let foreign_output_guard = ConsensusOutputGuard::isolated();
-    let planner_io = owner.bind_body_store_to_planner_io_for_test(
+    let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
         &mut production_services,
         Arc::clone(&foreign_output_guard),
         1,
@@ -2028,6 +2028,8 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         &mut production_services,
         Arc::clone(&fixture.executor.output_guard),
     );
+    V2EffectServices::enqueue_body_fetch(&mut production_services, task.clone())
+        .expect("install the exact certified-Fetch service owner for Phase B");
     planner_io.saturate_consensus_prefix(&production_services);
     let waiting_prepared = fixture
         .executor
@@ -2137,6 +2139,44 @@ fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once() 
         "an in-flight exact command must reject before advancing Fetch generation",
     );
     assert_eq!(planner_io.queued_certified_fetch_count(), 1);
+    assert!(!fixture.executor.output_guard.restart_required());
+    let queue_depth_before_completion = ingress.len();
+    planner_io.execute_one_certified_fetch(Arc::clone(&fixture.executor.output_guard));
+    let completion = match production_services
+        .take_next_lifecycle_completion()
+        .expect("the persisted Fetch retains its exact physical completion owner")
+    {
+        crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::CertifiedFetch(completion) => {
+            completion
+        }
+        _ => panic!("the persisted ordinary Fetch must classify as CertifiedFetch"),
+    };
+    if owner
+        .complete_certified_fetch_for_test(
+            &mut fixture.executor,
+            &mut production_services,
+            &ingress,
+            completion,
+        )
+        .is_err()
+    {
+        panic!("Phase B must publish Ready and retire the exact physical response");
+    }
+    assert_eq!(
+        ingress.len(),
+        queue_depth_before_completion - 1,
+        "Phase B dequeues only the selected response occurrence",
+    );
+    assert!(matches!(
+        owner.fetch_wait_projection_for_test(lifecycle_ordinal, lifecycle_source),
+        (Some(LifecycleState::Ready), Some(1), None, false)
+    ));
+    assert!(matches!(
+        production_services
+            .take_next_lifecycle_completion()
+            .expect("the completion FIFO remains valid after exact acknowledgement"),
+        crate::sumeragi::v2_worker::LifecycleCompletionTakeV1::None
+    ));
     assert!(!fixture.executor.output_guard.restart_required());
     planner_io.detach(&mut production_services);
 }

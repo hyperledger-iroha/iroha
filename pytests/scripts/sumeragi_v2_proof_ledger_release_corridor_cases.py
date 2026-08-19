@@ -6,12 +6,12 @@ def test_release_inventory_constants_match_current_source_seal(
     """Every release consumer binds the current production and focus seals."""
 
     module = load_checker()
-    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 865
+    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 864
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a"
+        "c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "37d89b45597ce3ba1c1ca81a0e58192177c396b53a1c1b305458a45acd4faebd"
+        "82eea9b45230bc55cc8aa6ddf9b7c9e5abc4e9d0de4c87ae622e5995876a5939"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -199,9 +199,9 @@ def test_release_inventory_constants_match_current_source_seal(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert receipt_module._PRODUCTION_TEST_COUNT == 865
+    assert receipt_module._PRODUCTION_TEST_COUNT == 864
     assert receipt_module._G_UNIT_TEST_COUNT == 530
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 865
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 864
     receipt_module_counts = {
         module_name: count
         for _leg_id, module_name, count in receipt_module._PRODUCTION_MODULES
@@ -1715,11 +1715,6 @@ kura.claim_autonomous_lifecycle_process_generation(
             effects_source,
         ),
         (
-            "sumeragi::v2_effects::tests::",
-            "certified_body_response_carrier_swap_fails_closed_before_fetch_mutation",
-            effects_source,
-        ),
-        (
             "sumeragi::v2_runtime::tests::",
             "runtime_merges_alternate_sources_for_one_semantic_request",
             runtime_source,
@@ -1765,7 +1760,7 @@ kura.claim_autonomous_lifecycle_process_generation(
             config_user_source,
         ),
     )
-    assert len(source_geometry_inventory_additions) == 14
+    assert len(source_geometry_inventory_additions) == 13
     route_lifecycle_inventory_additions = tuple(
         ("network::tests::", test_name, p2p_network_source)
         for test_name in (
@@ -2101,8 +2096,8 @@ kura.claim_autonomous_lifecycle_process_generation(
             )
         )
     )
-    assert len(production_inventory) == 865
-    assert len(set(production_inventory)) == 865
+    assert len(production_inventory) == 864
+    assert len(set(production_inventory)) == 864
     native_merge_projection_regressions = {
         "sumeragi::v2_lane_work::tests::native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order",
         "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier",
@@ -2238,8 +2233,8 @@ kura.claim_autonomous_lifecycle_process_generation(
             predecessor_durability_regression
             in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
         )
-    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 446
-    assert "readonly expected_production_liveness_test_count=865" in release_source
+    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 445
+    assert "readonly expected_production_liveness_test_count=864" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
         in release_source
@@ -2249,7 +2244,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         'root-anchored V3 matrix passed"'
         in release_source
     )
-    assert "_PRODUCTION_TEST_COUNT = 865" in receipt_source
+    assert "_PRODUCTION_TEST_COUNT = 864" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -2259,7 +2254,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 865
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 864
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
@@ -3593,7 +3588,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     helper_start = checker_source.index("require_exact_token() {")
     helper_end = checker_source.index("\n}\n", helper_start) + 3
     helper = checker_source[helper_start:helper_end]
-    canonical_declaration = "readonly canonical_production_test_count=865"
+    canonical_declaration = "readonly canonical_production_test_count=864"
     count_guard = (
         "require_exact_token \\\n"
         '  "$release_runner" \\\n'
@@ -3615,7 +3610,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     bash = shutil.which("bash")
     assert bash is not None
     runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
-    canonical = "readonly expected_production_liveness_test_count=865"
+    canonical = "readonly expected_production_liveness_test_count=864"
     weakened = "readonly expected_production_liveness_test_count=859"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
 
@@ -3667,11 +3662,11 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         (
             canonical_declaration,
             "readonly canonical_production_test_count=859",
-            "must seal exactly 865 production tests",
+            "must seal exactly 864 production tests",
         ),
         (
-            '    "sumeragi::v2_effects::tests": 71,',
             '    "sumeragi::v2_effects::tests": 70,',
+            '    "sumeragi::v2_effects::tests": 69,',
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (

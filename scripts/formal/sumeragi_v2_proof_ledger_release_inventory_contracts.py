@@ -862,8 +862,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 446:
-        errors.append("internal release-regression seal must contain exactly 446 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 445:
+        errors.append("internal release-regression seal must contain exactly 445 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -2172,21 +2172,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current\ninventory to 865 tests across 43 modules.\n"
+            "current\ninventory to 864 tests across 43 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "current 865-test, 43-module inventory. The complete source-sealed\n"
+            "current 864-test, 43-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current\nsource-bound inventory to 865 exact tests across 43 modules and "
+            "current\nsource-bound inventory to 864 exact tests across 43 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network\nlegs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",

@@ -440,6 +440,30 @@ where
     Ok(recovered.is_exact().then_some(recovered))
 }
 impl CertifiedStoreReplayEvidenceV1 {
+    /// Compare one installed Store carrier with its complete reconstructed row.
+    pub(super) fn exactly_matches_recovered_record(
+        &self,
+        active_context: LifecycleContext,
+        record: &LifecycleRecord,
+        metadata: &DurableRecordMetadata,
+        installed_digest: LifecycleDigest,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        certified_body_stage_matches_recovered_record(
+            &self.family,
+            active_context,
+            record,
+            metadata,
+            installed_digest,
+            effect,
+            receipt,
+            pending,
+            LifecycleWorkClass::Store,
+            LifecycleStageKind::StoreBody,
+        )
+    }
     /// Compare this canonical family with one exact durable Store carrier.
     pub(super) fn exactly_matches_store(
         &self,
@@ -581,6 +605,34 @@ impl CertifiedValidateReplayEvidenceV1 {
     }
 }
 impl DurableValidateReplayEvidenceV1 {
+    /// Compare one installed Validate carrier with its complete reconstructed row.
+    pub(super) fn exactly_matches_recovered_record(
+        &self,
+        active_context: LifecycleContext,
+        record: &LifecycleRecord,
+        metadata: &DurableRecordMetadata,
+        installed_digest: LifecycleDigest,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        let family = match self {
+            Self::Certified(evidence) => &evidence.family,
+            Self::RemoteProposal(_) => return false,
+        };
+        certified_body_stage_matches_recovered_record(
+            family,
+            active_context,
+            record,
+            metadata,
+            installed_digest,
+            effect,
+            receipt,
+            pending,
+            LifecycleWorkClass::Validate,
+            LifecycleStageKind::ValidateBody,
+        )
+    }
     /// Wrap one exact certified Validate family without exposing its source.
     pub(super) const fn certified(evidence: CertifiedValidateReplayEvidenceV1) -> Self {
         Self::Certified(evidence)
@@ -789,6 +841,84 @@ impl DurableValidateReplayEvidenceV1 {
             )
             .then_some(evidence)
     }
+}
+#[allow(clippy::too_many_arguments)]
+fn certified_body_stage_matches_recovered_record(
+    family: &CertifiedBodyPipelineReplayFamilyV1,
+    active_context: LifecycleContext,
+    record: &LifecycleRecord,
+    metadata: &DurableRecordMetadata,
+    installed_digest: LifecycleDigest,
+    effect: &AdapterEffect,
+    receipt: &DurableBodyReceipt,
+    pending: &PendingRuntimeEffectBinding,
+    work_class: LifecycleWorkClass,
+    stage_kind: LifecycleStageKind,
+) -> bool {
+    let (tag, round, subject) = match effect {
+        AdapterEffect::StoreBody {
+            tag,
+            round,
+            subject,
+        } if stage_kind == LifecycleStageKind::StoreBody => (*tag, *round, *subject),
+        AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } if stage_kind == LifecycleStageKind::ValidateBody => (*tag, *round, *subject),
+        _ => return false,
+    };
+    let Some(statement) = pending.candidate_statement() else {
+        return false;
+    };
+    let expected_payload =
+        DurablePayloadReference::BodyFrame(family.body_frame.durable_reference());
+    let source = LifecycleReplaySourceV1::BodyPipeline(family.source.clone());
+    let Ok(shape) = source.project(
+        active_context,
+        stage_kind,
+        &ReplayPayloadBindingV1::BodyFrame(family.body_frame),
+    ) else {
+        return false;
+    };
+    let expected_authority = canonical_replay_authority(
+        active_context,
+        source,
+        stage_kind,
+        ReplayPayloadBindingV1::BodyFrame(family.body_frame),
+    );
+    let slot = PhysicalSlotId::for_capacity(work_class.capacity_class(), 0);
+    pending.exactly_binds_adapter_effect(effect)
+        && statement.context_id() == round.context_id
+        && statement.round().context_id == round.context_id
+        && statement.proposal_round() == round
+        && statement.subject() == Some(subject)
+        && shape.key.round()
+            == LifecycleRound::new(statement.round().height, statement.round().view)
+        && shape.key.proposal_round()
+            == Some(LifecycleRound::new(
+                statement.proposal_round().height,
+                statement.proposal_round().view,
+            ))
+        && shape.key.subject() == Some(block_subject(subject))
+        && shape.key.execution_commitment()
+            == statement.execution_commitment().map(execution_commitment)
+        && tag.height() == active_context.height()
+        && tag.view() >= statement.round().view
+        && digest_from_hash(pending.causal_lifecycle_key()) == record.owner.causal_root().digest()
+        && record.key == shape.key
+        && record.work_class == work_class
+        && record.stage == LifecycleStage::new(stage_kind, PredecessorScope::Independent)
+        && record.state == super::LifecycleState::Ready
+        && record.physical_slots == std::collections::BTreeMap::from([(slot, installed_digest)])
+        && record.episode.slot_universe == std::collections::BTreeSet::from([slot])
+        && record.episode.consumed_slots == record.episode.slot_universe
+        && metadata.reconstruction_source == record.owner.causal_root().digest()
+        && metadata.payload == expected_payload
+        && expected_authority.as_ref() == Some(&metadata.replay_authority)
+        && durable_body_frame_reference(active_context, receipt)
+            == Some(family.body_frame.durable_reference())
+        && installed_digest == digest_from_hash(pending.exact_effect_identity())
 }
 impl InvalidBodyReportReplayEvidenceV1 {
     /// Compare the complete body origin, rejection envelope, report effect,

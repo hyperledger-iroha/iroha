@@ -5,7 +5,7 @@
 //! work. A future admission transaction must first reauthenticate the retained
 //! source against the verified height context and its owning durable store.
 use super::ledger::{
-    DurableCertifiedFetchLedgerCensusPermit, DurableCertifiedFetchLedgerJoinPermit,
+    DurableCertifiedBodyPipelineLedgerCensusPermit, DurableCertifiedFetchLedgerJoinPermit,
     LifecycleLedgerRecordV1,
 };
 use super::{
@@ -27,15 +27,17 @@ use super::{
     },
     selector::CertifiedFetchCompletionAuthority,
     work_registry::{
-        CertifiedFetchCompletion, ConcreteLifecycleWorkRegistry,
-        InstalledBodyCandidateProjectionPermit, LiveValidateSignWorkProjectionPermit,
-        PreparedLiveValidateSignRegistryWork, SealedBodySuccessorProjectionPermit,
+        CertifiedFetchCompletion, ConcreteLifecycleWorkRegistry, DurableStoreBody,
+        DurableValidateBody, InstalledBodyCandidateProjectionPermit,
+        LiveValidateSignWorkProjectionPermit, PreparedLiveValidateSignRegistryWork,
+        SealedBodySuccessorProjectionPermit,
     },
 };
 use crate::sumeragi::{
     v2::{
-        AdapterEffect, ExactLiveWalPersistedContinuationCause, LiveWalFrameIdentity,
-        PersistedWalFrameLocatorV1, RecoveredDecisionApplyCandidateProjectionPermit,
+        AdapterEffect, CertifiedBodyPipelineColdReplayStepV1,
+        ExactLiveWalPersistedContinuationCause, LiveWalFrameIdentity, PersistedWalFrameLocatorV1,
+        ProductionLifecycleAdapterStartupV1, RecoveredDecisionApplyCandidateProjectionPermit,
         RecoveredLifecycleNextWalVoteSealPermitV1, RecoveredWalFrameIdentity,
         RegisteredPrepareInvalidBodyReportCapability, SignRequest, VerifiedHeightContext,
     },
@@ -4236,123 +4238,490 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredD
     completion: CertifiedFetchCompletion,
     candidate: CandidateAdmission,
 }
-/// Aggregate opaque recovery cut for every live BodyFrame-backed Fetch row.
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredDurableCertifiedStoreV1
+{
+    candidate: CandidateAdmission,
+    carrier: DurableStoreBody,
+    replay: CertifiedBodyPipelineColdReplayStepV1,
+}
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredDurableCertifiedValidateV1
+{
+    candidate: CandidateAdmission,
+    carrier: DurableValidateBody,
+    fetch_replay: CertifiedBodyPipelineColdReplayStepV1,
+    store_replay: CertifiedBodyPipelineColdReplayStepV1,
+}
+pub(in crate::sumeragi::v2_lifecycle_coordinator) enum AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1
+{
+    Fetch(AuthenticatedRecoveredDurableCertifiedFetchV1),
+    Store(AuthenticatedRecoveredDurableCertifiedStoreV1),
+    Validate(AuthenticatedRecoveredDurableCertifiedValidateV1),
+}
+/// Aggregate opaque recovery cut for every live ordinary certified-body row.
 ///
-/// No row, candidate, effect, pending binding, or registry material can be
-/// extracted independently. Startup must eventually consume the whole cut at
-/// one coordinator-open/registry-install boundary.
-#[must_use = "the complete durable Fetch census must be consumed atomically"]
+/// Each entry retains the exact terminal prefix needed to reconstruct its
+/// reducer state. Recovered Decision rows are excluded by construction and
+/// remain owned by their dedicated payload-free WAL lineage.
+#[must_use = "the complete durable certified-body census must be consumed atomically"]
 #[cfg_attr(not(test), allow(dead_code))]
-pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredDurableCertifiedFetchCensusV1
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredDurableCertifiedBodyPipelineCensusV1
 {
     ledger_frame_identity: LifecycleDigest,
-    entries: Vec<AuthenticatedRecoveredDurableCertifiedFetchV1>,
+    live_ordinals: std::collections::BTreeSet<u128>,
+    entries: Vec<AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1>,
 }
-/// One consuming startup phase for the complete recovered Ready-Fetch census.
-///
-/// Candidate projection is moved into the logical recovery cut exactly once.
-/// The remaining closed completions can then enter only an initially empty
-/// concrete registry. Neither side has a row or parts accessor.
-#[must_use = "prepared durable Fetch startup authority must be installed atomically"]
-pub(super) struct PreparedDurableCertifiedFetchStartupV1 {
+/// One consuming startup phase for the complete recovered body-pipeline census.
+#[must_use = "prepared durable body-pipeline startup authority must be installed atomically"]
+pub(super) struct PreparedDurableCertifiedBodyPipelineStartupV1 {
     ledger_frame_identity: LifecycleDigest,
-    entries: Vec<PreparedDurableCertifiedFetchStartupEntryV1>,
+    live_ordinals: std::collections::BTreeSet<u128>,
+    entries: Vec<PreparedDurableCertifiedBodyPipelineStartupEntryV1>,
+    replay_steps: Vec<CertifiedBodyPipelineColdReplayStepV1>,
 }
-struct PreparedDurableCertifiedFetchStartupEntryV1 {
+pub(super) enum PreparedDurableCertifiedBodyPipelineWorkV1 {
+    Fetch(CertifiedFetchCompletion),
+    Store(DurableStoreBody),
+    Validate(DurableValidateBody),
+}
+struct PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
     candidate: Option<CandidateAdmission>,
-    completion: CertifiedFetchCompletion,
+    work: PreparedDurableCertifiedBodyPipelineWorkV1,
 }
 impl AuthenticatedRecoveredDurableCertifiedFetchV1 {
     fn is_exact(&self) -> bool {
         self.completion.matches_recovered_candidate(&self.candidate)
     }
+
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn into_store(
+        self,
+        verified: &VerifiedHeightContext,
+        ordinal: u128,
+    ) -> Option<AuthenticatedRecoveredDurableCertifiedStoreV1> {
+        let (carrier, candidate, replay) =
+            DurableStoreBody::from_recovered_certified_fetch(self.completion, verified, ordinal)
+                .ok()?;
+        let store = AuthenticatedRecoveredDurableCertifiedStoreV1 {
+            candidate,
+            carrier,
+            replay,
+        };
+        store.is_exact().then_some(store)
+    }
 }
-impl AuthenticatedRecoveredDurableCertifiedFetchCensusV1 {
+impl AuthenticatedRecoveredDurableCertifiedStoreV1 {
+    fn is_exact(&self) -> bool {
+        recovered_body_startup_candidate_is_exact(
+            &self.candidate,
+            self.carrier.address(),
+            self.carrier.ready_digest(),
+            LifecycleWorkClass::Store,
+            LifecycleStageKind::StoreBody,
+        ) && self.carrier.validates(self.carrier.ready_digest())
+    }
+
+    /// Compare this reconstructed Store with the exact Advanced parent of a
+    /// live Validate row before consuming it into the Validate carrier.
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exactly_matches_terminal_parent(
+        &self,
+        record: &LifecycleLedgerRecordV1,
+        validate_ordinal: u128,
+    ) -> bool {
+        let address = self.carrier.address();
+        self.is_exact()
+            && record.owner() == address.owner
+            && record.ordinal() == address.ordinal
+            && record.key() == Some(self.candidate.key)
+            && record.work_class() == Some(LifecycleWorkClass::Store)
+            && record.stage() == Some(self.candidate.stage)
+            && record.terminal() == Some(Some(TerminalOutcome::Advanced))
+            && record.reconstruction_source() == self.candidate.reconstruction_source
+            && record.durable_payload() == Some(self.candidate.payload)
+            && record.continuation()
+                == Some(super::schema::DurableContinuation::successor(
+                    DurableContinuationEdge::StoreToValidate,
+                    validate_ordinal,
+                ))
+            && record.replay_matches_candidate(&self.candidate)
+    }
+
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn into_validate(
+        self,
+        verified: &VerifiedHeightContext,
+        ordinal: u128,
+    ) -> Option<AuthenticatedRecoveredDurableCertifiedValidateV1> {
+        let fetch_replay = self.replay;
+        let (carrier, candidate, store_replay) =
+            DurableValidateBody::from_recovered_certified_store(self.carrier, verified, ordinal)
+                .ok()?;
+        let validate = AuthenticatedRecoveredDurableCertifiedValidateV1 {
+            candidate,
+            carrier,
+            fetch_replay,
+            store_replay,
+        };
+        validate.is_exact().then_some(validate)
+    }
+}
+impl AuthenticatedRecoveredDurableCertifiedValidateV1 {
+    fn is_exact(&self) -> bool {
+        recovered_body_startup_candidate_is_exact(
+            &self.candidate,
+            self.carrier.address(),
+            self.carrier.ready_digest(),
+            LifecycleWorkClass::Validate,
+            LifecycleStageKind::ValidateBody,
+        ) && self.carrier.validates(self.carrier.ready_digest())
+            && self.fetch_replay.ordinal() < self.store_replay.ordinal()
+    }
+}
+fn recovered_body_startup_candidate_is_exact(
+    candidate: &CandidateAdmission,
+    address: super::work_registry::ConcreteWorkAddress,
+    digest: LifecycleDigest,
+    work_class: LifecycleWorkClass,
+    stage_kind: LifecycleStageKind,
+) -> bool {
+    let slot = PhysicalSlotId::for_capacity(work_class.capacity_class(), 0);
+    candidate.initial_state == InitialLifecycleState::Ready
+        && candidate.causal_root == address.owner.causal_root()
+        && candidate.work_class == work_class
+        && candidate.stage == LifecycleStage::new(stage_kind, PredecessorScope::Independent)
+        && candidate.reconstruction_source == address.owner.causal_root().digest()
+        && matches!(candidate.payload, DurablePayloadReference::BodyFrame(_))
+        && candidate.producer_turn.is_none()
+        && candidate
+            .physical_geometry
+            .normalized()
+            .is_ok_and(|(physical, universe, consumed)| {
+                physical == std::collections::BTreeMap::from([(slot, digest)])
+                    && universe == std::collections::BTreeSet::from([slot])
+                    && consumed == universe
+            })
+}
+impl AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1 {
+    fn candidate(&self) -> &CandidateAdmission {
+        match self {
+            Self::Fetch(entry) => &entry.candidate,
+            Self::Store(entry) => &entry.candidate,
+            Self::Validate(entry) => &entry.candidate,
+        }
+    }
+    fn address(&self) -> super::work_registry::ConcreteWorkAddress {
+        match self {
+            Self::Fetch(entry) => entry.completion.address(),
+            Self::Store(entry) => entry.carrier.address(),
+            Self::Validate(entry) => entry.carrier.address(),
+        }
+    }
+    fn digest(&self) -> Option<LifecycleDigest> {
+        match self {
+            Self::Fetch(entry) => entry.completion.ready_digest(),
+            Self::Store(entry) => Some(entry.carrier.ready_digest()),
+            Self::Validate(entry) => Some(entry.carrier.ready_digest()),
+        }
+    }
+    fn is_exact(&self) -> bool {
+        match self {
+            Self::Fetch(entry) => entry.is_exact(),
+            Self::Store(entry) => entry.is_exact(),
+            Self::Validate(entry) => entry.is_exact(),
+        }
+    }
+    fn into_prepared(
+        self,
+        replay_steps: &mut Vec<CertifiedBodyPipelineColdReplayStepV1>,
+    ) -> PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
+        match self {
+            Self::Fetch(entry) => PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
+                candidate: Some(entry.candidate),
+                work: PreparedDurableCertifiedBodyPipelineWorkV1::Fetch(entry.completion),
+            },
+            Self::Store(entry) => {
+                replay_steps.push(entry.replay);
+                PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
+                    candidate: Some(entry.candidate),
+                    work: PreparedDurableCertifiedBodyPipelineWorkV1::Store(entry.carrier),
+                }
+            }
+            Self::Validate(entry) => {
+                replay_steps.push(entry.fetch_replay);
+                replay_steps.push(entry.store_replay);
+                PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
+                    candidate: Some(entry.candidate),
+                    work: PreparedDurableCertifiedBodyPipelineWorkV1::Validate(entry.carrier),
+                }
+            }
+        }
+    }
+}
+impl AuthenticatedRecoveredDurableCertifiedBodyPipelineCensusV1 {
     fn from_exact_ledger_census(
-        _permit: DurableCertifiedFetchLedgerCensusPermit,
-        entries: Vec<AuthenticatedRecoveredDurableCertifiedFetchV1>,
+        _permit: DurableCertifiedBodyPipelineLedgerCensusPermit,
+        entries: Vec<AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1>,
     ) -> Option<Self> {
+        let (ledger_frame_identity, live_ordinals) = _permit.into_parts();
         let mut addresses = std::collections::BTreeSet::new();
         let mut owners = std::collections::BTreeSet::new();
         let mut digests = std::collections::BTreeSet::new();
         let mut body_frames = std::collections::BTreeSet::new();
         for entry in &entries {
-            let DurablePayloadReference::BodyFrame(body_frame) = entry.candidate.payload else {
+            let DurablePayloadReference::BodyFrame(body_frame) = entry.candidate().payload else {
                 return None;
             };
             if !entry.is_exact()
-                || !addresses.insert(entry.completion.address())
-                || !owners.insert(entry.completion.owner())
-                || !entry
-                    .completion
-                    .ready_digest()
-                    .is_some_and(|digest| digests.insert(digest))
+                || !addresses.insert(entry.address())
+                || !owners.insert(entry.address().owner)
+                || !entry.digest().is_some_and(|digest| digests.insert(digest))
                 || !body_frames.insert(body_frame)
             {
                 return None;
             }
         }
+        if addresses
+            .iter()
+            .map(|address| address.ordinal)
+            .collect::<std::collections::BTreeSet<_>>()
+            != live_ordinals
+        {
+            return None;
+        }
         Some(Self {
-            ledger_frame_identity: _permit.into_frame_identity(),
+            ledger_frame_identity,
+            live_ordinals,
             entries,
         })
     }
     fn is_exact(&self) -> bool {
         self.entries
             .iter()
-            .all(AuthenticatedRecoveredDurableCertifiedFetchV1::is_exact)
+            .all(AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1::is_exact)
     }
-    /// Compare against the exact opened frame and its complete live-Fetch count.
+    /// Compare against the exact opened frame and selected ordinary body rows.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exactly_matches_opened_ledger(
         &self,
         ledger: &super::ledger::LifecycleLedgerV1,
-        live_body_fetch_count: usize,
     ) -> bool {
         self.ledger_frame_identity == ledger.frame_identity()
-            && self.entries.len() == live_body_fetch_count
+            && self.entries.len() == self.live_ordinals.len()
+            && self.entries.iter().all(|entry| {
+                let address = entry.address();
+                self.live_ordinals.contains(&address.ordinal)
+                    && ledger
+                        .records()
+                        .binary_search_by_key(
+                            &address.ordinal,
+                            super::ledger::LifecycleLedgerRecordV1::ordinal,
+                        )
+                        .ok()
+                        .and_then(|index| ledger.records().get(index))
+                        .is_some_and(|record| {
+                            record.terminal() == Some(None)
+                                && record.continuation()
+                                    == Some(super::schema::DurableContinuation::None)
+                                && record.owner() == address.owner
+                                && record.key() == Some(entry.candidate().key)
+                                && record.work_class() == Some(entry.candidate().work_class)
+                                && record.stage() == Some(entry.candidate().stage)
+                                && record.reconstruction_source()
+                                    == entry.candidate().reconstruction_source
+                                && record.durable_payload() == Some(entry.candidate().payload)
+                                && record.replay_matches_candidate(entry.candidate())
+                        })
+            })
             && self.is_exact()
     }
     /// Consume the authenticated census into its single startup phase.
     pub(super) fn into_startup(
         self,
         ledger: &super::ledger::LifecycleLedgerV1,
-    ) -> Option<PreparedDurableCertifiedFetchStartupV1> {
-        let live_body_fetch_count = ledger
-            .records()
-            .iter()
-            .filter(|record| {
-                record.work_class() == Some(LifecycleWorkClass::Fetch)
-                    && record.terminal() == Some(None)
-                    && matches!(
-                        record.durable_payload(),
-                        Some(DurablePayloadReference::BodyFrame(_))
-                    )
-            })
-            .count();
-        if !self.exactly_matches_opened_ledger(ledger, live_body_fetch_count) || !self.is_exact() {
+    ) -> Option<PreparedDurableCertifiedBodyPipelineStartupV1> {
+        if !self.exactly_matches_opened_ledger(ledger) || !self.is_exact() {
             return None;
         }
-        Some(PreparedDurableCertifiedFetchStartupV1 {
+        let mut replay_steps = Vec::new();
+        let entries = self
+            .entries
+            .into_iter()
+            .map(|entry| entry.into_prepared(&mut replay_steps))
+            .collect();
+        replay_steps.sort_by_key(CertifiedBodyPipelineColdReplayStepV1::ordinal);
+        if replay_steps
+            .windows(2)
+            .any(|pair| pair[0].ordinal() >= pair[1].ordinal())
+        {
+            return None;
+        }
+        Some(PreparedDurableCertifiedBodyPipelineStartupV1 {
             ledger_frame_identity: self.ledger_frame_identity,
-            entries: self
-                .entries
-                .into_iter()
-                .map(|entry| PreparedDurableCertifiedFetchStartupEntryV1 {
-                    candidate: Some(entry.candidate),
-                    completion: entry.completion,
-                })
-                .collect(),
+            live_ordinals: self.live_ordinals,
+            entries,
+            replay_steps,
         })
     }
     #[cfg(test)]
     pub(super) fn corrupt_first_completion_for_test(&mut self) {
         if let Some(entry) = self.entries.first_mut() {
-            entry.completion.corrupt_for_startup_test();
+            if let AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1::Fetch(entry) = entry {
+                entry.completion.corrupt_for_startup_test();
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn project_ready_store_records_for_test(
+        self,
+        verified: &VerifiedHeightContext,
+    ) -> Option<Vec<LifecycleLedgerRecordV1>> {
+        self.project_crash_boundary_records_for_test(verified, false)
+    }
+
+    #[cfg(test)]
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn project_ready_validate_records_for_test(
+        self,
+        verified: &VerifiedHeightContext,
+    ) -> Option<Vec<LifecycleLedgerRecordV1>> {
+        self.project_crash_boundary_records_for_test(verified, true)
+    }
+
+    #[cfg(test)]
+    fn project_crash_boundary_records_for_test(
+        self,
+        verified: &VerifiedHeightContext,
+        ready_validate: bool,
+    ) -> Option<Vec<LifecycleLedgerRecordV1>> {
+        if !self.is_exact() || self.entries.len() != 1 {
+            return None;
+        }
+        let mut entries = self.entries.into_iter();
+        let AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1::Fetch(fetch) =
+            entries.next()?
+        else {
+            return None;
+        };
+        let owner = fetch.completion.owner();
+        let fetch_ordinal = fetch.completion.address().ordinal;
+        let store_ordinal = fetch_ordinal.checked_add(1)?;
+        let fetch_candidate = fetch.candidate.clone();
+        let store = fetch.into_store(verified, store_ordinal)?;
+        let store_candidate = store.candidate.clone();
+        let fetch_record = recovered_body_candidate_record_for_test(
+            &fetch_candidate,
+            owner,
+            fetch_ordinal,
+            Some(TerminalOutcome::Advanced),
+            super::schema::DurableContinuation::successor(
+                DurableContinuationEdge::FetchToStore,
+                store_ordinal,
+            ),
+        )?;
+        if !ready_validate {
+            let store_record = recovered_body_candidate_record_for_test(
+                &store_candidate,
+                owner,
+                store_ordinal,
+                None,
+                super::schema::DurableContinuation::None,
+            )?;
+            return Some(vec![fetch_record, store_record]);
+        }
+        let validate_ordinal = store_ordinal.checked_add(1)?;
+        let validate = store.into_validate(verified, validate_ordinal)?;
+        let store_record = recovered_body_candidate_record_for_test(
+            &store_candidate,
+            owner,
+            store_ordinal,
+            Some(TerminalOutcome::Advanced),
+            super::schema::DurableContinuation::successor(
+                DurableContinuationEdge::StoreToValidate,
+                validate_ordinal,
+            ),
+        )?;
+        let validate_record = recovered_body_candidate_record_for_test(
+            &validate.candidate,
+            owner,
+            validate_ordinal,
+            None,
+            super::schema::DurableContinuation::None,
+        )?;
+        Some(vec![fetch_record, store_record, validate_record])
+    }
+}
+
+#[cfg(test)]
+fn recovered_body_candidate_record_for_test(
+    candidate: &CandidateAdmission,
+    owner: OwnerId,
+    ordinal: u128,
+    terminal: Option<TerminalOutcome>,
+    continuation: super::schema::DurableContinuation,
+) -> Option<LifecycleLedgerRecordV1> {
+    (candidate.initial_state == InitialLifecycleState::Ready
+        && candidate.causal_root == owner.causal_root())
+    .then_some(())?;
+    LifecycleLedgerRecordV1::new(
+        candidate.key,
+        owner,
+        ordinal,
+        candidate.work_class,
+        candidate.stage,
+        terminal,
+        candidate.reconstruction_source,
+        candidate.payload,
+        candidate.replay_authority.clone(),
+        continuation,
+    )
+    .ok()
+}
+impl PreparedDurableCertifiedBodyPipelineWorkV1 {
+    pub(super) fn address(&self) -> super::work_registry::ConcreteWorkAddress {
+        match self {
+            Self::Fetch(work) => work.address(),
+            Self::Store(work) => work.address(),
+            Self::Validate(work) => work.address(),
+        }
+    }
+    pub(super) fn digest(&self) -> Option<LifecycleDigest> {
+        match self {
+            Self::Fetch(work) => work.ready_digest(),
+            Self::Store(work) => Some(work.ready_digest()),
+            Self::Validate(work) => Some(work.ready_digest()),
+        }
+    }
+    pub(super) fn validates(&self) -> bool {
+        match self {
+            Self::Fetch(work) => work
+                .ready_digest()
+                .is_some_and(|digest| work.validates(digest)),
+            Self::Store(work) => work.validates(work.ready_digest()),
+            Self::Validate(work) => work.validates(work.ready_digest()),
+        }
+    }
+    fn lifecycle_shape(&self) -> (LifecycleWorkClass, LifecycleStageKind) {
+        match self {
+            Self::Fetch(_) => (LifecycleWorkClass::Fetch, LifecycleStageKind::FetchBody),
+            Self::Store(_) => (LifecycleWorkClass::Store, LifecycleStageKind::StoreBody),
+            Self::Validate(_) => (
+                LifecycleWorkClass::Validate,
+                LifecycleStageKind::ValidateBody,
+            ),
         }
     }
 }
-impl PreparedDurableCertifiedFetchStartupV1 {
+impl PreparedDurableCertifiedBodyPipelineStartupV1 {
+    /// Return whether this exact census selected the live ordinary row.
+    pub(super) fn contains_live_ordinal(&self, ordinal: u128) -> bool {
+        self.live_ordinals.contains(&ordinal)
+    }
+
+    /// Advance the cold reducer through the complete canonical replay prefix.
+    pub(super) fn replay_adapter_startup(
+        self,
+        startup: ProductionLifecycleAdapterStartupV1,
+    ) -> Result<(Self, ProductionLifecycleAdapterStartupV1), &'static str> {
+        let startup = startup.replay_certified_body_pipeline(&self.replay_steps)?;
+        Ok((self, startup))
+    }
     /// Verify the complete phase against one still-empty concrete registry.
     pub(super) fn preflights_empty_registry(
         &self,
@@ -4363,11 +4732,21 @@ impl PreparedDurableCertifiedFetchStartupV1 {
         registry.is_empty()
             && self.entries.iter().all(|entry| {
                 entry.candidate.as_ref().is_some_and(|candidate| {
-                    entry.completion.matches_recovered_candidate(candidate)
-                        && addresses.insert(entry.completion.address())
+                    let (work_class, stage_kind) = entry.work.lifecycle_shape();
+                    recovered_body_startup_candidate_is_exact(
+                        candidate,
+                        entry.work.address(),
+                        entry
+                            .work
+                            .digest()
+                            .expect("exact startup work has a digest"),
+                        work_class,
+                        stage_kind,
+                    ) && entry.work.validates()
+                        && addresses.insert(entry.work.address())
                         && entry
-                            .completion
-                            .ready_digest()
+                            .work
+                            .digest()
                             .is_some_and(|digest| digests.insert(digest))
                 })
             })
@@ -4381,9 +4760,25 @@ impl PreparedDurableCertifiedFetchStartupV1 {
         candidates: &mut std::collections::BTreeMap<LifecycleKey, CandidateAdmission>,
     ) -> bool {
         if self.ledger_frame_identity != ledger.frame_identity()
+            || self.live_ordinals
+                != self
+                    .entries
+                    .iter()
+                    .map(|entry| entry.work.address().ordinal)
+                    .collect()
             || self.entries.iter().any(|entry| {
                 entry.candidate.as_ref().is_none_or(|candidate| {
-                    !entry.completion.matches_recovered_candidate(candidate)
+                    let (work_class, stage_kind) = entry.work.lifecycle_shape();
+                    !entry.work.validates()
+                        || !entry.work.digest().is_some_and(|digest| {
+                            recovered_body_startup_candidate_is_exact(
+                                candidate,
+                                entry.work.address(),
+                                digest,
+                                work_class,
+                                stage_kind,
+                            )
+                        })
                         || candidates.contains_key(&candidate.key)
                 })
             })
@@ -4394,7 +4789,7 @@ impl PreparedDurableCertifiedFetchStartupV1 {
             let candidate = entry
                 .candidate
                 .take()
-                .expect("whole-census preflight retained every Fetch candidate");
+                .expect("whole-census preflight retained every body candidate");
             assert!(candidates.insert(candidate.key, candidate).is_none());
         }
         true
@@ -4411,14 +4806,8 @@ impl PreparedDurableCertifiedFetchStartupV1 {
         if !registry.is_empty()
             || self.entries.iter().any(|entry| {
                 entry.candidate.is_some()
-                    || !addresses.insert(entry.completion.address())
-                    || entry.completion.ready_digest().is_none()
-                    || !entry.completion.validates(
-                        entry
-                            .completion
-                            .ready_digest()
-                            .expect("guard retained a Ready digest"),
-                    )
+                    || !addresses.insert(entry.work.address())
+                    || !entry.work.validates()
             })
         {
             return Err(self);
@@ -4426,9 +4815,9 @@ impl PreparedDurableCertifiedFetchStartupV1 {
         for entry in self.entries {
             assert!(
                 registry
-                    .install_recovered_durable_fetch(entry.completion)
+                    .install_recovered_durable_body_pipeline(entry.work)
                     .is_ok(),
-                "preflighted empty-registry Fetch installation is infallible"
+                "preflighted empty-registry body installation is infallible"
             );
         }
         Ok(())
@@ -4444,35 +4833,36 @@ impl PreparedDurableCertifiedFetchStartupV1 {
         self,
         registry: &mut ConcreteLifecycleWorkRegistry,
     ) -> Result<(), Self> {
-        let completions = self
+        let works = self
             .entries
             .iter()
-            .map(|entry| &entry.completion)
+            .map(|entry| (entry.work.address(), entry.work.digest()))
             .collect::<Vec<_>>();
         if self.entries.iter().any(|entry| entry.candidate.is_some())
-            || !registry.preflights_recovered_fetches_alongside_wal_authority(&completions)
+            || !registry.preflights_recovered_body_pipeline_alongside_wal_authority(&works)
         {
             return Err(self);
         }
         for entry in self.entries {
             assert!(
                 registry
-                    .install_recovered_durable_fetch(entry.completion)
+                    .install_recovered_durable_body_pipeline(entry.work)
                     .is_ok(),
-                "preflighted recovered Sign-plus-Fetch installation is infallible"
+                "preflighted recovered WAL-plus-body installation is infallible"
             );
         }
         Ok(())
     }
 }
 /// Seal the complete opened-ledger Fetch census without releasing row parts.
-pub(in crate::sumeragi::v2_lifecycle_coordinator) fn seal_recovered_durable_certified_fetch_census(
-    permit: DurableCertifiedFetchLedgerCensusPermit,
-    entries: Vec<AuthenticatedRecoveredDurableCertifiedFetchV1>,
-) -> Option<AuthenticatedRecoveredDurableCertifiedFetchCensusV1> {
-    let census = AuthenticatedRecoveredDurableCertifiedFetchCensusV1::from_exact_ledger_census(
-        permit, entries,
-    )?;
+pub(in crate::sumeragi::v2_lifecycle_coordinator) fn seal_recovered_durable_certified_body_pipeline_census(
+    permit: DurableCertifiedBodyPipelineLedgerCensusPermit,
+    entries: Vec<AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1>,
+) -> Option<AuthenticatedRecoveredDurableCertifiedBodyPipelineCensusV1> {
+    let census =
+        AuthenticatedRecoveredDurableCertifiedBodyPipelineCensusV1::from_exact_ledger_census(
+            permit, entries,
+        )?;
     census.is_exact().then_some(census)
 }
 /// One-shot proof that a pending Fetch binding is reconstructed only while an

@@ -1,19 +1,3 @@
-/// Closed internal policy for crossing a durable physical ingress barrier.
-///
-/// The ordinary selector preserves every barrier. The timeout-vote episode
-/// variant exposes only a directly authenticated validator's exact productive
-/// TimeoutVote to the downstream episode predicate while one bounded
-/// certified-response carrier owns the shared physical turn. Response
-/// authority is acquired only after dequeue, so the phase check deliberately
-/// does not assume a claim which cannot exist yet. It does not admit the vote
-/// by itself.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FairV2IngressBarrierBypass {
-    /// Preserve every durable ingress barrier.
-    None,
-    /// Let the finite current-view TimeoutVote episode reach its predicate.
-    TimeoutVoteEpisode,
-}
 /// Exact leader-wire authority consulted by one fair-ingress selector cut.
 #[derive(Clone, Debug)]
 struct FairV2IngressLeaderWireSelectorProjection {
@@ -180,7 +164,6 @@ fn fair_v2_ingress_queue_gate_verdict(
     lane: &FairV2IngressLane,
     index: usize,
     leader: &FairV2IngressLeaderWireSelectorProjection,
-    barrier_bypass: FairV2IngressBarrierBypass,
 ) -> FairV2IngressQueueGateVerdict {
     let entry = &lane.entries[index];
     let leader_wire_barrier = leader.selected_barrier.as_ref();
@@ -221,18 +204,9 @@ fn fair_v2_ingress_queue_gate_verdict(
         && leader_wire_barrier.is_some_and(|owner| {
             fair_v2_ingress_certified_fence_escape_advances_owner(&owner.token, &entry.inbound)
         });
-    let timeout_vote_episode_dependency = barrier_bypass
-        == FairV2IngressBarrierBypass::TimeoutVoteEpisode
-        && fair_v2_ingress_is_direct_validator_timeout_vote_owner(source, entry)
-        && leader_wire_barrier.is_some_and(|owner| {
-            owner.token.identity.phase == FairV2IngressLeaderWirePhase::CertifiedResponse
-        });
     let dependency_bypass = !ingress_barrier_allows
-        && (timeout_vote_episode_dependency
-            || (leader_wire_control_barrier
-                && (earlier_dependency
-                    || timeout_control_dependency
-                    || certified_fence_escape_dependency)));
+        && leader_wire_control_barrier
+        && (earlier_dependency || timeout_control_dependency || certified_fence_escape_dependency);
     if has_live_control_predecessor || (!ingress_barrier_allows && !dependency_bypass) {
         FairV2IngressQueueGateVerdict::Blocked
     } else if dependency_bypass {

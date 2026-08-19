@@ -9,9 +9,9 @@ use super::{AdmissionRequest, LeaseId};
 use super::{
     AuthenticatedLifecycleRecoveryCut, CandidateAdmission, CapacityClass, InitialLifecycleState,
     LifecycleContext, LifecycleCoordinator, LifecycleDigest, LifecycleKey, LifecyclePhase,
-    LifecycleStage, LifecycleStageKind, LifecycleWorkClass, OwnerId, PhysicalReplacement,
-    PhysicalSlot, PhysicalSlotId, PredecessorScope, ReadyEvent, TurnLease, WaitSource, WaitToken,
-    authority,
+    LifecycleRecord, LifecycleStage, LifecycleStageKind, LifecycleWorkClass, OwnerId,
+    PhysicalReplacement, PhysicalSlot, PhysicalSlotId, PredecessorScope, ReadyEvent, TurnLease,
+    WaitSource, WaitToken, authority,
     body_pipeline_transition::{
         SealedInvalidBodyReportProjection, SealedInvalidBodyReportProjectionPermit,
         SealedValidateNoSuccessorProjection, SealedValidateNoSuccessorProjectionPermit,
@@ -25,14 +25,15 @@ use super::{
         CertifiedServeReplayEvidencePairV1, CertifiedServeTerminalReplayAuthorityPairV1,
         CertifiedStoreReplayEvidenceV1, CertifiedValidateReplayEvidenceV1,
         DurableCertifiedFetchReplayProjectionV1, DurableValidateReplayEvidenceV1,
-        LifecycleReplayAuthorityV1, PreparedDurableCertifiedFetchStartupV1,
+        LifecycleReplayAuthorityV1, PreparedDurableCertifiedBodyPipelineStartupV1,
+        PreparedDurableCertifiedBodyPipelineWorkV1,
         RecoveredLifecycleNextWalVoteCandidateProjectionV1, RemoteProposalFetchReplayEvidenceV1,
         RemoteProposalStoreReplayEvidenceV1, RemoteProposalStoredReplayEvidenceV1,
         RemoteProposalValidateReplayEvidenceV1, SealedLiveWalPersistedEffectV1,
         SignedBroadcastReplayEvidenceV1, SignedEquivocationReplayEvidenceV1,
         exact_direct_signed_admission_authority,
     },
-    schema::DurablePayloadReference,
+    schema::{DurablePayloadReference, DurableRecordMetadata},
     selector::{CertifiedFetchCompletionAuthority, CertifiedFetchDequeuedResponse},
     wal_recovery::{
         AuthenticatedRecoveredWalControlProjection,
@@ -737,13 +738,13 @@ use crate::sumeragi::{
     FairV2IngressDequeueDisposition, InboundBlockMessage,
     message::BlockMessage,
     v2::{
-        AdapterEffect, PreparedInvalidBodyReportAdapterReplay,
-        PreparedReadyDurableValidateAdapterPublication, PreparedReadyDurableValidatePersistedSign,
-        ProductionLifecycleAdapterStartupV1, ReadyDurableValidateAdapterPublicationKind,
-        ReadyDurableValidateSignWalError, RecoveredDecisionApplyRegistryCarrierV1,
-        RecoveredDecisionApplyStagedStorageV1, RecoveredWalVoteSign,
-        RegisteredPrepareValidateSignCapability, SignRequest, SumeragiV2Adapter,
-        VerifiedHeightContext,
+        AdapterEffect, CertifiedBodyPipelineColdReplayStepV1,
+        PreparedInvalidBodyReportAdapterReplay, PreparedReadyDurableValidateAdapterPublication,
+        PreparedReadyDurableValidatePersistedSign, ProductionLifecycleAdapterStartupV1,
+        ReadyDurableValidateAdapterPublicationKind, ReadyDurableValidateSignWalError,
+        RecoveredDecisionApplyRegistryCarrierV1, RecoveredDecisionApplyStagedStorageV1,
+        RecoveredWalVoteSign, RegisteredPrepareValidateSignCapability, SignRequest,
+        SumeragiV2Adapter, VerifiedHeightContext,
     },
     v2_body_store::{
         BodyValidationError, BodyValidationRejectionIdentity, DurableBodyReceipt,
@@ -1560,7 +1561,7 @@ impl CertifiedFetchCompletion {
 /// body-store receipt's own manifest hash so validation proves agreement
 /// between the transport family and the durable catalog entry.
 #[derive(Debug)]
-struct DurableStoreBody {
+pub(super) struct DurableStoreBody {
     address: ConcreteWorkAddress,
     effect: AdapterEffect,
     pending: PendingRuntimeEffectBinding,
@@ -1569,7 +1570,79 @@ struct DurableStoreBody {
     replay_evidence: CertifiedStoreReplayEvidenceV1,
 }
 impl DurableStoreBody {
-    fn validates(&self, installed_digest: LifecycleDigest) -> bool {
+    /// Reconstruct the exact durable Store child of one authenticated Fetch.
+    pub(super) fn from_recovered_certified_fetch(
+        completion: CertifiedFetchCompletion,
+        verified: &VerifiedHeightContext,
+        ordinal: u128,
+    ) -> Result<
+        (
+            Self,
+            CandidateAdmission,
+            CertifiedBodyPipelineColdReplayStepV1,
+        ),
+        (),
+    > {
+        let owner = completion.address.owner;
+        let Some((tag, manifest)) = completion.replay_evidence.adapter_preview_inputs(
+            &completion.incumbent_effect,
+            &completion.incumbent_pending,
+            &completion.durable_receipt,
+        ) else {
+            return Err(());
+        };
+        let manifest = manifest.clone();
+        let effect = AdapterEffect::StoreBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+        };
+        let Some(pending) = completion
+            .incumbent_pending
+            .project_certified_fetch_store_successor(&completion.incumbent_effect, &effect)
+        else {
+            return Err(());
+        };
+        let Some(replay_evidence) = completion.replay_evidence.project_store(
+            &completion.incumbent_effect,
+            &completion.incumbent_pending,
+            &completion.durable_receipt,
+            &effect,
+        ) else {
+            return Err(());
+        };
+        let slot = PhysicalSlotId::for_capacity(LifecycleWorkClass::Store.capacity_class(), 0);
+        let Some(address) = ConcreteWorkAddress::new(owner, ordinal, slot) else {
+            return Err(());
+        };
+        let digest = digest_from_hash(pending.exact_effect_identity());
+        let expected_manifest_hash = HashOf::new(&manifest);
+        let carrier = Self {
+            address,
+            effect: effect.clone(),
+            pending,
+            durable_receipt: completion.durable_receipt,
+            expected_manifest_hash,
+            replay_evidence,
+        };
+        if !carrier.validates(digest) {
+            return Err(());
+        }
+        let Ok(candidate) = carrier.project_candidate(verified) else {
+            return Err(());
+        };
+        let Some(replay) = CertifiedBodyPipelineColdReplayStepV1::body_available(
+            completion.address.ordinal,
+            tag,
+            manifest,
+            effect,
+        ) else {
+            return Err(());
+        };
+        Ok((carrier, candidate, replay))
+    }
+
+    pub(super) fn validates(&self, installed_digest: LifecycleDigest) -> bool {
         let AdapterEffect::StoreBody { round, subject, .. } = &self.effect else {
             return false;
         };
@@ -1586,6 +1659,30 @@ impl DurableStoreBody {
             && self
                 .replay_evidence
                 .exactly_matches_store(&self.effect, &self.durable_receipt)
+    }
+    pub(super) const fn address(&self) -> ConcreteWorkAddress {
+        self.address
+    }
+    pub(super) fn ready_digest(&self) -> LifecycleDigest {
+        digest_from_hash(self.pending.exact_effect_identity())
+    }
+    fn matches_recovered_record(
+        &self,
+        active_context: LifecycleContext,
+        record: &LifecycleRecord,
+        metadata: &DurableRecordMetadata,
+        installed_digest: LifecycleDigest,
+    ) -> bool {
+        self.validates(installed_digest)
+            && self.replay_evidence.exactly_matches_recovered_record(
+                active_context,
+                record,
+                metadata,
+                installed_digest,
+                &self.effect,
+                &self.durable_receipt,
+                &self.pending,
+            )
     }
     fn project_candidate(
         &self,
@@ -1606,7 +1703,7 @@ impl DurableStoreBody {
 /// through Fetch and Store. The independently transferred manifest hash is a
 /// second authority coordinate: it is never reconstructed from the receipt.
 #[derive(Debug)]
-struct DurableValidateBody {
+pub(super) struct DurableValidateBody {
     address: ConcreteWorkAddress,
     effect: AdapterEffect,
     pending: PendingRuntimeEffectBinding,
@@ -1615,7 +1712,83 @@ struct DurableValidateBody {
     replay_evidence: DurableValidateReplayEvidenceV1,
 }
 impl DurableValidateBody {
-    fn validates(&self, installed_digest: LifecycleDigest) -> bool {
+    /// Reconstruct the exact durable Validate child of one authenticated Store.
+    pub(super) fn from_recovered_certified_store(
+        store: DurableStoreBody,
+        verified: &VerifiedHeightContext,
+        ordinal: u128,
+    ) -> Result<
+        (
+            Self,
+            CandidateAdmission,
+            CertifiedBodyPipelineColdReplayStepV1,
+        ),
+        (),
+    > {
+        let (tag, round, subject) = match &store.effect {
+            AdapterEffect::StoreBody {
+                tag,
+                round,
+                subject,
+            } => (*tag, *round, *subject),
+            _ => return Err(()),
+        };
+        let store_effect = AdapterEffect::StoreBody {
+            tag,
+            round,
+            subject,
+        };
+        let effect = AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        };
+        let Some(pending) = store
+            .pending
+            .project_store_validate_successor(&store_effect, &effect)
+        else {
+            return Err(());
+        };
+        let Some(replay_evidence) = store.replay_evidence.project_validate(
+            &store_effect,
+            &store.durable_receipt,
+            &effect,
+            &pending,
+        ) else {
+            return Err(());
+        };
+        let slot = PhysicalSlotId::for_capacity(LifecycleWorkClass::Validate.capacity_class(), 0);
+        let Some(address) = ConcreteWorkAddress::new(store.address.owner, ordinal, slot) else {
+            return Err(());
+        };
+        let digest = digest_from_hash(pending.exact_effect_identity());
+        let durable_receipt = store.durable_receipt.clone();
+        let carrier = Self {
+            address,
+            effect: effect.clone(),
+            pending,
+            durable_receipt,
+            expected_manifest_hash: store.expected_manifest_hash,
+            replay_evidence: DurableValidateReplayEvidenceV1::certified(replay_evidence),
+        };
+        if !carrier.validates(digest) {
+            return Err(());
+        }
+        let Ok(candidate) = carrier.project_candidate(verified) else {
+            return Err(());
+        };
+        let Some(replay) = CertifiedBodyPipelineColdReplayStepV1::body_stored(
+            store.address.ordinal,
+            tag,
+            store.durable_receipt,
+            effect,
+        ) else {
+            return Err(());
+        };
+        Ok((carrier, candidate, replay))
+    }
+
+    pub(super) fn validates(&self, installed_digest: LifecycleDigest) -> bool {
         let AdapterEffect::ValidateBody { round, subject, .. } = &self.effect else {
             return false;
         };
@@ -1630,6 +1803,30 @@ impl DurableValidateBody {
             && self.durable_receipt.subject() == *subject
             && self.durable_receipt.manifest_hash() == self.expected_manifest_hash
             && self.replay_evidence.exactly_matches_validate_pending(
+                &self.effect,
+                &self.durable_receipt,
+                &self.pending,
+            )
+    }
+    pub(super) const fn address(&self) -> ConcreteWorkAddress {
+        self.address
+    }
+    pub(super) fn ready_digest(&self) -> LifecycleDigest {
+        digest_from_hash(self.pending.exact_effect_identity())
+    }
+    fn matches_recovered_record(
+        &self,
+        active_context: LifecycleContext,
+        record: &LifecycleRecord,
+        metadata: &DurableRecordMetadata,
+        installed_digest: LifecycleDigest,
+    ) -> bool {
+        self.validates(installed_digest)
+            && self.replay_evidence.exactly_matches_recovered_record(
+                active_context,
+                record,
+                metadata,
+                installed_digest,
                 &self.effect,
                 &self.durable_receipt,
                 &self.pending,
@@ -2965,6 +3162,47 @@ pub(super) enum ReadyRecoveredDecisionFetchDemandV1 {
     /// Reserve one exact-output fanout and one vacant executor owner before claim.
     ExactOutputAndExecutor,
 }
+/// Exact ordinary durable-body carrier admitted to one Completion census.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ReadyCertifiedBodyPipelineAttestationV1 {
+    address: ConcreteWorkAddress,
+    digest: LifecycleDigest,
+    work_class: LifecycleWorkClass,
+    state: super::LifecycleState,
+}
+impl ReadyCertifiedBodyPipelineAttestationV1 {
+    /// Recheck the exact scheduler row without exposing registry payloads.
+    pub(super) fn matches_schedulable_record(self, record: &super::LifecycleRecord) -> bool {
+        record.state == self.state
+            && record.work_class == self.work_class
+            && matches!(
+                self.work_class,
+                LifecycleWorkClass::Fetch | LifecycleWorkClass::Store
+            )
+            && record.stage.predecessor_scope() == PredecessorScope::Independent
+            && record.physical_slots.len() == 1
+            && record
+                .physical_slots
+                .first_key_value()
+                .is_some_and(|(&slot, &digest)| {
+                    ConcreteWorkAddress::new(record.owner, record.ordinal, slot)
+                        == Some(self.address)
+                        && digest == self.digest
+                })
+    }
+}
+/// Closed failure while authenticating one ordinary Fetch or Store scheduler row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReadyCertifiedBodyPipelineAttestationErrorV1 {
+    /// Coordinator indexes, durable metadata, or the reducer-fence wait are not exact.
+    InvalidCoordinatorIndex,
+    /// The physical registry address is absent or corrupt.
+    Registry(RegistryError),
+    /// The address contains another concrete carrier class.
+    WrongWorkKind,
+    /// The durable carrier does not reproduce the exact logical row.
+    InvalidCarrier,
+}
 /// Opaque proof and move-only request authority for one Ready recovered Decision Fetch.
 ///
 /// The request authority retains the exact tag, CommitQC, round, subject, and
@@ -3448,6 +3686,38 @@ impl ConcreteLifecycleWork {
             Err(completion)
         }
     }
+    fn from_recovered_durable_store(store: DurableStoreBody) -> Result<Self, DurableStoreBody> {
+        let digest = store.ready_digest();
+        let work = Self {
+            digest,
+            kind: ConcreteLifecycleWorkKind::DurableStoreBody(store),
+        };
+        if work.validate_exact() {
+            Ok(work)
+        } else {
+            let ConcreteLifecycleWorkKind::DurableStoreBody(store) = work.kind else {
+                unreachable!("new recovered Store work retains its closed carrier kind")
+            };
+            Err(store)
+        }
+    }
+    fn from_recovered_durable_validate(
+        validate: DurableValidateBody,
+    ) -> Result<Self, DurableValidateBody> {
+        let digest = validate.ready_digest();
+        let work = Self {
+            digest,
+            kind: ConcreteLifecycleWorkKind::DurableValidateBody(validate),
+        };
+        if work.validate_exact() {
+            Ok(work)
+        } else {
+            let ConcreteLifecycleWorkKind::DurableValidateBody(validate) = work.kind else {
+                unreachable!("new recovered Validate work retains its closed carrier kind")
+            };
+            Err(validate)
+        }
+    }
     /// Consume one exact effect and ordinal-free binding into registry work.
     pub(super) fn from_exact(
         effect: AdapterEffect,
@@ -3497,6 +3767,18 @@ impl ConcreteLifecycleWork {
             0xE1,
         )
         .authority;
+        Self::from_authorized_exact(effect, pending, replay_authority)
+    }
+
+    /// Construct one fixture carrier from the replay authority already sealed
+    /// into its exact candidate. Production callers must use a typed admission
+    /// or successor projection and cannot invoke this seam.
+    #[cfg(test)]
+    pub(super) fn from_candidate_for_test(
+        effect: AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+        replay_authority: LifecycleReplayAuthorityV1,
+    ) -> Result<Self, (RegistryError, AdapterEffect, PendingRuntimeEffectBinding)> {
         Self::from_authorized_exact(effect, pending, replay_authority)
     }
 
@@ -3932,10 +4214,10 @@ impl PreparedCertifiedServeRegistryBatchV1 {
     }
     /// Prove the complete post-install startup census before LedgerV1 fsync.
     ///
-    /// Sealed startup callers arrive with exactly the recovered Fetch census,
-    /// optionally beside one exclusive recovered-WAL work carrier. Any other valid but
-    /// unrelated registry entry therefore rejects before the batch mutates the
-    /// registry or invokes durable publication.
+    /// Sealed startup callers arrive with exactly the recovered body-pipeline
+    /// census, optionally beside one exclusive recovered-WAL work carrier. Any
+    /// other valid but unrelated registry entry therefore rejects before the
+    /// batch mutates the registry or invokes durable publication.
     pub(super) fn preflights_startup_registry(
         &self,
         registry: &ConcreteLifecycleWorkRegistry,
@@ -3944,11 +4226,12 @@ impl PreparedCertifiedServeRegistryBatchV1 {
         if !self.preflights_registry(registry) {
             return false;
         }
-        let existing_is_exact = registry
-            .exact_recovered_wal_registry_slot()
-            .is_some_and(|slot| {
-                registry.exactly_covers_recovered_ready_fetches_with_extra(coordinator, slot)
-            });
+        let existing_is_exact = match registry.exact_recovered_wal_registry_slot() {
+            Some(slot) => {
+                registry.exactly_covers_recovered_ready_body_pipeline_with_extra(coordinator, slot)
+            }
+            None => registry.exactly_covers_recovered_ready_body_pipeline(coordinator),
+        };
         let live_serve_or_producer = coordinator
             .records
             .values()

@@ -1458,7 +1458,7 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 865 named tests
+Before network startup, the executable wrapper inventories 864 named tests
 across 40 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -1582,7 +1582,7 @@ exact retired-attempt accessor, mixed-carrier successor, two-link cold-restart
 hydration, noncanonical autonomous-output retirement, and the ordinary plus
 record-backed autonomous predecessor-durability regressions, followed by the
 three producer-publication-fence race regressions, bring the current
-inventory to 865 tests across 43 modules.
+inventory to 864 tests across 43 modules.
 Together with the source-sealed command and tooling legs, the pre-network
 corridor contains 91 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor. The
@@ -1660,7 +1660,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a`.
+`c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1725,15 +1725,13 @@ matching logical request registration retires its old request owner. The
 certified slot is a single retained credit, not a one-certificate limit:
 additional distinct TCs, CommitQCs, or CommitQC-carrying recovery responses
 consume ordinary Progress capacity while all retained certificates share that
-one credit. While an authenticated
-certified-body response remains retained, its escape episode is explicitly
-`Fresh`, `Charged`, or `Spent`: the Fresh potential admits at most one new
-direct TC, CommitQC, or `CommitCertificateResponse` carrying a CommitQC root;
-Charged and Spent reject every further fresh root, and only claim retirement
-resets the latch.
-The claimed-response rank counts
-the exact frozen direct roots plus the strictly decreasing trusted causal tail,
-so pacemaker priority cannot be replenished indefinitely.
+one credit. There is no response-local phase or resettable certificate latch.
+A selected `CertifiedResponse` remains ordinary FIFO work: a later
+`TimeoutVote` cannot cross it, and timeout control is a dependency only when it
+advances the current Proposal, vote, QC, or TimeoutVote owner. The
+claimed-response rank therefore counts the exact direct roots already inside
+its frozen prefix plus their strictly decreasing trusted causal tail; later
+timeout traffic cannot replenish that prefix.
 Certificate-first and certificate-last arrival orders preserve the same
 ordinary reserves. The
 standalone revision-4 kernel also charges an unpublished `BodyAvailable` token
@@ -1859,7 +1857,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 91 pre-network legs and the exact
-865-test inventory, the pinned harness lock and resolved toolchain, the formal
+864-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer. The protected archived validator first publishes a no-clobber

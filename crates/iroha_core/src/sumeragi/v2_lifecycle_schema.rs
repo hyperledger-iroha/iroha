@@ -1624,6 +1624,34 @@ impl SchedulerReadyInputs {
             .then_some(row)
     }
 
+    /// Join one ordinary certified Fetch or durable Store carrier to its
+    /// exact Ready or prospectively-woken coordinator row.
+    pub(super) fn from_authenticated_certified_body_pipeline(
+        _factory: &AuthenticatedSchedulerInputsFactory,
+        record: &LifecycleRecord,
+        attestation: super::work_registry::ReadyCertifiedBodyPipelineAttestationV1,
+        live_debts: [u64; 6],
+    ) -> Option<Self> {
+        let [mode, capacity, selector, lane, source, runner] = live_debts;
+        let row = Self {
+            owner: record.owner,
+            key: record.key,
+            validate_attestation: None,
+            producer_handoff_blocked: false,
+            output_capacity_class: None,
+            physical_capacity_available: true,
+            mode,
+            capacity,
+            selector,
+            lane,
+            source,
+            runner,
+        };
+        (attestation.matches_schedulable_record(record)
+            && row.identity_matches(record.ordinal, record))
+        .then_some(row)
+    }
+
     /// Join one exact coordinator row, optional sealed Validate carrier, and
     /// the six authenticated runtime debts into a production scheduler row.
     ///

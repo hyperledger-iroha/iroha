@@ -2749,7 +2749,7 @@ pub(super) fn durable_validation_wait_source(
 /// borrow-bound adapter token. Including both authenticated context identity
 /// and height makes accidental cross-height context reuse fail closed.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(super) fn reducer_fence_wait_source(context: LifecycleContext) -> WaitSource {
+pub(in crate::sumeragi) fn reducer_fence_wait_source(context: LifecycleContext) -> WaitSource {
     let encoded = (*context.id().as_bytes(), context.height()).encode();
     WaitSource::External(domain_digest(REDUCER_FENCE_WAIT_SOURCE_DOMAIN, &encoded))
 }

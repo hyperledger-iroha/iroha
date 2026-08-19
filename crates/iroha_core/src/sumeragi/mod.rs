@@ -3287,38 +3287,6 @@ fn fair_v2_ingress_current_protected_slots(
 fn fair_v2_ingress_is_timeout_vote(inbound: &InboundBlockMessage) -> bool {
     fair_v2_ingress_message_is_timeout_vote(inbound.message())
 }
-/// Whether one queued occurrence is the exact pre-runtime TimeoutVote owner
-/// delivered directly by its authenticated validator source.
-///
-/// This is only a selector prerequisite. The serialized runtime still checks
-/// the current episode, signer index, signature, frozen roster slot, and
-/// ordinary Progress capacity before the occurrence can leave fair ingress.
-fn fair_v2_ingress_is_direct_validator_timeout_vote_owner(
-    source: &FairV2IngressSource,
-    entry: &FairV2IngressEntry,
-) -> bool {
-    let FairV2IngressSource::Validator(authenticated_source) = source else {
-        return false;
-    };
-    let Some(token) = entry.leader_wire_token.as_ref() else {
-        return false;
-    };
-    let Some(ownership) = entry.inbound.ingress_ownership() else {
-        return false;
-    };
-    fair_v2_ingress_is_timeout_vote(&entry.inbound)
-        && entry.inbound.sender() == Some(authenticated_source)
-        && entry.inbound.via() == Some(authenticated_source)
-        && token.identity.phase == FairV2IngressLeaderWirePhase::TimeoutVote
-        && token.source_class == FairV2IngressLeaderWireSourceClass::Control
-        && token.identity.semantic_origin == *authenticated_source
-        && token.slot.semantic_origin == *authenticated_source
-        && ownership.validate_exact()
-        && ownership.leader_wire_token() == Some(token)
-        && ownership.leader_wire_runtime_receipt().is_none()
-        && ownership.runtime_physical_cut().is_none()
-        && ownership.physical_admission_ordinal() == Some(entry.admission_ordinal)
-}
 fn fair_v2_ingress_message_is_timeout_vote(message: &BlockMessage) -> bool {
     matches!(
         message,
@@ -6207,21 +6175,7 @@ impl FairV2Ingress {
         &self,
         predicate: impl FnMut(&InboundBlockMessage) -> bool,
     ) -> Result<Option<(InboundBlockMessage, FairV2IngressDequeueDisposition)>, String> {
-        self.try_recv_if_at_checked_classified(
-            Instant::now(),
-            true,
-            FairV2IngressBarrierBypass::None,
-            predicate,
-        )
-    }
-    /// Checked production dequeue with one explicitly selected internal
-    /// barrier-bypass policy.
-    pub(crate) fn try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
-        &self,
-        barrier_bypass: FairV2IngressBarrierBypass,
-        predicate: impl FnMut(&InboundBlockMessage) -> bool,
-    ) -> Result<Option<(InboundBlockMessage, FairV2IngressDequeueDisposition)>, String> {
-        self.try_recv_if_at_checked_classified(Instant::now(), true, barrier_bypass, predicate)
+        self.try_recv_if_at_checked_classified(Instant::now(), true, predicate)
     }
     #[cfg(test)]
     fn try_recv_if_at(
@@ -6238,19 +6192,13 @@ impl FairV2Ingress {
         service_attempt_at: Instant,
         predicate: impl FnMut(&InboundBlockMessage) -> bool,
     ) -> Result<Option<InboundBlockMessage>, String> {
-        self.try_recv_if_at_checked_classified(
-            service_attempt_at,
-            false,
-            FairV2IngressBarrierBypass::None,
-            predicate,
-        )
-        .map(|selected| selected.map(|(inbound, _)| inbound))
+        self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)
+            .map(|selected| selected.map(|(inbound, _)| inbound))
     }
     fn try_recv_if_at_checked_classified(
         &self,
         service_attempt_at: Instant,
         retire_obsolete_leader_wire: bool,
-        barrier_bypass: FairV2IngressBarrierBypass,
         mut predicate: impl FnMut(&InboundBlockMessage) -> bool,
     ) -> Result<Option<(InboundBlockMessage, FairV2IngressDequeueDisposition)>, String> {
         let _service_guard = self.service_lock.lock();
@@ -6284,7 +6232,6 @@ impl FairV2Ingress {
                                     lane,
                                     index,
                                     &leader_wire_projection,
-                                    barrier_bypass,
                                 );
                                 (
                                     entry.admission_ordinal,

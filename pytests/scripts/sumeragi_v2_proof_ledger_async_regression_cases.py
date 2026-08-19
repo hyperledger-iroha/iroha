@@ -1692,49 +1692,6 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
     ), errors
     effects_path.write_text(canonical_effects, encoding="utf-8")
 
-    runner_path = reviewed_rust_item_provider(
-        module, tmp_path, Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
-        "drain_v2_ingress",
-    )
-    canonical_runner = runner_path.read_text(encoding="utf-8")
-
-    def mutate_runner_item(name: str, old: str, new: str) -> str:
-        item = module.rust_items(canonical_runner, name)[0]
-        assert item.source.count(old) == 1, (name, old)
-        return canonical_runner.replace(item.source, item.source.replace(old, new, 1), 1)
-
-    runner_path.write_text(
-        mutate_runner_item(
-            "drain_v2_ingress",
-            "mode != V2IngressDrainMode::Ordinary && turn != OuterIngressTurn::Ingress",
-            "false && turn != OuterIngressTurn::Ingress",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_source_fidelity_errors(formal_dir)
-    assert any(
-        "both non-Ordinary modes must skip Completion and Runtime turns" in error
-        for error in errors
-    ), errors
-
-    runner_path.write_text(
-        mutate_runner_item(
-            "drain_v2_ingress",
-            "if message.validate_version().is_err() {\n"
-            "                        return false;\n"
-            "                    }",
-            "if false {\n                        return false;\n                    }",
-        ),
-        encoding="utf-8",
-    )
-    errors = module._async_source_fidelity_errors(formal_dir)
-    assert any(
-        "non-Ordinary drain must reject wrong-version ingress" in error
-        for error in errors
-    ), errors
-    runner_path.write_text(canonical_runner, encoding="utf-8")
-
-
 def test_runtime_step_reconciliation_survives_effect_item_reseal(
     tmp_path: Path,
 ) -> None:
@@ -1907,7 +1864,7 @@ def test_async_candidate_producer_continuation_owner_rejects_target_only_narrowi
         ), errors
 
 
-def test_asyncnetwork_authority_and_order_migrations_fail_closed(
+def test_asyncnetwork_authority_and_order_contract_fails_closed(
     tmp_path: Path,
 ) -> None:
     """Reviewed terminal, Via, barrier, and transition authority is immutable."""
@@ -1960,14 +1917,14 @@ def test_asyncnetwork_authority_and_order_migrations_fail_closed(
             "candidate.item.authenticatedSource",
         ),
         (
-            "AsyncTimeoutRecoveryVoteBarrierException",
-            "source = item.source",
-            "TRUE",
+            "AsyncTimeoutControlDependencyAdvancesLeaderWire",
+            '"PrepareQC", "CommitQC", "TimeoutVote"}',
+            '"PrepareQC", "CommitQC", "TimeoutVote", "CertifiedResponse"}',
         ),
         (
-            "AsyncTimeoutRecoveryVoteCrossesCertifiedResponseBarrier",
-            'owner.status = "Ingress"',
-            "TRUE",
+            "AsyncTimeoutControlDependencyAdvancesLeaderWire",
+            "DeliveryView(item) \\in owner.view..(owner.view + 1)",
+            "DeliveryView(item) \\in 0..MaxRank",
         ),
         (
             "AsyncFairIngressCoreStateTransition",
@@ -1987,9 +1944,62 @@ def test_asyncnetwork_authority_and_order_migrations_fail_closed(
             "CanAdmitIngressItem(item)",
         ),
     )
-    assert module._async_network_migration_contract_errors(path, canonical) == []
+    assert module._async_network_reviewed_contract_errors(path, canonical) == []
     for symbol, old, new in mutations:
         mutated = mutate_tla_operator(canonical, symbol, old, new)
-        errors = module._async_network_migration_contract_errors(path, mutated)
+        errors = module._async_network_reviewed_contract_errors(path, mutated)
         assert len(errors) == 1, (symbol, errors)
-        assert f"migration contract {symbol} " in errors[0], errors
+        assert f"contract {symbol} " in errors[0], errors
+
+
+@pytest.mark.parametrize(
+    ("retired_symbol", "definition"),
+    (
+        ("escapePhase", 'escapePhase == "Fresh"'),
+        (
+            "CertifiedEscapeEpisodeIsOneShot",
+            "CertifiedEscapeEpisodeIsOneShot == TRUE",
+        ),
+    ),
+)
+def test_revision4_certified_credit_rejects_response_local_latch(
+    tmp_path: Path,
+    retired_symbol: str,
+    definition: str,
+) -> None:
+    """The generic physical credit cannot regain a response-local phase."""
+
+    module = load_checker()
+    formal_dir = tmp_path / "formal" / "sumeragi_v2"
+    formal_dir.mkdir(parents=True)
+    for name in (
+        "SumeragiV2Revision4CertifiedFenceReservation.tla",
+        "revision4_certified_fence_reservation_fixed.cfg",
+        "revision4_certified_fence_reservation_blocked_bug.cfg",
+        "revision4_certified_fence_reservation_arrival_order_bug.cfg",
+        "README.md",
+        "PROOF.md",
+    ):
+        shutil.copyfile(module.FORMAL_DIR / name, formal_dir / name)
+
+    assert (
+        module._revision4_certified_fence_reservation_contract_errors(
+            formal_dir, module.ROOT_DIR
+        )
+        == []
+    )
+    model_path = formal_dir / "SumeragiV2Revision4CertifiedFenceReservation.tla"
+    source = model_path.read_text(encoding="utf-8")
+    model_path.write_text(
+        source.replace("TypeOK ==", f"{definition}\n\nTypeOK ==", 1),
+        encoding="utf-8",
+    )
+
+    errors = module._revision4_certified_fence_reservation_contract_errors(
+        formal_dir, module.ROOT_DIR
+    )
+
+    assert any(
+        retired_symbol in error and "response-local latch symbol" in error
+        for error in errors
+    ), errors

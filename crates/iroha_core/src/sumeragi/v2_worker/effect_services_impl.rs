@@ -436,6 +436,7 @@ impl V2EffectServices for ProductionV2Services {
         operation.complete();
         Ok(())
     }
+    #[cfg(test)]
     fn complete_certified_body_fetch(
         &mut self,
         task: &BodyFetchTask,

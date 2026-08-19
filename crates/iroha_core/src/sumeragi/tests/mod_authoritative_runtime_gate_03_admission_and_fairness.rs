@@ -1,5 +1,5 @@
 #[test]
-fn timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier() {
+fn ordinary_selector_preserves_certified_response_before_timeout_vote() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
     let validator = PeerId::new(KeyPair::random().public_key().clone());
     let response = v2_certified_body_response(0, 0, 1);
@@ -55,42 +55,41 @@ fn timeout_vote_episode_crosses_only_the_bounded_certified_response_barrier() {
             .expect("ordinary selection preserves the response barrier")
             .is_none()
     );
-    assert!(
-        ingress
-            .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
-                super::FairV2IngressBarrierBypass::TimeoutVoteEpisode,
-                |_| false,
-            )
-            .expect("the internal episode policy still needs its runtime predicate")
-            .is_none()
-    );
     let (mut selected, disposition) = ingress
-        .try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
-            super::FairV2IngressBarrierBypass::TimeoutVoteEpisode,
-            is_timeout_vote,
-        )
-        .expect("the response barrier preserves the checked dequeue")
-        .expect("the exact timeout vote reaches its episode predicate");
+        .try_recv_if_checked_retiring_obsolete(|inbound| !is_timeout_vote(inbound))
+        .expect("the lifecycle selector preserves the checked dequeue")
+        .expect("the exact certified response remains first");
+    assert_eq!(disposition, super::FairV2IngressDequeueDisposition::Admit);
+    assert!(!is_timeout_vote(&selected));
+    let ownership = selected
+        .take_ingress_ownership()
+        .expect("the selected certified response retains exact ingress ownership");
+    assert!(ownership.validate_exact());
+    let response_runtime = ownership
+        .leader_wire_runtime_receipt()
+        .expect("the certified response crosses the durable runtime handoff");
+    ingress
+        .mark_leader_wire_volatile_terminal(response_runtime)
+        .expect("retire the consumed certified response");
+    assert_eq!(ingress.len(), 1, "the later TimeoutVote remains queued");
+
+    let (mut selected, disposition) = ingress
+        .try_recv_if_checked_retiring_obsolete(is_timeout_vote)
+        .expect("the strict selector remains live after response retirement")
+        .expect("the TimeoutVote becomes eligible only after its predecessor");
     assert_eq!(disposition, super::FairV2IngressDequeueDisposition::Admit);
     assert!(is_timeout_vote(&selected));
     let ownership = selected
         .take_ingress_ownership()
-        .expect("the selected timeout vote retains exact ingress ownership");
+        .expect("the selected TimeoutVote retains exact ingress ownership");
     assert!(ownership.validate_exact());
-    assert!(ownership.leader_wire_runtime_receipt().is_some());
-    assert_eq!(ingress.len(), 1, "the certified response stays retained");
-    assert!(
-        ingress
-            .state
-            .lock()
-            .leader_wire_lifecycles
-            .values()
-            .any(|record| {
-                record.status == super::FairV2IngressLeaderWireStatus::Ingress
-                    && record.token.identity.phase
-                        == super::FairV2IngressLeaderWirePhase::CertifiedResponse
-            })
-    );
+    let timeout_runtime = ownership
+        .leader_wire_runtime_receipt()
+        .expect("the TimeoutVote crosses the ordinary durable runtime handoff");
+    ingress
+        .mark_leader_wire_volatile_terminal(timeout_runtime)
+        .expect("retire the consumed TimeoutVote");
+    assert_eq!(ingress.len(), 0);
 }
 #[test]
 fn restored_productive_retry_stays_behind_an_earlier_certified_request_carrier() {
@@ -764,10 +763,7 @@ fn sealed_height_retirement_parks_ingress_without_consuming_runtime_owners() {
     ));
     let _directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
-            proposal,
-            Some(validator.clone()),
-        )),
+        ingress.try_push(InboundBlockMessage::new(proposal, Some(validator.clone()),)),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
     let selected = ingress

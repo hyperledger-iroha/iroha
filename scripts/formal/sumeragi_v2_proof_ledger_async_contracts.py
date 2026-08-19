@@ -295,6 +295,7 @@ ASYNC_NETWORK_RELEASE_THEOREMS = (
     'AsyncCandidateProducerContinuationRunnerSelectionIsTwoStageLogicalMinimum',
     'AsyncCandidateProducerContinuationRunnerSelectionIsPairwisePhysicalMinimum',
     'AsyncLeaderWireCarrierCannotBypassFrozenPrefix',
+    'AsyncOrdinarySelectorPreservesCertifiedResponseBeforeTimeoutVote',
     'AsyncCertifiedFenceEscapeCrossesSelectedServeBarrier',
     'AsyncCertifiedFenceEscapeCrossesMatchingLeaderWireBarrier',
     'AsyncOrdinaryIngressPhysicalOwnerExcludesDifferentCarrier',
@@ -1504,7 +1505,7 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "97f30ef35ce90e5a67193da0cdbdcc13c3de2f1c2535fd50ecdd081a697313a5"
     ),
     "scripts/formal/run_sumeragi_v2_certified_response_source_lineage_mutation.sh": (
-        "3848a6a8caf5b04053e5665c9545439e0f224234da36f0175e643865482d8daa"
+        "6d465561af8d5f95e56aa92f0fda37cfbeea660c8d05aa2846f6eef0f234001a"
     ),
     "scripts/formal/run_sumeragi_v2_commit_import_provenance_mutations.sh": (
         "75466cd1d485d26237931a11ad62ba9f277f63fb162d2a49648e22731a2a420e"
@@ -1889,10 +1890,10 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
 )
 LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "SumeragiV2Revision4CertifiedFenceReservation.tla": (
-        "fb29dcbe433d84f8c84453ea7e2537f4ef94abd13ed6083c435387f1aec54300"
+        "484545fdd06b3b60deccd195ee4a8b8c766c70126af405764957b1029a0f7b00"
     ),
     "revision4_certified_fence_reservation_fixed.cfg": (
-        "c68d79877e268f761bbe2d173ab6e8cd672cb5aa8d7b713c631f959f1ef8d3c4"
+        "1daca6e3e7db42e4665e7664a941fe80525ab737d1a6b30c479f2c76e7016039"
     ),
     "revision4_certified_fence_reservation_blocked_bug.cfg": (
         "8e204663a764ca03afdee20dad96060bda28d16d372ce8c8dd5eb7e61034944e"
@@ -3194,6 +3195,13 @@ def _revision4_certified_fence_reservation_contract_errors(
             "must be a regular file"
         ]
     source = module_path.read_text(encoding="utf-8")
+    stripped_source = strip_tla_comments(source)
+    for retired_symbol in ("escapePhase", "CertifiedEscapeEpisodeIsOneShot"):
+        if _symbol_exists(stripped_source, retired_symbol):
+            errors.append(
+                f"{module_path}: generic certified credit must not retain "
+                f"response-local latch symbol {retired_symbol}"
+            )
 
     required_operator_tokens = {
         "BarrierKinds": ('{"Serve", "LeaderWire"}',),
@@ -3278,7 +3286,6 @@ def _revision4_certified_fence_reservation_contract_errors(
             "CertifiedKinds \\ {offeredKind}",
             'runtimeQueue = <<"Progress">>',
             "conflictingProposalQueued",
-            'escapePhase = "Fresh"',
         ),
         "CertifiedFenceEscapeKind": ("kind \\in CertifiedKinds",),
         "OfferAdvancesRetainedOwner": (
@@ -3302,22 +3309,18 @@ def _revision4_certified_fence_reservation_contract_errors(
             "ownerRetained",
             "authenticated",
             "CertifiedFenceEscapeKind(offeredKind)",
-            'escapePhase = "Fresh"',
             "OfferAdvancesRetainedOwner",
             "CanUseCertifiedFinalSlot",
             'stage\' = "Runtime"',
             "runtimeQueue' = Append(runtimeQueue, offeredKind)",
-            'escapePhase\' = "Charged"',
             "UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained",
         ),
         "AdmitCertifiedEscapeEarly": (
             'stage = "Ingress"',
             "CertifiedFenceEscapeKind(offeredKind)",
-            'escapePhase = "Fresh"',
             "CanUseCertifiedEarlySlot",
             'stage\' = "Runtime"',
             "runtimeQueue' = Append(runtimeQueue, offeredKind)",
-            'escapePhase\' = "Charged"',
         ),
         "AdmitOrdinaryProgress": (
             "pendingProgress > 0",
@@ -3333,12 +3336,10 @@ def _revision4_certified_fence_reservation_contract_errors(
         ),
         "AdmitAdditionalCertified": (
             'stage = "Runtime"',
-            'escapePhase = "Fresh"',
             "kind \\in pendingCertified",
             'CanAppendClass(runtimeQueue, kind, "Progress", TRUE)',
             "runtimeQueue' = Append(runtimeQueue, kind)",
             "pendingCertified' = pendingCertified \\ {kind}",
-            'escapePhase\' = "Charged"',
         ),
         "ReserveUnpublishedBodyAvailable": (
             "conflictingProposalQueued",
@@ -3356,7 +3357,6 @@ def _revision4_certified_fence_reservation_contract_errors(
             "CertifiedFenceEscapeKind(offeredKind)",
             'stage\' = "TrustedTail"',
             "runtimeQueue' = SubSeq(runtimeQueue, 1, Len(runtimeQueue) - 1)",
-            'THEN "Spent"',
             "UNCHANGED <<ownerIdentity, ownerSnapshot, ownerRetained",
         ),
         "DispatchEarlyCertifiedEscape": (
@@ -3364,7 +3364,6 @@ def _revision4_certified_fence_reservation_contract_errors(
             "CertifiedQueueIndices # {}",
             "FirstCertifiedQueueIndex # Len(runtimeQueue)",
             "runtimeQueue' = RemoveAt(runtimeQueue, FirstCertifiedQueueIndex)",
-            'THEN "Spent"',
         ),
         "RunCertifiedTrustedTail": (
             'stage = "TrustedTail"',
@@ -3376,7 +3375,6 @@ def _revision4_certified_fence_reservation_contract_errors(
             'installedTC\' = (offeredKind = "TimeoutCertificate")',
             'decided\' = (offeredKind \\in '
             '{"CommitQC", "CommitCertificateResponse"})',
-            'escapePhase\' = "Fresh"',
             "UNCHANGED <<ownerIdentity, ownerSnapshot, offeredKind",
         ),
         "Next": (
@@ -3461,16 +3459,6 @@ def _revision4_certified_fence_reservation_contract_errors(
             'offeredKind = "TimeoutCertificate"',
             "installedTC /\\ ~decided",
             "~installedTC /\\ decided",
-        ),
-        "CertifiedEscapeEpisodeIsOneShot": (
-            'escapePhase \\in {"Fresh", "Charged", "Spent"}',
-            'escapePhase \\in {"Charged", "Spent"}',
-            "~ENABLED AdmitCertifiedEscape",
-            "~ENABLED AdmitCertifiedEscapeEarly",
-            "~ENABLED (\\E kind \\in CertifiedKinds:",
-            'stage = "Handled"',
-            "~ownerRetained",
-            'escapePhase = "Fresh"',
         ),
         "UnpublishedBodyAvailableOwnsOrdinaryCompletion": (
             "~(unpublishedBodyAvailable /\\ conflictingProposalQueued)",
@@ -3599,7 +3587,6 @@ def _revision4_certified_fence_reservation_contract_errors(
             "INVARIANT RawTimeoutVoteCannotUseEscape",
             "INVARIANT AuthenticationRequiredForEscape",
             "INVARIANT HandledOutcomeExact",
-            "INVARIANT CertifiedEscapeEpisodeIsOneShot",
             "INVARIANT UnpublishedBodyAvailableOwnsOrdinaryCompletion",
             "PROPERTY CertifiedEscapeEventuallyHandled",
             "CHECK_DEADLOCK FALSE",
@@ -3636,6 +3623,11 @@ def _revision4_certified_fence_reservation_contract_errors(
             )
             continue
         config_source = config_path.read_text(encoding="utf-8")
+        if "CertifiedEscapeEpisodeIsOneShot" in config_source:
+            errors.append(
+                f"{config_path}: generic certified-credit configuration must "
+                "not retain the response-local one-shot latch"
+            )
         missing = [token for token in required if token not in config_source]
         if missing:
             errors.append(
@@ -3711,24 +3703,26 @@ def _revision4_certified_fence_reservation_contract_errors(
 
     documentation_contracts = {
         formal_dir / "README.md": (
-            "its escape episode is explicitly\n"
-            "`Fresh`, `Charged`, or `Spent`:",
-            "direct TC, CommitQC, or `CommitCertificateResponse` carrying a CommitQC root;",
-            "The claimed-response rank counts\n"
-            "the exact frozen direct roots plus the strictly decreasing trusted causal tail,\n"
-            "so pacemaker priority cannot be replenished indefinitely.",
+            "There is no response-local phase or resettable certificate latch.",
+            "A selected `CertifiedResponse` remains ordinary FIFO work: a later\n"
+            "`TimeoutVote` cannot cross it, and timeout control is a dependency only when it\n"
+            "advances the current Proposal, vote, QC, or TimeoutVote owner.",
+            "claimed-response rank therefore counts the exact direct roots already inside\n"
+            "its frozen prefix plus their strictly decreasing trusted causal tail; later\n"
+            "timeout traffic cannot replenish that prefix.",
             "The\nstandalone revision-4 kernel also charges an unpublished `BodyAvailable` token\n"
             "as an ordinary Completion owner and replaces its conflicting proposal owner in\n"
             "one atomic transition, preserving physical occupancy throughout the swap.",
         ),
         formal_dir / "PROOF.md": (
-            "its escape episode is explicitly `Fresh`,\n"
-            "`Charged`, or `Spent`:",
-            "direct TC, CommitQC, or\n"
-            "`CommitCertificateResponse` carrying a CommitQC root;",
-            "The claimed-response rank counts the exact frozen direct\n"
-            "roots and their strictly decreasing trusted causal tail, so pacemaker priority\n"
-            "cannot be replenished indefinitely.",
+            "There is no response-local phase or resettable\n"
+            "certificate latch.",
+            "A selected `CertifiedResponse` remains ordinary FIFO work:\n"
+            "a later `TimeoutVote` cannot cross it, while timeout control is a dependency\n"
+            "only when it advances the current Proposal, vote, QC, or TimeoutVote owner.",
+            "claimed-response rank counts the exact direct roots already inside its frozen\n"
+            "prefix and their strictly decreasing trusted causal tail, so later timeout\n"
+            "traffic cannot replenish that prefix.",
             "The standalone revision-4 kernel charges\n"
             "an unpublished `BodyAvailable` token as an ordinary Completion owner and\n"
             "atomically replaces its conflicting proposal owner without changing physical\n"
@@ -3738,14 +3732,14 @@ def _revision4_certified_fence_reservation_contract_errors(
     for documentation_path, claims in documentation_contracts.items():
         if not documentation_path.is_file() or documentation_path.is_symlink():
             errors.append(
-                f"{documentation_path}: revision-4 latch documentation must be regular"
+                f"{documentation_path}: revision-4 certified-credit documentation must be regular"
             )
             continue
         documentation = documentation_path.read_text(encoding="utf-8")
         for claim in claims:
             if documentation.count(claim) != 1:
                 errors.append(
-                    f"{documentation_path}: revision-4 latch documentation must "
+                    f"{documentation_path}: revision-4 certified-credit documentation must "
                     f"contain exact claim {claim!r}"
                 )
     return errors

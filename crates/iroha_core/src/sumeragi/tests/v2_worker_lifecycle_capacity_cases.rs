@@ -414,7 +414,9 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner() {
 #[must_use = "the exact test I/O fixture must remain alive with its service"]
 pub(in crate::sumeragi) struct LifecyclePlannerIoFixture {
     command_rx: V2IoCommandReceiver,
-    _body_store: V2BodyStore,
+    completion_tx: mpsc::SyncSender<V2IoCompletion>,
+    admission: Arc<V2IoAdmission>,
+    body_store: V2BodyStore,
 }
 impl LifecyclePlannerIoFixture {
     /// Count exact queued certified-Fetch persistence commands.
@@ -462,6 +464,34 @@ impl LifecyclePlannerIoFixture {
                 }
             }
         }
+    }
+    /// Execute one exact certified-Fetch persistence command through the same
+    /// ownership transitions as the production worker and publish its guarded
+    /// completion into the service's sole physical completion FIFO.
+    pub(in crate::sumeragi) fn execute_one_certified_fetch(
+        &mut self,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) {
+        let command = self
+            .command_rx
+            .try_recv()
+            .expect("one certified-Fetch persistence command remains queued");
+        let V2IoCommand::PersistCertifiedFetchBody(task) = command else {
+            panic!("expected the exact certified-Fetch persistence command")
+        };
+        let work_id = task.work_id();
+        let completion = task
+            .persist(&mut self.body_store)
+            .unwrap_or_else(|(error, _)| panic!("persist certified-Fetch body: {error}"));
+        self.command_rx.complete_work(work_id);
+        try_send_tracked_completion(
+            &self.completion_tx,
+            &self.admission,
+            V2IoCompletion::CertifiedFetchBodyPersisted(
+                GuardedCertifiedFetchBodyPersistenceCompletion::new(completion, output_guard),
+            ),
+        )
+        .expect("publish one guarded certified-Fetch completion");
     }
     /// Replace only the manual service's output guard for identity tests.
     pub(in crate::sumeragi) fn install_output_guard_for_test(
@@ -547,7 +577,7 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
         class_capacity,
         Arc::clone(&admission),
     );
-    let (_completion_tx, completion_rx) = mpsc::sync_channel(admission.capacity());
+    let (completion_tx, completion_rx) = mpsc::sync_channel(admission.capacity());
     services.context = context.clone();
     services.local_peer = local_peer;
     services.local_validator = Some(local_validator);
@@ -559,11 +589,13 @@ pub(in crate::sumeragi) fn install_lifecycle_planner_io_for_validator_for_test(
         completion_rx,
         join: None,
         allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-        admission,
+        admission: Arc::clone(&admission),
     });
     LifecyclePlannerIoFixture {
         command_rx,
-        _body_store: body_store,
+        completion_tx,
+        admission,
+        body_store,
     }
 }
 /// Install the exact private signer matching the test service's local peer.

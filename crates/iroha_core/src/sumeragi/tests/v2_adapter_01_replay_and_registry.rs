@@ -144,17 +144,12 @@ fn canonical_body_rolls_back_exact_busy_deferred_conflicting_proposal() {
     let retained_certificates = adapter.registry.certificates.clone();
     let retained_execution_commitments = adapter.registry.execution_commitments.clone();
     assert!(adapter.registry.manifest_conflicts(&canonical_manifest));
-    let DirectCertifiedBodyAvailablePreparation::Inactive(conflict) = adapter
-        .prepare_direct_certified_body_available(deferred_tag, &canonical_manifest)
-        .expect("classify the deferred conflict without mutating it")
-    else {
-        panic!("deferred conflict must remain a non-applied classification")
-    };
-    assert_eq!(
-        conflict.disposition(),
-        DirectCertifiedBodyAvailableInactive::DeferredConflict
+    assert!(
+        adapter
+            .prepare_direct_certified_body_available(deferred_tag, &canonical_manifest)
+            .is_err(),
+        "the direct lifecycle preview rejects a conflicting deferred proposal"
     );
-    drop(conflict);
     assert_eq!(adapter.deferred_inputs.len(), 1);
     assert!(adapter.registry.manifest_conflicts(&canonical_manifest));
     let outcome = adapter

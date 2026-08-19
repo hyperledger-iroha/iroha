@@ -1503,8 +1503,8 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "BlockSignaturePolicy::GenesisAuthority(",
             "WalRecordV2::Decision(decision.clone())",
             "let mut launched = owner",
-            "ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(result)",
-            "ProductionRecoveredCompletionDispatchV1::ApplyQueued",
+            "ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(result)",
+            "ProductionCompletionDispatchV1::ApplyQueued",
             "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
             "let mut activated = launched",
             "lifecycle_run_inner::finalize_lifecycle_height(",
@@ -2184,7 +2184,7 @@ fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart
 fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit() {
     let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
     let dispatch = scheduler
-        .split_once("fn dispatch_recovered_completion_with_runner_debt(")
+        .split_once("fn dispatch_completion_with_runner_debt(")
         .expect("recovered Completion has one composite dispatch transaction")
         .1
         .split_once(

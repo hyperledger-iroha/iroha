@@ -1542,6 +1542,7 @@ macro_rules! production_historical_certificate_trace_body {
             && !$projection.request_present_after
     }};
 }
+#[cfg(test)]
 macro_rules! production_historical_body_pipeline_trace_body {
     ($projection:expr) => {{
         $projection.context_height > 0u64
@@ -5531,6 +5532,7 @@ pub struct ProductionHistoricalCertificateTraceProjection {
 }
 /// Exact certified historical body handoff into the ordinary body pipeline.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg(test)]
 pub struct ProductionHistoricalBodyPipelineTraceProjection {
     pub(crate) context_id: CanonicalIdentityProjection,
     pub(crate) context_height: u64,
@@ -8170,6 +8172,7 @@ pub(crate) const fn production_historical_certificate_trace_refines_indexed_asyn
     production_historical_certificate_trace_body!(projection)
 }
 /// Validate one authenticated historical body entering its exact body pipeline.
+#[cfg(test)]
 pub(crate) const fn production_historical_body_pipeline_trace_refines_indexed_async_kernel(
     projection: ProductionHistoricalBodyPipelineTraceProjection,
 ) -> bool {
@@ -8369,6 +8372,7 @@ pub(crate) fn check_production_historical_certificate_transition(
 }
 /// Check one authenticated historical body-pipeline handoff.
 #[must_use]
+#[cfg(test)]
 pub(crate) fn check_production_historical_body_pipeline_transition(
     projection: ProductionHistoricalBodyPipelineTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionHistoricalBodyPipelineTraceProjection>> {

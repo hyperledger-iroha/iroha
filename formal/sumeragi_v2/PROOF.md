@@ -1491,7 +1491,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable regression evidence, not independent
 proof of the promoted obligations.
 
-The current pre-network release inventory names 865 tests across 43 Rust
+The current pre-network release inventory names 864 tests across 43 Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1611,7 +1611,7 @@ yields the historical 856-test, 40-module checkpoint. The exact retired-attempt
 accessor, mixed-carrier successor, two-link cold-restart hydration,
 noncanonical autonomous-output retirement, and the ordinary plus record-backed
 autonomous predecessor-durability regressions yield the
-current 865-test, 43-module inventory. The complete source-sealed
+current 864-test, 43-module inventory. The complete source-sealed
 pre-network corridor
 contains 91 legs. Six source-
 sealed command legs and the G-SCALE
@@ -1683,7 +1683,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a`.
+`c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97`.
 The separate source-sealed G-UNIT inventory contains 530 focused tests,
 including 324 `iroha_core` tests. Its 531-line
 canonical TSV has SHA-256
@@ -1756,14 +1756,13 @@ certificate. Multiple distinct authenticated TCs, CommitQCs, or
 CommitQC-carrying recovery responses share that credit; every certificate
 after the first consumes ordinary Progress capacity, and the ordinary
 reservation is independent of whether the first certificate arrives before
-or after ordinary work. While an authenticated certified-body
-response remains retained, its escape episode is explicitly `Fresh`,
-`Charged`, or `Spent`: Fresh admits at most one new direct TC, CommitQC, or
-`CommitCertificateResponse` carrying a CommitQC root; Charged and Spent reject
-every further fresh root, and only claim retirement resets the latch.
-The claimed-response rank counts the exact frozen direct
-roots and their strictly decreasing trusted causal tail, so pacemaker priority
-cannot be replenished indefinitely. The standalone revision-4 kernel charges
+or after ordinary work. There is no response-local phase or resettable
+certificate latch. A selected `CertifiedResponse` remains ordinary FIFO work:
+a later `TimeoutVote` cannot cross it, while timeout control is a dependency
+only when it advances the current Proposal, vote, QC, or TimeoutVote owner. The
+claimed-response rank counts the exact direct roots already inside its frozen
+prefix and their strictly decreasing trusted causal tail, so later timeout
+traffic cannot replenish that prefix. The standalone revision-4 kernel charges
 an unpublished `BodyAvailable` token as an ordinary Completion owner and
 atomically replaces its conflicting proposal owner without changing physical
 occupancy. Production refinement additionally persists a complete Busy-
@@ -1814,7 +1813,7 @@ atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
 earlier 168-name inventory. The latest fresh discovery checkpoint covered 738
-names; the current 865-name tree still requires a clean committed, detached,
+names; the current 864-name tree still requires a clean committed, detached,
 source-sealed serial release execution. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither

@@ -1,6 +1,6 @@
 #[cfg(feature = "bls")]
 #[test]
-fn durable_store_prepare_seal_and_drop_preserve_the_closed_row() {
+fn durable_store_prepare_and_drop_preserve_the_closed_row() {
     let DurableStoreFixture {
         mut registry,
         verified,
@@ -18,11 +18,6 @@ fn durable_store_prepare_seal_and_drop_preserve_the_closed_row() {
     else {
         unreachable!("durable Store fixture retains its Store effect")
     };
-    let validate_effect = AdapterEffect::ValidateBody {
-        tag,
-        round,
-        subject,
-    };
     let before = format!("{registry:?}");
 
     let prepared = registry
@@ -36,31 +31,7 @@ fn durable_store_prepare_seal_and_drop_preserve_the_closed_row() {
         expected_manifest_hash
     );
     assert_eq!(prepared.expected_manifest_hash(), expected_manifest_hash);
-    let sealed = prepared
-        .seal_validate_successor(&validate_effect)
-        .expect("seal exact ordinal-free Validate successor");
-    assert_eq!(sealed._store_address, address);
-    assert_eq!(sealed._validate_effect, validate_effect);
-    assert!(
-        sealed
-            ._validate_pending
-            .exactly_binds_adapter_effect(&sealed._validate_effect)
-    );
-    assert_eq!(
-        sealed._validate_digest,
-        digest_from_hash(sealed._validate_pending.exact_effect_identity())
-    );
-    assert_eq!(
-        super::super::CausalRoot::new(digest_from_hash(
-            sealed._validate_pending.causal_lifecycle_key()
-        )),
-        lease.owner().causal_root()
-    );
-    assert_eq!(
-        sealed._durable_body.manifest_hash(),
-        sealed._expected_manifest_hash
-    );
-    drop(sealed);
+    drop(prepared);
 
     assert_eq!(format!("{registry:?}"), before);
     assert!(registry.exactly_contains(address, &effect));
@@ -195,43 +166,15 @@ fn durable_store_prepare_rejects_wrong_lease_projection_and_context_without_muta
 
 #[cfg(feature = "bls")]
 #[test]
-fn durable_store_seal_rejects_wrong_kind_or_tag_and_wrong_row_kind() {
+fn durable_store_prepare_rejects_wrong_row_kind() {
     let DurableStoreFixture {
         mut registry,
         verified,
         address,
         lease,
         slot,
-        effect,
         ..
     } = durable_store_fixture(0x61);
-    let before = format!("{registry:?}");
-
-    let prepared = registry
-        .prepare_durable_store_execution(&lease, slot, &verified)
-        .expect("prepare Store before wrong-kind successor");
-    assert!(matches!(
-        prepared.seal_validate_successor(&effect),
-        Err(DurableStoreExecutionError::InvalidValidateSuccessor)
-    ));
-    assert_eq!(format!("{registry:?}"), before);
-
-    let AdapterEffect::StoreBody { round, subject, .. } = effect.clone() else {
-        unreachable!("durable Store fixture retains its Store effect")
-    };
-    let wrong_tag_validate = AdapterEffect::ValidateBody {
-        tag: EventTag::new(round.height, round.view, Generation::new(999)),
-        round,
-        subject,
-    };
-    let prepared = registry
-        .prepare_durable_store_execution(&lease, slot, &verified)
-        .expect("prepare Store before wrong-tag successor");
-    assert!(matches!(
-        prepared.seal_validate_successor(&wrong_tag_validate),
-        Err(DurableStoreExecutionError::InvalidValidateSuccessor)
-    ));
-    assert_eq!(format!("{registry:?}"), before);
 
     let closed = registry
         .entries

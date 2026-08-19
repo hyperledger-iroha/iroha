@@ -1527,9 +1527,9 @@ def test_transport_geometry_source_fidelity_rejects_short_exact_progress_bound(
         ),
         (
             "try_recv_if_at_checked",
-            "FairV2IngressBarrierBypass::None,",
-            "FairV2IngressBarrierBypass::TimeoutVoteEpisode,",
-            "ordinary timestamped ingress must delegate with no barrier bypass",
+            "self.try_recv_if_at_checked_classified(service_attempt_at, false, predicate)",
+            "self.try_recv_if_at_checked_classified(service_attempt_at, true, predicate)",
+            "ordinary timestamped ingress must delegate to the single classifier",
         ),
     ),
 )
@@ -1602,8 +1602,8 @@ def test_transport_geometry_reviewed_ingress_items_survive_digest_refresh(
             for error in leader_errors
         ), leader_errors
         assert any(
-            "ordinary timestamped ingress must pass "
-            "FairV2IngressBarrierBypass::None" in error
+            "ordinary timestamped ingress must use the same classifier "
+            "without a bypass policy" in error
             and "exact reviewed token digest" not in error
             for error in timeout_errors
         ), timeout_errors

@@ -712,6 +712,7 @@ impl OutstandingCertifiedBodyRequests {
         self.response_claims.len()
     }
     /// Exact response occurrence currently owning one request family.
+    #[cfg(test)]
     pub(crate) fn response_claim_hash(
         &self,
         request_hash: HashOf<wire::CertifiedBodyRequest>,
@@ -912,6 +913,7 @@ impl OutstandingCertifiedBodyRequests {
     /// responder or body cannot replace the acquired occurrence while the
     /// request remains outstanding. Reconstructing this tracker after restart
     /// deliberately restores requests but no volatile claims.
+    #[cfg(test)]
     pub(crate) fn claim_authenticated_response(
         &mut self,
         authenticated: &AuthenticatedCertifiedBodyResponse,

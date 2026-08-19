@@ -2612,10 +2612,6 @@ def reviewed_run_inner_source_fidelity_errors(
         return module._local_runner_service_contract_source_fidelity_errors(
             module.load_ledger(), repo_root=repo_root, formal_dir=formal_dir
         )
-    if checker_name == "retained_response":
-        return module._retained_response_escape_latch_source_fidelity_errors(
-            repo_root
-        )
     if checker_name == "locked_body":
         return module._locked_body_reproposal_source_fidelity_errors(
             module.FORMAL_DIR, repo_root

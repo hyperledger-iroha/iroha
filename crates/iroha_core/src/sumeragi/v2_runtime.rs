@@ -15335,14 +15335,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.clocks_armed
     }
 
-    /// Inclusive root-ordinal cut for the active post-timeout recovery
-    /// episode. Completions at or below this cut may receive one bounded turn
-    /// while a retained transport response owns ordinary service.
-    pub(crate) fn timeout_recovery_lifecycle_cut(&self) -> Result<Option<u128>, String> {
-        self.emitted_timeout_recovery_owner()
-            .map(|owner| owner.map(|owner| owner.lifecycle_ordinal()))
-            .map_err(|_| "timeout recovery episode was invalid".to_owned())
-    }
     /// Arm the live clocks after all height constructors and startup effects.
     ///
     /// This one-shot boundary prevents WAL replay, body-store recovery, worker
@@ -15465,6 +15457,47 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     }
 }
 impl SerializedV2Runtime<SumeragiV2Adapter> {
+    /// Seal the adapter's exact reducer-fence source and generation.
+    pub(in crate::sumeragi) fn lifecycle_reducer_fence_observation(
+        &self,
+    ) -> super::v2::LifecycleReducerFenceObservationV1 {
+        self.driver.lifecycle_reducer_fence_observation()
+    }
+    /// Freeze the serialized shell around one ordinary Fetch-to-Store preview.
+    pub(in crate::sumeragi) fn prepare_certified_fetch_store(
+        &mut self,
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> Result<super::v2::CertifiedFetchStoreAdapterPreparationV1<'_>, AdapterError> {
+        if self.fail_closed
+            || self.ingress.len() != 0
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err(AdapterError::DirectCertifiedBodyAvailableContractViolation);
+        }
+        self.driver.prepare_certified_fetch_store(tag, manifest)
+    }
+    /// Freeze the serialized shell around one ordinary Store-to-Validate preview.
+    pub(in crate::sumeragi) fn prepare_durable_store_validate(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<super::v2::DurableStoreValidateAdapterPreparationV1<'_>, AdapterError> {
+        if self.fail_closed
+            || self.ingress.len() != 0
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err(AdapterError::DirectBodyStoredContractViolation);
+        }
+        self.driver
+            .prepare_durable_store_validate(tag, round, subject, receipt)
+    }
     /// Freeze the serialized shell around one lifecycle-owned signature.
     pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(
         &mut self,

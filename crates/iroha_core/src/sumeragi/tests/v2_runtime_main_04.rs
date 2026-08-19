@@ -444,7 +444,7 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
         .pop_first()
         .expect("four-validator universe is non-empty");
     assert!(
-        runtime.timeout_recovery_lifecycle_cut().is_err(),
+        runtime.emitted_timeout_recovery_owner().is_err(),
         "a changed frozen roster universe must invalidate the episode"
     );
     runtime
@@ -454,9 +454,10 @@ fn two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view()
         .timeout_vote_owner_universe = frozen_universe;
     assert_eq!(
         runtime
-            .timeout_recovery_lifecycle_cut()
-            .expect("the restored roster universe validates"),
-        Some(timeout_ordinal)
+            .emitted_timeout_recovery_owner()
+            .expect("the restored roster universe validates")
+            .map(|owner| owner.lifecycle_ordinal()),
+        Some(timeout_ordinal),
     );
     for signer in [1_u32, 2_u32] {
         let highest_prepare_qc = (signer == 2).then(|| {

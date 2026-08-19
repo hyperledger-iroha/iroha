@@ -824,8 +824,8 @@ def _successor_production_recovery_source_fidelity_errors(
                         "services.set_exact_output_admission_hook(|_post, _ticket| Ok(()))",
                         "let (queued, after_apply_selection) = with_lifecycle_current_runner_turn_for_test(",
                         "launched.drive_completion_turn(runner, &mut lane_work)",
-                        "ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(result)",
-                        "ProductionRecoveredCompletionDispatchV1::ApplyQueued",
+                        "ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(result)",
+                        "ProductionCompletionDispatchV1::ApplyQueued",
                         "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
                         ".initialize_recovered_local_proposal(setup_runner)",
                         "let mut activated = launched.activate( Instant::now(), activation, local_proposal_state )",
@@ -3676,7 +3676,7 @@ self.io.is_some()
                 scheduler_path,
                 scheduler_source,
                 "lifecycle-owned recovered Decision Fetch dispatch",
-                "fn dispatch_recovered_completion_with_runner_debt(",
+                "fn dispatch_completion_with_runner_debt(",
                 "/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.",
             )
             require_order(
@@ -4130,7 +4130,7 @@ self.io.is_some()
                 worker_path,
                 worker_source,
                 "unified recovered Decision Fetch completion classifier",
-                "pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(",
+                "pub(in crate::sumeragi) fn take_next_lifecycle_completion(",
                 "/// Drain only the oldest recovered-Sign guard;",
             )
             require_order(
@@ -4140,7 +4140,7 @@ self.io.is_some()
                 (
                     "V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded)",
                     "prepare_recovered_decision_fetch_body_completion(guarded, 0)",
-                    "RecoveredLifecycleCompletionTakeV1::DecisionFetch(",
+                    "LifecycleCompletionTakeV1::DecisionFetch(",
                 ),
             )
             require_tokens(
@@ -4152,7 +4152,7 @@ self.io.is_some()
                     "recovered_decision_fetch_bodies: BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>",
                     "V2IoCompletion::RecoveredDecisionFetchBodyPersisted",
                     "V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained",
-                    "fn take_next_recovered_lifecycle_completion(",
+                    "fn take_next_lifecycle_completion(",
                     "fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extraction()",
                 ),
             )

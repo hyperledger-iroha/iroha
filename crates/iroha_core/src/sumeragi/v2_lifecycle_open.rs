@@ -22,7 +22,8 @@ use super::{
     },
     replay_authority::{
         CertifiedServeTerminalReplayAuthorityPairV1, LifecycleReplayAuthorityV1,
-        PreparedDurableCertifiedFetchStartupV1, RecoveredLifecycleNextWalVoteCandidateProjectionV1,
+        PreparedDurableCertifiedBodyPipelineStartupV1,
+        RecoveredLifecycleNextWalVoteCandidateProjectionV1,
         recovered_decision_body_continuation_is_exact, signed_broadcast_continuation_is_exact,
     },
     schema::{
@@ -301,7 +302,7 @@ impl AuthenticatedLifecycleRecoveryCut {
             None,
         )
     }
-    /// Assemble the sole Ready-Fetch production startup recovery cut.
+    /// Assemble the sole ordinary body-pipeline production startup recovery cut.
     ///
     /// The opaque Fetch phase moves every logical candidate directly into this
     /// recovery value while retaining every concrete completion for the
@@ -309,21 +310,21 @@ impl AuthenticatedLifecycleRecoveryCut {
     /// consumed from the same owned body-store instance. Any other live
     /// ordinary class remains unsupported and fails closed.
     #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_durable_fetch_startup(
+    pub(super) fn assemble_storage_only_with_body_pipeline_startup(
         ledger: LifecycleLedgerV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
-        mut fetches: PreparedDurableCertifiedFetchStartupV1,
-    ) -> Result<(Self, PreparedDurableCertifiedFetchStartupV1), LifecycleRecoveryAssemblyError>
+        mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
     {
         let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
             ledger,
             serve_payloads,
             body_store,
             RecoveredWalStartupProjectionV1::None,
-            Some(&mut fetches),
+            Some(&mut body_pipeline),
         )?;
-        Ok((recovery, fetches))
+        Ok((recovery, body_pipeline))
     }
     /// Assemble one exact post-fsync recovered-WAL Sign crash cut.
     ///
@@ -394,7 +395,7 @@ impl AuthenticatedLifecycleRecoveryCut {
             None,
         )
     }
-    /// Assemble the final repaired-WAL Sign, every durable Ready-Fetch, and
+    /// Assemble the final repaired-WAL Sign, every ordinary durable body row, and
     /// all terminal Validate outcomes from one exact post-repair frame.
     ///
     /// The installed Sign projection remains borrowed, while the Fetch phase
@@ -402,42 +403,42 @@ impl AuthenticatedLifecycleRecoveryCut {
     /// is the sole storage assembler used by the unified recovered-vote
     /// production startup.
     #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_recovered_wal_sign_and_durable_fetch_startup(
+    pub(super) fn assemble_storage_only_with_recovered_wal_sign_and_body_pipeline_startup(
         ledger: LifecycleLedgerV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
         projection: &AuthenticatedRecoveredWalSignProjection,
-        mut fetches: PreparedDurableCertifiedFetchStartupV1,
-    ) -> Result<(Self, PreparedDurableCertifiedFetchStartupV1), LifecycleRecoveryAssemblyError>
+        mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
     {
         let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
             ledger,
             serve_payloads,
             body_store,
             RecoveredWalStartupProjectionV1::PhaseVote(projection),
-            Some(&mut fetches),
+            Some(&mut body_pipeline),
         )?;
-        Ok((recovery, fetches))
+        Ok((recovery, body_pipeline))
     }
     /// Assemble an exact recovered Validate→Sign→Broadcast phase-vote cut.
     #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup(
+    pub(super) fn assemble_storage_only_with_recovered_phase_broadcast_and_body_pipeline_startup(
         ledger: LifecycleLedgerV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
         projection: &AuthenticatedRecoveredWalSignProjection,
         broadcast: &super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
-        mut fetches: PreparedDurableCertifiedFetchStartupV1,
-    ) -> Result<(Self, PreparedDurableCertifiedFetchStartupV1), LifecycleRecoveryAssemblyError>
+        mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
     {
         let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
             ledger,
             serve_payloads,
             body_store,
             RecoveredWalStartupProjectionV1::PhaseBroadcast(projection, broadcast),
-            Some(&mut fetches),
+            Some(&mut body_pipeline),
         )?;
-        Ok((recovery, fetches))
+        Ok((recovery, body_pipeline))
     }
     /// Assemble an exact phase Prepare-Broadcast plus follow-on Commit Sign.
     ///
@@ -452,29 +453,29 @@ impl AuthenticatedLifecycleRecoveryCut {
         reason = "first-release cold startup currently emits the split next-Sign carrier; retain the combined recovery constructor until the TODO is resolved"
     )]
     #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_recovered_phase_broadcast_and_sign_and_durable_fetch_startup(
+    pub(super) fn assemble_storage_only_with_recovered_phase_broadcast_and_sign_and_body_pipeline_startup(
         ledger: LifecycleLedgerV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
         projection: &AuthenticatedRecoveredWalSignProjection,
         pair: &RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
         combined: &RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
-        mut fetches: PreparedDurableCertifiedFetchStartupV1,
-    ) -> Result<(Self, PreparedDurableCertifiedFetchStartupV1), LifecycleRecoveryAssemblyError>
+        mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
     {
         let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
             ledger,
             serve_payloads,
             body_store,
             RecoveredWalStartupProjectionV1::PhaseBroadcastAndSign(projection, pair, combined),
-            Some(&mut fetches),
+            Some(&mut body_pipeline),
         )?;
-        Ok((recovery, fetches))
+        Ok((recovery, body_pipeline))
     }
     /// Assemble the same phase pair after executable ownership has split into
     /// its two cold registry carriers.
     #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_durable_fetch_startup(
+    pub(super) fn assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_body_pipeline_startup(
         ledger: LifecycleLedgerV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
@@ -482,8 +483,8 @@ impl AuthenticatedLifecycleRecoveryCut {
         pair: &RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
         broadcast: &super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
         next_sign: &RecoveredLifecycleNextWalVoteCandidateProjectionV1,
-        mut fetches: PreparedDurableCertifiedFetchStartupV1,
-    ) -> Result<(Self, PreparedDurableCertifiedFetchStartupV1), LifecycleRecoveryAssemblyError>
+        mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
     {
         let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
             ledger,
@@ -492,9 +493,9 @@ impl AuthenticatedLifecycleRecoveryCut {
             RecoveredWalStartupProjectionV1::PhaseBroadcastAndNextSign(
                 projection, pair, broadcast, next_sign,
             ),
-            Some(&mut fetches),
+            Some(&mut body_pipeline),
         )?;
-        Ok((recovery, fetches))
+        Ok((recovery, body_pipeline))
     }
     /// Assemble the exact standalone control Sign with every durable Fetch.
     ///
@@ -502,42 +503,42 @@ impl AuthenticatedLifecycleRecoveryCut {
     /// unrepresentable. Only the control projection's exact live row may cross
     /// the ordinary-row fail-closed classifier.
     #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_recovered_wal_control_sign_and_durable_fetch_startup(
+    pub(super) fn assemble_storage_only_with_recovered_wal_control_sign_and_body_pipeline_startup(
         ledger: LifecycleLedgerV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
         projection: &AuthenticatedRecoveredWalControlProjection,
-        mut fetches: PreparedDurableCertifiedFetchStartupV1,
-    ) -> Result<(Self, PreparedDurableCertifiedFetchStartupV1), LifecycleRecoveryAssemblyError>
+        mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
     {
         let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
             ledger,
             serve_payloads,
             body_store,
             RecoveredWalStartupProjectionV1::ControlSign(projection),
-            Some(&mut fetches),
+            Some(&mut body_pipeline),
         )?;
-        Ok((recovery, fetches))
+        Ok((recovery, body_pipeline))
     }
     /// Assemble an exact Advanced control Sign with its sole live Broadcast.
     #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_recovered_control_broadcast_and_durable_fetch_startup(
+    pub(super) fn assemble_storage_only_with_recovered_control_broadcast_and_body_pipeline_startup(
         ledger: LifecycleLedgerV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
         control: &AuthenticatedRecoveredWalControlProjection,
         broadcast: &super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
-        mut fetches: PreparedDurableCertifiedFetchStartupV1,
-    ) -> Result<(Self, PreparedDurableCertifiedFetchStartupV1), LifecycleRecoveryAssemblyError>
+        mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
     {
         let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
             ledger,
             serve_payloads,
             body_store,
             RecoveredWalStartupProjectionV1::ControlBroadcast(control, broadcast),
-            Some(&mut fetches),
+            Some(&mut body_pipeline),
         )?;
-        Ok((recovery, fetches))
+        Ok((recovery, body_pipeline))
     }
     /// Assemble an exact control-Proposal Broadcast plus follow-on WAL Vote Sign.
     ///
@@ -548,24 +549,24 @@ impl AuthenticatedLifecycleRecoveryCut {
     /// authenticated.
     #[cfg_attr(not(test), allow(dead_code))]
     #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_recovered_control_broadcast_and_sign_and_durable_fetch_startup(
+    pub(super) fn assemble_storage_only_with_recovered_control_broadcast_and_sign_and_body_pipeline_startup(
         ledger: LifecycleLedgerV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
         control: &AuthenticatedRecoveredWalControlProjection,
         pair: &RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
         combined: &RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
-        mut fetches: PreparedDurableCertifiedFetchStartupV1,
-    ) -> Result<(Self, PreparedDurableCertifiedFetchStartupV1), LifecycleRecoveryAssemblyError>
+        mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
     {
         let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
             ledger,
             serve_payloads,
             body_store,
             RecoveredWalStartupProjectionV1::ControlBroadcastAndSign(control, pair, combined),
-            Some(&mut fetches),
+            Some(&mut body_pipeline),
         )?;
-        Ok((recovery, fetches))
+        Ok((recovery, body_pipeline))
     }
     /// Assemble the standalone Decision Fetch with every durable body-backed Fetch.
     ///
@@ -573,67 +574,67 @@ impl AuthenticatedLifecycleRecoveryCut {
     /// control Sign. Only this exact WAL-owned, payload-free Fetch row may
     /// cross the ordinary-row fail-closed classifier.
     #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_recovered_wal_decision_fetch_and_durable_fetch_startup(
+    pub(super) fn assemble_storage_only_with_recovered_wal_decision_fetch_and_body_pipeline_startup(
         ledger: LifecycleLedgerV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
         projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
-        mut fetches: PreparedDurableCertifiedFetchStartupV1,
-    ) -> Result<(Self, PreparedDurableCertifiedFetchStartupV1), LifecycleRecoveryAssemblyError>
+        mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
     {
         let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
             ledger,
             serve_payloads,
             body_store,
             RecoveredWalStartupProjectionV1::DecisionFetch(projection),
-            Some(&mut fetches),
+            Some(&mut body_pipeline),
         )?;
-        Ok((recovery, fetches))
+        Ok((recovery, body_pipeline))
     }
     /// Assemble an advanced recovered WAL Fetch with its sole live Store child.
     #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_recovered_decision_store_and_durable_fetch_startup(
+    pub(super) fn assemble_storage_only_with_recovered_decision_store_and_body_pipeline_startup(
         ledger: LifecycleLedgerV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
         fetch: &AuthenticatedRecoveredWalDecisionFetchProjection,
         store: &RecoveredDecisionFetchStoreProjectionV1,
-        mut fetches: PreparedDurableCertifiedFetchStartupV1,
-    ) -> Result<(Self, PreparedDurableCertifiedFetchStartupV1), LifecycleRecoveryAssemblyError>
+        mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
     {
         let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
             ledger,
             serve_payloads,
             body_store,
             RecoveredWalStartupProjectionV1::DecisionStore(fetch, store),
-            Some(&mut fetches),
+            Some(&mut body_pipeline),
         )?;
-        Ok((recovery, fetches))
+        Ok((recovery, body_pipeline))
     }
     /// Assemble one exact recovered Decision body chain with every unrelated
-    /// durable Ready-Fetch row.
+    /// ordinary durable body-pipeline row.
     ///
     /// The projection must name an already-terminal Fetch/Store/Validate
     /// prefix and the sole live Apply successor. It is borrowed while the
     /// candidate is spliced, so the dedicated registry carrier remains owned
     /// by the caller for the later atomic install.
     #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_recovered_decision_apply_and_durable_fetch_startup(
+    pub(super) fn assemble_storage_only_with_recovered_decision_apply_and_body_pipeline_startup(
         ledger: LifecycleLedgerV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
         projection: &crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
-        mut fetches: PreparedDurableCertifiedFetchStartupV1,
-    ) -> Result<(Self, PreparedDurableCertifiedFetchStartupV1), LifecycleRecoveryAssemblyError>
+        mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
     {
         let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
             ledger,
             serve_payloads,
             body_store,
             RecoveredWalStartupProjectionV1::DecisionApply(projection),
-            Some(&mut fetches),
+            Some(&mut body_pipeline),
         )?;
-        Ok((recovery, fetches))
+        Ok((recovery, body_pipeline))
     }
     #[allow(clippy::result_large_err)]
     fn assemble_storage_only_with_terminal_validate_outcomes(
@@ -641,14 +642,14 @@ impl AuthenticatedLifecycleRecoveryCut {
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
         recovered_wal: RecoveredWalStartupProjectionV1<'_>,
-        durable_fetches: Option<&mut PreparedDurableCertifiedFetchStartupV1>,
+        body_pipeline: Option<&mut PreparedDurableCertifiedBodyPipelineStartupV1>,
     ) -> Result<Self, LifecycleRecoveryAssemblyError> {
         let (candidates, claims) =
             match assemble_storage_only_candidates_and_terminal_validate_claims(
                 &ledger,
                 &serve_payloads,
                 recovered_wal,
-                durable_fetches,
+                body_pipeline,
             ) {
                 Ok(assembled) => assembled,
                 Err(kind) => {
@@ -1014,9 +1015,9 @@ pub(crate) enum LifecycleRecoveryAssemblyErrorKind {
     /// The opaque installed recovered-WAL projection and repaired frame differ.
     #[error("recovered-WAL Sign storage recovery is incomplete: {0}")]
     RecoveredWalSign(&'static str),
-    /// The complete recovered Ready-Fetch census differs from the ledger.
-    #[error("durable Ready-Fetch startup census is inconsistent: {0}")]
-    DurableCertifiedFetch(&'static str),
+    /// The complete recovered body-pipeline census differs from the ledger.
+    #[error("durable body-pipeline startup census is inconsistent: {0}")]
+    DurableCertifiedBodyPipeline(&'static str),
     /// The authenticated Serve cut did not resolve the ledger exactly.
     #[error("Certified-Serve storage recovery is incomplete: {0}")]
     CertifiedServe(#[source] LifecycleOpenError),
@@ -1693,7 +1694,7 @@ impl LifecycleCoordinator {
         Self::prepare_with_exact_store_borrowed(authority, store, ledger, payload_store, recovery)
     }
     /// Prepare from the exact ledger-store instance retained by the consuming
-    /// Ready-Fetch storage cut. No caller-selected path can be substituted.
+    /// ordinary body-pipeline storage cut. No caller-selected path can be substituted.
     pub(super) fn prepare_with_authenticated_store_borrowed(
         authority: AuthenticatedEpisodeAuthority,
         store: LifecycleLedgerStoreV1,
@@ -3240,7 +3241,7 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
     ledger: &LifecycleLedgerV1,
     serve_payloads: &AuthenticatedCertifiedServePayloadRecoveryCut,
     recovered_wal: RecoveredWalStartupProjectionV1<'_>,
-    mut durable_fetches: Option<&mut PreparedDurableCertifiedFetchStartupV1>,
+    mut body_pipeline: Option<&mut PreparedDurableCertifiedBodyPipelineStartupV1>,
 ) -> Result<
     (
         BTreeMap<LifecycleKey, CandidateAdmission>,
@@ -3248,6 +3249,7 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
     ),
     LifecycleRecoveryAssemblyErrorKind,
 > {
+    let body_pipeline_startup = body_pipeline.is_some();
     let belongs_to_context = match recovered_wal {
         RecoveredWalStartupProjectionV1::None => true,
         RecoveredWalStartupProjectionV1::PhaseVote(projection) => {
@@ -3516,12 +3518,14 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
                 if admitted_recovered_wal {
                     continue;
                 }
-                if work_class == LifecycleWorkClass::Fetch
-                    && durable_fetches.is_some()
-                    && matches!(
-                        record.durable_payload(),
-                        Some(DurablePayloadReference::BodyFrame(_))
-                    )
+                if matches!(
+                    work_class,
+                    LifecycleWorkClass::Fetch
+                        | LifecycleWorkClass::Store
+                        | LifecycleWorkClass::Validate
+                ) && body_pipeline
+                    .as_ref()
+                    .is_some_and(|pipeline| pipeline.contains_live_ordinal(record.ordinal()))
                 {
                     continue;
                 }
@@ -3530,12 +3534,14 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
             Err(kind) => return Err(kind),
         }
     }
-    if let Some(fetches) = durable_fetches.as_mut()
-        && !fetches.splice_candidates(ledger, &mut candidates)
+    if let Some(body_pipeline) = body_pipeline.as_mut()
+        && !body_pipeline.splice_candidates(ledger, &mut candidates)
     {
-        return Err(LifecycleRecoveryAssemblyErrorKind::DurableCertifiedFetch(
-            "the frame-bound all-row census did not splice exactly once",
-        ));
+        return Err(
+            LifecycleRecoveryAssemblyErrorKind::DurableCertifiedBodyPipeline(
+                "the frame-bound all-row census did not splice exactly once",
+            ),
+        );
     }
     match recovered_wal {
         RecoveredWalStartupProjectionV1::PhaseVote(projection) => {
@@ -3661,12 +3667,16 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
             }
         }
         RecoveredWalStartupProjectionV1::None => {
-            if candidates
-                .values()
-                .any(|candidate| candidate.work_class != LifecycleWorkClass::Fetch)
-            {
+            if candidates.values().any(|candidate| {
+                !matches!(candidate.work_class, LifecycleWorkClass::Fetch)
+                    && !(body_pipeline_startup
+                        && matches!(
+                            candidate.work_class,
+                            LifecycleWorkClass::Store | LifecycleWorkClass::Validate
+                        ))
+            }) {
                 return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
-                    "storage-only assembly created a Sign without installed authority",
+                    "storage-only assembly created non-body work without installed authority",
                 ));
             }
         }

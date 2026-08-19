@@ -2238,7 +2238,6 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks
   sumeragi::v2_effects::tests::recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks
   sumeragi::v2_effects::tests::owned_payload_chunk_rejects_source_swap_before_service_and_keeps_unknown_work_nonfatal
-  sumeragi::v2_effects::tests::certified_body_response_carrier_swap_fails_closed_before_fetch_mutation
   sumeragi::v2_effects::tests::failed_view_cleanup_keeps_stale_fetch_and_requires_restart
   sumeragi::v2_effects::tests::view_cleanup_rejects_inconsistent_protected_request_before_lock_mutation
   sumeragi::v2_effects::tests::view_cleanup_second_cancellation_failure_commits_no_fetch_retirement
@@ -2726,7 +2725,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=865
+readonly expected_production_liveness_test_count=864
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2817,7 +2816,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 865-test liveness inventory above. The later
+# not belong to the canonical 864-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.

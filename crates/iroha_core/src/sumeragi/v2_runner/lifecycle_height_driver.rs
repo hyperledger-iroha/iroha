@@ -100,8 +100,8 @@ impl LifecycleProducerClaimDispositionV1 {
         selected: &super::super::v2_lifecycle_coordinator::ProductionLifecycleCompletionSelectionV1,
     ) -> Result<Self, LifecycleProducerClaimTransitionErrorV1> {
         use super::super::v2_lifecycle_coordinator::{
+            ProductionCompletionDispatchV1 as Dispatch,
             ProductionLifecycleCompletionSelectionV1 as Completion,
-            ProductionRecoveredCompletionDispatchV1 as Dispatch,
             ProductionRecoveredDecisionFetchStoreSettlementV1 as FetchSettlement,
             ProductionRecoveredLifecycleProposalBroadcastAndSignSettlementV1 as ProposalSettlement,
             ProductionRecoveredLifecycleSignBroadcastSettlementV1 as SignSettlement,
@@ -116,17 +116,29 @@ impl LifecycleProducerClaimDispositionV1 {
         match (self, selected) {
             (
                 Self::Eligible,
-                Completion::RecoveredIoDispatch(Ok(
+                Completion::CompletionIoDispatch(Ok(
                     Dispatch::ApplyQueued { .. } | Dispatch::SignQueued { .. },
                 )),
             ) => Ok(Self::AwaitingCompletion),
             (
                 Self::Eligible,
-                Completion::RecoveredIoDispatch(Ok(Dispatch::FetchDispatched { .. })),
+                Completion::CompletionIoDispatch(Ok(Dispatch::FetchDispatched { .. })),
             ) => {
                 // Dispatch atomically publishes the request and settles the
                 // recovered Fetch to its exact external Waiting source. No
                 // active lease crosses this asynchronous network wait.
+                Ok(Self::Eligible)
+            }
+            (
+                Self::Eligible,
+                Completion::CompletionIoDispatch(Ok(
+                    Dispatch::BodyStageAdvanced { .. } | Dispatch::ReducerFenceWait { .. },
+                )),
+            ) => {
+                // Ordinary body publication either installs its exact Ready
+                // child synchronously or settles the parent on the adapter
+                // reducer fence. Neither outcome retains an asynchronous
+                // completion owner across the outer producer boundary.
                 Ok(Self::Eligible)
             }
             (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyDeferred)
@@ -191,7 +203,7 @@ impl LifecycleProducerClaimDispositionV1 {
             ) => Ok(self),
             (
                 Self::Eligible,
-                Completion::RecoveredIoDispatch(Ok(Dispatch::CapacityUnavailable)),
+                Completion::CompletionIoDispatch(Ok(Dispatch::CapacityUnavailable)),
             )
             | (Self::Eligible, Completion::RecoveredLifecycleBroadcastRefanout(_)) => Ok(self),
             _ => Err(LifecycleProducerClaimTransitionErrorV1::Completion),
@@ -491,8 +503,8 @@ mod tests {
     #[test]
     fn recovered_sign_dispatch_yields_until_its_typed_completion_settles() {
         use super::super::super::v2_lifecycle_coordinator::{
+            ProductionCompletionDispatchV1 as Dispatch,
             ProductionLifecycleCompletionSelectionV1 as Completion,
-            ProductionRecoveredCompletionDispatchV1 as Dispatch,
             ProductionRecoveredLifecycleSignBroadcastSettlementV1 as SignSettlement,
             ProductionRecoveredLifecycleSignCompletionSelectionV1 as SignCompletion,
         };
@@ -500,9 +512,9 @@ mod tests {
         let claim = LifecycleProducerClaimDispositionV1::initial();
         assert!(!claim.requires_yield());
         let claim = claim
-            .observe_completion(&Completion::RecoveredIoDispatch(Ok(Dispatch::SignQueued {
-                ordinal: 1,
-            })))
+            .observe_completion(&Completion::CompletionIoDispatch(Ok(
+                Dispatch::SignQueued { ordinal: 1 },
+            )))
             .expect("eligible Sign dispatch mints the Completion target");
         assert_eq!(
             claim,
@@ -519,14 +531,14 @@ mod tests {
     #[test]
     fn terminal_serve_replay_does_not_clear_an_unrelated_in_flight_lease() {
         use super::super::super::v2_lifecycle_coordinator::{
+            ProductionCompletionDispatchV1 as Dispatch,
             ProductionLifecycleCompletionSelectionV1 as Completion,
-            ProductionRecoveredCompletionDispatchV1 as Dispatch,
         };
 
         let claim = LifecycleProducerClaimDispositionV1::initial()
-            .observe_completion(&Completion::RecoveredIoDispatch(Ok(Dispatch::SignQueued {
-                ordinal: 1,
-            })))
+            .observe_completion(&Completion::CompletionIoDispatch(Ok(
+                Dispatch::SignQueued { ordinal: 1 },
+            )))
             .expect("eligible Sign dispatch");
         let claim = claim
             .observe_completion(&Completion::CertifiedServeReplayCompleted)
@@ -540,14 +552,14 @@ mod tests {
     #[test]
     fn ingress_outcomes_retain_their_exact_next_driver_target() {
         use super::super::super::v2_lifecycle_coordinator::{
+            ProductionCompletionDispatchV1 as Dispatch,
             ProductionLifecycleCompletionSelectionV1 as Completion,
             ProductionLifecycleIngressSelectionV1 as Ingress,
-            ProductionRecoveredCompletionDispatchV1 as Dispatch,
         };
 
         let eligible = LifecycleProducerClaimDispositionV1::initial();
         let fetch = eligible
-            .observe_completion(&Completion::RecoveredIoDispatch(Ok(
+            .observe_completion(&Completion::CompletionIoDispatch(Ok(
                 Dispatch::FetchDispatched { ordinal: 1 },
             )))
             .expect("external-Waiting Fetch dispatch releases its lease");
@@ -652,18 +664,18 @@ mod tests {
     #[test]
     fn mismatched_async_owner_transitions_fail_closed() {
         use super::super::super::v2_lifecycle_coordinator::{
+            ProductionCompletionDispatchV1 as Dispatch,
             ProductionLifecycleCompletionSelectionV1 as Completion,
             ProductionLifecycleIngressSelectionV1 as Ingress,
-            ProductionRecoveredCompletionDispatchV1 as Dispatch,
         };
 
         let awaiting = LifecycleProducerClaimDispositionV1::initial()
-            .observe_completion(&Completion::RecoveredIoDispatch(Ok(Dispatch::SignQueued {
-                ordinal: 1,
-            })))
+            .observe_completion(&Completion::CompletionIoDispatch(Ok(
+                Dispatch::SignQueued { ordinal: 1 },
+            )))
             .expect("queue the exact incumbent Sign");
         assert_eq!(
-            awaiting.observe_completion(&Completion::RecoveredIoDispatch(Ok(
+            awaiting.observe_completion(&Completion::CompletionIoDispatch(Ok(
                 Dispatch::SignQueued { ordinal: 2 },
             ))),
             Err(LifecycleProducerClaimTransitionErrorV1::Completion),

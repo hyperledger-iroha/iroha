@@ -82,11 +82,8 @@ pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
     /// One parked recovered Sign used exactly one successor-family settler.
     RecoveredLifecycleSignCompletion(ProductionRecoveredLifecycleSignCompletionSelectionV1),
     /// One complete recovered Apply/Sign/Fetch census used a joint physical cut.
-    RecoveredIoDispatch(
-        Result<
-            ProductionRecoveredCompletionDispatchV1,
-            ProductionRecoveredCompletionDispatchErrorV1,
-        >,
+    CompletionIoDispatch(
+        Result<ProductionCompletionDispatchV1, ProductionCompletionDispatchErrorV1>,
     ),
     /// One parked recovered Decision Fetch body entered its Store settlement.
     RecoveredDecisionFetchCompletion(ProductionRecoveredDecisionFetchStoreSettlementV1),
@@ -120,7 +117,7 @@ impl ProductionLifecycleCompletionSelectionV1 {
             | Self::CertifiedFetchBodyPersistenceRestartRequired
             | Self::RestartRequired => true,
             Self::RecoveredLifecycleSignCompletion(selection) => selection.restart_required(),
-            Self::RecoveredIoDispatch(result) => result.is_err(),
+            Self::CompletionIoDispatch(result) => result.is_err(),
             Self::RecoveredDecisionFetchCompletion(settlement) => matches!(
                 settlement,
                 ProductionRecoveredDecisionFetchStoreSettlementV1::None
@@ -1043,7 +1040,8 @@ impl LaunchedProductionLifecycleV1 {
         ready: ProductionLifecycleReadyCompletionTurnV1<'cursor>,
     ) -> ProductionLifecycleCompletionTurnV1<'cursor> {
         let ProductionLifecycleReadyCompletionTurnV1 { runner } = ready;
-        let selected = match self.owner.classify_completion_ready_work() {
+        let fence = self.executor.lifecycle_reducer_fence_observation();
+        let selected = match self.owner.classify_completion_ready_work(fence) {
             super::super::ProductionCompletionReadyWorkV1::None
             | super::super::ProductionCompletionReadyWorkV1::PassThrough => {
                 return ProductionLifecycleCompletionTurnV1::PassThrough(runner);
@@ -1053,7 +1051,7 @@ impl LaunchedProductionLifecycleV1 {
                 self.close_output_for_restart();
                 ProductionLifecycleCompletionSelectionV1::RestartRequired
             }
-            super::super::ProductionCompletionReadyWorkV1::RecoveredIo => {
+            super::super::ProductionCompletionReadyWorkV1::CompletionIo => {
                 let result = {
                     let Self {
                         owner,
@@ -1061,20 +1059,16 @@ impl LaunchedProductionLifecycleV1 {
                         services,
                         ..
                     } = self;
-                    owner.dispatch_recovered_completion_with_runner_debt(
-                        services,
-                        executor,
-                        runner.debt(),
-                    )
+                    owner.dispatch_completion_with_runner_debt(services, executor, runner.debt())
                 };
                 if let Err(error) = &result {
                     iroha_logger::error!(
                         ?error,
-                        "Sumeragi v2 recovered Completion dispatch failed closed"
+                        "Sumeragi v2 lifecycle Completion dispatch failed closed"
                     );
                     self.close_output_for_restart();
                 }
-                ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(result)
+                ProductionLifecycleCompletionSelectionV1::CompletionIoDispatch(result)
             }
             super::super::ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast => {
                 let result = {

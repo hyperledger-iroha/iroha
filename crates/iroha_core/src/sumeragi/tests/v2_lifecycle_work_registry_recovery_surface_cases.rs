@@ -1233,7 +1233,7 @@ fn recovered_decision_apply_terminal_settlement_is_exact_and_post_fsync_infallib
         .split_once("match self.services.take_next_lifecycle_completion()")
         .expect("the Completion turn uses the unified physical-head classifier")
         .1
-        .split_once("let selected = match self.owner.classify_completion_ready_work()")
+        .split_once("let selected = match self.owner.classify_completion_ready_work(fence)")
         .expect("completion draining precedes fresh Ready-work planning")
         .0;
     for required in [
