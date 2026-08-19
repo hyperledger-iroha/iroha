@@ -63,6 +63,8 @@ fn new(limit: usize, context_id: wire::HeightContextId, height: wire::Height) ->
         name: str,
         context: tuple[tuple[str, ...], ...],
         description: str,
+        *,
+        expected_attributes: tuple[str, ...] = (),
     ) -> RustItem | None:
         matches = tuple(
             item for item in rust_items(runner_source, name) if item.brace_context == context
@@ -71,7 +73,14 @@ fn new(limit: usize, context_id: wire::HeightContextId, height: wire::Height) ->
             errors.append(f"{runner_path}: require exactly one {description}; found {len(matches)}")
             return None
         item = matches[0]
-        _require_rust_item_context(runner_path, item, context, description, errors)
+        _require_rust_item_context(
+            runner_path,
+            item,
+            context,
+            description,
+            errors,
+            expected_attributes=expected_attributes,
+        )
         return item
 
     current_turn_structs = rust_struct_items(runner_source, "LifecycleCurrentRunnerTurn")
@@ -132,7 +141,10 @@ fn next_current(&mut self) -> Option<LifecycleCurrentRunnerTurn<'_>> {
         errors,
     )
     turn_item = exact_context_item(
-        "turn", current_context, "borrow-bound outer-ingress turn projection"
+        "turn",
+        current_context,
+        "test-only borrow-bound outer-ingress turn projection",
+        expected_attributes=("#[cfg(test)]",),
     )
     _require_exact_rust_tokens(
         runner_path,

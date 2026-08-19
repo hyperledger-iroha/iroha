@@ -67930,7 +67930,7 @@ def _local_runner_service_contract_source_fidelity_errors(
             paths["ordinary"],
             ordinary,
             "ordinary lifecycle height",
-            4,
+            3,
             "activated.claim_producer_turn_for_local_proposal(&mut active_runner)",
         ),
         (
@@ -67968,8 +67968,8 @@ def _local_runner_service_contract_source_fidelity_errors(
     _require_rust_token_sequence(
         paths["worker"],
         completion,
-        "self.drain_completions_inner(executor, MAX_COMPLETION_DRAIN_BATCH, CompletionDrainPolicy::Fair,)",
-        "typed completion service must use the fixed finite fair-policy scan",
+        "self.drain_completions_inner(executor, MAX_COMPLETION_DRAIN_BATCH)",
+        "typed completion service must use the fixed finite completion scan",
         errors,
     )
     return errors

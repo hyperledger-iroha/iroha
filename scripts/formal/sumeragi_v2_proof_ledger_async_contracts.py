@@ -175,7 +175,7 @@ ASYNC_LIVENESS_FACADE = "SumeragiV2AsyncLivenessProofs"
 # bodies are independently pinned by ``_acyclic_liveness_debt_topology_errors``
 # before this reviewed global mechanical-body seal is accepted.
 ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 = (
-    "3c42e84e93b38245cf1c6a24892086fccdac787b3c3a514aad8b2897cc92f9fc"
+    "dfedf4d3bef27c9c98991a8c38ad9bace40dd5617326bb4c2d266114f3b5f8ea"
 )
 ASYNC_LIVENESS_SHARD_MAX_BYTES = 256 * 1024
 ASYNC_LIVENESS_SHARD_MAX_LINES = 5_500
@@ -1268,7 +1268,7 @@ SERVE_SCHEDULER_ORDINAL_MUTATION_FORMAL_GLOBS = (
 )
 SERVE_SCHEDULER_ORDINAL_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "37ef65e05560d7950c21ea0b3cad721b2195d29dc865dca5c7030ff575611ead"
+        "75257acfd383539c408b47fcf3ef4e865bd4ce29f18d8ee93cd90d7925338161"
     ),
     "SumeragiV2AsyncRankAndInitProofs.tla": (
         "c6f6eade349f107e0572cb381690ad054b61493ef274a9127eed247f4f7b75ca"
@@ -1366,7 +1366,7 @@ COMMIT_IMPORT_PROVENANCE_MUTATION_FORMAL_GLOBS = (
 )
 COMMIT_IMPORT_PROVENANCE_RELEASE_SOURCE_SHA256 = {
     "SumeragiV2AsyncNetwork.tla": (
-        "37ef65e05560d7950c21ea0b3cad721b2195d29dc865dca5c7030ff575611ead"
+        "75257acfd383539c408b47fcf3ef4e865bd4ce29f18d8ee93cd90d7925338161"
     ),
     "SumeragiV2HistoricalRecoveryTemporalClosureProofs.tla": (
         "fac37875375b831db6ed1bd1f64e194fd5e7eebde51019c345a85c4083664752"
@@ -4100,40 +4100,6 @@ fn is_certified_fence_escape(&self) -> bool {
         errors,
     )
 
-    runtime_credit = _require_rust_item(
-        runtime_path,
-        source,
-        "has_certified_fence_escape_credit",
-        errors,
-    )
-    _require_rust_item_context(
-        runtime_path,
-        runtime_credit,
-        (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
-        "serialized runtime certified-fence credit observation",
-        errors,
-    )
-    _require_rust_item_token_sha256(
-        runtime_path,
-        runtime_credit,
-        _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256[
-            "SerializedV2Runtime::has_certified_fence_escape_credit"
-        ],
-        "serialized runtime certified-fence credit observation",
-        errors,
-    )
-    _require_exact_rust_tokens(
-        runtime_path,
-        runtime_credit,
-        """
-pub(crate) fn has_certified_fence_escape_credit(&self) -> bool {
-    self.ingress.certified_fence_escape_credit() == 1
-}
-""",
-        "runtime credit observation must expose only the exact retained credit",
-        errors,
-    )
-
     tests = (
         "certified_commit_uses_physical_slot_reserved_from_completions",
         "certified_commit_arriving_first_preserves_every_ordinary_reserve",
@@ -4312,7 +4278,6 @@ ingress.reserved_body_available = Some(reservation.clone());
         "BoundedIngress::check_capacity_change_inner",
         "BoundedIngress::remaining_capacity",
         "wire_payload_is_certified_fence_escape",
-        "SerializedV2Runtime::has_certified_fence_escape_credit",
         *(f"test::{item_name}" for item_name in tests),
     }
     observed_capacity_seal_keys = set(
@@ -4321,7 +4286,7 @@ ingress.reserved_body_available = Some(reservation.clone());
     if observed_capacity_seal_keys != expected_capacity_seal_keys:
         errors.append(
             "runtime certified-fence source-seal inventory must contain "
-            "exactly nine production items and eight regressions; "
+            "exactly eight production items and eight regressions; "
             f"missing={sorted(expected_capacity_seal_keys - observed_capacity_seal_keys)}, "
             f"extra={sorted(observed_capacity_seal_keys - expected_capacity_seal_keys)}"
         )

@@ -302,7 +302,7 @@ def _lifecycle_certified_serve_production_source_fidelity_errors(
         "drive_ready_completion_turn",
         "fresh Ready completion dispatch after the Producer eligibility gate",
         (
-            "self.owner.classify_completion_ready_work()",
+            "self.owner.classify_completion_ready_work(fence)",
             "ProductionCompletionReadyWorkV1::None",
             "ProductionLifecycleCompletionTurnV1::PassThrough(runner)",
             "ProductionCompletionReadyWorkV1::Invalid",

@@ -1475,7 +1475,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "eligible_deferred_admission_ordinals": (
         "ca2db5b8e601e556e10001d3c0a6be5b18dd1cd1f92e5eecf0273fe158fb232d"
     ),
-    "runtime_step": "cf7ea7ef32f0e4a7f8b418780848c030bf6cc04ccb2c04a61bb0037b684547a3",
+    "runtime_step": "aaa41e0366ae660537780528c97e763e8f292e9a80234c21d4cc37a390eea414",
     "runtime_step_recovery": (
         "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
     ),
@@ -1865,7 +1865,7 @@ _TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256 = {
         "47d9e77bbf51c1564dbdb4bb7ab2f5d3dafecc279a11fb59f91dcdeed2254d7f"
     ),
     "two_fresh_timeout_vote_slots_replenish_once_and_close_a_four_validator_view": (
-        "7b7545acd3419b5e23f92402787307896e18465e6ad8a922b94a1ec0bddb6581"
+        "a4e4de848ef3701270462522e0b1a9c66a1705e8e6840ad393c260d528854b4e"
     ),
     "restored_timeout_vote_reactivation_binds_fresh_carrier_before_runtime_admission": (
         "89eb5d842b627d1c1382143a53b73600936443130b086e5a9e0be5e5180dc6d8"
@@ -2310,13 +2310,13 @@ _EFFECT_CAPACITY_LIFECYCLE_RUST_ITEM_SHA256 = {
         "7501414a5b20cfeacf429a9d2b43cf5dd2a797e2a579559c05d987437352ed8d"
     ),
     "production_capacity_saturation_admits_response_and_reconstructible_fetch": (
-        "a97f5cab5c218297c5df0dbc3c9aa803c9a0284b50fc7c8ad960c2314e56b861"
+        "c9638139871a264986c7457f15fb0b6a1915a516901cbd120071fa6bd331ffc6"
     ),
     "unpublished_body_token_rebinds_retries_and_retires_as_one_exact_owner": (
         "920f70f6d4ebf90ce3f9a4365e99bc88da19671d80e4f716aa57bc08caece7fd"
     ),
     "tc_retires_unprotected_retryable_body_token_before_the_next_fetch": (
-        "49cbdd3ee3ef185f6e259b986b6fe1d2eea11f83b97eebab02aa8cae48903a44"
+        "ee725605bffe01b884de979276a7be88c225810229f27e6e1f71d1e6022cf455"
     ),
     "durable_sign_preemption_retires_a_retryable_body_token": (
         "4eff93945c51ac3473a2817a29dfe493a6606b3b2919ba33ff957ee121b325c1"
@@ -3583,10 +3583,10 @@ _PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {
     "ordinary_loop": "cf1175fb9703fb722dea4460957dd63847e4a6ec98b5394c66823f8aed0576cf",
     "pending_loop": "04cec89b8a40983a59dc0eaf425257a9bd9ff1a60f8ea6a2c870cb25c7601b05",
     "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041",
-    "ordinary_active": "0965aa3a17ce5ae4148a0b216fa0528879fbd92fc5273832e613211f90ea9f5d",
-    "pending_active": "d3a29a470ecb774e1d8e9a8a0c1ff7b1e0cbd862b544e764603045777f4b6387",
+    "ordinary_active": "7a8cda56bfba7202fce2a9547c46a2aef1a4138db837b7b9b3bf5d88ed38c7b5",
+    "pending_active": "c54b27bb132cd4403f76e459b30d32430b22318851ae2460a7845cc3162c6e27",
 }
-_PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "e3156115c7608e58491724d41dc852b11db86a92617e2d9454049a6dc898a08d"
+_PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "7d0eba6d24cfdae5e7d626bf2cac132b3200bc35b3bb1ac85c8b4992a82c7b98"
 
 # `asyncNodeServiceDeadlines` is a proof-only projection of this one explicit
 # trusted runtime contract. These complete-item seals bind the structural
@@ -3611,9 +3611,9 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "registry:ConcreteLifecycleWorkRegistry::project_claimed_certified_serve_dispatch": "985dcb45690f99cde6bc2b07703e9c2cf915ceb1abb43b99710e8be71c4f5f26",
     "scheduler:CertifiedServeSchedulerObservationV1::from_live_cuts": "886ef927aff3c6f8ae8577bb1bcb729f4058b48f20df6c5fbf1c3773c43b3d4f",
     "scheduler:claim_certified_serve_turn_v1": "93578174a9077b0cda5510e9f763b416731fd5bcae84fcc3c124949c8a3535d1",
-    "turn:prepare_and_dispatch_current_certified_serve": "c9171ad0e583732c0300b4d7c3ffc605e488924f9a78da85ce9114559db71985",
-    "turn:LaunchedProductionLifecycleV1::drive_completion_pre_gate": "8d2afb7d4ba4c1b9b268332316962f4b2c37c209c619f34ee98481e6a3c00d7c",
-    "turn:LaunchedProductionLifecycleV1::drive_ready_completion_turn": "ac0744fc956cd44064bd4906f276395e075afc962626f8bbdc3e0e33f436db16",
+    "turn:prepare_and_dispatch_current_certified_serve": "0830d824705ce2267f39960b0ad9ab552413d6b5613a845abfccdd7e09ff3988",
+    "turn:LaunchedProductionLifecycleV1::drive_completion_pre_gate": "991a71ed5f0d61c70023bdc18cdbca28b463fdf86b734947a8ce85aa22a102ef",
+    "turn:LaunchedProductionLifecycleV1::drive_ready_completion_turn": "d06433320e8a677bb1139f67da937b65d645f02c9a5aeb6fca5679ad603727b0",
     "turn:LaunchedProductionLifecycleV1::drive_completion_turn": "7ca0b1da70431c09a45682449db54d2fe752d62dbfde87ad8bfe28eadd91d15d",
     "worker:LifecycleCertifiedServeTaskV1::from_dequeued_parts": "0c9f86b230960b4db64254028b54894adcc3ee29d7a09aff10df489f82830aa1",
     "worker:LifecycleIoCapacityReservation<'_>::preflight_lifecycle_certified_serve": "698cf37eefa08f22e3fc49a3bba6e04fce8c4e031e94ba6922cde786ce78556c",
@@ -3624,12 +3624,12 @@ _LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
     "body_store:V2BodyStore::read_durable_body_for_certified_serve": "c3e4d12afaa3f18ad1d5b0865eb3a54f4ad892eff4449b9d9d5b72bfd8f26c87",
     "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": "77930bc25fa0078aba267238ba1f3e8016eaa28f9a2d3aa58b4199c3f3333d10",
     "projection:super::ProductionLifecycleOwnerV1::settle_producer_turn_advanced": "d15b6ada19aa19ddd64ce9a23ca4ec06518cb4eb99cfe386976f7f85bc6f3917",
-    "ordinary:run_lifecycle_active_height": "0965aa3a17ce5ae4148a0b216fa0528879fbd92fc5273832e613211f90ea9f5d",
-    "pending:run_pending_active_height": "d3a29a470ecb774e1d8e9a8a0c1ff7b1e0cbd862b544e764603045777f4b6387",
-    "height:drain_lifecycle_v2_ingress": "43c08f0351b6372c758800c5fcbe887712de8cc1517b0584a06268528d5514b2",
+    "ordinary:run_lifecycle_active_height": "7a8cda56bfba7202fce2a9547c46a2aef1a4138db837b7b9b3bf5d88ed38c7b5",
+    "pending:run_pending_active_height": "c54b27bb132cd4403f76e459b30d32430b22318851ae2460a7845cc3162c6e27",
+    "height:drain_lifecycle_v2_ingress": "616aade134d059756f0892159c5c164e790773eefc625fb25d72e0649941a163",
     "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
     "launch:ProductionLeaderWireIngressBindingV1::retire": "b2aca6532fa807ad78a8cbd4d202152209c53dd5dd8c5a4fd5bba45f7df18c4d",
-    "launch:ProductionLifecycleOwnerV1::launch": "6b74510906f87755de55b779c17ce3b7eb64b670f77026c2b7f14f4aadfcd48d",
+    "launch:ProductionLifecycleOwnerV1::launch": "59bffe3fadc27eb44e18fa0ac6ef4d173d0660077f89190871bfdf091b6eeff6",
 }
 
 # Completion provenance remains separately sealed because the direct runtime
@@ -3657,7 +3657,7 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
         "08ce0575f38ec671cff556b343d981536dd24fb5bc6c49874b76508cd9cd8104"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "d4bd27c607b63e39c37499f79cf9fbf3a678f52c392985bb1ffd8bf71a13e675"
+        "a6d4a56fb74fe95a5d681e9899df1865ee83741e47685e4c4681cd2b4c5e2526"
     ),
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"
@@ -4016,7 +4016,7 @@ _PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256 = {
         "2916d22c3e395f974f472d106ade75d700b75662f2985911e8ce09c130da7106"
     ),
     "consume_prepared_dequeued_v2_ingress": (
-        "e3156115c7608e58491724d41dc852b11db86a92617e2d9454049a6dc898a08d"
+        "7d0eba6d24cfdae5e7d626bf2cac132b3200bc35b3bb1ac85c8b4992a82c7b98"
     ),
 }
 
@@ -4087,9 +4087,6 @@ _PRODUCTION_RUNTIME_CERTIFIED_FENCE_CAPACITY_ITEM_SHA256 = {
     ),
     "wire_payload_is_certified_fence_escape": (
         "01d6853abc2e1b0e5f2a84197ce271fff2c4b71ba7467f64e0d7c85b3da8237a"
-    ),
-    "SerializedV2Runtime::has_certified_fence_escape_credit": (
-        "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
     ),
     "test::certified_commit_uses_physical_slot_reserved_from_completions": (
         "fe5d361fd09f716cca60ceecab8f4c3acfb1ec01080d16b9851af71277f15e53"

@@ -2104,17 +2104,15 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         "pending_kura_apply_replay: Option<super::super::v2::PreparedRecoveredPendingKuraApplyReplayV1>",
         "recovered_local_proposal_attempt:",
         "Option<super::super::v2::RecoveredLifecycleLocalProposalAttemptV1>",
-        "recovered_decision_apply_deferred: Option<RetainedRecoveredDecisionApplyDeferredV1>",
-        "recovered_decision_fetch_body_completion:",
-        "Option<PreparedRecoveredDecisionFetchBodyCompletionV1>",
-        "recovered_lifecycle_sign_completion: Option<PreparedRecoveredLifecycleSignCompletionV1>",
-        "recovered_ingress_capacity_wait: Option<super::PreparedProductionIngressCapacityWait>",
+        "pending_lifecycle_completion: Option<PendingLifecycleCompletionV1>",
+        "pending_ingress_capacity: Option<PendingIngressCapacityV1>",
+        "completion_observer_activation: Option<ProductionV2CompletionObserverActivationPermitV1>",
         "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
     ):
         position = launched_region.find(token, launched_cursor)
         if position < 0:
             errors.append(
-                f"{paths['launch']}: launched recovered Sign Drop order must "
+                f"{paths['launch']}: launched unified lifecycle Drop order must "
                 f"retain ordered field {token!r}"
             )
             break
@@ -2533,9 +2531,8 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         completion_pre_gate,
         "lifecycle Completion parked-owner and physical-head pre-gate order",
         (
-            "self.recovered_decision_apply_deferred.take()",
-            "self.recovered_lifecycle_sign_completion.is_some()",
-            "self.recovered_decision_fetch_body_completion.is_some()",
+            "self.pending_lifecycle_completion.take()",
+            "match pending",
             "self.services.take_next_lifecycle_completion()",
             "ProductionLifecycleCompletionPreGateV1::Ready(",
         ),
@@ -2565,7 +2562,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         ready_completion,
         "fresh lifecycle Completion Ready-work dispatch",
         (
-            "self.owner.classify_completion_ready_work()",
+            "self.owner.classify_completion_ready_work(fence)",
             "ProductionCompletionReadyWorkV1::PassThrough",
             "ProductionLifecycleCompletionTurnV1::PassThrough(runner)",
             "ProductionCompletionReadyWorkV1::CompletionIo",
@@ -2595,7 +2592,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         ),
         (
             ready_completion,
-            "self.owner.classify_completion_ready_work()",
+            "self.owner.classify_completion_ready_work(fence)",
             1,
             "lifecycle Completion single fresh Ready census",
         ),
@@ -2857,7 +2854,7 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
         driver,
         "ordinary/recovered ingress owner order",
         (
-            "self.recovered_ingress_capacity_wait.take()",
+            "self.pending_ingress_capacity.take()",
             "self.executor.lifecycle_terminal_subject()",
             "capture_next_ingress_turn_cut(",
             "v2_ingress_head_can_drain(",
@@ -2870,20 +2867,12 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "self.drive_recovered_ingress_selector(selector, runner)",
         ),
     )
-    require_tokens(
-        "driver",
-        driver,
-        "ordinary exact-winner handoff",
-        (
-            "cut.into_ordinary_turn_cut()",
-        ),
-    )
     if driver is not None:
         driver_tokens = rust_code_tokens(driver.source)
         for token, count in (
             (
                 "dequeue_prepared_ordinary_ingress(",
-                4,
+                3,
             ),
             ("ProductionLifecycleIngressTurnV1::PassThrough(runner)", 2),
         ):
@@ -3130,7 +3119,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         composite_dispatch,
         "all-row recovered Completion authentication and selection",
         (
-            "let exact_ready = self.coordinator.ready_index.clone()",
+            "let current_ready = self.coordinator.ready_index.clone()",
+            "let mut exact_ready = current_ready",
             "for ordinal in &exact_ready",
             "capture_recovered_completion_capacity_census(probes)",
             "authenticated_ready_row_with_physical_capacity(",
@@ -3145,7 +3135,6 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         composite_dispatch,
         "all-row recovered Completion authentication and selection",
         (
-            "census.complete_without_selection()",
             "census.select_apply(ordinal)",
             "census.select_sign(ordinal)",
             "census.select_fetch(ordinal)",
@@ -3154,6 +3143,16 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ),
     )
     if composite_dispatch is not None:
+        census_releases = _token_sequence_count(
+            rust_code_tokens(composite_dispatch.source),
+            rust_code_tokens("census.complete_without_selection()"),
+        )
+        if census_releases != 3:
+            errors.append(
+                f"{paths['scheduler']}:{composite_dispatch.line}: unified Completion "
+                "dispatch must release its physical census on idle, ordinary Fetch, "
+                f"and ordinary Store paths; found {census_releases} release sites"
+            )
         physical_rows = _token_sequence_count(
             rust_code_tokens(composite_dispatch.source),
             rust_code_tokens("authenticated_ready_row_with_physical_capacity("),

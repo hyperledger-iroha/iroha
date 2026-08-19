@@ -618,8 +618,8 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
         "fn dispatch_completion_with_runner_debt(",
-        "census.select_fetch(ordinal)",
-        "census.select_sign(ordinal)",
+        ".select_fetch(ordinal)",
+        ".select_sign(ordinal)",
         "all-row recovered Completion authentication and selection",
     ),
     (
@@ -790,10 +790,10 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-        "match cut.dequeue_exact_retaining() {",
-        "Some(prepared),",
-        "None,",
-        "stateful selected Serve fail-stop transaction",
+        "pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(",
+        "self.pending_ingress_capacity.take()",
+        "self.pending_ingress_capacity.as_ref()",
+        "ordinary/recovered ingress owner order",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -1008,9 +1008,9 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {",
-        "recovered_decision_fetch_body_completion:\n        Option<PreparedRecoveredDecisionFetchBodyCompletionV1>,",
-        "recovered_decision_fetch_body_completion: (),",
-        "launched recovered Decision Fetch Drop order must preserve exact production order",
+        "pending_lifecycle_completion: Option<PendingLifecycleCompletionV1>,",
+        "pending_lifecycle_completion: (),",
+        "launched unified lifecycle completion/capacity Drop order must preserve exact production order",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
@@ -1126,10 +1126,10 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-        "fn drain_v2_ingress(",
-        "consume_prepared_dequeued_v2_ingress(",
-        "consume_unsealed_v2_ingress(",
-        "legacy and lifecycle ordinary ingress share one post-dequeue tail",
+        "fn drain_decided_lane_recovery_ingress(",
+        "commit_decided_lane_recovery_drain(authorization, &mut committer)",
+        "commit_unchecked_decided_lane_recovery_drain(authorization, &mut committer)",
+        "live terminal drain retains current Serve before checked dequeue",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -1300,7 +1300,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "consuming activated Serve retirement fixture must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery.rs",
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04_wal_recovery_decision_classifier_cases.rs",
         "fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources()",
         "decision.subject.block_hash,",
         "HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b\"wrong pending block\")),",
@@ -1469,14 +1469,14 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
-        "fn assemble_storage_only_with_recovered_phase_broadcast_and_durable_fetch_startup(",
+        "fn assemble_storage_only_with_recovered_phase_broadcast_and_body_pipeline_startup(",
         "RecoveredWalStartupProjectionV1::PhaseBroadcast(projection, broadcast)",
         "RecoveredWalStartupProjectionV1::PhaseVote(projection)",
         "cold recovered phase-Broadcast storage assembly omits production refinement tokens",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_open.rs",
-        "fn assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_durable_fetch_startup(",
+        "fn assemble_storage_only_with_recovered_phase_broadcast_and_next_sign_and_body_pipeline_startup(",
         "RecoveredWalStartupProjectionV1::PhaseBroadcastAndNextSign(",
         "RecoveredWalStartupProjectionV1::PhaseBroadcast(",
         "cold recovered signed-Broadcast storage census omits production refinement tokens",
@@ -2188,7 +2188,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
         "fn authorizes_retained_successor(",
-        "self.predecessor_store.load().ok().as_ref() == Some(&self.predecessor_ledger)",
+        "self.successor_store.load().ok().as_ref() == Some(&self.successor_ledger)",
         "true",
         "CompleteTip restart publication authority must preserve exact production order",
     ),
@@ -2521,7 +2521,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 334
+) == 333
 
 
 @pytest.mark.parametrize(

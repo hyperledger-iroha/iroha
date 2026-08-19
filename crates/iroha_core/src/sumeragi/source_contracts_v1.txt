@@ -1198,8 +1198,10 @@ count|sealed_projection|pub(super) fn project_for_body_transition(|2|sealed body
 forbidden|sealed_projection|projection::admission_request(|sealed body successor projection acquired {forbidden}
 forbidden|sealed_projection|candidate.payload =|sealed body successor projection acquired {forbidden}
 forbidden|sealed_projection|fn commit(|sealed body successor projection acquired {forbidden}
-forbidden|sealed_projection|.insert(|sealed body successor projection acquired {forbidden}
-forbidden|sealed_projection|.remove(|sealed body successor projection acquired {forbidden}
+required|sealed_projection|registry.entries.insert(child_address, child)|sealed body successor publication omitted {required}
+required|sealed_projection|.remove(&completion_address)|sealed Fetch successor publication omitted {required}
+required|sealed_projection|.remove(&store_address)|sealed Store successor publication omitted {required}
+required|sealed_projection|pub(super) fn commit_after_publication(|sealed body successor publication omitted {required}
 forbidden|sealed_projection|for_test|sealed body successor projection acquired {forbidden}
 end
 case|certified_fetch_execution_surface_is_borrow_bound_and_commit_free
@@ -1277,7 +1279,7 @@ required|validate_token|adapter: crate::sumeragi::v2::PreparedDurableStoreValida
 forbidden|validate_token|derive(Clone|Validate successor must remain move-only
 required|fetch_execution|let Some(ready_projection) = completion.replay_evidence.project_durable_ready_fetch(|parent manifest authority lost authenticated Ready projection
 required|fetch_execution|let expected_manifest_hash = ready_projection.expected_manifest_hash();|parent manifest authority lost its authenticated projection transfer
-required|fetch_execution|_expected_manifest_hash: expected_manifest_hash|Store successor lost transferred parent manifest authority
+required|fetch_execution|expected_manifest_hash,|Store successor lost transferred parent manifest authority
 forbidden|fetch_execution|durable_body.manifest_hash()|parent manifest authority must not be re-read from the body receipt
 count|production|fn prepare_durable_store_execution(|1|the inert Store preflight must have no production caller
 forbidden|callers|prepare_durable_store_execution|the inert Store preflight must remain unwired outside the registry

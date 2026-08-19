@@ -346,9 +346,6 @@ def _serviced_candidate_production_source_fidelity_errors(
         "minimum_active_lifecycle_ordinal_excluding": (
             "minimum_active_lifecycle_ordinal_excluding"
         ),
-        "minimum_runnable_lifecycle_ordinal": (
-            "minimum_runnable_lifecycle_ordinal"
-        ),
         "complete_leader_wire_runtime_owner": (
             "complete_leader_wire_runtime_owner"
         ),

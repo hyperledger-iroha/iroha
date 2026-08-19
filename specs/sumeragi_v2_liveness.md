@@ -1332,7 +1332,7 @@ rows brings the historical 856-test, 40-module checkpoint. The exact retired-
 attempt accessor, mixed-carrier successor, two-link cold-restart hydration,
 noncanonical autonomous-output retirement, and the ordinary plus record-backed
 autonomous predecessor-durability regressions bring the current
-source-bound inventory to 865 exact tests across 43 modules and 91 pre-network
+source-bound inventory to 864 exact tests across 43 modules and 91 pre-network
 legs.
 The exact Apply regression also drains the typed Kura completion and verifies
 that its immutable finality artifact and original reducer tag absorb a later
@@ -1341,7 +1341,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`9e149c2cdfa751d087e3dbc8e7ae8aeadb3bbdf4ee6c0fdf49078fbb90d0262a`.
+`c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97`.
 Nine of those legs execute the separate 530-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 531 TSV lines and has SHA-256
 `e7eb7d609b110a421297d740f0a69cc2b01f2083731d29ca604826849bb36474`.
@@ -1800,7 +1800,7 @@ and real-network execution before it reduces release debt:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 865 exact production
+Before those longer scenarios, the PR gate inventories 864 exact production
 liveness tests and executes all 43 owning Rust modules serially. The release
 profile additionally records nine G-UNIT legs executing a separate 530-test
 focus inventory. The
@@ -2008,7 +2008,7 @@ unbounded broadcast admission. The integration filter remains a four-test
 module leg, while separate P2P, daemon, status, Nexus lane-relay, and atomic
 lane-certificate contracts brought that historical aggregate pre-network
 corridor to 61 legs. The current source-bound inventory is the separately
-audited 91-leg, 865-production-test corridor plus 530 G-UNIT tests; execution
+audited 91-leg, 864-production-test corridor plus 530 G-UNIT tests; execution
 against a signed clean candidate remains required before release promotion.
 
 The current reconnect changes supersede older mutable-tree diagnostics that

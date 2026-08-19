@@ -9,7 +9,7 @@ _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256 = {
         "08ce0575f38ec671cff556b343d981536dd24fb5bc6c49874b76508cd9cd8104"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "d4bd27c607b63e39c37499f79cf9fbf3a678f52c392985bb1ffd8bf71a13e675"
+        "a6d4a56fb74fe95a5d681e9899df1865ee83741e47685e4c4681cd2b4c5e2526"
     ),
     "fair_v2_ingress_required_capacity": (
         "b3786ae53f4632d7035fc68d122a7dc542df6d26d2cc00ece1f6681840045105"
