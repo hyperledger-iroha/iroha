@@ -882,7 +882,7 @@ fn validate_consumer_lock_collection_counts(
         .iter()
         .map(|root| root.dependencies.len())
         .chain(nodes.iter().map(|node| node.dependencies.len()))
-        .try_fold(0_usize, |total, count| total.checked_add(count))
+        .try_fold(0_usize, usize::checked_add)
         .ok_or_else(|| LockfileError::invalid("consumer-lock edge count overflowed"))?;
     if total_edges > MUSUBI_MAX_CONSUMER_LOCK_EDGES_V1 {
         return Err(LockfileError::invalid(

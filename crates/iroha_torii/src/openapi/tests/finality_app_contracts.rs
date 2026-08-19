@@ -224,6 +224,106 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
 }
 
 #[test]
+fn ledger_state_endpoints_expose_one_closed_authenticated_v2_schema() {
+    let document = generate_spec();
+    let schemas = component_schemas(&document);
+    assert_schema_shapes(schemas, &[SchemaShape {
+        name: "StateFinalityResponse",
+        required: "ledger.state_finality.required",
+        optional: None,
+    }]);
+    assert_property_refs(schemas, &[
+        PropertyRefContract {
+            owner: "StateFinalityResponse",
+            property: "block_hash",
+            expected: "#/components/schemas/Hash",
+        },
+        PropertyRefContract {
+            owner: "StateFinalityResponse",
+            property: "state_root",
+            expected: "#/components/schemas/Hash",
+        },
+        PropertyRefContract {
+            owner: "StateFinalityResponse",
+            property: "block_header",
+            expected: "#/components/schemas/BlockHeader",
+        },
+        PropertyRefContract {
+            owner: "StateFinalityResponse",
+            property: "finality_artifact",
+            expected: "#/components/schemas/SumeragiV2FinalityArtifact",
+        },
+    ]);
+    let schema = contract_schema(schemas, "StateFinalityResponse");
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("state finality properties");
+    for retired in contract_strings("ledger.state_finality.retired") {
+        assert!(
+            !properties.contains_key(retired),
+            "first-release state finality schema retained `{retired}`"
+        );
+    }
+    for retired_schema in ["StateRootResponse", "StateProofResponse"] {
+        assert!(
+            !schemas.contains_key(retired_schema),
+            "retired dual response schema `{retired_schema}` remains public"
+        );
+    }
+    assert_eq!(
+        contract_property(schemas, "StateFinalityResponse", "height")
+            .get("minimum")
+            .and_then(Value::as_u64),
+        Some(1)
+    );
+    for path in [
+        "/v1/ledger/state/{height}",
+        "/v1/ledger/state-proof/{height}",
+    ] {
+        let operation = openapi_operation(&document, path, "get");
+        let description = operation
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("ledger state endpoint description");
+        assert!(description.contains("Sumeragi-v2"));
+        assert!(description.contains("fails closed"));
+        assert_eq!(
+            operation_response_schema_ref(operation, "200", path),
+            "#/components/schemas/StateFinalityResponse"
+        );
+        let content = response_content(operation, "200", path);
+        assert_eq!(
+            content.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["application/json", "application/x-norito"])
+        );
+        let norito = content
+            .get("application/x-norito")
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .expect("Norito response schema");
+        assert_eq!(norito.get("type").and_then(Value::as_str), Some("string"));
+        assert_eq!(norito.get("format").and_then(Value::as_str), Some("binary"));
+    }
+    let paths = document
+        .get("paths")
+        .and_then(Value::as_object)
+        .expect("OpenAPI paths");
+    for retired_path in contract_strings("ledger.state_finality.retired_paths") {
+        assert!(
+            !paths.contains_key(retired_path),
+            "retired legacy finality path remains public: {retired_path}"
+        );
+    }
+    for retired_schema in contract_strings("ledger.state_finality.retired_schemas") {
+        assert!(
+            !schemas.contains_key(retired_schema),
+            "retired legacy finality schema remains public: {retired_schema}"
+        );
+    }
+}
+
+#[test]
 fn bridge_finality_operations_describe_durable_v2_evidence() {
     let document = generate_spec();
     for contract in [
@@ -269,7 +369,15 @@ fn generated_spec_documents_read_only_nexus_lifecycle_status() {
     assert_eq!(schema.get("additionalProperties"), Some(&Value::Bool(false)));
     assert_required_inventory(schema, "lifecycle.required", "lifecycle status");
     let properties = schema.get("properties").and_then(Value::as_object).expect("lifecycle properties");
+    assert_eq!(
+        object_field_set(properties),
+        ["catalog_hash", "incarnation_root", "incarnations", "lane_count", "lanes", "version"]
+            .into_iter()
+            .collect(),
+        "lifecycle schema must expose exactly the current V1 fields"
+    );
     assert_eq!(properties.get("lanes").and_then(|property| property.get("type")).and_then(Value::as_str), Some("array"));
+    assert!(!properties.contains_key("nexus_enabled"), "the current-only lifecycle schema must not retain the removed enablement switch");
     for name in ["catalog_hash", "incarnations", "incarnation_root"] { assert!(properties.contains_key(name)); }
     assert_eq!(properties.get("incarnations").and_then(|property| property.get("items")).and_then(|items| items.get("$ref")).and_then(Value::as_str), Some("#/components/schemas/NexusLaneLifecycleIncarnationEntry"));
 }
@@ -359,6 +467,32 @@ fn generated_spec_documents_exact_authoritative_sumeragi_v2_status() {
         PropertyRefContract { owner: "NativeAmxLegRecord", property: "commit_qc", expected: "#/components/schemas/NativeAmxAttestationQc" },
         PropertyRefContract { owner: "NativeAmxAttestationQc", property: "body", expected: "#/components/schemas/NativeAmxAttestationBody" },
     ]);
+    let proposal = contract_schema(schemas, "NativeAmxParticipantLaneBlockProposal");
+    assert_eq!(proposal.get("additionalProperties").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        schema_fields(proposal, "required", "native AMX participant proposal")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<BTreeSet<_>>(),
+        contract_strings("native.proposal.required")
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+    );
+    assert_eq!(
+        contract_property(
+            schemas,
+            "NativeAmxParticipantLaneBlockProposal",
+            "payload_block_hint"
+        )
+        .get("type")
+        .and_then(Value::as_str),
+        Some("null")
+    );
+    let proposal_description = proposal
+        .get("description")
+        .and_then(Value::as_str)
+        .expect("native AMX participant proposal description");
+    assert!(proposal_description.contains("requires payload_block_hint to be present as null"));
     let participant = contract_schema(schemas, "NativeAmxParticipantSettlementCommitment");
     assert_eq!(participant.get("additionalProperties").and_then(Value::as_bool), Some(false));
     for field in ["total_local_amount", "total_xor_due", "total_xor_after_haircut", "total_xor_variance"] {

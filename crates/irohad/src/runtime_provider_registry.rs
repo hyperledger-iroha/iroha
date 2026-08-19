@@ -4,7 +4,7 @@
 //! [`iroha_config`]. The deployment registry never receives the full node
 //! configuration, because that structure also contains validator keys, API
 //! tokens, and other values that runtime-provider discovery must not observe.
-use std::fmt;
+use crate::IrohaRuntimeDeps;
 use iroha_config::parameters::{
     actual::Root as Config,
     defaults::{
@@ -20,19 +20,19 @@ use iroha_config::parameters::{
 };
 use iroha_data_model::NetworkId;
 use rand::{rand_core::TryRngCore as _, rngs::OsRng};
-use crate::IrohaRuntimeDeps;
+use std::fmt;
 mod binding_collection;
 mod binding_types;
 mod catalog;
 mod dependency_scope;
 mod stream_token_gateway;
 mod stream_token_signer;
-pub use catalog::{IrohaRuntimeProviderCatalogErrorV1, RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1};
 use binding_collection::{
     append_required_governance_request_auth_binding, append_required_governance_service_binding,
     collect_configured_bindings, governance_request_ingress_binding_from_service,
 };
 pub(crate) use binding_types::{EvidenceViewerWebAuthnBindingV1, PopCredentialRuntimeBindingV1};
+pub use catalog::{IrohaRuntimeProviderCatalogErrorV1, RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1};
 use dependency_scope::{dependency_is_present, has_unrequested_dependency};
 const MAX_PROVIDER_INGEST_SOURCE_STREAMS_V1: u32 = 1_024;
 const GOVERNANCE_DAG_SIGNER_STARTUP_CHALLENGE_DOMAIN_V1: &[u8] =
@@ -1088,10 +1088,9 @@ impl IrohaRuntimeProviderBindingV1 {
             IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSignerResolver
                 | IrohaRuntimeProviderSlotV1::ProviderIngestCompletionSigner
         ) || signer_binding.validate().is_err()
-            || max_signed_transaction_bytes
-                < provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
-            || max_signed_transaction_bytes
-                > provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT
+            || !(provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
+                ..=provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_LIMIT)
+                .contains(&max_signed_transaction_bytes)
         {
             return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
         }
@@ -1188,13 +1187,13 @@ impl IrohaRuntimeProviderBindingV1 {
     pub(crate) const fn appeal_finance_checkpoint_max_bytes(&self) -> Option<u64> {
         self.appeal_finance_checkpoint_max_bytes
     }
-    /// Return the complete public PoTR signer, reader, and finalized-policy pins.
+    /// Return the complete public `PoTR` signer, reader, and finalized-policy pins.
     pub(crate) const fn potr_runtime_binding(
         &self,
     ) -> Option<&iroha_config::parameters::actual::SorafsPotrRuntimeBinding> {
         self.potr_runtime_binding.as_ref()
     }
-    /// Return the exact public PoP provider-registry resolution inputs.
+    /// Return the exact public `PoP` provider-registry resolution inputs.
     pub(crate) const fn pop_credential_runtime_binding(
         &self,
     ) -> Option<&PopCredentialRuntimeBindingV1> {
@@ -1268,7 +1267,7 @@ impl IrohaRuntimeProviderBindingV1 {
     ) -> Option<PorReplayArchiveProofLimitsV1> {
         self.por_replay_archive_proof_limits
     }
-    /// Return the exact public WebAuthn RP/origin policy.
+    /// Return the exact public `WebAuthn` RP/origin policy.
     pub(crate) const fn evidence_viewer_webauthn_binding(
         &self,
     ) -> Option<&EvidenceViewerWebAuthnBindingV1> {
@@ -1419,6 +1418,10 @@ impl IrohaRuntimeProviderBindingsV1 {
     /// a required public binding is missing, or an in-memory view was manually
     /// substituted with a noncanonical, zero-qualified, or test-marked
     /// binding.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "complete Governance DAG service projection"
+    )]
     pub fn try_from_governance_dag_service_view(
         chain_id: &iroha_data_model::ChainId,
         network_id: NetworkId,
@@ -1529,7 +1532,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         Self::try_from_governance_dag_service_projection(
             chain_id,
             network_id,
-            GovernanceDagServiceBindingProjectionV1 {
+            &GovernanceDagServiceBindingProjectionV1 {
                 ipfs_authenticator,
                 head_authenticator,
                 checkpoint_store_handle,
@@ -1612,7 +1615,7 @@ impl IrohaRuntimeProviderBindingsV1 {
         Self::try_from_governance_dag_service_projection(
             chain_id,
             network_id,
-            GovernanceDagServiceBindingProjectionV1 {
+            &GovernanceDagServiceBindingProjectionV1 {
                 ipfs_authenticator: GovernanceDagRequestAuthBindingProjectionV1 {
                     handle: service.ipfs_authenticator_handle(),
                     qualification: service.ipfs_authenticator_qualification(),
@@ -1627,7 +1630,7 @@ impl IrohaRuntimeProviderBindingsV1 {
     fn try_from_governance_dag_service_projection(
         chain_id: &iroha_data_model::ChainId,
         network_id: NetworkId,
-        service: GovernanceDagServiceBindingProjectionV1<'_>,
+        service: &GovernanceDagServiceBindingProjectionV1<'_>,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
         let mut bindings = Vec::with_capacity(3);
         append_required_governance_request_auth_binding(
@@ -2138,28 +2141,21 @@ fn qualify_moderation_checkpoint_dependency(
         .sorafs_moderation_checkpoint_store
         .as_ref()
         .ok_or(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)?;
-    let revision =
-        expected
-            .revision()
-            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                expected.slot(),
-            ))?;
-    let policy_digest =
-        expected
-            .policy_digest()
-            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                expected.slot(),
-            ))?;
+    let revision = expected
+        .revision()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
+    let policy_digest = expected
+        .policy_digest()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
     let qualification =
         sorafs_node::moderation_orchestrator::ModerationRuntimeProviderQualificationV1::new(
             revision,
             policy_digest,
         );
-    let expected_attestation_public_key = expected
-        .moderation_checkpoint_attestation_public_key()
-        .ok_or(
-        IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()),
-    )?;
+    let expected_attestation_public_key =
+        expected
+            .moderation_checkpoint_attestation_public_key()
+            .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
     sorafs_node::moderation_orchestrator::qualify_moderation_runtime_provider_v1(
         expected.handle(),
         qualification,
@@ -2179,9 +2175,9 @@ fn qualify_moderation_checkpoint_dependency(
         }
     })?;
     if let Some(record) = latest {
-        let max_bytes = expected.moderation_checkpoint_max_bytes().ok_or(
-            IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()),
-        )?;
+        let max_bytes = expected
+            .moderation_checkpoint_max_bytes()
+            .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
         let encoded = norito::to_bytes(&record)
             .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
         if !record.has_valid_provider_envelope(expected.handle(), qualification, max_bytes)
@@ -2516,18 +2512,12 @@ fn validate_musubi_provider_attestation_binding_set(
 fn musubi_provider_attestation_expected_qualification(
     binding: &IrohaRuntimeProviderBindingV1,
 ) -> Result<(u64, [u8; 32]), IrohaRuntimeProviderRegistryErrorV1> {
-    let revision =
-        binding
-            .revision()
-            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                binding.slot(),
-            ))?;
-    let policy_digest =
-        binding
-            .policy_digest()
-            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                binding.slot(),
-            ))?;
+    let revision = binding
+        .revision()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(binding.slot()))?;
+    let policy_digest = binding
+        .policy_digest()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(binding.slot()))?;
     Ok((revision, policy_digest))
 }
 fn validate_musubi_provider_attestation_runtime_handle(
@@ -2542,6 +2532,7 @@ fn validate_musubi_provider_attestation_runtime_handle(
     }
     Ok(())
 }
+#[expect(clippy::too_many_lines, reason = "cohesive attestation provider group")]
 fn qualify_musubi_provider_attestation_dependencies(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
@@ -2710,18 +2701,12 @@ fn validate_fenced_privacy_provider_observation(
     }
     let qualification =
         qualification.map_err(|_| IrohaRuntimeProviderRegistryErrorV1::Unavailable)?;
-    let expected_revision =
-        binding
-            .revision()
-            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                binding.slot(),
-            ))?;
-    let expected_policy_digest =
-        binding
-            .policy_digest()
-            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                binding.slot(),
-            ))?;
+    let expected_revision = binding
+        .revision()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(binding.slot()))?;
+    let expected_policy_digest = binding
+        .policy_digest()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(binding.slot()))?;
     if qualification.revision == 0
         || qualification.policy_digest == [0; 32]
         || qualification.revision != expected_revision
@@ -2843,6 +2828,10 @@ fn qualify_native_transaction_signers(
     );
     Ok(())
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "complete provider-ingest dependency audit"
+)]
 fn qualify_provider_ingest_dependencies(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
@@ -2878,9 +2867,7 @@ fn qualify_provider_ingest_dependencies(
                 || source_provider_ids.len()
                     > usize::try_from(limits.max_source_providers)
                         .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?
-                || source_provider_ids
-                    .iter()
-                    .any(|provider_id| *provider_id == [0; 32])
+                || source_provider_ids.contains(&[0; 32])
                 || source_provider_ids
                     .windows(2)
                     .any(|pair| pair[0] >= pair[1])
@@ -3037,8 +3024,10 @@ fn qualify_provider_ingest_dependencies(
         };
         let expected_qualification = observe()?;
         let network_id = bindings.network_id();
-        if let Some(record) = authority.load_latest(network_id).map_err(|error| {
-            match error {
+        if authority
+            .load_latest(network_id)
+            .map_err(|error| {
+                match error {
             iroha_core::query::provider_ingest_finalized::
                 ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1::Unavailable => {
                     IrohaRuntimeProviderRegistryErrorV1::Unavailable
@@ -3050,12 +3039,13 @@ fn qualify_provider_ingest_dependencies(
                     IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked
                 }
         }
-        })? {
-            if record.authority_qualification() != expected_qualification
-                || record.to_canonical_bytes().is_err()
-            {
-                return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
-            }
+            })?
+            .is_some_and(|record| {
+                record.authority_qualification() != expected_qualification
+                    || record.to_canonical_bytes().is_err()
+            })
+        {
+            return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
         }
         observe()?;
     }
@@ -3105,8 +3095,10 @@ fn qualify_reputation_retention_dependency(
     };
     let expected_qualification = observe()?;
     let network_id = bindings.network_id();
-    if let Some(record) = authority.load_latest(network_id).map_err(|error| {
-        match error {
+    if authority
+        .load_latest(network_id)
+        .map_err(|error| {
+            match error {
         iroha_core::query::reputation_finalized::
             ReputationFinalizedArchiveRetentionAuthorityExternalErrorV1::Unavailable => {
                 IrohaRuntimeProviderRegistryErrorV1::Unavailable
@@ -3118,12 +3110,13 @@ fn qualify_reputation_retention_dependency(
                 IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked
             }
     }
-    })? {
-        if record.authority_qualification() != expected_qualification
-            || record.to_canonical_bytes().is_err()
-        {
-            return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
-        }
+        })?
+        .is_some_and(|record| {
+            record.authority_qualification() != expected_qualification
+                || record.to_canonical_bytes().is_err()
+        })
+    {
+        return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
     }
     observe()?;
     Ok(())
@@ -3148,18 +3141,12 @@ fn qualify_reputation_journal_checkpoint_dependency(
     if provider.handle() != expected.handle() {
         return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
     }
-    let expected_revision =
-        expected
-            .revision()
-            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                expected.slot(),
-            ))?;
-    let expected_policy_digest =
-        expected
-            .policy_digest()
-            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                expected.slot(),
-            ))?;
+    let expected_revision = expected
+        .revision()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
+    let expected_policy_digest = expected
+        .policy_digest()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
     sorafs_node::reputation::runtime::ReputationJournalCheckpointSealingPolicyV1::try_new(
         expected.handle().to_owned(),
         expected_revision,
@@ -3224,9 +3211,9 @@ fn qualify_por_replay_archive_dependency(
     if archive.runtime_handle() != expected.handle() {
         return Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch);
     }
-    let expected_binding = expected.por_replay_archive_binding().ok_or(
-        IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()),
-    )?;
+    let expected_binding = expected
+        .por_replay_archive_binding()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
     let observe = || {
         archive.binding().map_err(|error| match error {
             sorafs_node::PorFinalizedReplayArchiveExternalErrorV1::Unavailable => {
@@ -3270,24 +3257,18 @@ fn qualify_evidence_viewer_archive_dependency(
     if !is_production_runtime_handle(archive.handle()) {
         return Err(IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected);
     }
-    let expected_revision =
-        expected
-            .revision()
-            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                expected.slot(),
-            ))?;
-    let expected_policy_digest =
-        expected
-            .policy_digest()
-            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                expected.slot(),
-            ))?;
-    let expected_archive_id = expected.evidence_viewer_archive_id().ok_or(
-        IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()),
-    )?;
-    let expected_public_key = expected.evidence_viewer_archive_public_key().ok_or(
-        IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()),
-    )?;
+    let expected_revision = expected
+        .revision()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
+    let expected_policy_digest = expected
+        .policy_digest()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
+    let expected_archive_id = expected
+        .evidence_viewer_archive_id()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
+    let expected_public_key = expected
+        .evidence_viewer_archive_public_key()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
     let observe = || {
         let qualification = archive.qualification().map_err(|error| match error {
             sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderReadinessErrorV1::Unavailable => {
@@ -3338,26 +3319,18 @@ fn qualify_moderation_panel_notification_archive_dependency(
     if !is_production_runtime_handle(archive.handle()) {
         return Err(IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected);
     }
-    let expected_revision =
-        expected
-            .revision()
-            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                expected.slot(),
-            ))?;
-    let expected_policy_digest =
-        expected
-            .policy_digest()
-            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                expected.slot(),
-            ))?;
-    let expected_archive_id = expected.moderation_panel_notification_archive_id().ok_or(
-        IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()),
-    )?;
+    let expected_revision = expected
+        .revision()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
+    let expected_policy_digest = expected
+        .policy_digest()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
+    let expected_archive_id = expected
+        .moderation_panel_notification_archive_id()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
     let expected_public_key = expected
         .moderation_panel_notification_archive_public_key()
-        .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-            expected.slot(),
-        ))?;
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
     let observe = || {
         let qualification = archive.qualification().map_err(|error| match error {
             sorafs_node::moderation_orchestrator::ModerationRuntimeProviderReadinessErrorV1::Unavailable => {
@@ -3408,23 +3381,15 @@ fn qualify_evidence_viewer_transparency_publisher_dependency(
     if !is_production_runtime_handle(publisher.handle()) {
         return Err(IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected);
     }
-    let expected_revision =
-        expected
-            .revision()
-            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                expected.slot(),
-            ))?;
-    let expected_policy_digest =
-        expected
-            .policy_digest()
-            .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-                expected.slot(),
-            ))?;
+    let expected_revision = expected
+        .revision()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
+    let expected_policy_digest = expected
+        .policy_digest()
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
     let expected_public_key = expected
         .evidence_viewer_transparency_publisher_public_key()
-        .ok_or(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
-            expected.slot(),
-        ))?;
+        .ok_or_else(|| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(expected.slot()))?;
     let observe = || {
         let qualification = publisher.qualification().map_err(|error| match error {
             sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderReadinessErrorV1::Unavailable => {
@@ -3453,6 +3418,9 @@ fn qualify_evidence_viewer_transparency_publisher_dependency(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use iroha_config_base::{toml::TomlSource, util::Bytes};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use std::{
         path::Path,
         sync::{
@@ -3461,9 +3429,6 @@ mod tests {
         },
         time::Duration,
     };
-    use super::*;
-    use iroha_config_base::{toml::TomlSource, util::Bytes};
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     fn standalone_bootle_lantern_bindings()
     -> iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1 {
         iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1::try_new(
@@ -3665,7 +3630,7 @@ mod tests {
             .expect("evidence-viewer archive signer key");
         let public_key = key_pair.public_key().to_bytes().1;
         let mut bytes = [0_u8; 32];
-        bytes.copy_from_slice(&public_key);
+        bytes.copy_from_slice(public_key);
         bytes
     }
     fn governance_signer_keypair(seed: u8) -> KeyPair {
@@ -3685,7 +3650,7 @@ mod tests {
             .expect("test Ed25519 keypair");
         let public_key = key_pair.public_key().to_bytes().1;
         let mut signing_public_key = [0_u8; 32];
-        signing_public_key.copy_from_slice(&public_key);
+        signing_public_key.copy_from_slice(public_key);
         sorafs_node::PorFinalizedReplayArchiveBindingV1::try_new(
             [0xB1; 32],
             17,
@@ -3832,7 +3797,11 @@ mod tests {
             .map(IrohaRuntimeProviderSlotV1::max_configured_multiplicity)
             .sum::<usize>();
         assert_eq!(derived, RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1);
-        assert_eq!(RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1, 185);
+        assert_eq!(
+            RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1,
+            IrohaRuntimeProviderSlotV1::ALL.len() - 1
+                + iroha_config::parameters::SORAFS_APPEAL_FINANCE_MAX_SUBMITTER_SIGNERS_V1
+        );
         assert_eq!(
             IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner
                 .max_configured_multiplicity(),
@@ -4499,7 +4468,7 @@ mod tests {
         let keypair = governance_auth_keypair(handle);
         let public_key = keypair.public_key().to_bytes().1;
         let mut bytes = [0_u8; 32];
-        bytes.copy_from_slice(&public_key);
+        bytes.copy_from_slice(public_key);
         bytes
     }
     impl sorafs_node::GovernanceDagRequestAuthenticator for GovernanceAuthenticator {
@@ -4582,21 +4551,23 @@ mod tests {
         fn slot(
             &self,
             slot: sorafs_node::GovernanceDagSealedStateSlot,
-        ) -> &Option<sorafs_node::GovernanceDagSealedStateRecord> {
+        ) -> Option<&sorafs_node::GovernanceDagSealedStateRecord> {
             match slot {
-                sorafs_node::GovernanceDagSealedStateSlot::Checkpoint => &self.checkpoint,
-                sorafs_node::GovernanceDagSealedStateSlot::PublishIntent => &self.publish_intent,
+                sorafs_node::GovernanceDagSealedStateSlot::Checkpoint => self.checkpoint.as_ref(),
+                sorafs_node::GovernanceDagSealedStateSlot::PublishIntent => {
+                    self.publish_intent.as_ref()
+                }
                 sorafs_node::GovernanceDagSealedStateSlot::ProducerCheckpoint => {
-                    &self.producer_checkpoint
+                    self.producer_checkpoint.as_ref()
                 }
                 sorafs_node::GovernanceDagSealedStateSlot::ProducerPublishIntent => {
-                    &self.producer_publish_intent
+                    self.producer_publish_intent.as_ref()
                 }
                 sorafs_node::GovernanceDagSealedStateSlot::IpfsRequestReplay => {
-                    &self.ipfs_request_replay
+                    self.ipfs_request_replay.as_ref()
                 }
                 sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
-                    &self.signed_head_request_replay
+                    self.signed_head_request_replay.as_ref()
                 }
             }
         }
@@ -4693,7 +4664,7 @@ mod tests {
                 .state
                 .lock()
                 .map_err(|_| "governance checkpoint store lock poisoned".to_owned())?;
-            Ok(state.slot(slot).clone())
+            Ok(state.slot(slot).cloned())
         }
         fn compare_and_swap(
             &self,
@@ -4709,24 +4680,22 @@ mod tests {
                 .lock()
                 .map_err(|_| "governance checkpoint store lock poisoned".to_owned())?;
             let current = state.slot(slot);
-            if current.as_ref().map(|record| record.revision) != expected_revision {
+            if current.map(|record| record.revision) != expected_revision {
                 return Err("governance checkpoint compare-and-swap conflict".to_owned());
             }
             let floor = state.generation_floor(slot);
             let generation_is_valid = match slot {
-                sorafs_node::GovernanceDagSealedStateSlot::Checkpoint
-                | sorafs_node::GovernanceDagSealedStateSlot::ProducerCheckpoint
-                | sorafs_node::GovernanceDagSealedStateSlot::IpfsRequestReplay
-                | sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay => {
-                    next.generation > floor
-                }
                 sorafs_node::GovernanceDagSealedStateSlot::PublishIntent
                 | sorafs_node::GovernanceDagSealedStateSlot::ProducerPublishIntent
                     if current.is_some() =>
                 {
                     next.generation >= floor
                 }
-                sorafs_node::GovernanceDagSealedStateSlot::PublishIntent
+                sorafs_node::GovernanceDagSealedStateSlot::Checkpoint
+                | sorafs_node::GovernanceDagSealedStateSlot::ProducerCheckpoint
+                | sorafs_node::GovernanceDagSealedStateSlot::IpfsRequestReplay
+                | sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay
+                | sorafs_node::GovernanceDagSealedStateSlot::PublishIntent
                 | sorafs_node::GovernanceDagSealedStateSlot::ProducerPublishIntent => {
                     next.generation > floor
                 }
@@ -4756,7 +4725,7 @@ mod tests {
                 .state
                 .lock()
                 .map_err(|_| "governance checkpoint store lock poisoned".to_owned())?;
-            if state.slot(slot).as_ref().map(|record| record.revision) != Some(expected_revision) {
+            if state.slot(slot).map(|record| record.revision) != Some(expected_revision) {
                 return Err("governance checkpoint compare-and-swap conflict".to_owned());
             }
             *state.slot_mut(slot) = None;
@@ -4990,11 +4959,7 @@ mod tests {
             sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderQualificationV1,
             sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderReadinessErrorV1,
         > {
-            if let Some(error) = self.qualification_error {
-                Err(error)
-            } else {
-                Ok(self.qualification)
-            }
+            self.qualification_error.map_or(Ok(self.qualification), Err)
         }
     }
     impl sorafs_node::evidence_viewer::transparency_producer::EvidenceViewerTransparencyPublisherV1
@@ -5788,6 +5753,7 @@ mod tests {
             });
     }
     #[test]
+    #[expect(clippy::too_many_lines, reason = "all specialized provider families")]
     fn canonical_catalog_roundtrips_every_specialized_config_projection_family() {
         let mut governance = default_runtime_config();
         configure_governance_producer(&mut governance);
@@ -6191,6 +6157,10 @@ mod tests {
             .expect("canonical non-default origin port");
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "complete evidence-viewer binding group"
+    )]
     fn evidence_viewer_catalog_projects_exact_checkpoint_store_qualification() {
         let mut config = default_runtime_config();
         configure_evidence_viewer(&mut config);
@@ -6434,8 +6404,8 @@ mod tests {
         );
         assert!(matches!(
             resolve_runtime_deps_from_bindings(&requested, Some(&registry)),
-            Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
-                | Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
+            Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch
+                | IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked)
         ));
     }
     #[test]

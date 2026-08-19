@@ -13,10 +13,9 @@ conflict‑aware scheduler driven by per‑transaction access sets. It is suitab
 for both leaders (proposal assembly) and validators (re‑validation) and keeps
 observable behavior identical on all honest nodes.
 
-This pipeline underpins both release lines: single-lane Iroha 2 deployments use
-the same IVM-first engine today, and the work documented here extends naturally
-into the multi-lane SORA Nexus network without requiring different contract
-artifacts or execution environments.
+This pipeline underpins Iroha 3 deployments with either one or many configured
+lanes. Both shapes use the same mandatory Nexus runtime and require no distinct
+contract artifacts or execution environments.
 
 ---
 

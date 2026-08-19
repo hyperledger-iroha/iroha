@@ -1738,7 +1738,7 @@ pub mod governance {
         /// Dispatch a typed SCCP route-governance proposal to Core, which admits registered citizens
         /// or holders of `CanProposeSccpRouteGovernance` (including role grants).
         visit_propose_sccp_route_governance(ProposeSccpRouteGovernance);
-        /// Dispatch a typed SoraFS provider-owner proposal to Core.
+        /// Dispatch a typed `SoraFS` provider-owner proposal to Core.
         ///
         /// Core admits proposal authors separately; only a successful referendum
         /// enactment can mutate the owner registry.
@@ -1896,16 +1896,8 @@ pub mod sorafs {
         /// Committed repair-ledger event pages are public operational state.
         visit_find_sorafs_repair_events(FindSorafsRepairEvents);
         /// The payload-free finalized reputation journal is public transparency state.
-        #[expect(
-            clippy::trivially_copy_pass_by_ref,
-            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-        )]
         visit_find_sorafs_reputation_journal_events(FindSorafsReputationJournalEvents);
         /// One payload-free finalized reputation source result is public transparency state.
-        #[expect(
-            clippy::trivially_copy_pass_by_ref,
-            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-        )]
         visit_find_sorafs_reputation_journal_event_by_source_id(
             FindSorafsReputationJournalEventBySourceId
         );
@@ -1947,10 +1939,6 @@ pub mod sorafs {
     declare_query_visitors! {
         via visit_orderbook_read;
         /// Validate permission to read the active authoritative orderbook policy.
-        #[expect(
-            clippy::trivially_copy_pass_by_ref,
-            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-        )]
         visit_find_sorafs_orderbook_policy(FindSorafsOrderbookPolicy);
         /// Validate permission to read an authoritative order.
         visit_find_sorafs_orderbook_order_by_id(FindSorafsOrderbookOrderById);
@@ -1965,10 +1953,6 @@ pub mod sorafs {
         /// Validate permission to read an authoritative settlement channel.
         visit_find_sorafs_orderbook_channel_by_id(FindSorafsOrderbookChannelById);
         /// Validate permission to read authoritative orderbook counters.
-        #[expect(
-            clippy::trivially_copy_pass_by_ref,
-            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-        )]
         visit_find_sorafs_orderbook_status(FindSorafsOrderbookStatus);
         /// Validate permission to list authoritative orders.
         visit_find_sorafs_orderbook_orders(FindSorafsOrderbookOrders);
@@ -1992,10 +1976,6 @@ pub mod sorafs {
     declare_query_visitors! {
         via visit_reserve_read;
         /// Validate permission to read the active reserve policy.
-        #[expect(
-            clippy::trivially_copy_pass_by_ref,
-            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-        )]
         visit_find_sorafs_reserve_policy(FindSorafsReservePolicy);
         /// Validate permission to read a provider reserve account.
         visit_find_sorafs_reserve_provider_by_id(FindSorafsReserveProviderById);
@@ -2015,26 +1995,14 @@ pub mod sorafs {
     declare_query_visitors! {
         no_op;
         /// `PoP` issuer policy is public transparency state.
-        #[expect(
-            clippy::trivially_copy_pass_by_ref,
-            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-        )]
         visit_find_sorafs_pop_issuer_policy(FindSorafsPopIssuerPolicy);
         /// Payload-free credential commitments are public transparency state.
         visit_find_sorafs_pop_credential_commitment_by_digest(
             FindSorafsPopCredentialCommitmentByDigest
         );
         /// Signed commitment-root publications are public transparency state.
-        #[expect(
-            clippy::trivially_copy_pass_by_ref,
-            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-        )]
         visit_find_sorafs_pop_commitment_root_by_version(FindSorafsPopCommitmentRootByVersion);
         /// Signed revocation publications are public transparency state.
-        #[expect(
-            clippy::trivially_copy_pass_by_ref,
-            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-        )]
         visit_find_sorafs_pop_revocation_publication_by_version(
             FindSorafsPopRevocationPublicationByVersion
         );
@@ -2043,22 +2011,10 @@ pub mod sorafs {
             FindSorafsPopRevocationByNonceCommitment
         );
         /// Registry audit links are public transparency state.
-        #[expect(
-            clippy::trivially_copy_pass_by_ref,
-            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-        )]
         visit_find_sorafs_pop_audit_digest_by_sequence(FindSorafsPopAuditDigestBySequence);
         /// Registry anchors and counters are public transparency state.
-        #[expect(
-            clippy::trivially_copy_pass_by_ref,
-            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-        )]
         visit_find_sorafs_pop_registry_status(FindSorafsPopRegistryStatus);
         /// Authoritative moderation policy is public transparency state.
-        #[expect(
-            clippy::trivially_copy_pass_by_ref,
-            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-        )]
         visit_find_sorafs_moderation_policy(FindSorafsModerationPolicy);
         /// Appeal intake, pinned roots, and deterministic roster are public transparency state.
         visit_find_sorafs_moderation_appeal(FindSorafsModerationAppeal);
@@ -2094,10 +2050,6 @@ pub mod sorafs {
         /// Derived no-show penalty records are public transparency state.
         visit_find_sorafs_moderation_no_show(FindSorafsModerationNoShow);
         /// Authoritative moderation counters are public transparency state.
-        #[expect(
-            clippy::trivially_copy_pass_by_ref,
-            reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
-        )]
         visit_find_sorafs_moderation_status(FindSorafsModerationStatus);
     }
     /// A complete snapshot includes every juror eligibility record and requires moderation access.
@@ -2201,7 +2153,7 @@ pub mod sorafs {
             "Can't manage the authoritative SoraFS reputation recorder policy"
         );
     }
-    /// Append a governed PoR reputation projection when permitted.
+    /// Append a governed `PoR` reputation projection when permitted.
     pub fn visit_append_por_reputation_journal_entry<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &AppendSorafsPorReputationJournalEntry,

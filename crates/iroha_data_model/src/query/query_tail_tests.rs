@@ -1,7 +1,5 @@
 #[cfg(test)]
 mod certified_merge_inclusion_tests {
-    use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof, MerkleTree};
-    use norito::codec::DecodeAll as _;
     use super::*;
     use crate::{
         account::AccountId,
@@ -14,6 +12,8 @@ mod certified_merge_inclusion_tests {
         },
         trigger::DataTriggerSequence,
     };
+    use iroha_crypto::{Hash, HashOf, KeyPair, MerkleProof, MerkleTree};
+    use norito::codec::DecodeAll as _;
     fn assert_committed_transaction_roundtrip(committed: &CommittedTransaction) {
         let encoded = committed.encode();
         let decoded = CommittedTransaction::decode_all(&mut encoded.as_slice())
@@ -235,8 +235,6 @@ mod certified_merge_inclusion_tests {
 }
 #[cfg(all(test, feature = "fault_injection"))]
 mod fault_injection_tests {
-    use std::str::FromStr;
-    use iroha_crypto::{Hash, HashOf, MerkleProof};
     use super::*;
     use crate::{
         AssetDefinitionId, Level,
@@ -245,6 +243,8 @@ mod fault_injection_tests {
         prelude::{DataTriggerSequence, Quantity, TimeTriggerEntrypoint, TransactionResult},
         trigger::TriggerId,
     };
+    use iroha_crypto::{Hash, HashOf, MerkleProof};
+    use std::str::FromStr;
     fn zero_hash<T>() -> HashOf<T> {
         let zero = [0u8; 32];
         HashOf::from_untyped_unchecked(Hash::prehashed(zero))
@@ -315,7 +315,7 @@ mod fault_injection_tests {
         };
         tx.result.set_batch_transfer_outcomes(vec![outcome.clone()]);
         tx.result_hash = tx.result.hash();
-        let original_result_hash = tx.result_hash.clone();
+        let original_result_hash = tx.result_hash;
         let original_result_proof = tx.result_proof.clone();
         tx.swap_result();
         assert!(tx.result.0.is_err());
@@ -327,10 +327,10 @@ mod fault_injection_tests {
 }
 #[cfg(all(test, feature = "json"))]
 mod tests {
-    use std::num::NonZeroU64;
+    use super::*;
     use iroha_crypto::KeyPair;
     use norito::json;
-    use super::*;
+    use std::num::NonZeroU64;
     #[test]
     fn proof_backend_query_payload_roundtrips() {
         use norito::codec::{Decode, Encode};

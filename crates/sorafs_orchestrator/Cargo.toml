@@ -1,5 +1,6 @@
 [package]
 name = "sorafs_orchestrator"
+autotests = false
 autobins = false
 version = "0.1.0"
 edition = "2024"
@@ -80,3 +81,11 @@ required-features = ["cli-orchestrator"]
 name = "taikai_viewer"
 path = "src/bin/taikai_viewer.rs"
 required-features = ["cli-orchestrator", "dev-tools"]
+
+[[test]]
+name = "orchestrator_parity"
+path = "tests/orchestrator_parity.rs"
+
+[[test]]
+name = "sorafs_cli"
+path = "tests/sorafs_cli.rs"

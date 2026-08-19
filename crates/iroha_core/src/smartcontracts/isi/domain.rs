@@ -3609,7 +3609,7 @@ mod tests {
         state_transaction: &mut crate::state::StateTransaction<'_, '_>,
     ) -> ValidationFeeUnregisterTargets {
         let domain_id =
-            DomainId::try_new("validation", "guard").expect("validation-fee guard domain");
+            DomainId::try_new("validation", "universal").expect("validation-fee guard domain");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(authority, state_transaction)
             .expect("register validation-fee guard domain");
@@ -3643,7 +3643,7 @@ mod tests {
             voting_asset_id.clone(),
             "xor".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id.clone()),
         ))
         .execute(authority, state_transaction)
         .expect("register retained validation-fee voting asset");
@@ -3694,10 +3694,10 @@ mod tests {
         );
         rules
     }
-    fn validation_fee_guard_sbd_asset_id() -> AssetDefinitionId {
+    fn validation_fee_guard_ds_asset_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
-            DomainId::try_new("sbd", "guard").expect("SBD guard domain"),
-            "sbd".parse().expect("SBD asset name"),
+            DomainId::try_new("ds", "guard").expect("DS guard domain"),
+            "ds".parse().expect("DS asset name"),
         )
     }
     fn validation_fee_guard_network_id() -> iroha_data_model::NetworkId {
@@ -3723,10 +3723,10 @@ mod tests {
             entrypoint: "autonomous_validation_fee_tick"
                 .parse()
                 .expect("payout entrypoint"),
-            sbd_asset_id: validation_fee_guard_sbd_asset_id(),
+            ds_asset_id: validation_fee_guard_ds_asset_id(),
             xor_asset_id: rules.voting_asset_id.clone(),
             pool_vault_account_id: fixture_account(0xA2),
-            batch_sbd: iroha_data_model::validation_fee::validation_fee_payout_batch_sbd(),
+            batch_ds: iroha_data_model::validation_fee::validation_fee_payout_batch_ds(),
             min_xor_out: iroha_data_model::validation_fee::validation_fee_payout_min_xor(),
             max_xor_out: iroha_data_model::validation_fee::validation_fee_payout_max_xor(),
             recipients: (0xA3..=0xA6)
@@ -3755,7 +3755,7 @@ mod tests {
                     network_id: validation_fee_guard_network_id(),
                     policy_version: 1,
                     previous_policy_hash: None,
-                    ds_asset_id: validation_fee_guard_sbd_asset_id(),
+                    ds_asset_id: validation_fee_guard_ds_asset_id(),
                     ds_scale: VALIDATION_FEE_DS_SCALE,
                     fee: Quantity::zero(),
                     treasury_account_id: fixture_account(0xA7),
@@ -7759,51 +7759,84 @@ mod tests {
             "permission epoch should be pruned for removed subject"
         );
     }
-    #[test]
-    fn unregister_account_rejects_when_account_owns_asset_definition() {
+    fn with_registered_account_unregistration_candidate(
+        test: impl FnOnce(AccountId, DomainId, AccountId, &mut crate::state::StateTransaction<'_, '_>),
+    ) {
         let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
+        let domain_id = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-        let keypair = checked_keypair();
-        let account_id = AccountId::new(keypair.public_key().clone());
-        let asset_def_id: AssetDefinitionId =
-            AssetDefinitionId::derive_from_components(domain_id.clone(), "bond".parse().unwrap());
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-        let mut tx = block.transaction();
+        let mut transaction = block.transaction();
         Register::account(NewAccount::new(account_id.clone()))
-            .execute(&authority, &mut tx)
+            .execute(&authority, &mut transaction)
             .expect("register account");
+        test(authority, domain_id, account_id, &mut transaction);
+    }
+    fn with_registered_asset_definition_unregistration_candidate(
+        test: impl FnOnce(AccountId, AssetDefinitionId, &mut crate::state::StateTransaction<'_, '_>),
+    ) {
+        let mut state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let asset_domain = DomainId::try_new("asset", "guard").expect("asset domain id");
+        seed_domain(&mut state, &asset_domain, &authority);
+        let asset_definition_id =
+            AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
         Register::asset_definition({
-            let __asset_definition_id = asset_def_id.clone();
+            let asset_definition_id = asset_definition_id.clone();
             AssetDefinition::numeric(
-                __asset_definition_id.clone(),
-                "bond".to_owned(),
+                asset_definition_id,
+                "usd".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )
         })
-        .execute(&authority, &mut tx)
+        .execute(&authority, &mut transaction)
         .expect("register asset definition");
-        tx.world
-            .asset_definition_mut(&asset_def_id)
-            .expect("definition exists")
-            .set_owned_by(account_id.clone());
-        tx.world
-            .replace_asset_definition_owner_index(&asset_def_id, &authority, &account_id);
-        let err = Unregister::account(account_id.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("account owning an asset definition must not be unregistered");
-        let err_string = err.to_string();
-        assert!(
-            err_string.contains("owns asset definition"),
-            "error should explain ownership conflict: {err_string}"
-        );
-        assert!(
-            tx.world.accounts.get(&account_id).is_some(),
-            "account should remain after rejected unregister"
-        );
+        test(authority, asset_definition_id, &mut transaction);
+    }
+    #[test]
+    fn unregister_account_rejects_when_account_owns_asset_definition() {
+        with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
+            let asset_def_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "bond".parse().unwrap(),
+            );
+            Register::asset_definition({
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "bond".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+            })
+            .execute(&authority, tx)
+            .expect("register asset definition");
+            tx.world
+                .asset_definition_mut(&asset_def_id)
+                .expect("definition exists")
+                .set_owned_by(account_id.clone());
+            tx.world
+                .replace_asset_definition_owner_index(&asset_def_id, &authority, &account_id);
+            let err = Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect_err("account owning an asset definition must not be unregistered");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("owns asset definition"),
+                "error should explain ownership conflict: {err_string}"
+            );
+            assert!(
+                tx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        });
     }
     #[test]
     fn unregister_account_rejects_when_account_has_contract_deployment_nonce_state() {
@@ -8045,47 +8078,39 @@ mod tests {
     }
     #[test]
     fn unregister_account_rejects_when_account_is_offline_escrow_account() {
-        let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
-        let authority = (*ALICE_ID).clone();
-        seed_domain(&mut state, &domain_id, &authority);
-        let keypair = checked_keypair();
-        let account_id = AccountId::new(keypair.public_key().clone());
-        let asset_definition_id =
-            AssetDefinitionId::derive_from_components(domain_id.clone(), "usd".parse().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::account(NewAccount::new(account_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register account");
-        Register::asset_definition({
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(
-                __asset_definition_id.clone(),
-                "usd".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-        })
-        .execute(&authority, &mut tx)
-        .expect("register asset definition");
-        tx.settlement
-            .offline
-            .escrow_accounts
-            .insert(asset_definition_id, account_id.clone());
-        let err = Unregister::account(account_id.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("offline escrow account must not be unregistered");
-        let err_string = err.to_string();
-        assert!(
-            err_string.contains("offline escrow account"),
-            "error should explain offline escrow conflict: {err_string}"
-        );
-        assert!(
-            tx.world.accounts.get(&account_id).is_some(),
-            "account should remain after rejected unregister"
-        );
+        with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
+            let asset_definition_id = AssetDefinitionId::derive_from_components(
+                domain_id.clone(),
+                "usd".parse().unwrap(),
+            );
+            Register::asset_definition({
+                let __asset_definition_id = asset_definition_id.clone();
+                AssetDefinition::numeric(
+                    __asset_definition_id.clone(),
+                    "usd".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    None,
+                )
+            })
+            .execute(&authority, tx)
+            .expect("register asset definition");
+            tx.settlement
+                .offline
+                .escrow_accounts
+                .insert(asset_definition_id, account_id.clone());
+            let err = Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect_err("offline escrow account must not be unregistered");
+            let err_string = err.to_string();
+            assert!(
+                err_string.contains("offline escrow account"),
+                "error should explain offline escrow conflict: {err_string}"
+            );
+            assert!(
+                tx.world.accounts.get(&account_id).is_some(),
+                "account should remain after rejected unregister"
+            );
+        });
     }
     #[test]
     fn unregister_account_rejects_live_offline_escrow_after_transaction_boundary() {
@@ -8250,33 +8275,25 @@ mod tests {
     }
     #[test]
     fn unregister_account_rejects_when_account_owns_sorafs_provider() {
-        let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
-        let authority = (*ALICE_ID).clone();
-        seed_domain(&mut state, &domain_id, &authority);
-        let keypair = checked_keypair();
-        let account_id = AccountId::new(keypair.public_key().clone());
-        let provider_id = iroha_data_model::sorafs::capacity::ProviderId::new([0xB1; 32]);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::account(NewAccount::new(account_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register account");
-        tx.world
-            .provider_owners
-            .insert(provider_id, account_id.clone());
-        let err = Unregister::account(account_id.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("account owning a provider must not be unregistered");
-        let err_string = err.to_string();
-        assert!(
-            err_string.contains("owns SoraFS provider"),
-            "error should explain ownership conflict: {err_string}"
-        );
-        assert!(
-            tx.world.accounts.get(&account_id).is_some(),
-            "account should remain after rejected unregister"
+        with_registered_account_unregistration_candidate(
+            |authority, _domain_id, account_id, tx| {
+                let provider_id = iroha_data_model::sorafs::capacity::ProviderId::new([0xB1; 32]);
+                tx.world
+                    .provider_owners
+                    .insert(provider_id, account_id.clone());
+                let err = Unregister::account(account_id.clone())
+                    .execute(&authority, tx)
+                    .expect_err("account owning a provider must not be unregistered");
+                let err_string = err.to_string();
+                assert!(
+                    err_string.contains("owns SoraFS provider"),
+                    "error should explain ownership conflict: {err_string}"
+                );
+                assert!(
+                    tx.world.accounts.get(&account_id).is_some(),
+                    "account should remain after rejected unregister"
+                );
+            },
         );
     }
     #[test]
@@ -8321,51 +8338,43 @@ mod tests {
     }
     #[test]
     fn unregister_account_ignores_mismatched_public_lane_validator_row() {
-        let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
-        let authority = (*ALICE_ID).clone();
-        seed_domain(&mut state, &domain_id, &authority);
-        let keypair = checked_keypair();
-        let account_id = AccountId::new(keypair.public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::account(NewAccount::new(account_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register account");
-        tx.world.public_lane_validators.insert(
-            (LaneId::SINGLE, account_id.clone()),
-            iroha_data_model::nexus::PublicLaneValidatorRecord {
-                lane_id: LaneId::new(1),
-                validator: account_id.clone(),
-                peer_id: PeerId::from(account_id.expect_single_signatory().clone()),
-                stake_account: account_id.clone(),
-                total_stake: Quantity::from(1_u32),
-                self_stake: Quantity::from(1_u32),
-                metadata: Metadata::default(),
-                status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
-                activation_epoch: Some(1),
-                activation_height: Some(1),
-                last_reward_epoch: None,
+        with_registered_account_unregistration_candidate(
+            |authority, _domain_id, account_id, tx| {
+                tx.world.public_lane_validators.insert(
+                    (LaneId::SINGLE, account_id.clone()),
+                    iroha_data_model::nexus::PublicLaneValidatorRecord {
+                        lane_id: LaneId::new(1),
+                        validator: account_id.clone(),
+                        peer_id: PeerId::from(account_id.expect_single_signatory().clone()),
+                        stake_account: account_id.clone(),
+                        total_stake: Quantity::from(1_u32),
+                        self_stake: Quantity::from(1_u32),
+                        metadata: Metadata::default(),
+                        status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
+                        activation_epoch: Some(1),
+                        activation_height: Some(1),
+                        last_reward_epoch: None,
+                    },
+                );
+                Unregister::account(account_id.clone())
+                    .execute(&authority, tx)
+                    .expect("mismatched validator row must not block account unregister");
+                assert!(
+                    tx.world.accounts.get(&account_id).is_none(),
+                    "account should be unregistered when only malformed validator state references it"
+                );
+                let record = tx
+                    .world
+                    .public_lane_validators
+                    .get(&(LaneId::SINGLE, account_id))
+                    .expect("malformed validator row remains as stored");
+                assert_eq!(record.lane_id, LaneId::new(1));
+                assert!(matches!(
+                    record.status,
+                    iroha_data_model::nexus::PublicLaneValidatorStatus::Active
+                ));
             },
         );
-        Unregister::account(account_id.clone())
-            .execute(&authority, &mut tx)
-            .expect("mismatched validator row must not block account unregister");
-        assert!(
-            tx.world.accounts.get(&account_id).is_none(),
-            "account should be unregistered when only malformed validator state references it"
-        );
-        let record = tx
-            .world
-            .public_lane_validators
-            .get(&(LaneId::SINGLE, account_id))
-            .expect("malformed validator row remains as stored");
-        assert_eq!(record.lane_id, LaneId::new(1));
-        assert!(matches!(
-            record.status,
-            iroha_data_model::nexus::PublicLaneValidatorStatus::Active
-        ));
     }
     #[test]
     fn unregister_account_rejects_when_account_has_public_lane_reward_record_state() {
@@ -8424,71 +8433,61 @@ mod tests {
     }
     #[test]
     fn unregister_account_ignores_mismatched_public_lane_economic_rows() {
-        let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
-        let authority = (*ALICE_ID).clone();
-        seed_domain(&mut state, &domain_id, &authority);
-        let keypair = checked_keypair();
-        let account_id = AccountId::new(keypair.public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::account(NewAccount::new(account_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register account");
-        tx.world.public_lane_stake_shares.insert(
-            (LaneId::SINGLE, account_id.clone(), authority.clone()),
-            iroha_data_model::nexus::PublicLaneStakeShare {
-                lane_id: LaneId::new(1),
-                validator: account_id.clone(),
-                staker: authority.clone(),
-                bonded: Quantity::from(1_u32),
-                pending_unbonds: std::collections::BTreeMap::new(),
-                metadata: Metadata::default(),
-            },
-        );
-        tx.world.public_lane_rewards.insert(
-            (LaneId::SINGLE, 1),
-            iroha_data_model::nexus::PublicLaneRewardRecord {
-                lane_id: LaneId::new(1),
-                epoch: 1,
-                asset: AssetId::new(
-                    AssetDefinitionId::derive_from_components(
-                        domain_id.clone(),
-                        "fee".parse().unwrap(),
+        with_registered_account_unregistration_candidate(|authority, domain_id, account_id, tx| {
+            tx.world.public_lane_stake_shares.insert(
+                (LaneId::SINGLE, account_id.clone(), authority.clone()),
+                iroha_data_model::nexus::PublicLaneStakeShare {
+                    lane_id: LaneId::new(1),
+                    validator: account_id.clone(),
+                    staker: authority.clone(),
+                    bonded: Quantity::from(1_u32),
+                    pending_unbonds: std::collections::BTreeMap::new(),
+                    metadata: Metadata::default(),
+                },
+            );
+            tx.world.public_lane_rewards.insert(
+                (LaneId::SINGLE, 1),
+                iroha_data_model::nexus::PublicLaneRewardRecord {
+                    lane_id: LaneId::new(1),
+                    epoch: 1,
+                    asset: AssetId::new(
+                        AssetDefinitionId::derive_from_components(
+                            domain_id.clone(),
+                            "fee".parse().unwrap(),
+                        ),
+                        account_id.clone(),
                     ),
-                    account_id.clone(),
-                ),
-                total_reward: Quantity::from(1_u32),
-                shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
-                    account: account_id.clone(),
-                    role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
-                    amount: Quantity::from(1_u32),
-                }],
-                metadata: Metadata::default(),
-            },
-        );
-        Unregister::account(account_id.clone())
-            .execute(&authority, &mut tx)
-            .expect("mismatched public-lane economic rows must not block account unregister");
-        assert!(
-            tx.world.accounts.get(&account_id).is_none(),
-            "account should be unregistered when only malformed economic rows reference it"
-        );
-        assert!(
-            tx.world
-                .public_lane_stake_shares
-                .get(&(LaneId::SINGLE, account_id.clone(), authority))
-                .is_some(),
-            "malformed stake-share row remains as stored"
-        );
-        assert!(
-            tx.world
-                .public_lane_rewards
-                .get(&(LaneId::SINGLE, 1))
-                .is_some(),
-            "malformed reward row remains as stored"
-        );
+                    total_reward: Quantity::from(1_u32),
+                    shares: vec![iroha_data_model::nexus::PublicLaneRewardShare {
+                        account: account_id.clone(),
+                        role: iroha_data_model::nexus::PublicLaneRewardRole::Validator,
+                        amount: Quantity::from(1_u32),
+                    }],
+                    metadata: Metadata::default(),
+                },
+            );
+            Unregister::account(account_id.clone())
+                .execute(&authority, tx)
+                .expect("mismatched public-lane economic rows must not block account unregister");
+            assert!(
+                tx.world.accounts.get(&account_id).is_none(),
+                "account should be unregistered when only malformed economic rows reference it"
+            );
+            assert!(
+                tx.world
+                    .public_lane_stake_shares
+                    .get(&(LaneId::SINGLE, account_id.clone(), authority))
+                    .is_some(),
+                "malformed stake-share row remains as stored"
+            );
+            assert!(
+                tx.world
+                    .public_lane_rewards
+                    .get(&(LaneId::SINGLE, 1))
+                    .is_some(),
+                "malformed reward row remains as stored"
+            );
+        });
     }
     #[test]
     fn unregister_account_rejects_when_account_has_repo_agreement_state() {
@@ -8886,40 +8885,32 @@ mod tests {
     }
     #[test]
     fn unregister_account_allows_peer_based_lane_relay_emergency_state() {
-        let mut state = test_state();
-        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
-        let authority = (*ALICE_ID).clone();
-        seed_domain(&mut state, &domain_id, &authority);
-        let keypair = checked_keypair();
-        let account_id = AccountId::new(keypair.public_key().clone());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::account(NewAccount::new(account_id.clone()))
-            .execute(&authority, &mut tx)
-            .expect("register account");
-        let peer = PeerId::new(
-            checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
-                .public_key()
-                .clone(),
-        );
-        tx.world.lane_relay_emergency_validators.insert(
-            LaneId::new(0),
-            iroha_data_model::nexus::LaneRelayEmergencyValidatorSet {
-                peers: vec![peer],
-                expires_at_height: 10,
-                metadata: Metadata::default(),
+        with_registered_account_unregistration_candidate(
+            |authority, _domain_id, account_id, tx| {
+                let peer = PeerId::new(
+                    checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
+                        .public_key()
+                        .clone(),
+                );
+                tx.world.lane_relay_emergency_validators.insert(
+                    LaneId::new(0),
+                    iroha_data_model::nexus::LaneRelayEmergencyValidatorSet {
+                        peers: vec![peer],
+                        expires_at_height: 10,
+                        metadata: Metadata::default(),
+                    },
+                );
+                assert!(
+                    Unregister::account(account_id.clone())
+                        .execute(&authority, tx)
+                        .is_ok(),
+                    "peer-based emergency override state should not block account unregister"
+                );
+                assert!(
+                    tx.world.accounts.get(&account_id).is_none(),
+                    "account should be removed when lane-relay override stores peers instead"
+                );
             },
-        );
-        assert!(
-            Unregister::account(account_id.clone())
-                .execute(&authority, &mut tx)
-                .is_ok(),
-            "peer-based emergency override state should not block account unregister"
-        );
-        assert!(
-            tx.world.accounts.get(&account_id).is_none(),
-            "account should be removed when lane-relay override stores peers instead"
         );
     }
     #[test]
@@ -10787,41 +10778,25 @@ mod tests {
     }
     #[test]
     fn unregister_asset_definition_rejects_when_definition_is_governance_voting_asset() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
-        seed_domain(&mut state, &asset_domain, &authority);
-        let asset_definition_id =
-            AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::asset_definition({
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(
-                __asset_definition_id.clone(),
-                "usd".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-        })
-        .execute(&authority, &mut tx)
-        .expect("register asset definition");
-        tx.gov.voting_asset_id = asset_definition_id.clone();
-        let err = Unregister::asset_definition(asset_definition_id.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("governance voting asset definition must not be unregistered");
-        let err_string = err.to_string();
-        assert!(
-            err_string.contains("governance voting asset definition"),
-            "error should explain governance voting-asset conflict: {err_string}"
-        );
-        assert!(
-            tx.world
-                .asset_definitions
-                .get(&asset_definition_id)
-                .is_some(),
-            "asset definition should remain after rejected unregister"
+        with_registered_asset_definition_unregistration_candidate(
+            |authority, asset_definition_id, tx| {
+                tx.gov.voting_asset_id = asset_definition_id.clone();
+                let err = Unregister::asset_definition(asset_definition_id.clone())
+                    .execute(&authority, tx)
+                    .expect_err("governance voting asset definition must not be unregistered");
+                let err_string = err.to_string();
+                assert!(
+                    err_string.contains("governance voting asset definition"),
+                    "error should explain governance voting-asset conflict: {err_string}"
+                );
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&asset_definition_id)
+                        .is_some(),
+                    "asset definition should remain after rejected unregister"
+                );
+            },
         );
     }
     #[test]
@@ -10889,158 +10864,96 @@ mod tests {
     }
     #[test]
     fn unregister_asset_definition_rejects_when_definition_is_governance_viral_reward_asset() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
-        seed_domain(&mut state, &asset_domain, &authority);
-        let asset_definition_id =
-            AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::asset_definition({
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(
-                __asset_definition_id.clone(),
-                "usd".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-        })
-        .execute(&authority, &mut tx)
-        .expect("register asset definition");
-        tx.gov.viral_incentives.reward_asset_definition_id = asset_definition_id.clone();
-        let err = Unregister::asset_definition(asset_definition_id.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("governance viral reward asset definition must not be unregistered");
-        let err_string = err.to_string();
-        assert!(
-            err_string.contains("governance viral reward asset definition"),
-            "error should explain governance viral reward-asset conflict: {err_string}"
-        );
-        assert!(
-            tx.world
-                .asset_definitions
-                .get(&asset_definition_id)
-                .is_some(),
-            "asset definition should remain after rejected unregister"
+        with_registered_asset_definition_unregistration_candidate(
+            |authority, asset_definition_id, tx| {
+                tx.gov.viral_incentives.reward_asset_definition_id = asset_definition_id.clone();
+                let err = Unregister::asset_definition(asset_definition_id.clone())
+                    .execute(&authority, tx)
+                    .expect_err(
+                        "governance viral reward asset definition must not be unregistered",
+                    );
+                let err_string = err.to_string();
+                assert!(
+                    err_string.contains("governance viral reward asset definition"),
+                    "error should explain governance viral reward-asset conflict: {err_string}"
+                );
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&asset_definition_id)
+                        .is_some(),
+                    "asset definition should remain after rejected unregister"
+                );
+            },
         );
     }
     #[test]
     fn unregister_asset_definition_rejects_when_definition_is_oracle_reward_asset() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
-        seed_domain(&mut state, &asset_domain, &authority);
-        let asset_definition_id =
-            AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::asset_definition({
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(
-                __asset_definition_id.clone(),
-                "usd".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-        })
-        .execute(&authority, &mut tx)
-        .expect("register asset definition");
-        tx.oracle.economics.reward_asset = asset_definition_id.clone();
-        let err = Unregister::asset_definition(asset_definition_id.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("oracle reward asset definition must not be unregistered");
-        let err_string = err.to_string();
-        assert!(
-            err_string.contains("oracle reward asset definition"),
-            "error should explain oracle reward-asset conflict: {err_string}"
-        );
-        assert!(
-            tx.world
-                .asset_definitions
-                .get(&asset_definition_id)
-                .is_some(),
-            "asset definition should remain after rejected unregister"
+        with_registered_asset_definition_unregistration_candidate(
+            |authority, asset_definition_id, tx| {
+                tx.oracle.economics.reward_asset = asset_definition_id.clone();
+                let err = Unregister::asset_definition(asset_definition_id.clone())
+                    .execute(&authority, tx)
+                    .expect_err("oracle reward asset definition must not be unregistered");
+                let err_string = err.to_string();
+                assert!(
+                    err_string.contains("oracle reward asset definition"),
+                    "error should explain oracle reward-asset conflict: {err_string}"
+                );
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&asset_definition_id)
+                        .is_some(),
+                    "asset definition should remain after rejected unregister"
+                );
+            },
         );
     }
     #[test]
     fn unregister_asset_definition_rejects_when_definition_is_nexus_fee_asset() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
-        seed_domain(&mut state, &asset_domain, &authority);
-        let asset_definition_id =
-            AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::asset_definition({
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(
-                __asset_definition_id.clone(),
-                "usd".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-        })
-        .execute(&authority, &mut tx)
-        .expect("register asset definition");
-        tx.nexus.fees.fee_asset_id = asset_definition_id.to_string();
-        let err = Unregister::asset_definition(asset_definition_id.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("nexus fee asset definition must not be unregistered");
-        let err_string = err.to_string();
-        assert!(
-            err_string.contains("nexus fee asset definition"),
-            "error should explain nexus fee-asset conflict: {err_string}"
-        );
-        assert!(
-            tx.world
-                .asset_definitions
-                .get(&asset_definition_id)
-                .is_some(),
-            "asset definition should remain after rejected unregister"
+        with_registered_asset_definition_unregistration_candidate(
+            |authority, asset_definition_id, tx| {
+                tx.nexus.fees.fee_asset_id = asset_definition_id.to_string();
+                let err = Unregister::asset_definition(asset_definition_id.clone())
+                    .execute(&authority, tx)
+                    .expect_err("nexus fee asset definition must not be unregistered");
+                let err_string = err.to_string();
+                assert!(
+                    err_string.contains("nexus fee asset definition"),
+                    "error should explain nexus fee-asset conflict: {err_string}"
+                );
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&asset_definition_id)
+                        .is_some(),
+                    "asset definition should remain after rejected unregister"
+                );
+            },
         );
     }
     #[test]
     fn unregister_asset_definition_rejects_when_definition_is_nexus_staking_asset() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
-        seed_domain(&mut state, &asset_domain, &authority);
-        let asset_definition_id =
-            AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::asset_definition({
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(
-                __asset_definition_id.clone(),
-                "usd".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-        })
-        .execute(&authority, &mut tx)
-        .expect("register asset definition");
-        tx.nexus.staking.stake_asset_id = asset_definition_id.to_string();
-        let err = Unregister::asset_definition(asset_definition_id.clone())
-            .execute(&authority, &mut tx)
-            .expect_err("nexus staking asset definition must not be unregistered");
-        let err_string = err.to_string();
-        assert!(
-            err_string.contains("nexus staking asset definition"),
-            "error should explain nexus staking-asset conflict: {err_string}"
-        );
-        assert!(
-            tx.world
-                .asset_definitions
-                .get(&asset_definition_id)
-                .is_some(),
-            "asset definition should remain after rejected unregister"
+        with_registered_asset_definition_unregistration_candidate(
+            |authority, asset_definition_id, tx| {
+                tx.nexus.staking.stake_asset_id = asset_definition_id.to_string();
+                let err = Unregister::asset_definition(asset_definition_id.clone())
+                    .execute(&authority, tx)
+                    .expect_err("nexus staking asset definition must not be unregistered");
+                let err_string = err.to_string();
+                assert!(
+                    err_string.contains("nexus staking asset definition"),
+                    "error should explain nexus staking-asset conflict: {err_string}"
+                );
+                assert!(
+                    tx.world
+                        .asset_definitions
+                        .get(&asset_definition_id)
+                        .is_some(),
+                    "asset definition should remain after rejected unregister"
+                );
+            },
         );
     }
     #[test]
@@ -11240,48 +11153,32 @@ mod tests {
     }
     #[test]
     fn unregister_asset_definition_removes_offline_escrow_mapping() {
-        let mut state = test_state();
-        let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
-        seed_domain(&mut state, &asset_domain, &authority);
-        let asset_definition_id =
-            AssetDefinitionId::derive_from_components(asset_domain, "usd".parse().unwrap());
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        Register::asset_definition({
-            let __asset_definition_id = asset_definition_id.clone();
-            AssetDefinition::numeric(
-                __asset_definition_id.clone(),
-                "usd".to_owned(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-        })
-        .execute(&authority, &mut tx)
-        .expect("register asset definition");
-        tx.settlement
-            .offline
-            .escrow_accounts
-            .insert(asset_definition_id.clone(), ALICE_ID.clone());
-        assert!(
-            tx.settlement
-                .offline
-                .escrow_accounts
-                .get(&asset_definition_id)
-                .is_some(),
-            "escrow mapping should exist before unregister"
-        );
-        Unregister::asset_definition(asset_definition_id.clone())
-            .execute(&authority, &mut tx)
-            .expect("unregister asset definition");
-        assert!(
-            tx.settlement
-                .offline
-                .escrow_accounts
-                .get(&asset_definition_id)
-                .is_none(),
-            "escrow mapping should be removed with asset definition"
+        with_registered_asset_definition_unregistration_candidate(
+            |authority, asset_definition_id, tx| {
+                tx.settlement
+                    .offline
+                    .escrow_accounts
+                    .insert(asset_definition_id.clone(), ALICE_ID.clone());
+                assert!(
+                    tx.settlement
+                        .offline
+                        .escrow_accounts
+                        .get(&asset_definition_id)
+                        .is_some(),
+                    "escrow mapping should exist before unregister"
+                );
+                Unregister::asset_definition(asset_definition_id.clone())
+                    .execute(&authority, tx)
+                    .expect("unregister asset definition");
+                assert!(
+                    tx.settlement
+                        .offline
+                        .escrow_accounts
+                        .get(&asset_definition_id)
+                        .is_none(),
+                    "escrow mapping should be removed with asset definition"
+                );
+            },
         );
     }
     #[test]

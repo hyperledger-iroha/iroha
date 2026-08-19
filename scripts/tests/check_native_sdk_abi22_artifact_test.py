@@ -984,7 +984,7 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
     complete.write_text(
         "module.exports = {"
         "connectNoritoBridgeAbiVersion() { return 22; },"
-        "inspectSorafsOrderbookSubmissionV1() {},"
+        "inspectSorafsOrderbookSubmissionForDiscriminantV1() {},"
         "sorafsValidateAppealFinanceCancelAssetLockJson() {}"
         ",verifySorafsOrderbookSubmissionReceiptV1() {}"
         "};\n",
@@ -1000,7 +1000,7 @@ def test_node_probe_requires_exports_and_exact_integer_abi(
 
     source = complete.read_text(encoding="utf-8")
     for symbol in (
-        "inspectSorafsOrderbookSubmissionV1",
+        "inspectSorafsOrderbookSubmissionForDiscriminantV1",
         "verifySorafsOrderbookSubmissionReceiptV1",
     ):
         incomplete = tmp_path / f"missing-{symbol}.cjs"
@@ -1025,7 +1025,7 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
     complete.write_text(
         "def connect_norito_bridge_abi_version():\n"
         "    return 22\n"
-        "def inspect_sorafs_orderbook_submission_v1():\n"
+        "def inspect_sorafs_orderbook_submission_for_discriminant_v1():\n"
         "    return {}\n"
         "def sorafs_validate_appeal_finance_cancel_asset_lock_json():\n"
         "    return '{}'\n"
@@ -1043,7 +1043,7 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
 
     source = complete.read_text(encoding="utf-8")
     for symbol in (
-        "inspect_sorafs_orderbook_submission_v1",
+        "inspect_sorafs_orderbook_submission_for_discriminant_v1",
         "verify_sorafs_orderbook_submission_receipt_v1",
     ):
         incomplete = tmp_path / f"missing-{symbol}.py"
@@ -1057,7 +1057,7 @@ def test_python_probe_requires_exports_and_exact_integer_abi(
     complete.write_text(
         "def connect_norito_bridge_abi_version():\n"
         "    return '22'\n"
-        "def inspect_sorafs_orderbook_submission_v1():\n"
+        "def inspect_sorafs_orderbook_submission_for_discriminant_v1():\n"
         "    return {}\n"
         "def sorafs_validate_appeal_finance_cancel_asset_lock_json():\n"
         "    return '{}'\n"
@@ -1449,7 +1449,7 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     for token in (
         'export const REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 22;',
         '"connectNoritoBridgeAbiVersion"',
-        '"inspectSorafsOrderbookSubmissionV1"',
+        '"inspectSorafsOrderbookSubmissionForDiscriminantV1"',
         '"sorafsValidateAppealFinanceCancelAssetLockJson"',
         '"verifySorafsOrderbookSubmissionReceiptV1"',
         "buildProvenance.source_tree_clean !== true",
@@ -1463,7 +1463,10 @@ def test_repository_wires_exact_abi22_release_contract() -> None:
     assert '#[pyo3(name = "connect_norito_bridge_abi_version")]' in python_native
     assert "fn connect_norito_bridge_abi_version_py() -> u32" in python_native
     assert "connect_norito_bridge_abi_version_py," in python_native
-    assert 'name = "inspect_sorafs_orderbook_submission_v1"' in python_orderbook_native
+    assert (
+        'name = "inspect_sorafs_orderbook_submission_for_discriminant_v1"'
+        in python_orderbook_native
+    )
     assert 'name = "verify_sorafs_orderbook_submission_receipt_v1"' in python_orderbook_native
 
     csharp = read(

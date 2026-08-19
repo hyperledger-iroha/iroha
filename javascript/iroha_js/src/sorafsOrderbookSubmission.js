@@ -254,7 +254,10 @@ export function prepareSorafsOrderbookSubmission({
   native,
   context,
 }) {
-  const inspect = nativeFunction(native, "inspectSorafsOrderbookSubmissionV1");
+  const inspect = nativeFunction(
+    native,
+    "inspectSorafsOrderbookSubmissionForDiscriminantV1",
+  );
   const verifyReceipt = nativeFunction(native, "verifySorafsOrderbookSubmissionReceiptV1");
   let body;
   if (ArrayBuffer.isView(signedTransaction)) {

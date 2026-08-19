@@ -720,8 +720,8 @@ PROOF
     <2>2l. AsyncCandidateLifecycleSchedulerCoverageInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2m. /\ AsyncProducerTypeInvariant
-            /\ AsyncServeProducerEpisodeTypeInvariant
-            /\ AsyncServeProducerEpisodeOwnershipInvariant
+            /\ AsyncServeProducerTurnTypeInvariant
+            /\ AsyncServeProducerTurnOwnershipInvariant
             /\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>3. StrongInductiveInvariant'
@@ -737,9 +737,9 @@ PROOF
          AsyncNextPreservesControlServiceStateTypeInvariant
     <2>4c. AsyncCandidateLifecycleSchedulerCoverageInvariant'
       BY <1>1, AsyncNextPreservesCandidateLifecycleSchedulerCoverage
-    <2>4d. /\ AsyncServeProducerEpisodeTypeInvariant'
-             /\ AsyncServeProducerEpisodeOwnershipInvariant'
-      BY <1>1, AsyncNextPreservesServeProducerEpisodeInvariants
+    <2>4d. /\ AsyncServeProducerTurnTypeInvariant'
+             /\ AsyncServeProducerTurnOwnershipInvariant'
+      BY <1>1, AsyncNextPreservesServeProducerTurnInvariants
     <2>4e. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
       BY <1>1, <2>2h,
          AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant

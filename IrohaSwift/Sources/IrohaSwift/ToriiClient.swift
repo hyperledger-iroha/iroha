@@ -20608,16 +20608,19 @@ public struct ToriiNativeAmxParticipantLaneBlockDescriptor: Decodable, Sendable,
 public struct ToriiNativeAmxParticipantLaneBlockProposal: Decodable, Sendable, Equatable {
     public let descriptor: ToriiNativeAmxParticipantLaneBlockDescriptor
     public let proposalHash: String
+    /// Uninhabited control-only field. The wire key is required and its value must be `null`.
+    public let payloadBlockHint: Never?
 
     private enum CodingKeys: String, CodingKey {
         case descriptor
         case proposalHash = "proposal_hash"
+        case payloadBlockHint = "payload_block_hint"
     }
 
     public init(from decoder: Decoder) throws {
         try rejectUnknownNativeAmxFields(
             from: decoder,
-            allowed: ["descriptor", "proposal_hash"],
+            allowed: ["descriptor", "proposal_hash", "payload_block_hint"],
             context: "native AMX participant lane-block proposal"
         )
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -20631,6 +20634,25 @@ public struct ToriiNativeAmxParticipantLaneBlockProposal: Decodable, Sendable, E
             container: container,
             field: "native AMX participant proposal_hash"
         )
+        guard container.contains(.payloadBlockHint) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.payloadBlockHint,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription:
+                        "native AMX participant payload_block_hint is required and must be null"
+                )
+            )
+        }
+        guard try container.decodeNil(forKey: .payloadBlockHint) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .payloadBlockHint,
+                in: container,
+                debugDescription:
+                    "native AMX participant payload_block_hint must be null"
+            )
+        }
+        payloadBlockHint = nil
         guard let computedProposalHash = ToriiNativeAmxWire.proposalHash(descriptor),
               proposalHash == computedProposalHash
         else {
@@ -22734,12 +22756,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         completion: @escaping (Result<ToriiSumeragiDiagnosticsSnapshot, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
         runTask(completion) { try await self.getSumeragiDiagnostics() }
-    }
-
-    @discardableResult
-    public func getSumeragiCommitQc(blockHashHex: String,
-                                    completion: @escaping (Result<ToriiSumeragiCommitQcRecord, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getSumeragiCommitQc(blockHashHex: blockHashHex) }
     }
 
     // MARK: - Governance (Completion)
@@ -27490,16 +27506,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         try rejectDuplicateJSONKeys(data, context: "Sumeragi diagnostics response")
         return try decodeJSON(ToriiSumeragiDiagnosticsSnapshot.self, from: data)
     }
-    public func getSumeragiCommitQc(blockHashHex: String) async throws -> ToriiSumeragiCommitQcRecord {
-        let normalized = try ToriiClient.normalizeHex32(blockHashHex, field: "block_hash")
-        let request = try makeOperatorGetRequest(
-            path: "/v1/sumeragi/commit-qcs/\(normalized)",
-            headers: ["Accept": "application/json"]
-        )
-        let data = try await data(for: request)
-        return try decodeJSON(ToriiSumeragiCommitQcRecord.self, from: data)
-    }
-
     public func getStatusSnapshot() async throws -> ToriiStatusSnapshot {
         let sequence = statusState.reserveSequence()
         let request = try makeRequest(path: "/v1/status",

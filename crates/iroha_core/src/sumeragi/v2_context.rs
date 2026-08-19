@@ -385,7 +385,7 @@ fn verify_staged_nexus_amx_context_hash(
 ///
 /// # Errors
 ///
-/// Returns an error if an enabled Nexus policy has no authenticated runtime policy set.
+/// Returns an error if the Nexus policy has no authenticated runtime policy set.
 pub fn staged_genesis_execution_policy_hash(
     staged: &StateBlock<'_>,
 ) -> Result<Hash, V2GenesisBootstrapError> {
@@ -698,11 +698,8 @@ pub(crate) fn finalized_next_epoch_snapshot(
                 epoch,
             )
             .ok_or(V2ContextBuildError::MissingFinalizedEpochRoster)?;
-            let active_lanes = state
-                .nexus()
-                .enabled
-                .then(|| nexus_active_lane_ids(state.nexus()));
-            strict_v2_voting_roster(state.world(), &elected, active_lanes.as_ref())?
+            let active_lanes = nexus_active_lane_ids(state.nexus());
+            strict_v2_voting_roster(state.world(), &elected, Some(&active_lanes))?
         }
     };
     let quorum = wire::DualQuorum::from_roster(&roster)?;
@@ -1209,7 +1206,6 @@ mod tests {
         let baseline = lane_hash_world(&records);
         let mut changed_catalog = lane_hash_world(&records);
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = true;
         nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {

@@ -49,7 +49,6 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
     "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_height_driver.rs",
     "crates/iroha_core/src/sumeragi/v2_runner/preactivation_ingress.rs",
     "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-    "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_recovered_wal.rs",
     "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger_operations.rs",
@@ -68,7 +67,7 @@ SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES = (
 )
 assert len(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_FIXTURE_FILES)
-) == 64
+) == 63
 
 
 def test_successor_run_inner_parser_rejects_neighbor_lookalike(
@@ -402,6 +401,48 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     (
         "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
         "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        "services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));",
+        "let _ = services;",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        "super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeQueued,",
+        "super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CapacityPending,",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        ") => {}\n                    ProductionLifecycleIngressTurnV1::PassThrough(runner)",
+        ") => { consume_prepared_ordinary_ingress_turn(); }\n                    ProductionLifecycleIngressTurnV1::PassThrough(runner)",
+        "direct lifecycle Certified-Serve dispatch must use the opaque checked-transition gate",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        "!selected.restart_required()",
+        "false",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        ".claim_producer_turn_for_local_proposal(&mut serve_runner)",
+        ".claim_unreviewed_producer_turn_for_local_proposal(&mut serve_runner)",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
+        ".settle_producer_turn_after_local_proposal(&mut serve_runner, attempted_producer)",
+        ".settle_unreviewed_producer_turn_after_local_proposal(&mut serve_runner, attempted_producer)",
+        "production lifecycle finalization behavior must preserve exact production order",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/tests/v2_adapter_04b_lifecycle_startup.rs",
+        "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
         ".retain_merge_sidecars_for_global_view(",
         ".retain_merge_sidecars_for_global_view_removed(",
         "production lifecycle finalization behavior must preserve exact production order",
@@ -701,41 +742,51 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "exact queue-owned physical dequeue",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
-        "fn prepare_and_dequeue_current_certified_serve<'cursor>(",
-        "ProductionCurrentCertifiedServePreparationV1::Retain => {\n"
-        "            operation.complete();",
-        "ProductionCurrentCertifiedServePreparationV1::Retain => {\n"
-        "            drop(operation);",
-        "stateful selected Serve fail-stop transaction",
+        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
+        "fn prepare_current_certified_serve_pre_admission(",
+        "CurrentCertifiedServePreAdmissionV1::AuthenticatedNegative {",
+        "CurrentCertifiedServePreAdmissionV1::Negative {",
+        "shared current Serve transport/authentication classifier",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
         "fn prepare_decided_lane_recovery_ingress(",
-        "Some(decided_subject),",
-        "None,",
-        "terminal recovery must bind both invalid-version and current-height Serve classifiers",
+        "if request.round.height == active_height {\n"
+        "        return DecidedLaneRecoveryIngressPreparation::CurrentServeRetain;\n"
+        "    }",
+        "if request.round.height == active_height {\n"
+        "        return DecidedLaneRecoveryIngressPreparation::LeaderWireRetire;\n"
+        "    }",
+        "terminal recovery classifies current Serve as retained",
+    ),
+    (
+        "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
+        "fn authorize_decided_lane_recovery_drain(",
+        "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain => {\n"
+        "            DecidedLaneRecoveryDrainDecision::Retain\n"
+        "        }",
+        "DecidedLaneRecoveryIngressPreparation::CurrentServeRetain => {\n"
+        "            DecidedLaneRecoveryDrainDecision::Authorized(\n"
+        "                DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,\n"
+        "            )\n"
+        "        }",
+        "terminal recovery denies current-Serve dequeue authority",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
         "fn drain_decided_lane_recovery_ingress(",
-        ".authenticate_certified_body_request(request, sender)",
-        ".authenticate_certified_body_request_unchecked(request, sender)",
-        "live terminal drain authenticates before checked authorization",
+        "DecidedLaneRecoveryDrainDecision::Retain => false,",
+        "DecidedLaneRecoveryDrainDecision::Retain => true,",
+        "live terminal drain retains current Serve before checked dequeue",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs",
-        "fn authorize_decided_lane_recovery_drain<",
-        "ordinary_ingress_consumer::authorize_current_certified_serve_pre_dequeue(",
-        "ordinary_ingress_consumer::authorize_current_certified_serve_pre_dequeue_unchecked(",
-        "terminal recovery translates only the shared durable preparation",
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs",
-        "impl CurrentCertifiedServePreDequeueAuthorizer for ProductionV2Services",
-        "self.stage_certified_serve_rejection(request_hash, outcome)",
-        "Ok(())",
-        "production current Serve authorizer omits",
+        "fn authorize_decided_lane_recovery_drain(",
+        ") -> DecidedLaneRecoveryDrainDecision {\n    match preparation {",
+        ") -> DecidedLaneRecoveryDrainDecision {\n"
+        "    let _legacy = CertifiedServeAdmission;\n"
+        "    match preparation {",
+        "terminal recovery cannot mint coordinator-owned Serve authority",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs",
@@ -984,16 +1035,16 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
-        "fn bind_certified_serve(",
-        "self.ingress.bind_certified_serve_gate(gate.clone())",
-        "Ok(())",
+        "fn bind(",
+        "ingress.bind_leader_wire_lifecycle_gate(",
+        "ingress.bind_unreviewed_leader_wire_lifecycle_gate(",
         "sealed leader-wire launch binding omits production refinement tokens",
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs",
         "fn retire(&mut self) -> Result<(), String>",
-        ".unbind_height_ingress_gates(certified_serve_gate, leader_wire_gate)",
-        ".unbind_certified_serve_gate(certified_serve_gate)",
+        "self.ingress.unbind_leader_wire_lifecycle_gate(&gate)",
+        "self.ingress.unbind_unreviewed_leader_wire_lifecycle_gate(&gate)",
         "sealed leader-wire launch binding omits production refinement tokens",
     ),
     (
@@ -1712,9 +1763,9 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
     ),
     (
         "crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs",
-        "fn dispatch_recovered_decision_fetch_with_runner_debt(",
-        "capture_recovered_decision_fetch_exact_output(&owner)",
-        "capture_recovered_decision_fetch_output_without_reservation(&owner)",
+        "fn dispatch_recovered_completion_with_runner_debt(",
+        "registration.commit(prepared)",
+        "registration.abort(prepared)",
         "lifecycle-owned recovered Decision Fetch dispatch must preserve exact production order",
     ),
     (
@@ -2149,7 +2200,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "CompleteTip restart publication authority must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
         "fn open_ingress_for_active_height(",
         "output_guard.begin_fail_stop_operation()",
         "output_guard.acquire()",
@@ -2170,7 +2221,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "non-pending lifecycle live successor startup must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
         "fn initial_block_sync_deadline(",
         "if eager_recovery {\n        height_started_at\n    } else {",
         "if eager_recovery {\n"
@@ -2194,7 +2245,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
         "ordinary lifecycle successor handoff must preserve exact production order",
     ),
     (
-        "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
+        "crates/iroha_core/src/sumeragi/v2_runner.rs",
         "const fn retain_eager_block_sync(",
         "recovering_interrupted_tip || admitted_discovered_commit_qc",
         "{ let _ = admitted_discovered_commit_qc; recovering_interrupted_tip }",
@@ -2477,7 +2528,7 @@ SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS = (
 
 assert len(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS) == len(
     set(SUCCESSOR_PRODUCTION_SOURCE_MAPPING_MUTATIONS)
-) == 328
+) == 334
 
 
 @pytest.mark.parametrize(

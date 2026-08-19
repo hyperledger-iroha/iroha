@@ -1,14 +1,14 @@
 // Rooted filesystem and two-slot store regression tests.
 #[cfg(test)]
 mod tests {
-    use std::{
-        ffi::{OsStr, OsString},
-        fs,
-        io::{self, Seek as _, SeekFrom, Write as _},
-        panic::AssertUnwindSafe,
-        sync::{Arc, Barrier, mpsc},
-        thread,
-        time::Duration,
+    use super::{
+        ExpectedFile, RootedDirectory, TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1, TWO_SLOT_NAMES_V1,
+        TWO_SLOT_ZERO_DIGEST, TwoSlotCasOutcomeV1, TwoSlotInitFileLockV1,
+        TwoSlotInitializationWaitV1, TwoSlotSnapshotV1, TwoSlotStageV1, TwoSlotStoreConfigV1,
+        TwoSlotStoreV1, TwoSlotTryErrorV1, decode_two_slot_value, encode_two_slot_value,
+        initialize_two_slot_stage, open_existing_two_slot_store, read_exact_file_region,
+        two_slot_init_lock_name, two_slot_lost_found_name, two_slot_stage_prefix,
+        write_exact_file_region, write_two_slot_record_unlocked,
     };
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use std::cell::Cell;
@@ -21,16 +21,16 @@ mod tests {
         ffi::{CString, c_char, c_int, c_void},
         os::fd::AsRawFd as _,
     };
-    use tempfile::tempdir;
-    use super::{
-        ExpectedFile, RootedDirectory, TWO_SLOT_LOST_FOUND_ENTRY_HARD_CAP_V1, TWO_SLOT_NAMES_V1,
-        TWO_SLOT_ZERO_DIGEST, TwoSlotCasOutcomeV1, TwoSlotInitFileLockV1,
-        TwoSlotInitializationWaitV1, TwoSlotSnapshotV1, TwoSlotStageV1, TwoSlotStoreConfigV1,
-        TwoSlotStoreV1, TwoSlotTryErrorV1, decode_two_slot_value, encode_two_slot_value,
-        initialize_two_slot_stage, open_existing_two_slot_store, read_exact_file_region,
-        two_slot_init_lock_name, two_slot_lost_found_name, two_slot_stage_prefix,
-        write_exact_file_region, write_two_slot_record_unlocked,
+    use std::{
+        ffi::{OsStr, OsString},
+        fs,
+        io::{self, Seek as _, SeekFrom, Write as _},
+        panic::AssertUnwindSafe,
+        sync::{Arc, Barrier, mpsc},
+        thread,
+        time::Duration,
     };
+    use tempfile::tempdir;
     fn test_root(path: &std::path::Path) -> RootedDirectory {
         #[cfg(windows)]
         {
@@ -958,7 +958,7 @@ mod tests {
                     .count()
             })
             .collect::<Vec<_>>();
-        assert!(inventories.iter().any(|entries| *entries == 2));
+        assert!(inventories.contains(&2));
         assert!(inventories.contains(&0));
         let hard_link_temp = tempdir().expect("tempdir");
         let hard_link_root = test_root(hard_link_temp.path());

@@ -18,14 +18,11 @@ use norito::{
         default_encode_flags, hardware_crc64 as norito_crc64,
     },
 };
+#[cfg(any(test, feature = "transparent_api"))]
+use std::collections::BTreeMap;
 use std::{
-    borrow::Cow,
-    collections::{BTreeMap, BTreeSet},
-    convert::TryInto,
-    fmt, format,
-    string::String,
-    time::Duration,
-    vec::Vec,
+    borrow::Cow, collections::BTreeSet, convert::TryInto, fmt, format, string::String,
+    time::Duration, vec::Vec,
 };
 pub mod proofs;
 fn enforce_payload_len_limit(len: usize) -> Result<(), NoritoFrameError> {
@@ -240,7 +237,6 @@ impl SignedBlock {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -271,7 +267,6 @@ impl SignedBlock {
                 da_commitments,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -782,7 +777,7 @@ impl SignedBlock {
         )?;
         Ok(core::mem::replace(&mut self.signatures, signatures))
     }
-    /// Creates genesis block signed with the genesis private key (and not signed by any peer).
+    /// Creates a canonical resultless genesis proposal signed with the genesis private key.
     ///
     /// `da_commitments` lets the caller embed a [`DaCommitmentBundle`] into the genesis payload once
     /// DA receipts are available during block assembly.
@@ -800,7 +795,7 @@ impl SignedBlock {
         )
         .expect("genesis block signing should succeed for non-empty transactions and valid key material")
     }
-    /// Try to create genesis block signed with the genesis private key (and not signed by any peer).
+    /// Try to create a canonical resultless genesis proposal signed with the genesis private key.
     ///
     /// `da_commitments` lets the caller embed a [`DaCommitmentBundle`] into the genesis payload once
     /// DA receipts are available during block assembly.
@@ -824,27 +819,8 @@ impl SignedBlock {
             None,
         )
     }
-    /// Creates genesis block signed with the genesis private key, overriding DA proof policies.
-    ///
-    /// `da_commitments` lets the caller embed a [`DaCommitmentBundle`] into the genesis payload once
-    /// DA receipts are available during block assembly.
-    pub fn genesis_with_da_proof_policies(
-        transactions: Vec<SignedTransaction>,
-        private_key: &iroha_crypto::PrivateKey,
-        confidential_features: Option<crate::confidential::ConfidentialFeatureDigest>,
-        da_commitments: Option<DaCommitmentBundle>,
-        da_proof_policies: Option<DaProofPolicyBundle>,
-    ) -> SignedBlock {
-        Self::try_genesis_with_da_proof_policies(
-            transactions,
-            private_key,
-            confidential_features,
-            da_commitments,
-            da_proof_policies,
-        )
-        .expect("genesis block signing should succeed for non-empty transactions and valid key material")
-    }
-    /// Try to create genesis block signed with the genesis private key, overriding DA proof policies.
+    /// Try to create a canonical resultless genesis proposal signed with the genesis private key,
+    /// overriding DA proof policies.
     ///
     /// `da_commitments` lets the caller embed a [`DaCommitmentBundle`] into the genesis payload once
     /// DA receipts are available during block assembly.
@@ -870,7 +846,6 @@ impl SignedBlock {
         let merkle_root = entry_merkle.root().ok_or_else(|| {
             iroha_crypto::Error::Signing("Genesis block must have transactions".to_owned())
         })?;
-        let result_merkle = MerkleTree::default();
         let creation_time_ms = Self::get_genesis_block_creation_time(&transactions);
         let confidential_features = confidential_features.or(Some(
             crate::confidential::DEFAULT_CONFIDENTIAL_FEATURE_DIGEST,
@@ -891,11 +866,10 @@ impl SignedBlock {
             height: nonzero!(1_u64),
             prev_block_hash: None,
             merkle_root: Some(merkle_root),
-            result_merkle_root: result_merkle.root(),
+            result_merkle_root: None,
             da_proof_policies_hash: Some(proof_policy_hash),
             da_commitments_hash,
             da_pin_intents_hash: None,
-            prev_roster_evidence_hash: None,
             npos_effects_hash: None,
             execution_context_hash: None,
             creation_time_ms,
@@ -916,25 +890,12 @@ impl SignedBlock {
             da_commitments,
             da_proof_policies: Some(proof_policies),
             da_pin_intents: None,
-            previous_roster_evidence: None,
             npos_consensus_effects: None,
-        };
-        let result = BlockResult {
-            time_triggers: Vec::new(),
-            merkle: entry_merkle,
-            result_merkle,
-            transaction_results: Vec::new(),
-            committed_fragment_count: 0,
-            fastpq_transcripts: BTreeMap::new(),
-            axt_envelopes: Vec::new(),
-            lane_finality_statements: Vec::new(),
-            trigger_completions: Vec::new(),
-            axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
         };
         Ok(SignedBlock {
             signatures: [signature].into_iter().collect(),
             payload,
-            result: Some(result),
+            result: None,
         })
     }
     /// Serialize this block into a canonical Norito wire frame (version byte + header + payload).
@@ -1600,7 +1561,7 @@ pub mod prelude {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::consensus::{NposConsensusEffects, PreviousRosterEvidence};
+    use crate::consensus::NposConsensusEffects;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
     use norito::codec::{DecodeAll as _, Encode};
@@ -1722,7 +1683,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -1738,7 +1698,6 @@ mod tests {
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
-            previous_roster_evidence: None,
             npos_consensus_effects: None,
         };
         let mut with_context = payload.clone();
@@ -1766,7 +1725,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -1820,7 +1778,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -1899,7 +1856,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -1938,13 +1894,11 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
-            result: Some(BlockResult {
-                ..BlockResult::default()
-            }),
+            result: None,
         };
+        assert!(block.is_resultless_proposal());
         let mut explicit_iter = block.external_entrypoints_cloned();
         assert_eq!(explicit_iter.len(), 1);
         assert_eq!(explicit_iter.next_back(), Some(entrypoint.clone()));
@@ -1968,6 +1922,7 @@ mod tests {
         let encoded = block.encode_versioned();
         let decoded = SignedBlock::decode_all_versioned(&encoded).expect("decode versioned block");
         assert_eq!(decoded, block);
+        assert!(decoded.is_resultless_proposal());
         assert_eq!(
             decoded.external_entrypoints_cloned().collect::<Vec<_>>(),
             vec![entrypoint]
@@ -1975,22 +1930,23 @@ mod tests {
         assert_eq!(decoded.external_transactions().next(), Some(&tx));
     }
     #[test]
-    fn block_payload_rejects_pre_release_optional_layout() {
+    fn block_payload_rejects_pre_release_layout_with_retired_roster_slot() {
         #[derive(norito::codec::Encode)]
         struct PreReleaseBlockPayload {
             header: BlockHeader,
-            #[norito(skip_serializing_if = "Vec::is_empty")]
             external_entrypoints: Vec<TransactionEntrypoint>,
-            #[norito(skip_serializing_if = "Option::is_none")]
+            #[norito(required)]
             da_commitments: Option<DaCommitmentBundle>,
-            #[norito(skip_serializing_if = "Option::is_none")]
+            #[norito(required)]
             da_proof_policies: Option<DaProofPolicyBundle>,
-            #[norito(skip_serializing_if = "Option::is_none")]
+            #[norito(required)]
             da_pin_intents: Option<DaPinIntentBundle>,
-            #[norito(skip_serializing_if = "Option::is_none")]
-            previous_roster_evidence: Option<PreviousRosterEvidence>,
-            #[norito(skip_serializing_if = "Option::is_none")]
+            #[norito(required)]
+            retired_roster_slot: Option<()>,
+            #[norito(required)]
             npos_consensus_effects: Option<NposConsensusEffects>,
+            #[norito(required)]
+            execution_context: Option<BlockExecutionContextBundle>,
         }
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 10, 0);
         let pre_release = PreReleaseBlockPayload {
@@ -1999,14 +1955,16 @@ mod tests {
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
-            previous_roster_evidence: None,
+            // `None` has the exact retired option-slot encoding without reintroducing its type.
+            retired_roster_slot: None,
             npos_consensus_effects: None,
+            execution_context: None,
         };
         let bytes = pre_release.encode();
         let mut cursor = bytes.as_slice();
         assert!(
             BlockPayload::decode_all(&mut cursor).is_err(),
-            "the first-release BlockPayload layout requires every canonical field"
+            "the first-release BlockPayload decoder must reject the longer pre-release roster layout"
         );
     }
     #[test]
@@ -2017,7 +1975,6 @@ mod tests {
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
-            previous_roster_evidence: None,
             npos_consensus_effects: None,
             execution_context: None,
         };
@@ -2104,7 +2061,6 @@ mod tests {
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
-            previous_roster_evidence: None,
             npos_consensus_effects: None,
         };
         let key_pair = checked_bls_keypair();
@@ -2125,7 +2081,7 @@ mod tests {
         let signature = checked_block_signature(0, &key_pair, &header);
         let with_da = SignedBlock::presigned_with_da(
             signature.clone(),
-            header.clone(),
+            header,
             Vec::new(),
             Some(DaCommitmentBundle::default()),
         );
@@ -2138,7 +2094,6 @@ mod tests {
             da_commitments: Some(DaCommitmentBundle::default()),
             da_proof_policies: None,
             da_pin_intents: Some(DaPinIntentBundle::default()),
-            previous_roster_evidence: None,
             npos_consensus_effects: None,
         };
         let with_payload = SignedBlock::presigned_with_payload(signature, payload);
@@ -2165,7 +2120,6 @@ mod tests {
             da_commitments: None,
             da_proof_policies: None,
             da_pin_intents: None,
-            previous_roster_evidence: None,
             npos_consensus_effects: None,
         };
         let signature = checked_block_signature(0, &key_pair, &payload.header);
@@ -2219,7 +2173,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: Some(result),
@@ -2238,7 +2191,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2258,7 +2210,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2294,7 +2245,6 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
-            prev_roster_evidence_hash: None,
             npos_effects_hash: None,
             execution_context_hash: None,
             sccp_commitment_root: None,
@@ -2323,7 +2273,6 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
-            prev_roster_evidence_hash: None,
             npos_effects_hash: None,
             execution_context_hash: None,
             sccp_commitment_root: None,
@@ -2425,7 +2374,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2481,7 +2429,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2520,7 +2467,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2561,7 +2507,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2596,7 +2541,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2639,7 +2583,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2694,7 +2637,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2773,7 +2715,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2801,7 +2742,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2828,7 +2768,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2858,7 +2797,6 @@ mod tests {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
             },
             result: None,
@@ -2885,74 +2823,6 @@ mod tests {
         block.set_da_pin_intents(None);
         assert!(block.da_pin_intents().is_none());
         assert!(block.header().da_pin_intents_hash().is_none());
-    }
-    #[test]
-    fn signed_block_previous_roster_evidence_setter_updates_header_hash_and_roundtrips() {
-        use crate::consensus::{
-            PreviousRosterEvidence, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint,
-        };
-        use crate::peer::PeerId;
-        use nonzero_ext::nonzero;
-        let kp_a = checked_random_keypair();
-        let kp_b = checked_random_keypair();
-        let validator_set = vec![
-            PeerId::new(kp_a.public_key().clone()),
-            PeerId::new(kp_b.public_key().clone()),
-        ];
-        let previous_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
-        let previous_hash = previous_header.hash();
-        let evidence = PreviousRosterEvidence {
-            height: previous_header.height().get(),
-            block_hash: previous_hash,
-            validator_checkpoint: ValidatorSetCheckpoint::new(
-                previous_header.height().get(),
-                previous_header.view_change_index(),
-                previous_hash,
-                Hash::new([0xA1; Hash::LENGTH]),
-                Hash::new([0xB2; Hash::LENGTH]),
-                validator_set,
-                vec![0b11],
-                vec![0xCC; 96],
-                VALIDATOR_SET_HASH_VERSION_V1,
-                None,
-            ),
-            stake_snapshot: None,
-        };
-        let expected_hash = HashOf::new(&evidence);
-        let header = BlockHeader::new(nonzero!(2_u64), Some(previous_hash), None, None, 2, 0);
-        let mut block = SignedBlock {
-            signatures: BTreeSet::new(),
-            payload: BlockPayload {
-                header,
-                external_entrypoints: Vec::new(),
-                execution_context: None,
-                da_commitments: None,
-                da_proof_policies: None,
-                da_pin_intents: None,
-                previous_roster_evidence: None,
-                npos_consensus_effects: None,
-            },
-            result: None,
-        };
-        assert!(block.previous_roster_evidence().is_none());
-        assert!(block.header().prev_roster_evidence_hash().is_none());
-        block.set_previous_roster_evidence(Some(evidence.clone()));
-        assert_eq!(block.previous_roster_evidence(), Some(&evidence));
-        assert_eq!(
-            block.header().prev_roster_evidence_hash(),
-            Some(expected_hash)
-        );
-        let encoded = block.encode_versioned();
-        let decoded =
-            SignedBlock::decode_all_versioned(&encoded).expect("decode versioned signed block");
-        assert_eq!(decoded.previous_roster_evidence(), Some(&evidence));
-        assert_eq!(
-            decoded.header().prev_roster_evidence_hash(),
-            Some(expected_hash)
-        );
-        block.set_previous_roster_evidence(None);
-        assert!(block.previous_roster_evidence().is_none());
-        assert!(block.header().prev_roster_evidence_hash().is_none());
     }
     #[test]
     fn genesis_can_embed_da_commitments() {
@@ -3013,18 +2883,19 @@ mod tests {
             proof_scheme: DaProofScheme::MerkleSha256,
         }]);
         let expected_hash = HashOf::new(&bundle);
-        let block = SignedBlock::genesis_with_da_proof_policies(
+        let block = SignedBlock::try_genesis_with_da_proof_policies(
             vec![tx],
             keypair.private_key(),
             None,
             None,
             Some(bundle.clone()),
-        );
+        )
+        .expect("genesis block with explicit DA proof policies should be signed");
         assert_eq!(block.da_proof_policies(), Some(&bundle));
         assert_eq!(block.header().da_proof_policies_hash(), Some(expected_hash));
     }
     #[test]
-    fn try_genesis_with_da_proof_policies_matches_compatibility_signature_and_rejects_empty() {
+    fn try_genesis_with_da_proof_policies_signs_and_rejects_empty() {
         use crate::{
             account::AccountId,
             da::commitment::{DaProofPolicy, DaProofPolicyBundle, DaProofScheme},
@@ -3047,31 +2918,21 @@ mod tests {
             alias: "checked".to_string(),
             proof_scheme: DaProofScheme::MerkleSha256,
         }]);
-        let fallible = SignedBlock::try_genesis_with_da_proof_policies(
-            vec![tx.clone()],
-            keypair.private_key(),
-            None,
-            None,
-            Some(bundle.clone()),
-        )
-        .expect("checked genesis signing should succeed");
-        let compatibility = SignedBlock::genesis_with_da_proof_policies(
+        let block = SignedBlock::try_genesis_with_da_proof_policies(
             vec![tx],
             keypair.private_key(),
             None,
             None,
             Some(bundle),
-        );
-        assert_eq!(fallible.header(), compatibility.header());
-        let fallible_signature = fallible.signatures().next().expect("fallible signature");
-        let compatibility_signature = compatibility
-            .signatures()
-            .next()
-            .expect("compatibility signature");
-        assert_eq!(fallible_signature, compatibility_signature);
-        fallible_signature
+        )
+        .expect("checked genesis signing should succeed");
+        assert!(block.is_resultless_proposal());
+        assert_eq!(block.committed_fragment_count(), None);
+        assert_eq!(block.header().result_merkle_root(), None);
+        let signature = block.signatures().next().expect("genesis signature");
+        signature
             .signature()
-            .verify_hash(keypair.public_key(), fallible.hash())
+            .verify_hash(keypair.public_key(), block.hash())
             .expect("checked genesis signature verifies");
         let err = SignedBlock::try_genesis(Vec::new(), keypair.private_key(), None, None)
             .expect_err("empty genesis transaction set must fail");

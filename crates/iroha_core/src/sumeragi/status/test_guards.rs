@@ -57,8 +57,6 @@ static STATUS_TEST_GLOBAL_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static RBC_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
-static COMMIT_HISTORY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
-#[cfg(test)]
 static MODE_TAGS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static PEER_KEY_POLICY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
@@ -145,11 +143,6 @@ impl NexusFeeTestLock {
 /// the original owner from releasing the lease.
 pub(crate) fn rbc_status_test_guard() -> TestLockGuard {
     reentrant_test_guard(&RBC_STATUS_TEST_LOCK)
-}
-#[cfg(test)]
-/// Serialize tests that mutate archival commit history.
-pub(crate) fn commit_history_test_guard() -> TestLockGuard {
-    reentrant_test_guard(&COMMIT_HISTORY_TEST_LOCK)
 }
 #[cfg(test)]
 /// Serialize tests that mutate archival mode tags.

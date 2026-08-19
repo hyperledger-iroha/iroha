@@ -349,7 +349,6 @@ def _run_effective_routing_policy_checker(
 def _healthy_lane_dataspace_topology() -> dict[str, object]:
     return {
         "version": 1,
-        "nexus_enabled": True,
         "lane_count": 7,
         "lanes": [
             {"id": 0, "alias": "core", "dataspace_id": 0},
@@ -369,6 +368,11 @@ def _healthy_lane_dataspace_topology() -> dict[str, object]:
             {"id": 6, "alias": "cbsi", "dataspace_id": 20},
         ],
         "catalog_hash": "hash:" + "c" * 64,
+        "incarnations": [
+            {"lane_id": lane_id, "incarnation": "hash:" + f"{lane_id + 1:x}" * 64}
+            for lane_id in range(7)
+        ],
+        "incarnation_root": "hash:" + "d" * 64,
     }
 
 

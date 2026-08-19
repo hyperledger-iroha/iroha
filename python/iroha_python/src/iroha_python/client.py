@@ -8384,113 +8384,6 @@ class SumeragiEvidenceListPage:
 
 
 @dataclass(frozen=True)
-class SumeragiCommitQc:
-    """Commit QC record returned by `/v1/sumeragi/commit-qcs/{block_hash}`."""
-
-    phase: str
-    parent_state_root: str
-    post_state_root: str
-    height: int
-    view: int
-    epoch: int
-    mode_tag: str
-    validator_set_hash: str
-    validator_set_hash_version: int
-    validator_set: List[str]
-    signers_bitmap: str
-    bls_aggregate_signature: str
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiCommitQc":
-        if not isinstance(payload, Mapping):
-            raise TypeError("commit_qc payload must be an object")
-        phase = payload.get("phase")
-        mode_tag = payload.get("mode_tag")
-        if not isinstance(phase, str):
-            raise TypeError("commit_qc `phase` must be a string")
-        if not isinstance(mode_tag, str):
-            raise TypeError("commit_qc `mode_tag` must be a string")
-        try:
-            height = int(payload.get("height", 0))
-            view = int(payload.get("view", 0))
-            epoch = int(payload.get("epoch", 0))
-            validator_set_hash_version = int(payload.get("validator_set_hash_version", 0))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("commit_qc numeric fields must be numeric") from exc
-        parent_state_root = _normalize_hex_string(
-            payload.get("parent_state_root"),
-            "commit_qc.parent_state_root",
-            expected_length=64,
-        )
-        post_state_root = _normalize_hex_string(
-            payload.get("post_state_root"),
-            "commit_qc.post_state_root",
-            expected_length=64,
-        )
-        validator_set_hash = _normalize_hex_string(
-            payload.get("validator_set_hash"),
-            "commit_qc.validator_set_hash",
-            expected_length=64,
-        )
-        validator_set_value = payload.get("validator_set")
-        if not isinstance(validator_set_value, list):
-            raise TypeError("commit_qc `validator_set` must be a list")
-        validator_set: List[str] = []
-        for index, entry in enumerate(validator_set_value):
-            if not isinstance(entry, str):
-                raise TypeError(f"commit_qc validator_set entry {index} must be a string")
-            validator_set.append(entry)
-        signers_bitmap = _normalize_hex_string(
-            payload.get("signers_bitmap"),
-            "commit_qc.signers_bitmap",
-        )
-        bls_aggregate_signature = _normalize_hex_string(
-            payload.get("bls_aggregate_signature"),
-            "commit_qc.bls_aggregate_signature",
-        )
-        return cls(
-            phase=phase,
-            parent_state_root=parent_state_root,
-            post_state_root=post_state_root,
-            height=height,
-            view=view,
-            epoch=epoch,
-            mode_tag=mode_tag,
-            validator_set_hash=validator_set_hash,
-            validator_set_hash_version=validator_set_hash_version,
-            validator_set=validator_set,
-            signers_bitmap=signers_bitmap,
-            bls_aggregate_signature=bls_aggregate_signature,
-        )
-
-
-@dataclass(frozen=True)
-class SumeragiCommitQcRecord:
-    """Commit QC response wrapper returned by `/v1/sumeragi/commit-qcs/{block_hash}`."""
-
-    subject_block_hash: str
-    commit_qc: Optional[SumeragiCommitQc]
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "SumeragiCommitQcRecord":
-        if not isinstance(payload, Mapping):
-            raise TypeError("commit_qc response must be an object")
-        subject_block_hash = _normalize_hex_string(
-            payload.get("subject_block_hash"),
-            "commit_qc.subject_block_hash",
-            expected_length=64,
-        )
-        commit_qc_payload = payload.get("commit_qc")
-        if commit_qc_payload is None:
-            commit_qc = None
-        elif isinstance(commit_qc_payload, Mapping):
-            commit_qc = SumeragiCommitQc.from_payload(commit_qc_payload)
-        else:
-            raise TypeError("commit_qc response `commit_qc` must be an object or null")
-        return cls(subject_block_hash=subject_block_hash, commit_qc=commit_qc)
-
-
-@dataclass(frozen=True)
 class SumeragiPrfStatus:
     """Pending PRF (pseudo-random function) window state."""
 
@@ -8918,10 +8811,11 @@ class SumeragiNativeAmxParticipantLaneBlockDescriptor:
 
 @dataclass(frozen=True)
 class SumeragiNativeAmxParticipantLaneBlockProposal:
-    """Exact participant proposal, with recovery payload hints forbidden."""
+    """Exact participant proposal whose required recovery-hint field is null."""
 
     descriptor: SumeragiNativeAmxParticipantLaneBlockDescriptor
     proposal_hash: str
+    payload_block_hint: None
 
     @classmethod
     def from_payload(
@@ -8930,7 +8824,13 @@ class SumeragiNativeAmxParticipantLaneBlockProposal:
         context = "native AMX participant lane-block proposal"
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
-        _strict_exact_fields(payload, {"descriptor", "proposal_hash"}, context)
+        _strict_exact_fields(
+            payload,
+            {"descriptor", "proposal_hash", "payload_block_hint"},
+            context,
+        )
+        if payload["payload_block_hint"] is not None:
+            raise ValueError(f"{context} `payload_block_hint` must be null")
         descriptor = _required_field(payload, "descriptor", context)
         if not isinstance(descriptor, Mapping):
             raise TypeError(f"{context} `descriptor` must be an object")
@@ -8938,7 +8838,11 @@ class SumeragiNativeAmxParticipantLaneBlockProposal:
         proposal_hash = _strict_hash_literal(payload, "proposal_hash", context)
         if proposal_hash != compute_native_amx_proposal_hash(asdict(parsed_descriptor)):
             raise ValueError(f"{context} proposal hash does not match its canonical preimage")
-        return cls(descriptor=parsed_descriptor, proposal_hash=proposal_hash)
+        return cls(
+            descriptor=parsed_descriptor,
+            proposal_hash=proposal_hash,
+            payload_block_hint=None,
+        )
 
 
 @dataclass(frozen=True)
@@ -15351,7 +15255,6 @@ class ToriiClient(
             status,
             (
                 "version",
-                "nexus_enabled",
                 "lane_count",
                 "lanes",
                 "catalog_hash",
@@ -15362,8 +15265,6 @@ class ToriiClient(
         )
         if _strict_uint(status, "version", 8, status_context) != 1:
             raise ValueError("Nexus lane lifecycle status version must be 1")
-        if not isinstance(status["nexus_enabled"], bool):
-            raise TypeError("Nexus lane lifecycle status `nexus_enabled` must be boolean")
         lane_count = _strict_uint(status, "lane_count", 32, status_context)
         if lane_count == 0:
             raise ValueError("Nexus lane lifecycle status `lane_count` must be in 1..=4294967295")
@@ -15512,8 +15413,6 @@ class ToriiClient(
             raise ValueError("lane lifecycle plan must add or retire at least one lane")
 
         status = self.nexus_lane_lifecycle_status(timeout=timeout)
-        if not status["nexus_enabled"]:
-            raise RuntimeError("Nexus lane lifecycle is disabled on the serving node")
         plan = _json_safe_value({"additions": normalized_additions, "retire": normalized_retire})
         instruction = _require_crypto().Instruction.nexus_lane_lifecycle(
             json.dumps(_json_safe_value(status), sort_keys=True, separators=(",", ":")),
@@ -20359,23 +20258,6 @@ class ToriiClient(
         if not isinstance(payload, Mapping):
             raise TypeError("qc response must be a JSON object")
         return SumeragiV2QcResponse.from_payload(payload)
-
-    def get_sumeragi_commit_qc(self, block_hash_hex: str) -> Optional[Any]:
-        """Fetch commit QC details for a block hash (`GET /v1/sumeragi/commit-qcs/{block_hash}`)."""
-
-        normalized = _normalize_hash_hex(block_hash_hex, "block_hash_hex")
-        return self._sumeragi_operator_json(
-            f"/v1/sumeragi/commit-qcs/{normalized}",
-            context="sumeragi commit quorum certificate",
-        )
-
-    def get_sumeragi_commit_qc_typed(self, block_hash_hex: str) -> SumeragiCommitQcRecord:
-        """Typed wrapper for :meth:`get_sumeragi_commit_qc`."""
-
-        payload = self.get_sumeragi_commit_qc(block_hash_hex)
-        if not isinstance(payload, Mapping):
-            raise TypeError("commit_qc response must be a JSON object")
-        return SumeragiCommitQcRecord.from_payload(payload)
 
     def get_sumeragi_leader(self) -> Optional[Any]:
         """Fetch the operator-authenticated leader index snapshot."""

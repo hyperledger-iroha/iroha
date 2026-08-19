@@ -724,6 +724,115 @@ fn v6_audit_inventory_probe_exits_before_the_first_populated_circuit() {
     assert!(wrapper.contains("KagemushaK17ShapeProbeScopeV5::enter()"));
     assert!(wrapper.contains("populated_step_circuits=0"));
 }
+#[test]
+fn serialized_v7_is_the_only_operator_visible_audit_candidate() {
+    const RETIRED: &str = concat!("probe-compact-k17-", "ipa-audit-bridge");
+    let binary = include_str!("../../bin/kagemusha_recursive_spend_v4_memory_benchmark.rs");
+    let wrapper = include_str!("../../../../../scripts/run_kagemusha_v4_generation_benchmark.py");
+    let facade = include_str!("../kagemusha_v2.rs");
+    assert!(!binary.contains(RETIRED));
+    assert!(!wrapper.contains(RETIRED));
+    assert!(!facade.contains("run_kagemusha_k17_ipa_audit_bridge_probe_v7"));
+
+    let selected = include_str!("serialized_audit_bridge_v7.rs");
+    assert!(selected.contains("KAGEMUSHA_SERIALIZED_BRIDGE_REVIEWED_V7: bool = false"));
+    assert!(selected.contains("if !KAGEMUSHA_SERIALIZED_BRIDGE_REVIEWED_V7"));
+}
+#[test]
+fn serialized_v7_native_vector_has_one_reviewed_freeze_seam() {
+    let vector = include_str!("serialized_audit_vector_v7.rs");
+    let serialized = include_str!("../kagemusha_serialized_audit_v7.rs");
+    assert_eq!(
+        vector.matches("impl<F: ff::PrimeField> super::kagemusha_serialized_audit_v7::KagemushaNativeAuditVectorSourceV7<F>").count(),
+        1,
+        "the compiler provenance capability must have one reviewed implementation"
+    );
+    assert_eq!(
+        vector
+            .matches("KagemushaFrozenNativeAuditVectorV7::from_reviewed_source(")
+            .count(),
+        1,
+        "the canonical assigned vector builder must own the only production freeze call"
+    );
+    assert_eq!(
+        vector
+            .matches("KagemushaReviewedNativeAuditSourceV7(elements)")
+            .count(),
+        1,
+        "the exact pre-audit vector must be frozen directly at the builder tail"
+    );
+    assert_eq!(
+        serialized
+            .matches("pub(super) fn from_reviewed_source<S>(")
+            .count(),
+        1,
+        "the frozen-vector constructor must not be duplicated"
+    );
+}
+
+#[test]
+fn serialized_v7_absent_parent_canonicalizes_the_full_parsed_instance() {
+    let source = include_str!("serialized_audit_builder_v7.rs");
+    let induction = source
+        .split_once("fn constrain_kagemusha_serialized_parent_induction_v7")
+        .expect("serialized parent-induction function")
+        .1
+        .split_once("fn constrain_kagemusha_serialized_challenge_and_native_evaluation_v7")
+        .expect("end of serialized parent-induction function")
+        .0;
+    assert!(induction.contains("for value in &parent.instance_cells"));
+    assert!(induction.contains("Existing(parent.present), Existing(*value)"));
+    assert!(induction.contains("ctx.constrain_equal(&selected, value)"));
+    assert!(
+        induction
+            .find("for value in &parent.instance_cells")
+            .expect("full parent-column zeroing")
+            < induction
+                .find("slots.push(KagemushaAssignedParentSlotV7")
+                .expect("transitive parent tuple construction"),
+        "all 70 parsed cells must be canonicalized before the digest tuple is assembled"
+    );
+}
+
+#[test]
+fn serialized_v7_atomic_acceptance_terminally_decides_both_openings() {
+    let source = include_str!("serialized_audit_builder_v7.rs");
+    let verifier = source
+        .split_once("fn verify_kagemusha_serialized_atomic_pair_v7")
+        .expect("serialized atomic verifier")
+        .1
+        .split_once("fn create_kagemusha_serialized_eq_proof_v7")
+        .expect("end of serialized atomic verifier")
+        .0;
+    assert_eq!(
+        verifier
+            .matches("verify_and_decide_eq_accumulation_v4")
+            .count(),
+        1
+    );
+    assert_eq!(
+        verifier
+            .matches("verify_and_decide_ep_accumulation_v4")
+            .count(),
+        1
+    );
+    assert_eq!(
+        verifier
+            .matches("KagemushaIpaAccumulationProofV4::initialization(manifest.k)")
+            .count(),
+        2
+    );
+    let challenge_check = verifier
+        .find("public challenge is not commitment-derived")
+        .expect("commitment-derived challenge check");
+    let eq_decision = verifier
+        .find("verify_and_decide_eq_accumulation_v4")
+        .expect("terminal Eq decision");
+    let success = verifier
+        .rfind("Ok(KagemushaSerializedVerifiedPairV7")
+        .expect("atomic success");
+    assert!(challenge_check < eq_decision && eq_decision < success);
+}
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
 #[test]
 fn v5_candidate_spool_identity_rejects_wrong_bindings() {
@@ -1358,45 +1467,49 @@ fn v4_memory_monitor_refuses_an_initial_sample_over_the_ceiling() {
     assert!(error.contains("already exceeds"));
 }
 #[test]
-fn macos_resource_probe_parsers_are_strict_and_bounded() {
-    assert!(std::path::Path::new(KAGEMUSHA_MACOS_SYSCTL_V4).is_absolute());
-    assert!(std::path::Path::new(KAGEMUSHA_MACOS_FOOTPRINT_V4).is_absolute());
+fn macos_native_resource_value_validation_is_strict() {
     assert_eq!(
-        parse_kagemusha_macos_physical_memory_bytes_v4(b"137438953472\n")
-            .expect("canonical macOS physical memory"),
+        validate_kagemusha_macos_native_resource_value_v4(
+            137_438_953_472,
+            std::mem::size_of::<u64>(),
+            std::mem::size_of::<u64>(),
+            "physical-memory",
+        )
+        .expect("canonical macOS physical memory"),
         137_438_953_472
     );
-    for malformed in [b"0\n".as_slice(), b"128 GiB\n", b"not-a-number\n"] {
-        assert!(
-            parse_kagemusha_macos_physical_memory_bytes_v4(malformed).is_err(),
-            "malformed physical-memory sample must fail closed"
-        );
-    }
-    let sample =
-        b"Auxiliary data:\n    phys_footprint: 1802600 B\n    phys_footprint_peak: 1900000 B\n";
-    assert_eq!(
-        parse_kagemusha_macos_physical_footprint_bytes_v4(sample)
-            .expect("canonical macOS physical footprint"),
-        1_802_600
+    assert!(
+        validate_kagemusha_macos_native_resource_value_v4(
+            0,
+            std::mem::size_of::<u64>(),
+            std::mem::size_of::<u64>(),
+            "physical-memory",
+        )
+        .is_err(),
+        "zero native resource values must fail closed"
     );
-    for malformed in [
-        b"Auxiliary data:\n".as_slice(),
-        b"phys_footprint: 0 B\n",
-        b"phys_footprint: 1.8 MiB\n",
-        b"phys_footprint: 1 B\nphys_footprint: 2 B\n",
-    ] {
-        assert!(
-            parse_kagemusha_macos_physical_footprint_bytes_v4(malformed).is_err(),
-            "malformed physical-footprint sample must fail closed"
-        );
-    }
+    assert!(
+        validate_kagemusha_macos_native_resource_value_v4(
+            1,
+            std::mem::size_of::<u32>(),
+            std::mem::size_of::<u64>(),
+            "physical-memory",
+        )
+        .is_err(),
+        "ABI-size drift must fail closed"
+    );
 }
 #[cfg(target_os = "macos")]
 #[test]
-fn macos_resource_probes_use_pinned_system_tools() {
-    assert!(kagemusha_physical_memory_bytes_v4().expect("macOS physical-memory probe") > 0);
+fn macos_native_resource_queries_match_the_public_abi() {
+    assert_eq!(
+        std::mem::size_of::<KagemushaMacosRusageInfoV0>(),
+        96,
+        "rusage_info_v0 ABI drift"
+    );
+    assert!(kagemusha_physical_memory_bytes_v4().expect("macOS physical-memory query") > 0);
     assert!(
-        kagemusha_process_physical_footprint_bytes_v4().expect("macOS physical-footprint probe")
+        kagemusha_process_physical_footprint_bytes_v4().expect("macOS physical-footprint query")
             > 0
     );
 }

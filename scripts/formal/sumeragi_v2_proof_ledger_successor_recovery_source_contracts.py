@@ -40,15 +40,9 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
             )
 
     def require_token_count(
-        path: Path,
-        label: str,
-        body: str,
-        token: str,
-        expected: int,
+        path: Path, label: str, body: str, token: str, expected: int,
     ) -> None:
-        observed = _token_sequence_count(
-            rust_code_tokens(body), rust_code_tokens(token)
-        )
+        observed = _token_sequence_count(rust_code_tokens(body), rust_code_tokens(token))
         if observed != expected:
             errors.append(
                 f"{path}: {label} must contain {token!r} exactly {expected} "
@@ -709,17 +703,21 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "let mut launched = owner.launch(launch_inputs)",
                         "let mut setup_runner = ProductionLifecyclePreActivationRunnerBorrowV1::for_test()",
                         ".with_runner_setup(&mut setup_runner",
+                        "services.set_exact_output_admission_hook(|_post, _ticket| Ok(()))",
                         "launched.drive_completion_turn(runner, &mut lane_work)",
                         "ProductionRecoveredCompletionDispatchV1::ApplyQueued",
                         "launched.drive_completion_turn(runner, &mut lane_work)",
                         "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
                         ".initialize_recovered_local_proposal(setup_runner)",
                         "let mut activated = launched .activate(Instant::now(), activation, local_proposal_state)",
-                        "let producer_episode = activated .take_certified_serve_producer_episode_for_test()",
-                        "assert!(producer_episode.is_some())",
+                        "drop(auxiliary_hold)", "ProductionLifecycleIngressSelectionV1::CertifiedServeQueued",
+                        "assert_eq!(leader_wire_ingress.len(), 0)", "ProductionLifecycleCompletionSelectionV1::CertifiedServeCompleted",
+                        "!selected.restart_required()",
+                        "let claimed_producer = activated .claim_producer_turn_for_local_proposal(&mut serve_runner)",
+                        "let attempted_producer = claimed_producer .into_attempted(producer_turn_attempt_permit_for_test(&mut serve_runner))",
+                        "activated .settle_producer_turn_after_local_proposal(&mut serve_runner, attempted_producer)",
                         "let mut runner = super::super::v2_runner::ProductionLifecycleActiveRunnerBorrowV1::for_test()",
                         "super::super::v2_runner::lifecycle_run_inner::finalize_lifecycle_height(",
-                        "producer_episode",
                         "assert_eq!(receipt.context_id(), recovered_context.id())",
                         "assert_eq!(artifact.subject, subject)",
                         ".retain_merge_sidecars_for_global_view(",
@@ -728,6 +726,17 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                         "drop(retained_sidecars)",
                         "assert!(outcome.cleanup().warnings().is_empty())",
                         "assert!(outcome.wal_retirement_warning().is_none())",
+                    ),
+                )
+                admitted_serve_dispatch = region(
+                    adapter_path, finalization_behavior.source,
+                    "direct lifecycle Certified-Serve dispatch",
+                    "drop(auxiliary_hold);", "let claimed_producer = activated",
+                )
+                reject_tokens(
+                    adapter_path, "direct lifecycle Certified-Serve dispatch",
+                    admitted_serve_dispatch, (
+                        "consume_prepared_ordinary_ingress_turn(", "has_prepared_serve_for_test()",
                     ),
                 )
             for literal in (
@@ -857,6 +866,9 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
         launch_path, launch_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_launch.rs"
         )
+        turn_driver_path, turn_driver_source = load(
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_turn_driver.rs"
+        )
         kura_path, kura_source = load("crates/iroha_core/src/kura.rs")
         owner_path, owner_source = load(
             "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator.rs"
@@ -924,6 +936,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
         )
         if (
             launch_source
+            and turn_driver_source
             and kura_source
             and owner_source
             and worker_source
@@ -1144,7 +1157,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
             all_live_census = _require_rust_item(
                 registry_validate_path,
                 registry_validate_source,
-                "exactly_covers_all_live_work",
+                "exactly_covers_all_live_work_with_optional_active_producer",
                 errors,
             )
             if all_live_census is not None:
@@ -1380,8 +1393,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "ProductionV2Services::start_with_apply_service(",
                     "ProductionLifecycleApplyServiceLaunchPermitV1",
                     "apply_service,",
-                    "services.certified_serve_ingress_gate()",
-                    "leader_wire_ingress_binding.bind_certified_serve(certified_serve_gate)",
+                    "leader_wire_ingress_binding,",
                 ),
             )
             runner_dependency_permit = region(
@@ -1749,15 +1761,15 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 ),
             )
             require_tokens(
-                launch_path,
-                "single restored lifecycle ordinal source",
-                lifecycle_launch,
+                launch_path, "single restored lifecycle ordinal source", lifecycle_launch,
                 (
-                    "inputs.network.reply_route_source_capacity().max(1)",
-                    "inputs.auxiliary_io_capacity",
-                    "lifecycle_ordinals.clone()",
-                    "lifecycle_ordinals,",
+                    "inputs.network.reply_route_source_capacity().max(1)", "inputs.auxiliary_io_capacity",
+                    "lifecycle_ordinals.clone()", "lifecycle_ordinals .advance_past(leader_wire_restore.scheduler_ordinal_high_watermark())",
                 ),
+            )
+            require_token_count(
+                launch_path, "single restored lifecycle ordinal source",
+                lifecycle_launch, "lifecycle_ordinals.clone()", 2,
             )
             require_token_count(
                 launch_path,
@@ -1875,12 +1887,13 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 launch_source,
                 (
                     "struct ProductionLeaderWireIngressBindingV1",
-                    "certified_serve_gate: Option<CertifiedServeIngressGate>",
-                    "fn bind_certified_serve(",
-                    "self.ingress.bind_certified_serve_gate(gate.clone())",
+                    "gate: Option<Arc<LeaderWireLifecycleStoreGate>>",
+                    "fn bind(",
+                    "ingress.bind_leader_wire_lifecycle_gate(",
                     "self.ingress.close()",
-                    "self.ingress.unbind_leader_wire_lifecycle_gate(gate)?",
-                    "self.ingress.unbind_height_ingress_gates( certified_serve_gate, leader_wire_gate )",
+                    "fn retire(&mut self)",
+                    "self.gate.take()",
+                    "self.ingress.unbind_leader_wire_lifecycle_gate(&gate)",
                     "impl Drop for ProductionLeaderWireIngressBindingV1",
                     "leader_wire_ingress_binding: ProductionLeaderWireIngressBindingV1",
                 ),
@@ -2027,7 +2040,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 scheduler_source,
                 "lifecycle-owned recovered Sign dispatch",
                 "fn dispatch_recovered_lifecycle_sign_with_runner_debt(",
-                "/// Refanout one durable recovered signed Broadcast at the live Completion cursor.",
+                "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
             )
             require_order(
                 scheduler_path,
@@ -2639,7 +2652,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 worker_source,
                 "sealed recovered Proposal reservation methods",
                 "impl RecoveredLifecycleProposalExactOutputReservationV1<'_> {",
-                "/// Result of reserving exact output for one recovered Decision Fetch request.",
+                "pub(in crate::sumeragi) struct RecoveredDecisionFetchExactOutputReservationV1<'service> {",
             )
             require_order(
                 worker_path,
@@ -3379,7 +3392,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 launch_source,
                 "restart-closed recovered Proposal Broadcast-and-next-Sign settlement",
                 "pub(in crate::sumeragi) fn settle_recovered_lifecycle_proposal_broadcast_and_sign(",
-                "/// Refanout one durable recovered signed Broadcast",
+                "pub(in crate::sumeragi) fn drive_recovered_decision_apply_deferred(",
             )
             require_order(
                 launch_path,
@@ -3432,7 +3445,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 scheduler_source,
                 "restart-safe recovered signed-Broadcast refanout",
                 "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
-                "/// Sign, reserve, claim, and publish the sole recovered Decision Fetch",
+                "fn persist_recovered_decision_fetch_response_after_runner(",
             )
             require_order(
                 scheduler_path,
@@ -3719,14 +3732,14 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 worker_source,
                 "recovered Sign capacity capture release",
                 "fn capture_recovered_lifecycle_sign_capacity<'a>(",
-                "fn begin_decision_serve_reconciliation(",
+                "fn recovered_completion_worker_capacity(",
             )
             require_token_count(
                 worker_path,
                 "recovered Sign capacity capture release",
                 recovered_sign_capacity,
                 "operation.complete()",
-                5,
+                4,
             )
             reject_tokens(
                 worker_path,
@@ -3786,8 +3799,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 scheduler_path,
                 scheduler_source,
                 "lifecycle-owned recovered Decision Fetch dispatch",
-                "fn dispatch_recovered_decision_fetch_with_runner_debt(",
-                "/// Persist one selected recovered Decision Fetch response",
+                "fn dispatch_recovered_completion_with_runner_debt(",
+                "/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.",
             )
             require_order(
                 scheduler_path,
@@ -3795,11 +3808,12 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 recovered_fetch_dispatch,
                 (
                     "attest_ready_recovered_decision_fetch",
+                    "authenticate_recovered_decision_fetch_request(",
                     "take_request_authority()",
-                    "authenticate_recovered_decision_fetch_request(authority)",
-                    "capture_recovered_decision_fetch_exact_output(&owner)",
-                    "prepare_recovered_decision_fetch_request_registration(owner)",
+                    "capture_recovered_completion_capacity_census(probes)",
                     "self.coordinator.plan_turn(inputs)",
+                    "census.select_fetch(ordinal)",
+                    "prepare_recovered_decision_fetch_request_registration(owner)",
                     "prepare_recovered_decision_fetch_dispatch",
                     "registration.commit(prepared)",
                     "output.commit()",
@@ -3813,9 +3827,10 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "services.matches_lifecycle_body_store(body_store_identity)",
                     "services.matches_lifecycle_executor_output_guard(executor)",
                     "ReadyRecoveredDecisionFetchDemandV1::ExactOutputAndExecutor",
-                    "output.abort_before_claim()",
-                    "self.coordinator.rollback_unpublished_turn(&lease)",
-                    "assert_eq!(installed, dispatch_key)",
+                    "RecoveredCompletionCapacityProbeV1::Fetch",
+                    "authenticated_capacity(ordinal, &factory)",
+                    "prepared.dispatch_key() != registration.dispatch_key()",
+                    "installed != dispatch_key",
                 ),
             )
             reject_tokens(
@@ -3852,38 +3867,47 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "assert_eq!(self.coordinator.active_lease.as_ref(), Some(&lease))",
                 ),
             )
-            require_tokens(
-                scheduler_path,
-                "recovered Decision Fetch response persistence Phase A",
-                scheduler_source,
+            recovered_fetch_ingress = region(
+                turn_driver_path,
+                turn_driver_source,
+                "unified recovered Decision Fetch ingress driver",
+                "pub(in crate::sumeragi) fn drive_ingress_turn<'cursor>(",
+                "fn drive_recovered_ingress_selector<'cursor>(",
+            )
+            require_order(
+                turn_driver_path,
+                "unified recovered Decision Fetch ingress driver",
+                recovered_fetch_ingress,
                 (
-                    "runner.target() != LifecycleRunnerRankTarget::Ingress",
-                    "ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignRunnerObservation",
+                    "if !self.runner_turn_matches(",
+                    "LifecycleRunnerRankTarget::Ingress",
+                    "return ProductionLifecycleIngressTurnV1::PassThrough(runner)",
+                    "self.drive_recovered_ingress_selector(selector, runner)",
                 ),
             )
-            require_tokens(
-                effects_path,
-                "recovered Decision Fetch foreign-cursor owner regression",
-                effects_source,
-                (
-                    "fn lifecycle_selector_capture_censuses_competing_response_family_exactly_once()",
-                    "owner.persist_recovered_decision_fetch_response(",
-                    "Err(ProductionRecoveredDecisionFetchPersistenceErrorV1::ForeignRunnerObservation)",
-                ),
+            recovered_fetch_ingress_handoff = region(
+                turn_driver_path,
+                turn_driver_source,
+                "validated recovered Decision Fetch Phase-A handoff",
+                "fn drive_recovered_ingress_selector<'cursor>(",
+                "fn settle_parked_recovered_sign_completion(",
             )
-            require_literal_count(
-                effects_path,
-                "recovered Decision Fetch foreign-cursor owner regression",
-                effects_source,
-                '"a foreign Ingress cursor cannot change the recovered Fetch lease or registry row"',
-                1,
+            require_order(
+                turn_driver_path,
+                "validated recovered Decision Fetch Phase-A handoff",
+                recovered_fetch_ingress_handoff,
+                (
+                    "persist_recovered_decision_fetch_response_after_runner(",
+                    "drop(runner)",
+                    "ProductionLifecycleIngressTurnV1::Selected(selected)",
+                ),
             )
             require_tokens(
                 launch_path,
                 "recovered Decision Fetch source-order regression",
                 launch_source,
                 (
-                    "fn recovered_decision_fetch_phase_a_rejects_foreign_ingress_cursor_before_mutation()",
+                    "fn recovered_decision_fetch_phase_a_is_reachable_only_after_runner_validation()",
                 ),
             )
             recovered_fetch_ready = region(
@@ -4203,7 +4227,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 worker_source,
                 "recovered Decision Fetch mixed completion head fence",
                 "fn take_io_completion(&mut self, runtime_capacity_available: bool)",
-                "fn take_recovered_decision_apply_completion(",
+                "fn take_recovered_lifecycle_sign_completion(",
             )
             require_order(
                 worker_path,
@@ -4217,16 +4241,33 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "io.try_recv_completion_unacknowledged()",
                 ),
             )
+            recovered_fetch_classifier = region(
+                worker_path,
+                worker_source,
+                "unified recovered Decision Fetch completion classifier",
+                "pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(",
+                "/// Drain only the oldest recovered-Sign guard;",
+            )
+            require_order(
+                worker_path,
+                "unified recovered Decision Fetch completion classifier",
+                recovered_fetch_classifier,
+                (
+                    "V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded)",
+                    "prepare_recovered_decision_fetch_body_completion(guarded, 0)",
+                    "RecoveredLifecycleCompletionTakeV1::DecisionFetch(",
+                ),
+            )
             require_tokens(
                 worker_path,
-                "dedicated recovered Decision Fetch worker ownership",
+                "unified recovered Decision Fetch worker ownership",
                 worker_source,
                 (
                     "PersistRecoveredDecisionFetchBody(RecoveredDecisionFetchBodyPersistenceTaskV1)",
                     "recovered_decision_fetch_bodies: BTreeMap<RecoveredDecisionFetchDispatchKeyV1, V2IoTrackedRecoveredDecisionFetchBodyV1>",
                     "V2IoCompletion::RecoveredDecisionFetchBodyPersisted",
                     "V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained",
-                    "fn drain_recovered_decision_fetch_body_completion(",
+                    "fn take_next_recovered_lifecycle_completion(",
                     "fn recovered_decision_fetch_queue_transitions_and_parks_until_dedicated_extraction()",
                 ),
             )
@@ -4775,7 +4816,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "placeholder_cadence.checked_add(Duration::from_millis(1))",
                     "assert_eq!(cadence_inputs.block_cadence, authenticated_cadence)",
                     "fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies()",
-                    ".take_certified_serve_producer_episode_for_test()",
+                    ".claim_producer_turn_for_local_proposal(&mut serve_runner)",
+                    ".settle_producer_turn_after_local_proposal(&mut serve_runner, attempted_producer)",
                     "super::super::v2_runner::lifecycle_run_inner::finalize_lifecycle_height(",
                     "assert_eq!(receipt.context_id(), recovered_context.id())",
                     "assert_eq!(artifact.subject, subject)",

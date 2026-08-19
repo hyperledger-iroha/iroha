@@ -125,7 +125,6 @@ fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
     ));
     let lane_catalog = LaneCatalog::new(lane_catalog.lane_count(), lanes).expect("lane catalog");
     let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
     nexus.lane_catalog = lane_catalog;
     nexus.dataspace_catalog = (*dataspace_catalog).clone();
     nexus.fees.base_fee = Quantity::zero();
@@ -527,7 +526,6 @@ fn enforce_lane_teu_limits_updates_telemetry_counters() {
         dataspace_metadata.clone(),
     ])
     .expect("valid state dataspace catalog");
-    nexus.enabled = true;
     nexus.lane_catalog = state_lane_catalog;
     nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
     nexus.dataspace_catalog = state_dataspace_catalog;
@@ -652,7 +650,6 @@ fn queue_backlog_reports_available_lane_headroom() {
         dataspace_metadata.clone(),
     ])
     .expect("valid state dataspace catalog");
-    nexus.enabled = true;
     nexus.lane_catalog = state_lane_catalog;
     nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
     nexus.dataspace_catalog = state_dataspace_catalog;

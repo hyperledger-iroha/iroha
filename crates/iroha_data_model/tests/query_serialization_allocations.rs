@@ -2,6 +2,11 @@
 // This isolated integration test is the narrow exception that needs `GlobalAlloc`
 // to observe steady-state heap traffic in the production serialization paths.
 #![allow(unsafe_code)]
+
+#[cfg(feature = "trybuild-tests")]
+#[path = "ui.rs"]
+mod ui;
+
 use iroha_data_model::{
     domain::Domain,
     query::{

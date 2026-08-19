@@ -1705,13 +1705,13 @@ def test_prepare_reset_requires_complete_kagemusha_flag_pair(
 
 
 def _prepare_reset_controller_case(
-    tmp_path: Path,
+    tmp_path: Path, role: str = "macos-qualification",
 ) -> tuple[list[str], dict[str, object], Path, Path, str]:
     handoff = tmp_path / "handoff"
     trusted = tmp_path / "trusted"
     handoff.mkdir(mode=0o711)
     trusted.mkdir(mode=0o700)
-    attestation = _attestation(handoff, trusted, "macos-qualification")
+    attestation = _attestation(handoff, trusted, role)
     runtime_root = Path(str(attestation["runtime_root"]))
     source_bundle = runtime_root / "source-bundle"
     privacy_release = runtime_root / "privacy-release"
@@ -1785,11 +1785,12 @@ def _prepare_reset_controller_case(
     return args, attestation, output, controller_executable, controller_sha256
 
 
+@pytest.mark.parametrize("role", ("macos-qualification", "macos-deploy"))
 def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema(
-    tmp_path: Path,
+    tmp_path: Path, role: str,
 ) -> None:
     args, attestation, output, controller_executable, controller_sha256 = (
-        _prepare_reset_controller_case(tmp_path)
+        _prepare_reset_controller_case(tmp_path, role)
     )
 
     staged, outputs = controller._validate_operation_args(
@@ -1812,6 +1813,41 @@ def test_prepare_reset_accepts_complete_kagemusha_pair_through_controller_schema
         "run_as": "runtime",
         "sha256": controller_sha256,
     }
+
+
+@pytest.mark.parametrize("role", ("macos-qualification", "macos-deploy"))
+@pytest.mark.parametrize(
+    "omitted_flag",
+    ("--kagemusha-release-root", "--kagemusha-activation-authority"),
+)
+def test_prepare_reset_rejects_omitted_kagemusha_pair_member(
+    tmp_path: Path, role: str, omitted_flag: str
+) -> None:
+    args, attestation, _output, _controller_executable, _controller_sha256 = (
+        _prepare_reset_controller_case(tmp_path, role)
+    )
+    index = args.index(omitted_flag)
+    del args[index : index + 2]
+
+    with pytest.raises(controller.ControllerSealError, match="supplied together"):
+        controller._validate_operation_args("prepare-reset", args, attestation)
+
+
+@pytest.mark.parametrize("role", ("macos-qualification", "macos-deploy"))
+def test_prepare_reset_rejects_substituted_kagemusha_release_root(
+    tmp_path: Path, role: str
+) -> None:
+    args, attestation, _output, _controller_executable, _controller_sha256 = (
+        _prepare_reset_controller_case(tmp_path, role)
+    )
+    substituted = tmp_path / "caller-owned-kagemusha-release"
+    substituted.mkdir(mode=0o755)
+    args[args.index("--kagemusha-release-root") + 1] = str(substituted)
+
+    with pytest.raises(
+        controller.ControllerSealError, match="root-owned and nonwritable"
+    ):
+        controller._validate_operation_args("prepare-reset", args, attestation)
 
 
 @pytest.mark.parametrize(
@@ -1866,7 +1902,54 @@ def test_prepare_reset_rejects_substituted_authenticated_controller_pair_member(
         controller._validate_operation_args("prepare-reset", args, attestation)
 
 
-def test_protected_prepare_reset_workflow_owns_authenticated_controller_pair() -> None:
+def _assert_protected_prepare_reset_workflow_pins(workflow: str) -> None:
+    contracts = (
+        (
+            "macos-secret-free-qualification",
+            "macos-candidate-authority",
+            "QUALIFICATION_KAGEMUSHA_RELEASE_ROOT",
+            "TAIRA_QUALIFICATION_KAGEMUSHA_RELEASE_ROOT",
+            "QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY",
+            "TAIRA_QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY",
+        ),
+        (
+            "macos-deploy",
+            "macos-publish",
+            "TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT",
+            "TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT",
+            "TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY",
+            "TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY",
+        ),
+    )
+    for (
+        job,
+        next_job,
+        root_name,
+        root_variable,
+        authority_name,
+        authority_variable,
+    ) in contracts:
+        section = workflow.split(f"  {job}:\n", 1)[1].split(f"  {next_job}:\n", 1)[0]
+        assert section.count(
+            f"{root_name}: ${{{{ vars.{root_variable} }}}}"
+        ) == 1
+        assert section.count(
+            f"{authority_name}: ${{{{ vars.{authority_variable} }}}}"
+        ) == 1
+        assert section.count(
+            f'if [[ -z "${root_name}" || -z "${authority_name}" ]]; then'
+        ) == 1
+        assert section.count(f'[[ "${root_name}" == /* ]]') == 1
+        assert section.count(
+            f'test "$(cd "${root_name}" && pwd -P)" = "${root_name}"'
+        ) == 1
+        assert section.count(f'--kagemusha-release-root "${root_name}"') == 1
+        assert section.count(
+            f'--kagemusha-activation-authority "${authority_name}"'
+        ) == 1
+
+
+def test_protected_prepare_reset_workflow_owns_all_authenticated_pins() -> None:
     workflow = (ROOT / ".github/workflows/publish_taira_validator.yml").read_text(
         encoding="utf-8"
     )
@@ -1887,6 +1970,82 @@ def test_protected_prepare_reset_workflow_owns_authenticated_controller_pair() -
         "--trusted-authenticated-tool-controller-sha256 "
         '"$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_SHA256"'
     ) == 2
+    _assert_protected_prepare_reset_workflow_pins(workflow)
+
+
+@pytest.mark.parametrize(
+    ("original", "replacement"),
+    (
+        (
+            "QUALIFICATION_KAGEMUSHA_RELEASE_ROOT: "
+            "${{ vars.TAIRA_QUALIFICATION_KAGEMUSHA_RELEASE_ROOT }}",
+            "QUALIFICATION_KAGEMUSHA_RELEASE_ROOT: "
+            "${{ vars.SUBSTITUTED_KAGEMUSHA_RELEASE_ROOT }}",
+        ),
+        (
+            "QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY: "
+            "${{ vars.TAIRA_QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY }}",
+            "QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY: "
+            "${{ vars.SUBSTITUTED_KAGEMUSHA_ACTIVATION_AUTHORITY }}",
+        ),
+        (
+            "TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT: "
+            "${{ vars.TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT }}",
+            "TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT: "
+            "${{ vars.SUBSTITUTED_KAGEMUSHA_RELEASE_ROOT }}",
+        ),
+        (
+            "TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY: "
+            "${{ vars.TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY }}",
+            "TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY: "
+            "${{ vars.SUBSTITUTED_KAGEMUSHA_ACTIVATION_AUTHORITY }}",
+        ),
+        (
+            '--kagemusha-release-root "$QUALIFICATION_KAGEMUSHA_RELEASE_ROOT"',
+            '--kagemusha-release-root "$SUBSTITUTED_KAGEMUSHA_RELEASE_ROOT"',
+        ),
+        (
+            '--kagemusha-activation-authority '
+            '"$QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY"',
+            '--kagemusha-activation-authority '
+            '"$SUBSTITUTED_KAGEMUSHA_ACTIVATION_AUTHORITY"',
+        ),
+        (
+            '--kagemusha-release-root "$TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT"',
+            '--kagemusha-release-root "$SUBSTITUTED_KAGEMUSHA_RELEASE_ROOT"',
+        ),
+        (
+            '--kagemusha-activation-authority '
+            '"$TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY"',
+            '--kagemusha-activation-authority '
+            '"$SUBSTITUTED_KAGEMUSHA_ACTIVATION_AUTHORITY"',
+        ),
+        (
+            'if [[ -z "$QUALIFICATION_KAGEMUSHA_RELEASE_ROOT" || -z '
+            '"$QUALIFICATION_KAGEMUSHA_ACTIVATION_AUTHORITY" ]]; then',
+            'if [[ -z "$QUALIFICATION_KAGEMUSHA_RELEASE_ROOT" ]]; then',
+        ),
+        (
+            'if [[ -z "$TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT" || -z '
+            '"$TAIRA_MACOS_KAGEMUSHA_ACTIVATION_AUTHORITY" ]]; then',
+            'if [[ -z "$TAIRA_MACOS_KAGEMUSHA_RELEASE_ROOT" ]]; then',
+        ),
+    ),
+)
+def test_protected_prepare_reset_wiring_rejects_omission_or_substitution(
+    original: str, replacement: str
+) -> None:
+    workflow = (ROOT / ".github/workflows/publish_taira_validator.yml").read_text(
+        encoding="utf-8"
+    )
+    assert workflow.count(original) == 1
+
+    for mutation in (
+        workflow.replace(original, "", 1),
+        workflow.replace(original, replacement, 1),
+    ):
+        with pytest.raises((AssertionError, IndexError)):
+            _assert_protected_prepare_reset_workflow_pins(mutation)
 
 
 def test_controller_has_no_generic_signing_or_direct_close_surface() -> None:

@@ -574,7 +574,6 @@ impl Root {
     /// complete admission trust policy. The profile never manufactures trust
     /// roots on behalf of the operator.
     pub fn apply_sora_profile(&mut self) {
-        self.nexus.enabled = true;
         self.torii.sorafs_storage.enabled = true;
         self.torii.sorafs_discovery.discovery_enabled =
             self.torii.sorafs_discovery.admission.is_some();
@@ -600,9 +599,6 @@ impl Root {
     /// When the aggregate budget is omitted, `irohad` derives a filesystem-aware budget at
     /// runtime and applies it with [`Self::apply_derived_storage_budget`].
     pub fn apply_storage_budget(&mut self) {
-        if !self.nexus.enabled {
-            return;
-        }
         self.apply_storage_memory_budget();
         let Some(max_disk) = self.nexus.storage.local_budget_bytes.map(Bytes::get) else {
             return;
@@ -642,9 +638,6 @@ impl Root {
                 })?;
         let aggregate_budget_bytes = NonZeroU64::new(aggregate_budget_bytes)
             .ok_or(NexusStorageBudgetApplicationError::NoFilesystemBudgets)?;
-        if !self.nexus.enabled {
-            return Ok(aggregate_budget_bytes);
-        }
         self.apply_storage_memory_budget();
         self.nexus.storage.effective_local_budget_bytes = Some(Bytes(aggregate_budget_bytes.get()));
         let derived_caps = derive_filesystem_nexus_storage_component_caps(
@@ -1013,59 +1006,6 @@ pub(crate) fn sora_routing_policy() -> LaneRoutingPolicy {
             },
         ],
     }
-}
-#[cfg(test)]
-mod sora_profile_tests {
-    use super::*;
-    use iroha_config_base::toml::TomlSource;
-    use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneConfigMetadata};
-    use std::num::NonZeroU32;
-    use toml::Table;
-    const MINIMAL_CONFIG: &str = r#"
-chain = "00000000-0000-0000-0000-000000000000"
-public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
-soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
-trusted_peers_pop = [
-  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
-]
-
-[network]
-address = "addr:127.0.0.1:1337#8F78"
-public_address = "addr:127.0.0.1:1337#8F78"
-
-[torii]
-address = "addr:127.0.0.1:8080#8942"
-
-[genesis]
-public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-
-[streaming]
-identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
-identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-"#;
-    pub(super) fn minimal_root() -> Root {
-        let table: Table = toml::from_str(MINIMAL_CONFIG).expect("parse minimal config table");
-        Root::from_toml_source(TomlSource::inline(table)).expect("load minimal config")
-    }
-    fn minimal_root_with_sorafs_admission() -> Root {
-        let config = format!(
-            r#"{MINIMAL_CONFIG}
-
-[sorafs.discovery.admission]
-envelopes_dir = "admission"
-trusted_council_keys = ["ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"]
-signature_threshold = 1
-"#
-        );
-        let table: Table = toml::from_str(&config).expect("parse config with SoraFS admission");
-        Root::from_toml_source(TomlSource::inline(table))
-            .expect("load config with valid SoraFS admission")
-    }
-    include!("actual/sora_profile_discovery_disabled_test.rs");
-    include!("actual/sora_profile_runtime_tests.rs");
 }
 /// Common options shared between multiple components.
 #[derive(Debug, Clone)]
@@ -2817,7 +2757,7 @@ pub enum NexusStorageBudgetApplicationError {
         component: NexusStorageBudgetComponent,
     },
 }
-/// Storage budget configuration for Nexus-enabled nodes.
+/// Storage budget configuration for Nexus nodes.
 #[derive(Clone, Copy)]
 pub struct NexusStorage {
     /// Operator-configured aggregate on-disk storage budget (bytes).
@@ -2906,9 +2846,7 @@ impl Default for NexusStorageWeights {
 /// Nexus configuration describing lanes, data spaces, and routing policy.
 #[derive(Debug, Clone)]
 pub struct Nexus {
-    /// Whether multilane (Nexus/Iroha3) features are enabled at runtime.
-    pub enabled: bool,
-    /// Storage budget configuration for Nexus-enabled nodes.
+    /// Storage budget configuration for Nexus nodes.
     pub storage: NexusStorage,
     /// Staking guardrails for public lanes.
     pub staking: NexusStaking,
@@ -2960,7 +2898,6 @@ pub struct Nexus {
 impl Default for Nexus {
     fn default() -> Self {
         Self {
-            enabled: defaults::nexus::ENABLED,
             storage: NexusStorage::default(),
             staking: NexusStaking::default(),
             fees: NexusFees::default(),
@@ -3048,7 +2985,6 @@ pub enum NexusConsensusPolicyDigestError {
 #[derive(Encode)]
 struct NexusConsensusPolicyPreimageV1 {
     version: u8,
-    enabled: bool,
     configured_lane_catalog_hash: [u8; 32],
     dataspaces: Vec<NexusConsensusDataspaceV1>,
     dataspace_fee_sponsor_program_ids: Vec<(u64, FeeSponsorProgramId)>,
@@ -3365,7 +3301,6 @@ pub fn nexus_consensus_policy_digest_with_runtime_policies(
         .encode();
     let preimage = NexusConsensusPolicyPreimageV1 {
         version: VERSION,
-        enabled: nexus.enabled,
         configured_lane_catalog_hash: Hash::new_from_chunks(&[
             CONFIGURED_LANE_CATALOG_DOMAIN,
             configured_lane_catalog.as_slice(),
@@ -5064,7 +4999,6 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
         out.extend_from_slice(&bytes);
     }
     let mut preimage = b"sumeragi-v2:nexus-amx-context\0v2".to_vec();
-    append(&mut preimage, "nexus.enabled", &nexus.enabled);
     append(
         &mut preimage,
         "nexus.lane_catalog.lane_count",
@@ -5384,57 +5318,32 @@ pub fn sumeragi_v2_nexus_amx_context_hash(
         &nexus.commit.window_slots.get(),
     );
     let da = &nexus.da;
-    for (tag, value) in [
-        ("nexus.da.q_in_slot_total", da.q_in_slot_total.get()),
-        (
-            "nexus.da.q_in_slot_per_ds_min",
-            u32::from(da.q_in_slot_per_ds_min.get()),
-        ),
-        (
-            "nexus.da.sample_size_base",
-            u32::from(da.sample_size_base.get()),
-        ),
-        (
-            "nexus.da.sample_size_max",
-            u32::from(da.sample_size_max.get()),
-        ),
-        (
-            "nexus.da.threshold_base",
-            u32::from(da.threshold_base.get()),
-        ),
-    ] {
-        append(&mut preimage, tag, &value);
+    macro_rules! append_da_fields {
+        ($($tag:literal => $value:expr),+ $(,)?) => {
+            $(
+                append(
+                    &mut preimage,
+                    $tag,
+                    &$value,
+                );
+            )+
+        };
     }
-    append(
-        &mut preimage,
-        "nexus.da.per_attester_shards",
-        &da.per_attester_shards.get(),
-    );
-    append(
-        &mut preimage,
-        "nexus.da.ingest_quota_window_blocks",
-        &da.ingest_quota_window_blocks.get(),
-    );
-    append(
-        &mut preimage,
-        "nexus.da.ingest_quota_max_count_per_account",
-        &da.ingest_quota_max_count_per_account.get(),
-    );
-    append(
-        &mut preimage,
-        "nexus.da.ingest_quota_max_bytes_per_account",
-        &da.ingest_quota_max_bytes_per_account.get(),
-    );
-    append(
-        &mut preimage,
-        "nexus.da.audit.sample_size",
-        &da.audit.sample_size.get(),
-    );
-    append(
-        &mut preimage,
-        "nexus.da.audit.window_count",
-        &da.audit.window_count.get(),
-    );
+    append_da_fields! {
+        "nexus.da.q_in_slot_total" => da.q_in_slot_total.get(),
+        "nexus.da.q_in_slot_per_ds_min" => da.q_in_slot_per_ds_min.get(),
+        "nexus.da.sample_size_base" => da.sample_size_base.get(),
+        "nexus.da.sample_size_max" => da.sample_size_max.get(),
+        "nexus.da.threshold_base" => da.threshold_base.get(),
+        "nexus.da.per_attester_shards" => da.per_attester_shards.get(),
+        "nexus.da.ingest_quota_window_blocks" => da.ingest_quota_window_blocks.get(),
+        "nexus.da.ingest_quota_max_count_per_account" =>
+            da.ingest_quota_max_count_per_account.get(),
+        "nexus.da.ingest_quota_max_bytes_per_account" =>
+            da.ingest_quota_max_bytes_per_account.get(),
+        "nexus.da.audit.sample_size" => da.audit.sample_size.get(),
+        "nexus.da.audit.window_count" => da.audit.window_count.get(),
+    }
     append(
         &mut preimage,
         "nexus.da.audit.interval_ns",
@@ -5942,12 +5851,8 @@ pub struct Kura {
     pub max_disk_usage_bytes: Bytes<u64>,
     /// Number of recent blocks kept in memory.
     pub blocks_in_memory: NonZeroUsize,
-    /// Number of recent committed non-genesis roster records retained for block-sync validation.
-    /// Genesis is pinned separately, and one additional row is reserved for an authenticated
-    /// pre-Kura successor.
-    pub block_sync_roster_retention: NonZeroUsize,
-    /// Number of recent roster sidecars retained alongside the block store.
-    pub roster_sidecar_retention: NonZeroUsize,
+    /// Number of recent lane-history entries retained alongside the block store.
+    pub lane_history_retention: NonZeroUsize,
     /// Authenticated replica-advert retention, expiry, and refresh policy.
     pub replica_advert: KuraReplicaAdvertPolicy,
     /// Whether to append new blocks as JSONL to `blocks.jsonl` under the active Kura lane.
@@ -6198,8 +6103,8 @@ pub struct SumeragiQueues {
     pub body_bytes: NonZeroUsize,
     /// Per-ingress-source canonical wire-byte partition. Validator partitions
     /// isolate ordinary traffic, payload completions, and timeout votes;
-    /// authenticated non-validator and anonymous partitions do not spend the
-    /// timeout reserve. Lane progress and executable-payload recovery impose
+    /// authenticated non-validator partitions do not spend the timeout
+    /// reserve. Lane progress and executable-payload recovery impose
     /// fixed one-MiB and four-MiB minima on ordinary and completion regions.
     pub body_source_bytes: NonZeroUsize,
     /// Payload-chunk ingress and orphan-buffer capacity.
@@ -6456,7 +6361,7 @@ impl Sumeragi {
         )?;
         let minimum_body_queue_capacity = authenticated_non_validator_source_capacity
             .checked_mul(3)
-            .and_then(|hubs| hubs.checked_add(7))
+            .and_then(|sources| sources.checked_add(5))
             .ok_or(SumeragiV2ConfigError::LimitOverflow(
                 "Sumeragi v2 authenticated non-validator outer-ingress message minimum",
             ))?;
@@ -6521,7 +6426,7 @@ impl Sumeragi {
             });
         }
         let minimum_body_sources = authenticated_non_validator_source_capacity
-            .checked_add(2)
+            .checked_add(1)
             .ok_or(SumeragiV2ConfigError::LimitOverflow(
                 "Sumeragi v2 authenticated-source outer-ingress partition count",
             ))?;
@@ -7170,7 +7075,7 @@ pub enum SumeragiV2ConfigError {
     /// Reserved reducer FIFO capacity consumed the whole queue.
     #[error("Sumeragi v2 reducer queue reserves leave no normal-ingress capacity")]
     InvalidQueueAllocation,
-    /// Outer ingress cannot retain one validator, every non-validator source lane, and anonymous work.
+    /// Outer ingress cannot retain one validator and every non-validator source lane.
     #[error(
         "Sumeragi v2 body queue capacity {actual} is below minimum {minimum} for {authenticated_non_validator_sources} authenticated non-validator source lanes"
     )]
@@ -7327,9 +7232,9 @@ pub struct TrustedPeers {
     /// Other trusted peers.
     pub others: UniqueVec<Peer>,
     /// Proof-of-Possession (PoP) for validator BLS keys, keyed by public key.
-    /// When this map is non-empty, BLS trusted peers with valid PoPs form the
-    /// validator roster; trusted peers without PoPs remain network-trusted peers
-    /// and are excluded from consensus.
+    /// Only BLS trusted peers with explicit valid entries form the validator
+    /// roster. An empty map yields no validators, and entries cannot introduce
+    /// peers outside the trusted-peer set.
     pub pops: std::collections::BTreeMap<PublicKey, Vec<u8>>,
 }
 impl TrustedPeers {

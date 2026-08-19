@@ -365,7 +365,7 @@ impl ApplyFixture {
     fn new_with_options(
         include_lane_payload: bool,
         include_projection_policies: bool,
-        enable_nexus: bool,
+        include_lane_lifecycle: bool,
         include_native_lane: bool,
     ) -> Self {
         let chain_id: ChainId = "sumeragi-v2-apply-crash-test".into();
@@ -407,7 +407,7 @@ impl ApplyFixture {
             leader_seed: [0x63; 32],
         };
         context.validate().expect("valid fixture context");
-        let kura = if enable_nexus {
+        let kura = if include_lane_lifecycle {
             crate::sumeragi::v2_lane_work::tests::locked_lane_work_test_kura(
                 iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             )
@@ -430,13 +430,6 @@ impl ApplyFixture {
             LiveQueryStore::start_test(),
             chain_id.clone(),
         );
-        if enable_nexus {
-            let mut nexus = state.nexus_snapshot();
-            nexus.enabled = true;
-            state
-                .set_nexus(nexus)
-                .expect("enable Nexus for lane-lifecycle apply fixture");
-        }
         let validator_set_pops = keys
             .iter()
             .map(|key| {
@@ -914,26 +907,6 @@ impl ApplyFixture {
         assert!(
             commit_manifest.binds_authenticated_v2_commit_authority(&artifact),
             "manifest must retain the exact QC roots and complete v2 authority seal"
-        );
-        assert!(
-            state
-                .world_view()
-                .commit_qcs()
-                .get(&self.body.hash())
-                .is_none(),
-            "Sumeragi v2 finality must not be projected into the legacy commit-QC store"
-        );
-        assert!(
-            state
-                .commit_roster_snapshot_for_block(self.context.height, self.body.hash())
-                .is_none(),
-            "Sumeragi v2 finality must not populate the legacy commit-roster journal"
-        );
-        assert!(
-            self.kura
-                .read_roster_metadata(self.context.height)
-                .is_none(),
-            "Sumeragi v2 finality must not populate the legacy roster sidecar"
         );
     }
 }
@@ -2025,10 +1998,7 @@ fn reserve_autonomous_crash_batch(
     fixture: &ApplyFixture,
     queue: &Arc<Queue>,
     producer: &KeyPair,
-) -> (
-    LaneExecutablePayloadV1,
-    Vec<HashOf<TransactionEntrypoint>>,
-) {
+) -> (LaneExecutablePayloadV1, Vec<HashOf<TransactionEntrypoint>>) {
     let transactions = (0_u8..4)
         .map(|index| {
             TransactionBuilder::new(
@@ -2281,10 +2251,7 @@ fn reserve_canonical_successor_autonomous_batch(
     queue: &Arc<Queue>,
     context: &wire::HeightContext,
     count: usize,
-) -> (
-    LaneExecutablePayloadV1,
-    Vec<HashOf<TransactionEntrypoint>>,
-) {
+) -> (LaneExecutablePayloadV1, Vec<HashOf<TransactionEntrypoint>>) {
     reserve_canonical_successor_autonomous_batch_with_instructions(
         fixture,
         queue,
@@ -2308,10 +2275,7 @@ fn reserve_canonical_successor_autonomous_batch_with_instructions(
     instructions: impl Fn(usize) -> Vec<InstructionBox>,
     sort_by_signed_transaction_hash: bool,
     native_receipt_builder: Option<ApplyNativeReceiptBuilder>,
-) -> (
-    LaneExecutablePayloadV1,
-    Vec<HashOf<TransactionEntrypoint>>,
-) {
+) -> (LaneExecutablePayloadV1, Vec<HashOf<TransactionEntrypoint>>) {
     assert_eq!(fixture.state.committed_height(), 1);
     assert_eq!(context.height, 2);
     assert!((1..=16).contains(&count));
@@ -2792,10 +2756,7 @@ fn deferred_canonical_carrier_startup_fixture() -> DeferredCanonicalCarrierStart
         .expect("persist deferred carrier application receipts");
     commit_exact_fixture_carrier_chain_to_state(&fixture, &parent, &carrier);
     fixture.state.record_direct_committed_entrypoints(
-        [
-            first_key.entrypoint_hash,
-            second_key.entrypoint_hash,
-        ],
+        [first_key.entrypoint_hash, second_key.entrypoint_hash],
         NonZeroUsize::new(2).expect("deferred carrier State height"),
     );
     drop(absent_queue);

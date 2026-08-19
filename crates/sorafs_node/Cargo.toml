@@ -1,6 +1,7 @@
 [package]
 name = "sorafs_node"
 autobins = false
+autotests = false
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
@@ -61,3 +62,7 @@ iroha_data_model = { path = "../iroha_data_model", default-features = false, fea
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "time"] }
 tower = { version = "0.5.2", features = ["util"] }
 base64 = { workspace = true }
+
+[[test]]
+name = "pin_workflows"
+path = "tests/pin_workflows.rs"

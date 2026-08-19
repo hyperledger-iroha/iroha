@@ -1396,13 +1396,6 @@ pub enum PrivacyProofEnvelopeValidationError {
 }
 #[cfg(any(test, feature = "privacy-exact12-conformance"))]
 mod exact12_fixture {
-    use std::{
-        fmt::Write as _,
-        num::{NonZeroU32, NonZeroU64},
-        str::FromStr as _,
-    };
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_version::codec::EncodeVersioned as _;
     use super::*;
     use crate::{
         NetworkId,
@@ -1415,6 +1408,13 @@ mod exact12_fixture {
             Executable, FeePaymentIntent, TransactionBuilder, TransactionDomain,
             TransactionPayload, signed::PrivacyTransactionIntentErrorV1,
         },
+    };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_version::codec::EncodeVersioned as _;
+    use std::{
+        fmt::Write as _,
+        num::{NonZeroU32, NonZeroU64},
+        str::FromStr as _,
     };
     const _: [(); 12] = [(); PrivacyProtocolIdV1::COUNT];
     const EXACT12_CANONICAL_HEADER_V1: [&str; 4] = [
@@ -2074,7 +2074,7 @@ mod exact12_fixture {
         statement: PrivacyStatementV1,
     ) -> Result<PrivacyProofEnvelopeV1, norito::Error> {
         let protocol_id = statement.protocol_id();
-        let context = statement.context().clone();
+        let context = *statement.context();
         let statement_digest = statement.digest()?;
         let proof = match &statement {
             PrivacyStatementV1::IrohaZkAmsV1(IrohaZkAmsStatementV1 {

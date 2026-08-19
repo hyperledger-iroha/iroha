@@ -950,12 +950,12 @@ mod tests {
             },
         );
         let mut config = default_v2_sumeragi();
-        config.queues.bodies = NonZeroUsize::new(12).expect("non-zero");
+        config.queues.bodies = NonZeroUsize::new(10).expect("non-zero");
         assert_error(
             &config,
             SumeragiV2ConfigError::BodyQueueTooSmall {
-                actual: 12,
-                minimum: 13,
+                actual: 10,
+                minimum: 11,
                 authenticated_non_validator_sources: 2,
             },
         );
@@ -968,14 +968,14 @@ mod tests {
             ),
         );
         let mut config = default_v2_sumeragi();
-        config.queues.body_bytes = NonZeroUsize::new(132 * 1024 * 1024 - 1).expect("non-zero");
+        config.queues.body_bytes = NonZeroUsize::new(99 * 1024 * 1024 - 1).expect("non-zero");
         assert_error(
             &config,
             SumeragiV2ConfigError::BodyBytesTooSmall {
-                actual: 132 * 1024 * 1024 - 1,
-                minimum: 132 * 1024 * 1024,
+                actual: 99 * 1024 * 1024 - 1,
+                minimum: 99 * 1024 * 1024,
                 body_source_bytes: 33 * 1024 * 1024,
-                minimum_sources: 4,
+                minimum_sources: 3,
             },
         );
         let mut config = default_v2_sumeragi();
@@ -1258,7 +1258,7 @@ mod tests {
             sumeragi_v2_nexus_amx_context_hash(&Nexus::default(), &Pipeline::default(), &[], &[]);
         assert_eq!(
             hex::encode(hash.as_ref()),
-            "304879d9c7d1f5c0f62708d2c097a35deafcec04314e88d16dc2d3a61a70ba43",
+            "e3b96d8b05e290807ff89e8080c5dcc3b471108d3d5e90cd41ebd89f30a2d301",
         );
         assert_eq!(
             <[u8; 32]>::from(hash),
@@ -1421,13 +1421,13 @@ mod tests {
             );
         };
         let mut changed = nexus.clone();
-        changed.enabled = !changed.enabled;
-        assert_nexus_change("Nexus enabled state", changed);
-        let mut changed = nexus.clone();
         changed.lane_catalog = sora_lane_catalog();
         assert_nexus_change("lane catalog", changed);
         let mut changed = nexus.clone();
-        changed.dataspace_catalog = sora_dataspace_catalog();
+        let mut dataspace = changed.dataspace_catalog.entries()[0].clone();
+        dataspace.fault_tolerance = dataspace.fault_tolerance.saturating_add(1);
+        changed.dataspace_catalog =
+            DataSpaceCatalog::new(vec![dataspace]).expect("valid changed dataspace catalog");
         assert_nexus_change("dataspace catalog", changed);
         let mut changed = nexus.clone();
         changed.routing_policy.default_lane = LaneId::new(1);
@@ -1580,4 +1580,57 @@ mod tests {
             "retained lane-lineage input order must not affect the context commitment"
         );
     }
+}
+#[cfg(test)]
+mod sora_profile_tests {
+    use super::*;
+    use iroha_config_base::toml::TomlSource;
+    use iroha_data_model::nexus::{LaneCatalog, LaneConfig as LaneConfigMetadata};
+    use std::num::NonZeroU32;
+    use toml::Table;
+    const MINIMAL_CONFIG: &str = r#"
+chain = "00000000-0000-0000-0000-000000000000"
+public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+soranet_transport_public_key = "ed0120D9F6AEF1813164294D1D9C0662FEB9C7F7861B4DFFE385680331093DA4ABD10B"
+soranet_transport_private_key = "802620134C4527B3852AE2218A8F079B301C651EAD8C7567B96BD7A9BE8DB366E46B89"
+trusted_peers_pop = [
+  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
+]
+
+[network]
+address = "addr:127.0.0.1:1337#8F78"
+public_address = "addr:127.0.0.1:1337#8F78"
+
+[torii]
+address = "addr:127.0.0.1:8080#8942"
+
+[genesis]
+public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+
+[streaming]
+identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
+identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
+"#;
+    pub(super) fn minimal_root() -> Root {
+        let table: Table = toml::from_str(MINIMAL_CONFIG).expect("parse minimal config table");
+        Root::from_toml_source(TomlSource::inline(table)).expect("load minimal config")
+    }
+    fn minimal_root_with_sorafs_admission() -> Root {
+        let config = format!(
+            r#"{MINIMAL_CONFIG}
+
+[sorafs.discovery.admission]
+envelopes_dir = "admission"
+trusted_council_keys = ["ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"]
+signature_threshold = 1
+"#
+        );
+        let table: Table = toml::from_str(&config).expect("parse config with SoraFS admission");
+        Root::from_toml_source(TomlSource::inline(table))
+            .expect("load config with valid SoraFS admission")
+    }
+    include!("sora_profile_discovery_disabled_test.rs");
+    include!("sora_profile_runtime_tests.rs");
 }

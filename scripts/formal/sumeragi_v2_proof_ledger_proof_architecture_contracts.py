@@ -29,8 +29,8 @@ def _promotion_target_invocation(
 ASYNC_STRONG_TYPE_INVARIANT_EXACT_BODY = (
     "/\\ StrongInductiveInvariant /\\ AsyncSchedulerTypeInvariant "
     "/\\ AsyncProducerTypeInvariant "
-    "/\\ AsyncServeProducerEpisodeTypeInvariant "
-    "/\\ AsyncServeProducerEpisodeOwnershipInvariant "
+    "/\\ AsyncServeProducerTurnTypeInvariant "
+    "/\\ AsyncServeProducerTurnOwnershipInvariant "
     "/\\ AsyncServiceActivationPairInvariant "
     "/\\ AsyncControlServiceStateTypeInvariant "
     "/\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant "
@@ -70,9 +70,9 @@ def _async_extended_strong_type_induction_errors(
         bridges = (
             "<2>3f. AsyncProducerTypeInvariant BY <1>1, "
             "AsyncInitEstablishesProducerTypeInvariant",
-            "<2>3p. /\\ AsyncServeProducerEpisodeTypeInvariant "
-            "/\\ AsyncServeProducerEpisodeOwnershipInvariant BY <1>1, "
-            "AsyncInitEstablishesServeProducerEpisodeInvariants",
+            "<2>3p. /\\ AsyncServeProducerTurnTypeInvariant "
+            "/\\ AsyncServeProducerTurnOwnershipInvariant BY <1>1, "
+            "AsyncInitEstablishesServeProducerTurnInvariants",
             "<2>3t. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant "
             "BY <1>1, AsyncInitEstablishesTimeoutRecoveryCurrentBoundary",
         )
@@ -90,8 +90,8 @@ def _async_extended_strong_type_induction_errors(
         body, line = stutter
         projection = (
             "/\\ AsyncProducerTypeInvariant "
-            "/\\ AsyncServeProducerEpisodeTypeInvariant "
-            "/\\ AsyncServeProducerEpisodeOwnershipInvariant "
+            "/\\ AsyncServeProducerTurnTypeInvariant "
+            "/\\ AsyncServeProducerTurnOwnershipInvariant "
             "/\\ AsyncServiceActivationPairInvariant "
             "/\\ AsyncControlServiceStateTypeInvariant "
             "/\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant"
@@ -99,11 +99,11 @@ def _async_extended_strong_type_induction_errors(
         steps = (
             "<2>4e. AsyncProducerTypeInvariant' BY <1>1, <2>1, "
             "AsyncProducerVarsFramePreservesTypeInvariant DEF AsyncAllVars",
-            "<2>8p. /\\ AsyncServeProducerEpisodeTypeInvariant' "
-            "/\\ AsyncServeProducerEpisodeOwnershipInvariant' "
+            "<2>8p. /\\ AsyncServeProducerTurnTypeInvariant' "
+            "/\\ AsyncServeProducerTurnOwnershipInvariant' "
             "BY <1>1, <2>1, Isa DEF AsyncAllVars, AsyncSchedulerVars, "
-            "AsyncServeProducerEpisodeTypeInvariant, "
-            "AsyncServeProducerEpisodeOwnershipInvariant, "
+            "AsyncServeProducerTurnTypeInvariant, "
+            "AsyncServeProducerTurnOwnershipInvariant, "
             "AsyncServeIngressLifecycleOwnerIdentities, "
             "AsyncServeIngressAdmissionIdentities, "
             "AsyncServeOffQueueReservations, AsyncServeJobQueued, "
@@ -143,8 +143,8 @@ def _async_extended_strong_type_induction_errors(
         body, line = next_step
         projection = (
             "<2>2m. /\\ AsyncProducerTypeInvariant "
-            "/\\ AsyncServeProducerEpisodeTypeInvariant "
-            "/\\ AsyncServeProducerEpisodeOwnershipInvariant "
+            "/\\ AsyncServeProducerTurnTypeInvariant "
+            "/\\ AsyncServeProducerTurnOwnershipInvariant "
             "/\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant "
             "BY <1>1 DEF AsyncStrongTypeInvariant"
         )
@@ -153,9 +153,9 @@ def _async_extended_strong_type_induction_errors(
             "AsyncProducerProjectionPreservesTypeInvariant DEF AsyncNext"
         )
         serve_type = (
-            "<2>4d. /\\ AsyncServeProducerEpisodeTypeInvariant' "
-            "/\\ AsyncServeProducerEpisodeOwnershipInvariant' BY <1>1, "
-            "AsyncNextPreservesServeProducerEpisodeInvariants"
+            "<2>4d. /\\ AsyncServeProducerTurnTypeInvariant' "
+            "/\\ AsyncServeProducerTurnOwnershipInvariant' BY <1>1, "
+            "AsyncNextPreservesServeProducerTurnInvariants"
         )
         boundary = (
             "<2>4e. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant' "
@@ -183,13 +183,13 @@ def _async_extended_strong_type_induction_errors(
         if body.count(serve_type) != 1:
             errors.append(
                 f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
-                "prime AsyncServeProducerEpisodeTypeInvariant through the "
+                "prime AsyncServeProducerTurnTypeInvariant through the "
                 "exact one-shot transition"
             )
         if body.count(serve_type) != 1:
             errors.append(
                 f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
-                "prime AsyncServeProducerEpisodeOwnershipInvariant through "
+                "prime AsyncServeProducerTurnOwnershipInvariant through "
                 "the reviewed admission, retirement, and reset cases"
             )
         if body.count(boundary) != 1:
@@ -1052,8 +1052,8 @@ WF_(IndexedAdequateLeaderWitness(initialContext)!AsyncAllVars)(
         ) + (
             "asyncFixedCorridorDeadlines <- "
             "IndexedFixedCorridorDeadlines(initialContext)",
-            "asyncServeProducerEpisodeDue <- "
-            "IndexedServeProducerEpisodeDue(initialContext)",
+            "asyncServeProducerTurnReady <- "
+            "IndexedServeProducerTurnDue(initialContext)",
         )
         for module, symbol, instance_module in (
             HISTORICAL_INDEXED_INSTANCE_CONTRACTS

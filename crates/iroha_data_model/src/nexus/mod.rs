@@ -91,8 +91,6 @@ pub struct LaneLifecycleIncarnationEntry {
 pub struct LaneLifecycleStatusV1 {
     /// Status layout version. This must be [`Self::VERSION`].
     pub version: u8,
-    /// Whether Nexus lane routing is enabled on the serving node.
-    pub nexus_enabled: bool,
     /// Exclusive lane-id bound for the current catalog namespace.
     pub lane_count: u32,
     /// Canonically ordered active lane metadata.
@@ -114,14 +112,12 @@ impl LaneLifecycleStatusV1 {
     /// Returns [`LaneLifecycleStatusError`] when the incarnation map does not
     /// exactly and canonically cover the active catalog.
     pub fn new(
-        nexus_enabled: bool,
         catalog: &LaneCatalog,
         incarnations: &BTreeMap<LaneId, Hash>,
     ) -> Result<Self, LaneLifecycleStatusError> {
         let incarnations = LaneLifecycleParameterV1::canonical_incarnations(catalog, incarnations)?;
         Ok(Self {
             version: Self::VERSION,
-            nexus_enabled,
             lane_count: catalog.lane_count().get(),
             lanes: catalog.lanes().to_vec(),
             catalog_hash: LaneLifecycleParameterV1::catalog_hash(catalog),
@@ -1664,10 +1660,6 @@ impl norito::json::FastJsonWrite for LaneLifecycleStatusV1 {
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.version, out);
         out.push(',');
-        norito::json::write_json_string("nexus_enabled", out);
-        out.push(':');
-        norito::json::JsonSerialize::json_serialize(&self.nexus_enabled, out);
-        out.push(',');
         norito::json::write_json_string("lane_count", out);
         out.push(':');
         norito::json::JsonSerialize::json_serialize(&self.lane_count, out);
@@ -1696,8 +1688,6 @@ impl norito::json::FastJsonWrite for LaneLifecycleStatusV1 {
         out.begin_container()?;
         out.push_str("{\"version\":")?;
         norito::json::JsonSerialize::json_serialize_to(&self.version, out)?;
-        out.push_str(",\"nexus_enabled\":")?;
-        norito::json::JsonSerialize::json_serialize_to(&self.nexus_enabled, out)?;
         out.push_str(",\"lane_count\":")?;
         norito::json::JsonSerialize::json_serialize_to(&self.lane_count, out)?;
         out.push_str(",\"lanes\":")?;
@@ -1721,7 +1711,6 @@ impl norito::json::JsonDeserialize for LaneLifecycleStatusV1 {
         use norito::json::MapVisitor;
         let mut visitor = MapVisitor::new(parser)?;
         let mut version = None;
-        let mut nexus_enabled = None;
         let mut lane_count = None;
         let mut lanes = None;
         let mut catalog_hash = None;
@@ -1739,12 +1728,6 @@ impl norito::json::JsonDeserialize for LaneLifecycleStatusV1 {
                         return Err(duplicate("version"));
                     }
                     version = Some(visitor.parse_value()?);
-                }
-                "nexus_enabled" => {
-                    if nexus_enabled.is_some() {
-                        return Err(duplicate("nexus_enabled"));
-                    }
-                    nexus_enabled = Some(visitor.parse_value()?);
                 }
                 "lane_count" => {
                     if lane_count.is_some() {
@@ -1791,7 +1774,6 @@ impl norito::json::JsonDeserialize for LaneLifecycleStatusV1 {
         };
         Ok(Self {
             version: version.ok_or_else(|| missing("version"))?,
-            nexus_enabled: nexus_enabled.ok_or_else(|| missing("nexus_enabled"))?,
             lane_count: lane_count.ok_or_else(|| missing("lane_count"))?,
             lanes: lanes.ok_or_else(|| missing("lanes"))?,
             catalog_hash: catalog_hash.ok_or_else(|| missing("catalog_hash"))?,
@@ -2156,7 +2138,7 @@ mod tests {
             .collect()
     }
     fn lifecycle_status(catalog: &LaneCatalog) -> LaneLifecycleStatusV1 {
-        LaneLifecycleStatusV1::new(true, catalog, &incarnation_map(catalog))
+        LaneLifecycleStatusV1::new(catalog, &incarnation_map(catalog))
             .expect("valid lifecycle status")
     }
     #[test]
@@ -2987,8 +2969,8 @@ mod tests {
             Hash::new(b"lane-incarnation-after-replacement"),
         )]);
         let first_status =
-            LaneLifecycleStatusV1::new(true, &catalog, &first).expect("first lifecycle status");
-        let replacement_status = LaneLifecycleStatusV1::new(true, &catalog, &replacement)
+            LaneLifecycleStatusV1::new(&catalog, &first).expect("first lifecycle status");
+        let replacement_status = LaneLifecycleStatusV1::new(&catalog, &replacement)
             .expect("replacement lifecycle status");
         assert_eq!(first_status.catalog_hash, replacement_status.catalog_hash);
         assert_ne!(
@@ -2997,9 +2979,14 @@ mod tests {
         );
     }
     #[test]
-    fn lane_lifecycle_status_json_rejects_duplicate_and_unknown_fields() {
+    fn lane_lifecycle_status_json_rejects_duplicate_unknown_and_missing_fields() {
         let status = lifecycle_status(&LaneCatalog::default());
-        let mut encoded = norito::json::to_string(&status).expect("serialize lifecycle status");
+        let encoded = norito::json::to_string(&status).expect("serialize lifecycle status");
+        assert!(
+            !encoded.contains("nexus_enabled"),
+            "the first-release status layout must not retain the removed enablement switch"
+        );
+        let mut encoded = encoded;
         assert_eq!(encoded.pop(), Some('}'));
         encoded.push_str(",\"version\":1}");
         let err = norito::json::from_str::<LaneLifecycleStatusV1>(&encoded)
@@ -3011,6 +2998,24 @@ mod tests {
         let err = norito::json::from_str::<LaneLifecycleStatusV1>(&encoded)
             .expect_err("unknown status fields must fail closed");
         assert!(err.to_string().contains("unexpected"));
+        let mut encoded = norito::json::to_string(&status).expect("serialize lifecycle status");
+        assert_eq!(encoded.pop(), Some('}'));
+        encoded.push_str(",\"nexus_enabled\":true}");
+        let err = norito::json::from_str::<LaneLifecycleStatusV1>(&encoded)
+            .expect_err("the removed enablement field must fail as unknown");
+        assert!(err.to_string().contains("nexus_enabled"));
+        let mut value = norito::json::to_value(&status).expect("serialize lifecycle status value");
+        assert!(
+            value
+                .as_object_mut()
+                .expect("lifecycle status JSON object")
+                .remove("incarnation_root")
+                .is_some()
+        );
+        let encoded = norito::json::to_string(&value).expect("serialize shortened status");
+        let err = norito::json::from_str::<LaneLifecycleStatusV1>(&encoded)
+            .expect_err("a missing current field must fail closed");
+        assert!(err.to_string().contains("incarnation_root"));
     }
     #[test]
     fn lane_lifecycle_plan_json_rejects_duplicate_fields() {
@@ -3037,6 +3042,8 @@ mod tests {
     }
     #[test]
     fn lane_config_json_rejects_duplicate_fields() {
+        use core::fmt::Write as _;
+
         let duplicate_values = [
             (
                 "id",
@@ -3056,7 +3063,8 @@ mod tests {
             let mut encoded =
                 norito::json::to_string(&LaneConfig::default()).expect("serialize lane metadata");
             assert_eq!(encoded.pop(), Some('}'));
-            encoded.push_str(&format!(",\"{field}\":{value}}}"));
+            write!(&mut encoded, ",\"{field}\":{value}}}")
+                .expect("writing duplicate field to a String cannot fail");
             let err = norito::json::from_str::<LaneConfig>(&encoded)
                 .expect_err("duplicate lane metadata fields must fail closed");
             assert!(

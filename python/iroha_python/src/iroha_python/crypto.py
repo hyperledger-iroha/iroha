@@ -183,7 +183,7 @@ __all__ = [
     "sign_ed25519",
     "sign_sm2",
     "decode_transaction_receipt_json",
-    "inspect_sorafs_orderbook_submission_v1",
+    "inspect_sorafs_orderbook_submission_for_discriminant_v1",
     "verify_sorafs_orderbook_submission_receipt_v1",
     "verify_signed_transaction_versioned",
     "verify",
@@ -653,8 +653,8 @@ if not TYPE_CHECKING:
         """Signed transaction envelope produced by the Python SDK."""
     )
 
-_INSPECT_SORAFS_ORDERBOOK_SUBMISSION_V1 = getattr(
-    _crypto, "inspect_sorafs_orderbook_submission_v1", None
+_INSPECT_SORAFS_ORDERBOOK_SUBMISSION_FOR_DISCRIMINANT_V1 = getattr(
+    _crypto, "inspect_sorafs_orderbook_submission_for_discriminant_v1", None
 )
 _VERIFY_SORAFS_ORDERBOOK_SUBMISSION_RECEIPT_V1 = getattr(
     _crypto, "verify_sorafs_orderbook_submission_receipt_v1", None
@@ -673,7 +673,7 @@ def decode_transaction_receipt_json(payload: bytes) -> str:
     return _crypto.decode_transaction_receipt_json(payload)
 
 
-def inspect_sorafs_orderbook_submission_v1(
+def inspect_sorafs_orderbook_submission_for_discriminant_v1(
     route: str,
     expected_network_id: NetworkId,
     expected_chain_discriminant: int,
@@ -682,7 +682,7 @@ def inspect_sorafs_orderbook_submission_v1(
 ) -> Mapping[str, str]:
     """Authenticate and identify one exact route-bound orderbook transaction."""
 
-    inspect = _INSPECT_SORAFS_ORDERBOOK_SUBMISSION_V1
+    inspect = _INSPECT_SORAFS_ORDERBOOK_SUBMISSION_FOR_DISCRIMINANT_V1
     if not callable(inspect):
         raise RuntimeError("native crypto module lacks strict orderbook inspection")
     result = inspect(

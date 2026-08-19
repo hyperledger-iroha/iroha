@@ -95,7 +95,7 @@ pub struct LaneRelayEnvelope {
     #[norito(required)]
     pub fastpq_proof: Option<LaneFastpqProofMaterial>,
 }
-/// Canonical post-execution effect authenticated by the global CommitQC.
+/// Canonical post-execution effect authenticated by the global `CommitQC`.
 ///
 /// This statement deliberately excludes the QC and `FastPQ` proof material.
 /// Validators can therefore derive and sign it before either proof is attached,
@@ -140,7 +140,7 @@ pub struct LaneFinalityStatement {
 pub struct LaneFinalityAuthorityV1 {
     /// Authority format version; exactly one in the first release.
     pub version: u8,
-    /// Global block height whose CommitQC authenticated the statement tree.
+    /// Global block height whose `CommitQC` authenticated the statement tree.
     pub global_block_height: u64,
     /// Hash of the exact immutable finality artifact retained by Kura.
     pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
@@ -1025,9 +1025,6 @@ pub fn compute_settlement_hash(
 /// Errors encountered while validating or deriving relay envelopes.
 #[derive(Debug, Error)]
 pub enum LaneRelayError {
-    /// Nexus lane lifecycle is disabled so relays are not accepted.
-    #[error("lane relay processing requires nexus.enabled=true")]
-    NexusDisabled,
     /// Lane identifier not present in the configured catalog.
     #[error("lane relay references unknown lane {0}")]
     UnknownLane(LaneId),
@@ -1151,7 +1148,7 @@ pub enum LaneRelayError {
     /// Referenced immutable finality artifact is unavailable or differs from Kura.
     #[error("referenced lane finality artifact is unavailable or mismatched")]
     FinalityArtifactMismatch,
-    /// The envelope-derived statement is not included in the CommitQC manifest.
+    /// The envelope-derived statement is not included in the `CommitQC` manifest.
     #[error("lane finality statement proof is invalid")]
     FinalityStatementProofInvalid,
     /// Norito encoding failed while hashing the settlement.
@@ -1210,8 +1207,7 @@ impl PartialEq for LaneRelayError {
     fn eq(&self, other: &Self) -> bool {
         use LaneRelayError::*;
         match (self, other) {
-            (NexusDisabled, NexusDisabled)
-            | (SettlementHashMismatch, SettlementHashMismatch)
+            (SettlementHashMismatch, SettlementHashMismatch)
             | (SettlementTotalsMismatch, SettlementTotalsMismatch)
             | (SettlementTxCountMismatch, SettlementTxCountMismatch)
             | (DuplicateSettlementSource, DuplicateSettlementSource)
@@ -1352,7 +1348,6 @@ impl LaneRelayError {
     #[must_use]
     pub fn as_label(&self) -> &'static str {
         match self {
-            LaneRelayError::NexusDisabled => "nexus_disabled",
             LaneRelayError::UnknownLane(_) => "unknown_lane",
             LaneRelayError::UnknownDataspace(_) => "unknown_dataspace",
             LaneRelayError::DataspaceMismatch { .. } => "dataspace_mismatch",

@@ -59,7 +59,7 @@ def test_external_software_signer_requires_explicit_release_opt_in() -> None:
     assert signer["required-features"] == [marker]
 
     caller_markers = {
-        "scripts/build_line.sh": "--features external-software-signer-bin",
+        "scripts/build_canonical_binaries.sh": "--features external-software-signer-bin",
         "ci/check_sorafs_cli_release.sh": "--features external-software-signer-bin",
         ".github/workflows/sorafs-cli-release.yml": (
             "--features external-software-signer-bin"

@@ -366,7 +366,7 @@ compile_rejection_cases! {
         &[], &["expects string", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
     "pointer_constructors_reject_implicit_conversions_and_method_aliases/json_bytes", Production,
         CaseSource::Exact(r#"seiyaku C { fn f(bytes value) { let _x = Json::parse(value); } }"#),
-        &[], &["expects string", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
+        &[], &["expects string", "E_JSON_LITERAL_REQUIRED", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
     "pointer_constructors_reject_implicit_conversions_and_method_aliases/name_bytes", Production,
         CaseSource::Exact(r#"seiyaku C { fn f(bytes value) { let _x = Name::parse(value); } }"#),
         &[], &["expects string", "method aliases were removed", "compiler-internal", "unknown function or builtin"];
@@ -1095,8 +1095,8 @@ fn compile_builtin_create_nfts_and_set_detail() {
     assert!(has(imm_create) && has(imm_detail));
 }
 #[test]
-fn pointer_constructors_accept_string_variables() {
-    // Use variables bound to string literals; constructors should work
+fn non_json_pointer_constructors_accept_string_variables() {
+    // Non-JSON constructors accept string variables; Json::parse remains literal-only.
     let src = include_str!("../fixtures/koto_v1/kotodama/032.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");

@@ -878,10 +878,9 @@ fn read_response(response: Response) -> Result<ResponseBytes, String> {
     let status = response.status();
     let content_type = {
         let mut values = response.headers().get_all(CONTENT_TYPE).iter();
-        match values.next() {
-            None => None,
-            Some(value) => Some(value.as_bytes() == b"application/json" && values.next().is_none()),
-        }
+        values
+            .next()
+            .map(|value| value.as_bytes() == b"application/json" && values.next().is_none())
     };
     let mut encodings = response.headers().get_all(CONTENT_ENCODING).iter();
     let identity_only = match encodings.next() {

@@ -107,6 +107,11 @@ pub(crate) fn reviewed_lifecycle_work_registry_source_for_test() -> &'static str
                     include_str!("v2_lifecycle_work_registry_validate_execution.rs"),
                     1,
                 )
+                .replacen(
+                    "include!(\"v2_lifecycle_work_registry_decision_apply.rs\");\n",
+                    include_str!("v2_lifecycle_work_registry_decision_apply.rs"),
+                    1,
+                )
         })
         .as_str()
 }
@@ -117,11 +122,17 @@ pub(crate) fn reviewed_v2_adapter_source_for_test() -> &'static str {
     static SOURCE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     SOURCE
         .get_or_init(|| {
-            include_str!("v2.rs").replacen(
-                "include!(\"v2_authenticated_recovered_adapter_startup_impl.rs\");\n",
-                include_str!("v2_authenticated_recovered_adapter_startup_impl.rs"),
-                1,
-            )
+            include_str!("v2.rs")
+                .replacen(
+                    "include!(\"v2_authenticated_recovered_adapter_startup_impl.rs\");\n",
+                    include_str!("v2_authenticated_recovered_adapter_startup_impl.rs"),
+                    1,
+                )
+                .replacen(
+                    "include!(\"v2_ready_durable_validate_adapter_publication.rs\");\n",
+                    include_str!("v2_ready_durable_validate_adapter_publication.rs"),
+                    1,
+                )
         })
         .as_str()
 }
@@ -141,6 +152,11 @@ pub(crate) fn reviewed_v2_runtime_source_for_test() -> &'static str {
                 .replacen(
                     "include!(\"v2_runtime_effect_ownership_rebind_impl.rs\");\n",
                     include_str!("v2_runtime_effect_ownership_rebind_impl.rs"),
+                    1,
+                )
+                .replacen(
+                    "include!(\"v2_runtime_body_lifecycle_adapter_bridge.rs\");\n",
+                    include_str!("v2_runtime_body_lifecycle_adapter_bridge.rs"),
                     1,
                 )
         })

@@ -1,5 +1,5 @@
-use std::{fs, path::PathBuf};
 use super::*;
+use std::{fs, path::PathBuf};
 #[test]
 fn applying_settings_persists_config_and_rebuilds_supervisor() {
     if !super::socket_bind_available() {
@@ -36,7 +36,6 @@ fn applying_settings_persists_config_and_rebuilds_supervisor() {
     app.settings_p2p_port_input = "16000".to_owned();
     app.settings_chain_id_input = "custom-chain".to_owned();
     app.settings_profile_input = "{ peer_count = 7, consensus_mode = \"npos\" }".to_owned();
-    app.settings_nexus_enabled = true;
     app.settings_nexus_lane_count_input = "2".to_owned();
     app.settings_nexus_lane_catalog_input =
         "[[lane_catalog]]\nindex = 0\nalias = \"core\"\ndataspace = \"universal\"\nmetadata = {}"
@@ -77,10 +76,7 @@ fn applying_settings_persists_config_and_rebuilds_supervisor() {
     assert_eq!(profile.topology.peer_count, 7);
     assert_eq!(profile.consensus_mode, SumeragiConsensusMode::Npos);
     let nexus = bundle.config.nexus.as_ref().expect("nexus config");
-    assert_eq!(
-        nexus.get("enabled").and_then(TomlValue::as_bool),
-        Some(true)
-    );
+    assert!(!nexus.contains_key("enabled"));
     assert_eq!(
         nexus.get("lane_count").and_then(TomlValue::as_integer),
         Some(2)
@@ -129,10 +125,7 @@ fn applying_settings_persists_config_and_rebuilds_supervisor() {
         SumeragiConsensusMode::Npos
     );
     let round_trip_nexus = round_trip.config.nexus.expect("nexus config");
-    assert_eq!(
-        round_trip_nexus.get("enabled").and_then(TomlValue::as_bool),
-        Some(true)
-    );
+    assert!(!round_trip_nexus.contains_key("enabled"));
     assert!(round_trip.config.sumeragi.is_none());
     assert!(round_trip.config.torii.is_none());
     let _ = fs::remove_file(&bundle.path);

@@ -227,9 +227,9 @@ const GOVERNANCE_RUNTIME_DAG_TOTAL_BYTES_HARD_CAP_V1: u64 = 1024 * 1024 * 1024;
 const GOVERNANCE_RUNTIME_DAG_MAX_FUTURE_SKEW_SECS_V1: u64 = 60;
 // Nested qualification histories need 20x variable headroom; small composite
 // records need a 2 KiB floor for their 1,696 bytes of fixed decode overhead.
-const GOVERNANCE_RUNTIME_DAG_DECODE_MIN_ALLOCATED_BYTES_V1: usize = 2 * 1024;
+const DAG_DECODE_MIN_BYTES_V1: usize = 2 * 1024;
 const GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1: usize = 20;
-const GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1: usize = 512 * 1024 * 1024;
+const DAG_DECODE_MAX_BYTES_V1: usize = 512 * 1024 * 1024;
 const GOVERNANCE_RUNTIME_DAG_DECODE_MAX_TOTAL_ELEMENTS_V1: usize = 4_000_000;
 pub(crate) const GOVERNANCE_RUNTIME_DAG_PRODUCER_CHECKPOINT_VERSION_V1: u8 = 1;
 const GOVERNANCE_RUNTIME_DAG_PRODUCER_INTENT_VERSION_V1: u8 = 1;
@@ -386,6 +386,7 @@ impl GovernanceDagRequestReplayPostureV1 {
     }
 }
 /// Stable validation failure for a live Governance DAG ingress qualification.
+#[expect(clippy::enum_variant_names, reason = "stable first-release error API")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GovernanceDagRequestIngressQualificationErrorV1 {
     /// The canonical endpoint URL or endpoint digest is invalid.
@@ -9410,8 +9411,7 @@ where
 fn runtime_dag_decode_allocation_limit(input_bytes: usize) -> usize {
     input_bytes
         .saturating_mul(GOVERNANCE_RUNTIME_DAG_DECODE_ALLOCATION_MULTIPLIER_V1)
-        .max(GOVERNANCE_RUNTIME_DAG_DECODE_MIN_ALLOCATED_BYTES_V1)
-        .min(GOVERNANCE_RUNTIME_DAG_DECODE_MAX_ALLOCATED_BYTES_V1)
+        .clamp(DAG_DECODE_MIN_BYTES_V1, DAG_DECODE_MAX_BYTES_V1)
 }
 fn add_runtime_dag_audit_bytes(total: &mut u64, len: usize) -> Result<(), GovernancePublishError> {
     let len = u64::try_from(len).map_err(|_| {

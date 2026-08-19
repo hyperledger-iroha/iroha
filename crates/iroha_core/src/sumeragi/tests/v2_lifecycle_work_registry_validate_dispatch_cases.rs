@@ -96,8 +96,9 @@
         .expect("bind direct signed registry fixture")
         .pop()
         .expect("one direct signed registry fixture owner")
-        .pending_adapter_effect_binding(effect)
-        .expect("mint direct signed pending binding")
+        .current_effect_producer(effect)
+        .expect("seal direct signed producer")
+        .mint_pending_binding()
     }
 
     fn direct_signed_vote(marker: u8, subject_marker: u8) -> wire::Vote {
@@ -213,8 +214,9 @@
         .pop()
         .expect("one registry fixture owner");
         let pending = ownership
-            .pending_adapter_effect_binding(&effect)
-            .expect("mint pending registry fixture");
+            .current_effect_producer(&effect)
+            .expect("seal registry fixture producer")
+            .mint_pending_binding();
         ConcreteLifecycleWork::from_inert_fixture_for_test(effect, pending)
             .expect("construct exact concrete work")
     }
@@ -503,8 +505,9 @@
             .rebind_as_inherited_adapter_effect(&effect)
             .expect("carry certified Fetch authority into Store");
         let pending = ownership
-            .pending_adapter_effect_binding(&effect)
-            .expect("mint sealed durable Store binding");
+            .current_effect_producer(&effect)
+            .expect("seal durable Store producer")
+            .mint_pending_binding();
         let validate_effect = AdapterEffect::ValidateBody {
             tag,
             round,
@@ -666,8 +669,9 @@
             .rebind_as_inherited_adapter_effect(&store_effect)
             .expect("carry certified Fetch authority into Validate parent Store");
         let store_pending = ownership
-            .pending_adapter_effect_binding(&store_effect)
-            .expect("mint sealed durable Validate parent binding");
+            .current_effect_producer(&store_effect)
+            .expect("seal durable Validate parent producer")
+            .mint_pending_binding();
         let effect = AdapterEffect::ValidateBody {
             tag,
             round,
@@ -916,8 +920,9 @@
             .adopt_incumbent_body_stage_for_retry_or_authority(&incoming_store_owner, &store_effect)
             .expect("retain physical Store owner while sealing commitment authority");
         let upgraded_store = adopted_store_owner
-            .pending_adapter_effect_binding(&store_effect)
-            .expect("mint commitment-authorized Store binding");
+            .current_effect_producer(&store_effect)
+            .expect("seal commitment-authorized Store producer")
+            .mint_pending_binding();
         let upgraded_validate = upgraded_store
             .project_store_validate_successor(&store_effect, &fixture.effect)
             .expect("carry commitment authority into Validate");

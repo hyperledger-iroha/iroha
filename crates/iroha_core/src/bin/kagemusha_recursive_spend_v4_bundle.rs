@@ -1,7 +1,8 @@
 //! Generate and finalize calibrated ABI-21 Kagemusha release bundles.
 //!
-//! Candidate generation runs the independently reviewed recursion source closure exactly once and
-//! publishes eight immutable `KRV4KEY` artifacts plus one canonical pre-evidence candidate record.
+//! Candidate generation runs two byte-identical builds of the independently reviewed recursion
+//! source closure and publishes eight immutable `KRV4KEY` artifacts plus one canonical
+//! pre-evidence candidate record.
 //! Finalization never regenerates proof material: it binds the unchanged candidate to supplied
 //! evidence and authenticates the resulting release before publishing a distinct final directory
 //! atomically.
@@ -170,6 +171,9 @@ const GENERATE_OPTIONS: &[&str] = &[
     "parameter-generation",
     "source-commit",
     "source-tree-sha256",
+    // Injected only after the launcher pins the executable and canonical report.
+    "generator-binary-sha256",
+    "sealed-candidate-build-report-sha256",
     "activation-height",
     "withdrawal-height",
     OPTIONAL_MEMORY_LIMIT_OPTION,
@@ -233,7 +237,32 @@ const AUTHENTICATED_SOURCE_SEAL_PROJECTION_SCHEMA: &str =
 const SOURCE_SEAL_BUILD_SCRIPT_OBSERVED_SCHEMA: &str =
     "iroha.kagemusha.source_seal_build_script_observed.v1";
 const SOURCE_SEAL_OUTER_POLICY_SCHEMA: &str = "iroha.kagemusha.cprime_source_seal_outer_policy.v1";
+const SOURCE_SEAL_CAPTURE_RECEIPT_SCHEMA: &str =
+    "iroha.kagemusha.cargo_unit_graph_capture_receipt.v1";
+const SOURCE_SEAL_BUILD_INPUT_CLOSURE_SCHEMA: &str = "iroha.kagemusha.build_input_closure.v1";
 const SOURCE_SEAL_UNIT_GRAPH_NORMALIZATION: &str = "cargo-unit-graph-v1-package-root-relative-src-path-source-cache-placeholders-sorted-compact-lf-v1";
+const SOURCE_SEAL_REQUIRED_HOST_TOOLS: &[&str] = &[
+    "/bin/bash",
+    "/bin/sh",
+    "/bin/ps",
+    "/usr/bin/ar",
+    "/usr/bin/as",
+    "/usr/bin/cc",
+    "/usr/bin/clang",
+    "/usr/bin/clang++",
+    "/usr/bin/dsymutil",
+    "/usr/bin/env",
+    "/usr/bin/install_name_tool",
+    "/usr/bin/ld",
+    "/usr/bin/libtool",
+    "/usr/bin/lipo",
+    "/usr/bin/nm",
+    "/usr/bin/otool",
+    "/usr/bin/ranlib",
+    "/usr/bin/sandbox-exec",
+    "/usr/bin/strip",
+    "/usr/bin/xcrun",
+];
 const SOURCE_SEAL_RESOLVED_FEATURES: &[&str] = &[
     "bls",
     "circuit-params",
@@ -260,6 +289,9 @@ const SOURCE_SEAL_SEMANTIC_ARGV: &[&str] = &[
     "build",
     "--release",
     "--locked",
+    "--offline",
+    "--target",
+    "aarch64-apple-darwin",
     "--target-dir",
     "<EXTERNAL_TARGET_DIR>",
     "-p",
@@ -491,6 +523,8 @@ struct BundleMetadata {
     authenticated_source_seal_projection_sha256: [u8; 32],
     reviewed_cargo_binary_sha256: [u8; 32],
     reviewed_rustc_binary_sha256: [u8; 32],
+    generator_binary_sha256: [u8; 32],
+    sealed_candidate_build_report_sha256: [u8; 32],
     generation_memory_limit_bytes: u64,
     generation_memory_enforcement_profile: String,
     activation_height: u64,
@@ -638,6 +672,8 @@ struct CandidateValidationReportV2 {
     authenticated_source_seal_projection_sha256: String,
     reviewed_cargo_binary_sha256: String,
     reviewed_rustc_binary_sha256: String,
+    generator_binary_sha256: String,
+    sealed_candidate_build_report_sha256: String,
     generation_memory_limit_bytes: u64,
     generation_memory_enforcement_profile: String,
     generation: String,
@@ -676,15 +712,34 @@ struct SourceSealBuildScriptObservedV1 {
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct SourceSealUnitGraphV1 {
+    capture_receipt: SourceSealUnitGraphCaptureReceiptV1,
     custom_build_packages: u64,
     custom_build_units: u64,
     iroha_core_units: u64,
     normalization: String,
     packages: u64,
+    raw_sha256: String,
+    raw_size_bytes: u64,
     sha256: String,
     size_bytes: u64,
     units: u64,
 }
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
+#[norito(deny_unknown_fields)]
+struct SourceSealUnitGraphCaptureReceiptV1 {
+    build_inputs_sha256: String,
+    cargo_binary_sha256: String,
+    exit_status: u64,
+    raw_stdout_sha256: String,
+    raw_stdout_size_bytes: u64,
+    rustc_binary_sha256: String,
+    schema: String,
+    source_commit: String,
+    source_tree_sha256: String,
+    stderr_sha256: String,
+    stderr_size_bytes: u64,
+}
+include!("kagemusha_recursive_spend_v4_bundle/source_seal_build_inputs.rs");
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct SourceSealCargoPolicyV1 {
@@ -699,9 +754,12 @@ struct SourceSealCargoPolicyV1 {
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
 struct SourceSealOuterPolicyV1 {
+    build_inputs_hex: String,
+    build_inputs_sha256: String,
     cargo: SourceSealCargoPolicyV1,
     execution_policy_sha256: String,
     schema: String,
+    toolchain: SourceSealToolchainV1,
 }
 #[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize)]
 #[norito(deny_unknown_fields)]
@@ -1177,6 +1235,9 @@ fn prepare_bundle_metadata(
         &source_identity.reviewed_rustc_binary_sha256,
         &mut reviewed_rustc_binary_sha256,
     )?;
+    let generator_binary_sha256 = parse_digest(options, "generator-binary-sha256")?;
+    let sealed_candidate_build_report_sha256 =
+        parse_digest(options, "sealed-candidate-build-report-sha256")?;
     let activation_height = parse_u64(options, "activation-height")?;
     let withdrawal_height = parse_u64(options, "withdrawal-height")?;
     if activation_height == 0 || withdrawal_height <= activation_height {
@@ -1309,6 +1370,8 @@ fn prepare_bundle_metadata(
             authenticated_source_seal_projection_sha256,
             reviewed_cargo_binary_sha256,
             reviewed_rustc_binary_sha256,
+            generator_binary_sha256,
+            sealed_candidate_build_report_sha256,
             generation_memory_limit_bytes,
             generation_memory_enforcement_profile,
             activation_height,
@@ -1666,6 +1729,35 @@ fn decode_embedded_source_seal(
     let observed = &projection.build_script_observed;
     let cargo = &projection.outer_policy.cargo;
     let unit_graph = &cargo.unit_graph;
+    let capture_receipt = &unit_graph.capture_receipt;
+    let toolchain = &projection.outer_policy.toolchain;
+    let build_inputs_hex = &projection.outer_policy.build_inputs_hex;
+    if build_inputs_hex.len() < 2
+        || build_inputs_hex.len() > 16_384
+        || !build_inputs_hex.len().is_multiple_of(2)
+        || !is_lower_hex(build_inputs_hex, build_inputs_hex.len())
+        || !is_nonzero_lower_hex(&projection.outer_policy.build_inputs_sha256, 64)
+    {
+        return Err("embedded build-input closure is malformed".to_owned());
+    }
+    let build_inputs_bytes = hex::decode(build_inputs_hex)
+        .map_err(|error| format!("embedded build-input closure hex is invalid: {error}"))?;
+    if build_inputs_bytes.len() > 8_192
+        || hex::encode(Sha256::digest(&build_inputs_bytes))
+            != projection.outer_policy.build_inputs_sha256
+    {
+        return Err("embedded build-input closure digest differs".to_owned());
+    }
+    let build_inputs: SourceSealBuildInputClosureV1 = norito::json::from_slice(&build_inputs_bytes)
+        .map_err(|error| format!("embedded build-input closure is not strict V1 JSON: {error}"))?;
+    let mut canonical_build_inputs = norito::json::to_json(&build_inputs)
+        .map_err(|error| format!("could not canonicalize build-input closure: {error}"))?;
+    canonical_build_inputs.push('\n');
+    if canonical_build_inputs.as_bytes() != build_inputs_bytes
+        || !exact_source_seal_build_inputs(&build_inputs)
+    {
+        return Err("embedded build-input closure is not canonical exact V1 JSON".to_owned());
+    }
     let authority = &projection.source_authority;
     let signature = &authority.signature;
     if projection.schema != AUTHENTICATED_SOURCE_SEAL_PROJECTION_SCHEMA
@@ -1702,6 +1794,23 @@ fn decode_embedded_source_seal(
             .eq(SOURCE_SEAL_SEMANTIC_ARGV.iter().copied())
         || cargo.target != "aarch64-apple-darwin"
         || unit_graph.normalization != SOURCE_SEAL_UNIT_GRAPH_NORMALIZATION
+        || capture_receipt.schema != SOURCE_SEAL_CAPTURE_RECEIPT_SCHEMA
+        || capture_receipt.exit_status != 0
+        || capture_receipt.build_inputs_sha256 != projection.outer_policy.build_inputs_sha256
+        || capture_receipt.cargo_binary_sha256 != reviewed_cargo_binary_sha256
+        || capture_receipt.rustc_binary_sha256 != reviewed_rustc_binary_sha256
+        || capture_receipt.source_commit != commit
+        || capture_receipt.source_tree_sha256 != tree
+        || capture_receipt.raw_stdout_sha256 != unit_graph.raw_sha256
+        || capture_receipt.raw_stdout_size_bytes != unit_graph.raw_size_bytes
+        || !is_nonzero_lower_hex(&capture_receipt.stderr_sha256, 64)
+        || capture_receipt.stderr_size_bytes > 16 * 1024 * 1024
+        || (capture_receipt.stderr_size_bytes == 0)
+            != (capture_receipt.stderr_sha256
+                == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        || !is_nonzero_lower_hex(&unit_graph.raw_sha256, 64)
+        || unit_graph.raw_size_bytes == 0
+        || unit_graph.raw_size_bytes > 16 * 1024 * 1024
         || !is_nonzero_lower_hex(&unit_graph.sha256, 64)
         || unit_graph.size_bytes == 0
         || unit_graph.size_bytes > 16 * 1024 * 1024
@@ -1711,6 +1820,12 @@ fn decode_embedded_source_seal(
         || unit_graph.iroha_core_units > unit_graph.units
         || unit_graph.custom_build_units > unit_graph.units
         || unit_graph.custom_build_packages > unit_graph.packages
+        || toolchain.cargo.binary_sha256 != reviewed_cargo_binary_sha256
+        || toolchain.cargo.binary_size_bytes == 0
+        || toolchain.cargo.binary_size_bytes > 512 * 1024 * 1024
+        || toolchain.rustc.binary_sha256 != reviewed_rustc_binary_sha256
+        || toolchain.rustc.binary_size_bytes == 0
+        || toolchain.rustc.binary_size_bytes > 512 * 1024 * 1024
         || authority.commit != commit
         || !is_nonzero_lower_hex(&authority.commit_object_sha256, 64)
         || authority.commit_object_size == 0
@@ -2730,6 +2845,10 @@ fn validate_candidate(
             ),
             reviewed_cargo_binary_sha256: hex::encode(manifest.reviewed_cargo_binary_sha256),
             reviewed_rustc_binary_sha256: hex::encode(manifest.reviewed_rustc_binary_sha256),
+            generator_binary_sha256: hex::encode(manifest.generator_binary_sha256),
+            sealed_candidate_build_report_sha256: hex::encode(
+                manifest.sealed_candidate_build_report_sha256,
+            ),
             generation_memory_limit_bytes: manifest.generation_memory_limit_bytes,
             generation_memory_enforcement_profile: manifest
                 .generation_memory_enforcement_profile
@@ -3214,6 +3333,8 @@ fn finalize_release(
                 .authenticated_source_seal_projection_sha256,
             reviewed_cargo_binary_sha256: manifest.reviewed_cargo_binary_sha256,
             reviewed_rustc_binary_sha256: manifest.reviewed_rustc_binary_sha256,
+            generator_binary_sha256: manifest.generator_binary_sha256,
+            sealed_candidate_build_report_sha256: manifest.sealed_candidate_build_report_sha256,
             candidate_sha256: candidate_record
                 .sha256()
                 .map_err(|error| format!("failed to identify immutable V4 candidate: {error}"))?,
@@ -3409,6 +3530,8 @@ fn write_candidate(
             .authenticated_source_seal_projection_sha256,
         reviewed_cargo_binary_sha256: metadata.reviewed_cargo_binary_sha256,
         reviewed_rustc_binary_sha256: metadata.reviewed_rustc_binary_sha256,
+        generator_binary_sha256: metadata.generator_binary_sha256,
+        sealed_candidate_build_report_sha256: metadata.sealed_candidate_build_report_sha256,
         generation_memory_limit_bytes: metadata.generation_memory_limit_bytes,
         generation_memory_enforcement_profile: metadata.generation_memory_enforcement_profile,
         network_id: metadata.network_id,

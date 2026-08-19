@@ -1125,6 +1125,9 @@ const FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_ATTACHMENT_CONTEXT:
     open_verify_label: "FHE full-bootstrap execution proof OpenVerifyEnvelope",
     max_open_verify_bytes: SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_MAX_OPEN_VERIFY_BYTES,
 };
+const FHE_INPUT_ADMISSION_DEDICATED_WITNESS_AIR_REQUIRED: &str = "FHE input admission requires a dedicated BFV ciphertext witness AIR; binding-only STARK AIR does not prove ciphertext residual or noise bounds";
+const FHE_PUBLIC_KEY_DEDICATED_WITNESS_AIR_REQUIRED: &str = "FHE public-key proof requires a dedicated BFV key-generation witness AIR; binding-only STARK AIR does not prove secret-key/public-key consistency or residual/noise bounds";
+const FHE_BOOTSTRAP_KEY_DEDICATED_WITNESS_AIR_REQUIRED: &str = "FHE bootstrap-key proof requires a dedicated BFV zero-refresh witness AIR; binding-only STARK AIR does not prove zero-encryption refresh ciphertexts or round consistency";
 #[cfg(all(test, feature = "zk-stark"))]
 const FHE_FULL_BOOTSTRAP_DEDICATED_PROVER_UNAVAILABLE: &str =
     "dedicated BFV full-bootstrap arithmetic STARK prover is not available";
@@ -1633,26 +1636,13 @@ fn verify_soracloud_fhe_input_admission_backend(
         &envelope,
         statement_hash,
     )?;
-    state_transaction
-        .register_confidential_proof(attachment.proof.bytes.len())
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "FHE input admission proof quota accounting failed: {err}"
-            ))
-        })?;
-    let ok = crate::zk::verify_backend_with_timing_checked(
-        attachment.backend.as_str(),
-        &attachment.proof,
-        Some(&vk_box),
-        &state_transaction.zk,
-    )
-    .ok;
-    if !ok {
-        return Err(invalid_parameter(
-            "FHE input admission proof verification failed",
-        ));
-    }
-    Ok(())
+    // TODO: Implement a dedicated BFV ciphertext witness AIR that proves the declared
+    // exact-residual-multiple or bounded-noise relation from private encryption witness
+    // material. Even a cryptographically valid binding AIR would authenticate only public
+    // statement metadata.
+    Err(invalid_parameter(
+        FHE_INPUT_ADMISSION_DEDICATED_WITNESS_AIR_REQUIRED,
+    ))
 }
 fn validate_soracloud_fhe_bootstrap_key_proof_native_envelope_bytes(
     envelope_bytes: &[u8],
@@ -2943,26 +2933,13 @@ fn verify_soracloud_fhe_public_key_proof_backend(
         &envelope,
         statement_hash,
     )?;
-    state_transaction
-        .register_confidential_proof(attachment.proof.bytes.len())
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "FHE public-key proof quota accounting failed: {err}"
-            ))
-        })?;
-    let ok = crate::zk::verify_backend_with_timing_checked(
-        attachment.backend.as_str(),
-        &attachment.proof,
-        Some(&vk_box),
-        &state_transaction.zk,
-    )
-    .ok;
-    if !ok {
-        return Err(invalid_parameter(
-            "FHE public-key proof verification failed",
-        ));
-    }
-    Ok(())
+    // TODO: Implement a dedicated BFV key-generation witness AIR that proves the
+    // secret-key/public-key equation and the declared exact-residual or bounded-noise
+    // relation. Even a cryptographically valid binding AIR would authenticate only public
+    // metadata.
+    Err(invalid_parameter(
+        FHE_PUBLIC_KEY_DEDICATED_WITNESS_AIR_REQUIRED,
+    ))
 }
 fn verify_soracloud_fhe_bootstrap_key_proof_backend(
     attachment: &ProofAttachment,
@@ -3156,26 +3133,13 @@ fn verify_soracloud_fhe_bootstrap_key_proof_backend(
         &envelope,
         statement_hash,
     )?;
-    state_transaction
-        .register_confidential_proof(attachment.proof.bytes.len())
-        .map_err(|err| {
-            invalid_parameter(format!(
-                "FHE bootstrap-key proof quota accounting failed: {err}"
-            ))
-        })?;
-    let ok = crate::zk::verify_backend_with_timing_checked(
-        attachment.backend.as_str(),
-        &attachment.proof,
-        Some(&vk_box),
-        &state_transaction.zk,
-    )
-    .ok;
-    if !ok {
-        return Err(invalid_parameter(
-            "FHE bootstrap-key proof verification failed",
-        ));
-    }
-    Ok(())
+    // TODO: Implement a dedicated BFV zero-refresh witness AIR that proves every
+    // governed refresh ciphertext encrypts zero with the transcript-bound randomness
+    // and noise for its declared round. Even a cryptographically valid binding AIR would
+    // authenticate only public metadata, not that relation.
+    Err(invalid_parameter(
+        FHE_BOOTSTRAP_KEY_DEDICATED_WITNESS_AIR_REQUIRED,
+    ))
 }
 fn governed_full_bootstrap_execution_verifier_key(
     params: &BfvParameters,
@@ -3613,7 +3577,7 @@ fn validate_governed_full_bootstrap_execution_stark_verifier_key_payload(
                 n_log2: native_payload.n_log2,
                 blowup_log2: native_payload.blowup_log2,
                 fold_arity: native_payload.fold_arity,
-                queries: native_payload.queries,
+                queries: crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES,
                 merkle_arity: native_payload.merkle_arity,
                 hash_fn: native_payload.hash_fn,
             };
@@ -16706,11 +16670,11 @@ mod tests {
             rotation_key_bounded_noise_from_seed, rotation_key_from_seed,
         },
     };
-    use iroha_data_model::confidential::ConfidentialStatus;
     use iroha_data_model::{
         Encode,
         account::Account,
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
+        confidential::ConfidentialStatus,
         domain::Domain,
         isi::{Grant, Mint},
         metadata::Metadata,
@@ -16763,1689 +16727,7 @@ mod tests {
         sync::Arc,
         time::Duration,
     };
-    fn checked_signature(
-        private_key: &iroha_crypto::PrivateKey,
-        payload: &[u8],
-    ) -> iroha_crypto::Signature {
-        iroha_crypto::Signature::try_new(private_key, payload)
-            .expect("test fixture signing should succeed")
-    }
-    const SMALL_ORDER_ED25519_R: [u8; 32] = [
-        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0,
-    ];
-    const NONCANONICAL_ED25519_R: [u8; 32] = [
-        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0x7f,
-    ];
-    fn signature_with_malformed_ed25519_r(
-        signature: &iroha_crypto::Signature,
-        replacement_r: &[u8; 32],
-    ) -> iroha_crypto::Signature {
-        let mut payload = signature.payload().to_vec();
-        payload[..replacement_r.len()].copy_from_slice(replacement_r);
-        iroha_crypto::Signature::from_bytes(&payload)
-    }
-    #[test]
-    fn soracloud_provenance_signature_admission_rejects_malformed_ed25519_signature_r() {
-        let key_pair = KeyPair::try_from_seed(vec![0x61; 32], iroha_crypto::Algorithm::Ed25519)
-            .expect("derive checked Soracloud Ed25519 provenance keypair");
-        let payload = b"soracloud-provenance-ed25519-admission";
-        let signature = checked_signature(key_pair.private_key(), payload);
-        for (label, replacement_r) in [
-            ("small-order", SMALL_ORDER_ED25519_R),
-            ("noncanonical", NONCANONICAL_ED25519_R),
-        ] {
-            let malformed_signature =
-                signature_with_malformed_ed25519_r(&signature, &replacement_r);
-            assert!(
-                verify_signature_for_signer(&malformed_signature, key_pair.public_key(), payload)
-                    .is_err(),
-                "{label} Soracloud provenance Ed25519 admission must reject malformed R before backend verification"
-            );
-        }
-    }
-    #[test]
-    fn soracloud_provenance_signature_admission_rejects_malformed_mldsa_signature_lengths() {
-        let key_pair = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::MlDsa)
-            .expect("generate checked Soracloud ML-DSA provenance keypair");
-        let payload = b"soracloud-provenance-mldsa-admission";
-        let signature = checked_signature(key_pair.private_key(), payload);
-        verify_signature_for_signer(&signature, key_pair.public_key(), payload)
-            .expect("valid Soracloud ML-DSA provenance signature verifies");
-        let valid_signature = signature.payload().to_vec();
-        for (label, replacement_signature) in [
-            (
-                "short",
-                valid_signature[..valid_signature.len() - 1].to_vec(),
-            ),
-            ("overlong", {
-                let mut payload = valid_signature.clone();
-                payload.push(0x64);
-                payload
-            }),
-        ] {
-            let malformed_signature = iroha_crypto::Signature::from_bytes(&replacement_signature);
-            assert_eq!(
-                verify_signature_for_signer(&malformed_signature, key_pair.public_key(), payload)
-                    .expect_err("malformed Soracloud ML-DSA signature length must fail admission"),
-                iroha_crypto::Error::BadSignature,
-                "{label} Soracloud ML-DSA signature length was not rejected"
-            );
-        }
-    }
-    #[track_caller]
-    fn checked_keypair() -> KeyPair {
-        let caller = std::panic::Location::caller();
-        let mut seed = Sha256::new();
-        seed.update(b"iroha-core-soracloud-test-keypair-v1");
-        seed.update(caller.file().as_bytes());
-        seed.update(caller.line().to_le_bytes());
-        seed.update(caller.column().to_le_bytes());
-        KeyPair::try_from_seed(seed.finalize().to_vec(), iroha_crypto::Algorithm::default())
-            .expect("derive Soracloud fixture key from call site")
-    }
-    #[test]
-    fn checked_keypair_helper_preserves_default_algorithm() {
-        assert_eq!(
-            checked_keypair().algorithm(),
-            iroha_crypto::Algorithm::default()
-        );
-    }
-    #[test]
-    fn checked_keypair_helper_is_deterministic_per_call_site() {
-        let fixture = || checked_keypair();
-        let first = fixture();
-        let second = fixture();
-        assert_eq!(first.public_key(), second.public_key());
-        let other_call_site = checked_keypair();
-        assert_ne!(first.public_key(), other_call_site.public_key());
-    }
-    #[test]
-    fn soracloud_provenance_rejects_multisig_authority_without_panicking() {
-        let member_key = checked_keypair();
-        let member =
-            iroha_data_model::account::MultisigMember::new(member_key.public_key().clone(), 1)
-                .expect("multisig member");
-        let policy = iroha_data_model::account::MultisigPolicy::new(1, vec![member])
-            .expect("multisig policy");
-        let authority = AccountId::new_multisig(policy);
-        let error = single_signatory_authority(&authority)
-            .expect_err("multisig authority must fail provenance admission");
-        assert!(
-            matches!(
-                &error,
-                InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract(message)
-                ) if message.contains("single-signatory transaction authority")
-            ),
-            "unexpected multisig provenance rejection: {error:?}"
-        );
-    }
-    fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
-        state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
-    }
-    fn seed_domain_name_lease_tx(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        owner: &AccountId,
-        domain_id: &DomainId,
-    ) {
-        let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
-        let address =
-            iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
-        let record = iroha_data_model::sns::NameRecordV1::new(
-            selector.clone(),
-            owner.clone(),
-            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
-            0,
-            0,
-            u64::MAX,
-            u64::MAX,
-            u64::MAX,
-            Metadata::default(),
-        );
-        state_transaction.world.smart_contract_state.insert(
-            crate::sns::record_storage_key(&selector),
-            norito::codec::Encode::encode(&record),
-        );
-    }
-    fn state_with_soracloud_permission(kura: &Arc<Kura>) -> Result<State, eyre::Report> {
-        state_with_soracloud_permission_on_chain(
-            kura,
-            iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
-        )
-    }
-    fn state_with_soracloud_permission_on_chain(
-        kura: &Arc<Kura>,
-        chain_id: iroha_data_model::ChainId,
-    ) -> Result<State, eyre::Report> {
-        let world = World::with([], [], []);
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura.clone(), query_handle, chain_id);
-        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-            .as_ref()
-            .header();
-        let mut state_block = state.block(block_header);
-        let mut state_transaction = state_block.transaction();
-        let wonderland: iroha_data_model::domain::DomainId =
-            DomainId::try_new("wonderland", "universal")?;
-        seed_domain_name_lease_tx(
-            &mut state_transaction,
-            &SAMPLE_GENESIS_ACCOUNT_ID,
-            &wonderland,
-        );
-        Register::domain(Domain::new(wonderland.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        Register::account(Account::new(ALICE_ID.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        Grant::account_permission(
-            Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new(())),
-            ALICE_ID.clone(),
-        )
-        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        state_transaction.world.public_lane_validators.insert(
-            (LaneId::SINGLE, ALICE_ID.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: ALICE_ID.clone(),
-                peer_id: PeerId::from(ALICE_ID.expect_single_signatory().clone()),
-                stake_account: ALICE_ID.clone(),
-                total_stake: Quantity::from(1_000_u64),
-                self_stake: Quantity::from(1_000_u64),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
-        );
-        state_transaction.apply();
-        state_block.commit()?;
-        Ok(state)
-    }
-    #[test]
-    fn soracloud_permission_allows_granted_authority() -> Result<(), eyre::Report> {
-        let kura = Kura::blank_kura_for_testing();
-        let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-            .as_ref()
-            .header();
-        let mut state_block = state.block(block_header);
-        let state_transaction = state_block.transaction();
-        require_soracloud_permission(&ALICE_ID, &state_transaction)?;
-        Ok(())
-    }
-    #[test]
-    fn soracloud_permission_rejects_ungranted_taira_testnet_authority() -> Result<(), eyre::Report>
-    {
-        let kura = Kura::blank_kura_for_testing();
-        let state = state_with_soracloud_permission_on_chain(
-            &kura,
-            iroha_data_model::ChainId::from(TAIRA_TESTNET_CHAIN_ID),
-        )?;
-        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-            .as_ref()
-            .header();
-        let mut state_block = state.block(block_header);
-        let mut state_transaction = state_block.transaction();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        let err = require_soracloud_permission(&BOB_ID, &state_transaction)
-            .expect_err("Taira must enforce the same Soracloud permission as every other chain");
-        assert!(matches!(
-            err,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.as_ref() == "not permitted: CanManageSoracloud"
-        ));
-        Ok(())
-    }
-    #[test]
-    fn soracloud_permission_rejects_ungranted_authority() -> Result<(), eyre::Report> {
-        let kura = Kura::blank_kura_for_testing();
-        let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-            .as_ref()
-            .header();
-        let mut state_block = state.block(block_header);
-        let mut state_transaction = state_block.transaction();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        let err = require_soracloud_permission(&BOB_ID, &state_transaction)
-            .expect_err("authority without Soracloud permission must be rejected");
-        assert!(matches!(
-            err,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.as_ref() == "not permitted: CanManageSoracloud"
-        ));
-        Ok(())
-    }
-    #[test]
-    fn soracloud_permission_accepts_exact_assigned_role() -> Result<(), eyre::Report> {
-        let kura = Kura::blank_kura_for_testing();
-        let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-            .as_ref()
-            .header();
-        let mut state_block = state.block(block_header);
-        let mut state_transaction = state_block.transaction();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        let role_id: RoleId = "soracloud_operator".parse().expect("valid role id");
-        let role = Role::new(role_id.clone(), BOB_ID.clone())
-            .add_permission(Permission::new(
-                CAN_MANAGE_SORACLOUD_PERMISSION.into(),
-                Json::new(()),
-            ))
-            .build(&BOB_ID);
-        state_transaction.world.roles.insert(role_id.clone(), role);
-        state_transaction.world.account_roles.insert(
-            crate::role::RoleIdWithOwner::new(BOB_ID.clone(), role_id),
-            (),
-        );
-        require_soracloud_permission(&BOB_ID, &state_transaction)?;
-        Ok(())
-    }
-    #[test]
-    fn soracloud_permission_rejects_same_name_wrong_payload_direct_and_role()
-    -> Result<(), eyre::Report> {
-        let kura = Kura::blank_kura_for_testing();
-        let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-            .as_ref()
-            .header();
-        let mut state_block = state.block(block_header);
-        let mut state_transaction = state_block.transaction();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        state_transaction.world.add_account_permission(
-            &BOB_ID,
-            Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new("all")),
-        );
-        let role_id: RoleId = "malformed_soracloud_operator"
-            .parse()
-            .expect("valid role id");
-        let role = Role::new(role_id.clone(), BOB_ID.clone())
-            .add_permission(Permission::new(
-                CAN_MANAGE_SORACLOUD_PERMISSION.into(),
-                Json::new(true),
-            ))
-            .build(&BOB_ID);
-        state_transaction.world.roles.insert(role_id.clone(), role);
-        state_transaction.world.account_roles.insert(
-            crate::role::RoleIdWithOwner::new(BOB_ID.clone(), role_id),
-            (),
-        );
-        let error = require_soracloud_permission(&BOB_ID, &state_transaction)
-            .expect_err("same-name permissions with non-unit payloads must not authorize");
-        assert!(matches!(
-            error,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.as_ref() == "not permitted: CanManageSoracloud"
-        ));
-        Ok(())
-    }
-    #[test]
-    fn soracloud_active_validator_authority_rejects_mismatched_public_lane_validator_rows()
-    -> Result<(), eyre::Report> {
-        let kura = Kura::blank_kura_for_testing();
-        let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-            .as_ref()
-            .header();
-        let mut state_block = state.block(block_header);
-        let mut state_transaction = state_block.transaction();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        state_transaction.world.public_lane_validators.insert(
-            (LaneId::SINGLE, BOB_ID.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::new(8),
-                validator: BOB_ID.clone(),
-                peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
-                stake_account: BOB_ID.clone(),
-                total_stake: Quantity::from(9_000_u64),
-                self_stake: Quantity::from(9_000_u64),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
-        );
-        assert!(
-            require_active_public_lane_validator(&BOB_ID, &state_transaction).is_err(),
-            "a row whose storage-key lane disagrees with the embedded record lane must not grant Soracloud runtime authority"
-        );
-        state_transaction.world.public_lane_validators.insert(
-            (LaneId::SINGLE, BOB_ID.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: ALICE_ID.clone(),
-                peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
-                stake_account: BOB_ID.clone(),
-                total_stake: Quantity::from(8_000_u64),
-                self_stake: Quantity::from(8_000_u64),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
-        );
-        assert!(
-            require_active_public_lane_validator(&BOB_ID, &state_transaction).is_err(),
-            "a row whose storage-key validator disagrees with the embedded record validator must not grant Soracloud runtime authority"
-        );
-        Ok(())
-    }
-    fn insert_active_public_lane_validator(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        validator: AccountId,
-        total_stake: u64,
-    ) {
-        let bonded = Quantity::from(total_stake);
-        state_transaction.world.public_lane_validators.insert(
-            (LaneId::SINGLE, validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::SINGLE,
-                validator: validator.clone(),
-                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
-                stake_account: validator.clone(),
-                total_stake: bonded.clone(),
-                self_stake: bonded.clone(),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
-        );
-        state_transaction.world.public_lane_stake_shares.insert(
-            (LaneId::SINGLE, validator.clone(), validator.clone()),
-            PublicLaneStakeShare {
-                lane_id: LaneId::SINGLE,
-                validator: validator.clone(),
-                staker: validator,
-                bonded,
-                pending_unbonds: BTreeMap::new(),
-                metadata: Metadata::default(),
-            },
-        );
-    }
-    fn install_future_created_autoscale_lane(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        lane_id: LaneId,
-        created_height: u64,
-    ) {
-        let mut lane = LaneConfig {
-            id: lane_id,
-            alias: format!("elastic-lane-{}", lane_id.as_u32()),
-            dataspace_id: DataSpaceId::UNIVERSAL,
-            visibility: LaneVisibility::Public,
-            ..LaneConfig::default()
-        };
-        lane.metadata
-            .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
-        lane.metadata.insert(
-            AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
-            created_height.to_string(),
-        );
-        crate::state::attach_synthetic_autoscale_committee_for_test(&mut lane);
-        let lane_count = NonZeroU32::new(lane_id.as_u32().saturating_add(1))
-            .expect("future-created lane count must be nonzero");
-        state_transaction.nexus.enabled = true;
-        state_transaction.nexus.autoscale.enabled = true;
-        state_transaction.nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min");
-        state_transaction.nexus.autoscale.max_lanes = lane_count;
-        state_transaction.nexus.lane_catalog =
-            LaneCatalog::new(lane_count, vec![LaneConfig::default(), lane])
-                .expect("future-created autoscale lane catalog");
-        state_transaction.nexus.lane_config =
-            iroha_config::parameters::actual::LaneConfig::from_catalog(
-                &state_transaction.nexus.lane_catalog,
-            );
-    }
-    fn insert_active_public_lane_validator_on_lane(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        lane_id: LaneId,
-        validator: AccountId,
-        total_stake: u64,
-    ) {
-        let bonded = Quantity::from(total_stake);
-        state_transaction.world.public_lane_validators.insert(
-            (lane_id, validator.clone()),
-            PublicLaneValidatorRecord {
-                lane_id,
-                validator: validator.clone(),
-                peer_id: PeerId::from(validator.expect_single_signatory().clone()),
-                stake_account: validator.clone(),
-                total_stake: bonded.clone(),
-                self_stake: bonded.clone(),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
-        );
-        state_transaction.world.public_lane_stake_shares.insert(
-            (lane_id, validator.clone(), validator.clone()),
-            PublicLaneStakeShare {
-                lane_id,
-                validator: validator.clone(),
-                staker: validator,
-                bonded,
-                pending_unbonds: BTreeMap::new(),
-                metadata: Metadata::default(),
-            },
-        );
-    }
-    #[test]
-    fn soracloud_active_validator_authority_rejects_future_created_autoscale_lane_record()
-    -> Result<(), eyre::Report> {
-        let kura = Kura::blank_kura_for_testing();
-        let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-            .as_ref()
-            .header();
-        let mut state_block = state.block(block_header);
-        let mut state_transaction = state_block.transaction();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        let future_lane = LaneId::new(1);
-        install_future_created_autoscale_lane(&mut state_transaction, future_lane, 7);
-        insert_active_public_lane_validator_on_lane(
-            &mut state_transaction,
-            future_lane,
-            BOB_ID.clone(),
-            9_000,
-        );
-        assert!(
-            require_active_public_lane_validator(&BOB_ID, &state_transaction).is_err(),
-            "active validator rows on future-created autoscale lanes must not grant Soracloud runtime authority before activation"
-        );
-        let stakes = hf_active_validator_stakes(&state_transaction)?;
-        assert!(
-            !stakes.contains_key(&BOB_ID),
-            "future-created autoscale lane validator rows must not contribute HF placement stake"
-        );
-        Ok(())
-    }
-    #[test]
-    fn hf_active_validator_stakes_ignore_mismatched_public_lane_validator_rows()
-    -> Result<(), eyre::Report> {
-        let kura = Kura::blank_kura_for_testing();
-        let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-            .as_ref()
-            .header();
-        let mut state_block = state.block(block_header);
-        let mut state_transaction = state_block.transaction();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
-        insert_active_public_lane_validator(&mut state_transaction, BOB_ID.clone(), 700);
-        let future_lane = LaneId::new(1);
-        install_future_created_autoscale_lane(&mut state_transaction, future_lane, 7);
-        insert_active_public_lane_validator_on_lane(
-            &mut state_transaction,
-            future_lane,
-            BOB_ID.clone(),
-            9_000,
-        );
-        state_transaction.world.public_lane_validators.insert(
-            (LaneId::new(2), BOB_ID.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::new(3),
-                validator: BOB_ID.clone(),
-                peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
-                stake_account: BOB_ID.clone(),
-                total_stake: Quantity::from(9_000_u64),
-                self_stake: Quantity::from(9_000_u64),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
-        );
-        state_transaction.world.public_lane_validators.insert(
-            (LaneId::new(4), BOB_ID.clone()),
-            PublicLaneValidatorRecord {
-                lane_id: LaneId::new(4),
-                validator: ALICE_ID.clone(),
-                peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
-                stake_account: BOB_ID.clone(),
-                total_stake: Quantity::from(8_000_u64),
-                self_stake: Quantity::from(8_000_u64),
-                metadata: Metadata::default(),
-                status: PublicLaneValidatorStatus::Active,
-                activation_epoch: None,
-                activation_height: None,
-                last_reward_epoch: None,
-            },
-        );
-        let stakes = hf_active_validator_stakes(&state_transaction)?;
-        assert_eq!(stakes.get(&ALICE_ID), Some(&1_000_u128));
-        assert_eq!(
-            stakes.get(&BOB_ID),
-            Some(&700_u128),
-            "mismatched key/record validator rows must not inflate HF active stake"
-        );
-        Ok(())
-    }
-    fn configure_staking_assets_for_validator_slash_test(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        validator: &AccountId,
-        escrow_balance: u64,
-    ) -> Result<AssetDefinitionId, eyre::Report> {
-        Register::account(Account::new(validator.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
-        let asset_definition_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").expect("domain"),
-            "stake".parse().expect("stake"),
-        );
-        Register::asset_definition(AssetDefinition::numeric(
-            asset_definition_id.clone(),
-            "stake".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        ))
-        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
-        Mint::asset_quantity(
-            escrow_balance,
-            AssetId::new(asset_definition_id.clone(), ALICE_ID.clone()),
-        )
-        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
-        state_transaction.nexus.staking.stake_asset_id = asset_definition_id.to_string();
-        state_transaction.nexus.staking.stake_escrow_account_id = ALICE_ID.to_string();
-        state_transaction.nexus.staking.slash_sink_account_id = ALICE_ID.to_string();
-        Ok(asset_definition_id)
-    }
-    fn sample_hf_shared_lease_pool_record(
-        pool_id: Hash,
-        source_id: Hash,
-        window_started_at_ms: u64,
-    ) -> SoraHfSharedLeasePoolV1 {
-        SoraHfSharedLeasePoolV1 {
-            schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
-            pool_id,
-            source_id,
-            storage_class: StorageClass::Warm,
-            lease_asset_definition_id: AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").expect("domain"),
-                "xor".parse().expect("asset"),
-            ),
-            base_fee: "0.00001".parse().expect("base fee"),
-            lease_term_ms: 60_000,
-            window_started_at_ms,
-            window_expires_at_ms: window_started_at_ms + 60_000,
-            active_member_count: 1,
-            status: SoraHfSharedLeaseStatusV1::Active,
-            queued_next_window: None,
-        }
-    }
-    fn sample_bundle(
-        service_name: &str,
-        service_version: &str,
-        canary_percent: u8,
-    ) -> SoraDeploymentBundleV1 {
-        let container = SoraContainerManifestV1 {
-            schema_version: iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
-            runtime: SoraContainerRuntimeV1::Ivm,
-            bundle_hash: Hash::new(format!("bundle:{service_name}:{service_version}").as_bytes()),
-            bundle_path: "/bundles/service.ivm".to_string(),
-            entrypoint: "main".to_string(),
-            args: Vec::new(),
-            env: std::collections::BTreeMap::new(),
-            inrou: None,
-            required_config_names: Vec::new(),
-            required_secret_names: Vec::new(),
-            config_exports: Vec::new(),
-            capabilities: SoraCapabilityPolicyV1 {
-                network: SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
-                    "api.example.test",
-                    [443],
-                )]),
-                allow_wallet_signing: false,
-                allow_state_writes: false,
-                allow_model_inference: false,
-                allow_model_training: false,
-            },
-            resources: SoraResourceLimitsV1 {
-                cpu_millis: NonZeroU32::new(500).expect("nonzero"),
-                memory_bytes: NonZeroU64::new(64 * 1024 * 1024).expect("nonzero"),
-                ephemeral_storage_bytes: NonZeroU64::new(64 * 1024 * 1024).expect("nonzero"),
-                max_open_files: NonZeroU32::new(1024).expect("nonzero"),
-                max_tasks: NonZeroU16::new(32).expect("nonzero"),
-            },
-            lifecycle: SoraLifecycleHooksV1 {
-                start_grace_secs: NonZeroU32::new(10).expect("nonzero"),
-                stop_grace_secs: NonZeroU32::new(10).expect("nonzero"),
-                healthcheck_path: Some("/health".to_string()),
-            },
-        };
-        let container_manifest_hash = Hash::new(Encode::encode(&container));
-        SoraDeploymentBundleV1 {
-            schema_version: iroha_data_model::soracloud::SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
-            container,
-            service: SoraServiceManifestV1 {
-                schema_version: iroha_data_model::soracloud::SORA_SERVICE_MANIFEST_VERSION_V1,
-                service_name: service_name.parse().expect("valid name"),
-                service_version: service_version.to_string(),
-                execution_plane:
-                    iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService,
-                container: SoraContainerManifestRefV1 {
-                    manifest_hash: container_manifest_hash,
-                    expected_schema_version:
-                        iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
-                },
-                replicas: NonZeroU16::new(2).expect("nonzero"),
-                route: Some(SoraRouteTargetV1 {
-                    host: format!("{service_name}.example.test"),
-                    path_prefix: "/".to_string(),
-                    service_port: NonZeroU16::new(8080).expect("nonzero"),
-                    visibility: SoraRouteVisibilityV1::Public,
-                    tls_mode: SoraTlsModeV1::Required,
-                }),
-                rollout: SoraRolloutPolicyV1 {
-                    canary_percent,
-                    max_unavailable_replicas: 0,
-                    health_window_secs: NonZeroU32::new(30).expect("nonzero"),
-                    automatic_rollback_failures: NonZeroU32::new(2).expect("nonzero"),
-                },
-                economics: Default::default(),
-                state_bindings: vec![SoraStateBindingV1 {
-                    schema_version: iroha_data_model::soracloud::SORA_STATE_BINDING_VERSION_V1,
-                    binding_name: "session".parse().expect("valid name"),
-                    key_prefix: "/state/session".to_string(),
-                    scope: SoraStateScopeV1::ServiceState,
-                    encryption: SoraStateEncryptionV1::Plaintext,
-                    mutability: SoraStateMutabilityV1::ReadOnly,
-                    max_item_bytes: NonZeroU64::new(1024).expect("nonzero"),
-                    max_total_bytes: NonZeroU64::new(2048).expect("nonzero"),
-                }],
-                lease_volumes: Vec::new(),
-                handlers: vec![SoraServiceHandlerV1 {
-                    handler_name: "query".parse().expect("valid name"),
-                    class: SoraServiceHandlerClassV1::Query,
-                    entrypoint: "serve_query".to_string(),
-                    route_path: Some("/query".to_string()),
-                    certified_response: SoraCertifiedResponsePolicyV1::AuditReceipt,
-                    mailbox: None,
-                }],
-                artifacts: vec![SoraArtifactRefV1 {
-                    kind: SoraArtifactKindV1::StaticAsset,
-                    artifact_hash: Hash::new(
-                        format!("asset:{service_name}:{service_version}").as_bytes(),
-                    ),
-                    artifact_path: "/public/index.html".to_string(),
-                    handler_name: Some("query".parse().expect("valid name")),
-                }],
-            },
-        }
-    }
-    fn sample_inrou_manifest() -> SoraInrouManifestV1 {
-        SoraInrouManifestV1 {
-            schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
-            guest_os: SoraInrouGuestOsV1::DebianSlim,
-            guest_images: std::collections::BTreeMap::from([
-                (
-                    iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
-                    iroha_data_model::soracloud::SoraInrouGuestImageV1 {
-                        kernel_image_path: "/inrou/x86_64/vmlinux".to_string(),
-                        rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_string(),
-                        initrd_image_path: None,
-                        distribution: Default::default(),
-                        published_artifact: None,
-                    },
-                ),
-                (
-                    iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64,
-                    iroha_data_model::soracloud::SoraInrouGuestImageV1 {
-                        kernel_image_path: "/inrou/aarch64/vmlinux".to_string(),
-                        rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_string(),
-                        initrd_image_path: None,
-                        distribution: Default::default(),
-                        published_artifact: None,
-                    },
-                ),
-            ]),
-            bootstrap_user_data_path: None,
-            ssh_authorized_keys: vec!["ssh-ed25519 test-key soracloud-tests".to_string()],
-        }
-    }
-    fn sample_inrou_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
-        vec![
-            SoraLeaseVolumeBindingV1 {
-                volume_name: "root_disk".parse().expect("valid name"),
-                kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
-                storage_class: StorageClass::Warm,
-                mount_path: "/".to_string(),
-                max_total_bytes: NonZeroU64::new(8 * 1024 * 1024 * 1024).expect("nonzero"),
-            },
-            SoraLeaseVolumeBindingV1 {
-                volume_name: "service_state".parse().expect("valid name"),
-                kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
-                storage_class: StorageClass::Warm,
-                mount_path: "/var/lib/sora".to_string(),
-                max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
-            },
-        ]
-    }
-    fn sample_inrou_replica_runtime_state_for(
-        service_name: iroha_data_model::name::Name,
-        service_version: &str,
-        replica_slot: u16,
-        validator_account_id: AccountId,
-    ) -> SoraInrouReplicaRuntimeStateV1 {
-        SoraInrouReplicaRuntimeStateV1 {
-            schema_version: SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
-            service_name,
-            service_version: service_version.to_string(),
-            replica_slot,
-            validator_account_id,
-            peer_id: "12D3KooWInrouRuntimePeer".to_string(),
-            selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
-            selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
-            health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-            load_factor_bps: 250,
-            materialized_bundle_hash: Hash::new(b"inrou-runtime-state-test-bundle"),
-            accounted_egress_bytes: 0,
-            pending_mailbox_message_count: 0,
-            last_receipt_id: None,
-            updated_at_ms: 1_000,
-            last_error: None,
-        }
-    }
-    fn sample_inrou_service_placement_record_for(
-        service_name: iroha_data_model::name::Name,
-        service_version: &str,
-        runtime_state: &SoraInrouReplicaRuntimeStateV1,
-    ) -> SoraInrouServicePlacementRecordV1 {
-        SoraInrouServicePlacementRecordV1 {
-            schema_version: SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
-            service_name,
-            service_version: service_version.to_string(),
-            desired_replica_count: runtime_state.replica_slot,
-            eligible_validator_count: 1,
-            placements: vec![SoraInrouReplicaPlacementV1 {
-                replica_slot: runtime_state.replica_slot,
-                validator_account_id: runtime_state.validator_account_id.clone(),
-                peer_id: runtime_state.peer_id.clone(),
-                selected_backend: runtime_state.selected_backend,
-                selected_guest_isa: runtime_state.selected_guest_isa,
-                selected_geography_tag: None,
-                selection_latency_ms: None,
-            }],
-            reconciled_at_ms: 1_000,
-            last_error: None,
-        }
-    }
-    #[test]
-    fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), eyre::Report> {
-        let kura = Kura::blank_kura_for_testing();
-        let state = state_with_soracloud_permission(&kura)?;
-        let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
-            .as_ref()
-            .header();
-        let mut state_block = state.block(block_header);
-        let mut stx = state_block.transaction();
-        Register::account(Account::new(BOB_ID.clone()))
-            .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-        insert_active_public_lane_validator(&mut stx, BOB_ID.clone(), 500);
-        let bundle = sample_bundle("victim_runtime", "1.0.0", 0);
-        isi::DeploySoracloudService {
-            bundle: bundle.clone(),
-            initial_service_configs: BTreeMap::new(),
-            initial_service_secrets: BTreeMap::new(),
-            provenance: bundle_provenance(&bundle),
-        }
-        .execute(&ALICE_ID, &mut stx)?;
-        let victim_name = bundle.service.service_name.clone();
-        let victim_version = bundle.service.service_version.as_str();
-        let other_bundle = sample_bundle("assigned_elsewhere", "2.0.0", 0);
-        isi::DeploySoracloudService {
-            bundle: other_bundle.clone(),
-            initial_service_configs: BTreeMap::new(),
-            initial_service_secrets: BTreeMap::new(),
-            provenance: bundle_provenance(&other_bundle),
-        }
-        .execute(&ALICE_ID, &mut stx)?;
-        let other_name = other_bundle.service.service_name.clone();
-        let other_version = other_bundle.service.service_version.as_str();
-        let alice_runtime = sample_inrou_replica_runtime_state_for(
-            victim_name.clone(),
-            victim_version,
-            1,
-            ALICE_ID.clone(),
-        );
-        let alice_placement = sample_inrou_service_placement_record_for(
-            victim_name.clone(),
-            victim_version,
-            &alice_runtime,
-        );
-        stx.world.soracloud_inrou_service_placements.insert(
-            (
-                alice_placement.service_name.as_ref().to_owned(),
-                alice_placement.service_version.clone(),
-            ),
-            alice_placement,
-        );
-        let bob_other_runtime = sample_inrou_replica_runtime_state_for(
-            other_name.clone(),
-            other_version,
-            1,
-            BOB_ID.clone(),
-        );
-        let bob_other_placement = sample_inrou_service_placement_record_for(
-            other_name.clone(),
-            other_version,
-            &bob_other_runtime,
-        );
-        stx.world.soracloud_inrou_service_placements.insert(
-            (
-                bob_other_placement.service_name.as_ref().to_owned(),
-                bob_other_placement.service_version.clone(),
-            ),
-            bob_other_placement,
-        );
-        assert_eq!(
-            require_soracloud_service_runtime_authority(
-                &ALICE_ID,
-                &victim_name,
-                victim_version,
-                &stx,
-            )?,
-            SoracloudServiceRuntimeAuthority::Manager
-        );
-        assert_eq!(
-            require_soracloud_service_runtime_authority(&BOB_ID, &other_name, other_version, &stx,)?,
-            SoracloudServiceRuntimeAuthority::AssignedValidator
-        );
-        let cross_service_error = require_soracloud_service_runtime_authority(
-            &BOB_ID,
-            &victim_name,
-            victim_version,
-            &stx,
-        )
-        .expect_err("a placement for another service must not grant runtime authority");
-        assert!(matches!(
-            cross_service_error,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("is not assigned to service")
-        ));
-        let stale_runtime =
-            sample_inrou_replica_runtime_state_for(victim_name.clone(), "0.9.0", 1, BOB_ID.clone());
-        let stale_placement =
-            sample_inrou_service_placement_record_for(victim_name.clone(), "0.9.0", &stale_runtime);
-        stx.world.soracloud_inrou_service_placements.insert(
-            (
-                stale_placement.service_name.as_ref().to_owned(),
-                stale_placement.service_version.clone(),
-            ),
-            stale_placement,
-        );
-        let stale_placement_error =
-            require_soracloud_service_runtime_authority(&BOB_ID, &victim_name, "0.9.0", &stx)
-                .expect_err("a stale placement must not grant runtime authority");
-        assert!(matches!(
-            stale_placement_error,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("is not an active deployment revision")
-        ));
-        let runtime_state = SoraServiceRuntimeStateV1 {
-            schema_version: iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
-            service_name: victim_name.clone(),
-            active_service_version: victim_version.to_owned(),
-            health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-            load_factor_bps: 125,
-            materialized_bundle_hash: bundle.container.bundle_hash,
-            rollout_handle: None,
-            pending_mailbox_message_count: 0,
-            last_receipt_id: None,
-        };
-        let runtime_state_error = isi::SetSoracloudRuntimeState {
-            state: runtime_state.clone(),
-        }
-        .execute(&BOB_ID, &mut stx)
-        .expect_err("a validator assigned elsewhere must not replace runtime state");
-        assert!(matches!(
-            runtime_state_error,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("is not assigned to service")
-        ));
-        assert!(
-            stx.world
-                .soracloud_service_runtime
-                .get(&victim_name)
-                .is_none()
-        );
-        let deployment_before_usage = stx
-            .world
-            .soracloud_service_deployments
-            .get(&victim_name)
-            .cloned()
-            .expect("victim deployment");
-        let lease_error = isi::ReportSoracloudServiceLeaseUsage {
-            service_name: victim_name.clone(),
-            active_service_version: victim_version.to_owned(),
-            accounted_egress_bytes: u64::MAX,
-        }
-        .execute(&BOB_ID, &mut stx)
-        .expect_err("a validator assigned elsewhere must not inflate lease usage");
-        assert!(matches!(
-            lease_error,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("is not assigned to service")
-        ));
-        assert_eq!(
-            stx.world.soracloud_service_deployments.get(&victim_name),
-            Some(&deployment_before_usage)
-        );
-        let mailbox_message = SoraServiceMailboxMessageV1 {
-            schema_version: iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
-            message_id: Hash::new(b"cross-service-mailbox-message"),
-            from_service: victim_name.clone(),
-            from_handler: "query".parse().expect("valid handler"),
-            to_service: victim_name.clone(),
-            to_handler: "query".parse().expect("valid handler"),
-            payload_bytes: b"payload".to_vec(),
-            payload_commitment: Hash::new(b"payload"),
-            enqueue_sequence: 1,
-            available_after_sequence: 1,
-            expires_at_sequence: None,
-        };
-        let mailbox_error = isi::RecordSoracloudMailboxMessage {
-            message: mailbox_message.clone(),
-        }
-        .execute(&BOB_ID, &mut stx)
-        .expect_err("a validator assigned elsewhere must not forge source-service messages");
-        assert!(matches!(
-            mailbox_error,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("is not assigned to service")
-        ));
-        assert!(
-            stx.world
-                .soracloud_mailbox_messages
-                .get(&mailbox_message.message_id)
-                .is_none()
-        );
-        let mut undeployed_source_message = mailbox_message.clone();
-        undeployed_source_message.message_id = Hash::new(b"undeployed-source-mailbox-message");
-        undeployed_source_message.from_service =
-            "undeployed_source".parse().expect("valid service name");
-        let undeployed_source_error = isi::RecordSoracloudMailboxMessage {
-            message: undeployed_source_message.clone(),
-        }
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("even a manager must not forge messages from an undeployed service");
-        assert!(matches!(
-            undeployed_source_error,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("source service")
-        ));
-        assert!(
-            stx.world
-                .soracloud_mailbox_messages
-                .get(&undeployed_source_message.message_id)
-                .is_none()
-        );
-        isi::RecordSoracloudMailboxMessage {
-            message: mailbox_message.clone(),
-        }
-        .execute(&ALICE_ID, &mut stx)?;
-        let mut colliding_mailbox_message = mailbox_message.clone();
-        colliding_mailbox_message.from_service = other_name.clone();
-        colliding_mailbox_message.payload_bytes = b"replacement".to_vec();
-        colliding_mailbox_message.payload_commitment = Hash::new(b"replacement");
-        let mailbox_collision_error = isi::RecordSoracloudMailboxMessage {
-            message: colliding_mailbox_message,
-        }
-        .execute(&BOB_ID, &mut stx)
-        .expect_err("an assigned validator must not replace a recorded mailbox message");
-        assert!(matches!(
-            mailbox_collision_error,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("has already been recorded")
-        ));
-        assert_eq!(
-            stx.world
-                .soracloud_mailbox_messages
-                .get(&mailbox_message.message_id),
-            Some(&mailbox_message)
-        );
-        let runtime_receipt = SoraRuntimeReceiptV1 {
-            schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
-            receipt_id: Hash::new(b"cross-service-runtime-receipt"),
-            service_name: victim_name.clone(),
-            service_version: victim_version.to_owned(),
-            handler_name: "query".parse().expect("valid handler"),
-            handler_class: SoraServiceHandlerClassV1::Query,
-            request_commitment: Hash::new(b"request"),
-            result_commitment: Hash::new(b"result"),
-            certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
-            emitted_sequence: 1,
-            placement_id: Some(Hash::new(b"placement")),
-            selected_validator_account_id: Some(BOB_ID.clone()),
-            selected_peer_id: Some("12D3KooWRuntimeReceiptPeer".to_string()),
-            mailbox_message_id: None,
-            journal_artifact_hash: None,
-            checkpoint_artifact_hash: None,
-        };
-        let receipt_error = isi::RecordSoracloudRuntimeReceipt {
-            receipt: runtime_receipt.clone(),
-        }
-        .execute(&BOB_ID, &mut stx)
-        .expect_err("a validator assigned elsewhere must not forge runtime receipts");
-        assert!(matches!(
-            receipt_error,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("is not assigned to service")
-        ));
-        assert!(
-            stx.world
-                .soracloud_runtime_receipts
-                .get(&runtime_receipt.receipt_id)
-                .is_none()
-        );
-        isi::RecordSoracloudRuntimeReceipt {
-            receipt: runtime_receipt.clone(),
-        }
-        .execute(&ALICE_ID, &mut stx)?;
-        let mut colliding_runtime_receipt = runtime_receipt.clone();
-        colliding_runtime_receipt.service_name = other_name;
-        colliding_runtime_receipt.service_version = other_version.to_owned();
-        colliding_runtime_receipt.result_commitment = Hash::new(b"replacement-result");
-        let receipt_collision_error = isi::RecordSoracloudRuntimeReceipt {
-            receipt: colliding_runtime_receipt,
-        }
-        .execute(&BOB_ID, &mut stx)
-        .expect_err("an assigned validator must not replace a recorded runtime receipt");
-        assert!(matches!(
-            receipt_collision_error,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("has already been recorded")
-        ));
-        assert_eq!(
-            stx.world
-                .soracloud_runtime_receipts
-                .get(&runtime_receipt.receipt_id),
-            Some(&runtime_receipt)
-        );
-        let mut private_bundle =
-            sample_uploaded_model_bundle("victim_runtime", ManifestDigest::new([0xD1; 32]));
-        private_bundle.runtime_format =
-            iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1;
-        stx.world.soracloud_uploaded_model_bundles.insert(
-            (
-                private_bundle.service_name.as_ref().to_owned(),
-                private_bundle.model_id.clone(),
-                private_bundle.weight_version.clone(),
-            ),
-            private_bundle.clone(),
-        );
-        let private_artifact = |role: &str, byte: u8| SoraPrivateModelArtifactRefV1 {
-            schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
-            sorafs_manifest_digest: ManifestDigest::new([byte; 32]),
-            artifact_hash: Hash::new([byte; 32]),
-            ciphertext_bytes: 64,
-            artifact_role: role.to_string(),
-        };
-        let private_receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
-            schema_version:
-                iroha_data_model::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
-            receipt_id: Hash::new(b"validator-private-runtime-receipt"),
-            service_name: private_bundle.service_name.clone(),
-            model_id: private_bundle.model_id.clone(),
-            weight_version: private_bundle.weight_version.clone(),
-            runtime_version:
-                crate::soracloud_runtime::SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1.to_string(),
-            model_manifest_digest: private_bundle.sorafs_manifest_digest,
-            model_bundle_root: private_bundle.bundle_root,
-            policy_id: private_bundle.decryption_policy_ref.clone(),
-            input_artifact: private_artifact("input", 0xD2),
-            output_artifact: private_artifact("output", 0xD3),
-            input_commitment: Hash::new(b"input-commitment"),
-            output_commitment: Hash::new(b"output-commitment"),
-            request_commitment: Hash::new(b"private-request-commitment"),
-            result_commitment: Hash::new(b"private-result-commitment"),
-            emitted_sequence: 1,
-        };
-        let private_receipt_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-            receipt: private_receipt.clone(),
-        }
-        .execute(&BOB_ID, &mut stx)
-        .expect_err("private uploaded-model receipts must remain manager-only");
-        assert!(matches!(
-            private_receipt_error,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.as_ref() == "not permitted: CanManageSoracloud"
-        ));
-        assert!(
-            stx.world
-                .soracloud_private_uploaded_model_execution_receipts
-                .get(&private_receipt.receipt_id)
-                .is_none()
-        );
-        isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-            receipt: private_receipt.clone(),
-        }
-        .execute(&ALICE_ID, &mut stx)?;
-        assert_eq!(
-            stx.world
-                .soracloud_private_uploaded_model_execution_receipts
-                .get(&private_receipt.receipt_id),
-            Some(&private_receipt)
-        );
-        let mut colliding_private_receipt = private_receipt.clone();
-        colliding_private_receipt.result_commitment =
-            Hash::new(b"replacement-private-result-commitment");
-        let private_collision_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
-            receipt: colliding_private_receipt,
-        }
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("a private uploaded-model receipt identifier must be immutable");
-        assert!(matches!(
-            private_collision_error,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("has already been recorded")
-        ));
-        assert_eq!(
-            stx.world
-                .soracloud_private_uploaded_model_execution_receipts
-                .get(&private_receipt.receipt_id),
-            Some(&private_receipt)
-        );
-        let bob_victim_runtime = sample_inrou_replica_runtime_state_for(
-            victim_name.clone(),
-            victim_version,
-            1,
-            BOB_ID.clone(),
-        );
-        let bob_victim_placement = sample_inrou_service_placement_record_for(
-            victim_name.clone(),
-            victim_version,
-            &bob_victim_runtime,
-        );
-        stx.world.soracloud_inrou_service_placements.insert(
-            (
-                bob_victim_placement.service_name.as_ref().to_owned(),
-                bob_victim_placement.service_version.clone(),
-            ),
-            bob_victim_placement,
-        );
-        assert_eq!(
-            require_soracloud_service_runtime_authority(
-                &BOB_ID,
-                &victim_name,
-                victim_version,
-                &stx,
-            )?,
-            SoracloudServiceRuntimeAuthority::AssignedValidator
-        );
-        let mut falsely_attributed_receipt = runtime_receipt;
-        falsely_attributed_receipt.receipt_id = Hash::new(b"falsely-attributed-runtime-receipt");
-        falsely_attributed_receipt.selected_validator_account_id = Some(ALICE_ID.clone());
-        let attribution_error = isi::RecordSoracloudRuntimeReceipt {
-            receipt: falsely_attributed_receipt.clone(),
-        }
-        .execute(&BOB_ID, &mut stx)
-        .expect_err("an assigned validator must identify itself in its runtime receipt");
-        assert!(matches!(
-            attribution_error,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("must identify submitting validator")
-        ));
-        assert!(
-            stx.world
-                .soracloud_runtime_receipts
-                .get(&falsely_attributed_receipt.receipt_id)
-                .is_none()
-        );
-        isi::SetSoracloudRuntimeState {
-            state: runtime_state.clone(),
-        }
-        .execute(&BOB_ID, &mut stx)?;
-        assert_eq!(
-            stx.world.soracloud_service_runtime.get(&victim_name),
-            Some(&runtime_state)
-        );
-        Ok(())
-    }
-    fn bundle_provenance(bundle: &SoraDeploymentBundleV1) -> ManifestProvenance {
-        let payload = iroha_data_model::soracloud::encode_bundle_with_materials_provenance_payload(
-            bundle,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-        )
-        .expect("bundle payload");
-        ManifestProvenance {
-            signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
-        }
-    }
-    fn rollback_provenance(
-        service_name: &iroha_data_model::name::Name,
-        target_version: Option<&str>,
-    ) -> ManifestProvenance {
-        let payload = encode_rollback_provenance_payload(service_name.as_ref(), target_version)
-            .expect("rollback payload");
-        ManifestProvenance {
-            signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
-        }
-    }
-    fn rollout_provenance(
-        service_name: &iroha_data_model::name::Name,
-        rollout_handle: &str,
-        healthy: bool,
-        promote_to_percent: Option<u8>,
-        governance_tx_hash: Hash,
-    ) -> ManifestProvenance {
-        let payload = encode_rollout_provenance_payload(
-            service_name.as_ref(),
-            rollout_handle,
-            healthy,
-            promote_to_percent,
-            governance_tx_hash,
-        )
-        .expect("rollout payload");
-        ManifestProvenance {
-            signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
-        }
-    }
-    fn sample_bundle_with_state_binding(
-        service_name: &str,
-        service_version: &str,
-        canary_percent: u8,
-        binding_name: &str,
-        key_prefix: &str,
-        encryption: SoraStateEncryptionV1,
-        mutability: SoraStateMutabilityV1,
-        max_item_bytes: u64,
-        max_total_bytes: u64,
-    ) -> SoraDeploymentBundleV1 {
-        let mut bundle = sample_bundle(service_name, service_version, canary_percent);
-        bundle.container.capabilities.allow_state_writes = true;
-        bundle.service.state_bindings = vec![SoraStateBindingV1 {
-            schema_version: iroha_data_model::soracloud::SORA_STATE_BINDING_VERSION_V1,
-            binding_name: binding_name.parse().expect("valid name"),
-            key_prefix: key_prefix.to_string(),
-            scope: SoraStateScopeV1::ServiceState,
-            encryption,
-            mutability,
-            max_item_bytes: NonZeroU64::new(max_item_bytes).expect("nonzero"),
-            max_total_bytes: NonZeroU64::new(max_total_bytes).expect("nonzero"),
-        }];
-        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-        bundle
-    }
-    fn state_mutation_provenance(
-        service_name: &iroha_data_model::name::Name,
-        binding_name: &iroha_data_model::name::Name,
-        state_key: &str,
-        operation: SoraStateMutationOperationV1,
-        value_size_bytes: Option<u64>,
-        payload_commitment: Option<Hash>,
-        encryption: SoraStateEncryptionV1,
-        governance_tx_hash: Hash,
-        fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
-    ) -> ManifestProvenance {
-        let operation_label = match operation {
-            SoraStateMutationOperationV1::Upsert => "upsert",
-            SoraStateMutationOperationV1::Delete => "delete",
-        };
-        let payload = encode_state_mutation_provenance_payload(
-            service_name.as_ref(),
-            binding_name.as_ref(),
-            state_key,
-            operation_label,
-            value_size_bytes,
-            payload_commitment,
-            encryption,
-            governance_tx_hash,
-            fhe_input_admission_proof,
-        )
-        .expect("state mutation payload");
-        ManifestProvenance {
-            signer: ALICE_KEYPAIR.public_key().clone(),
-            signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
-        }
-    }
-    fn sample_fhe_param_set() -> FheParamSetV1 {
-        let registered_params = ram_lfe_bfv_parameters_v1();
-        let parameter_digest = registered_bfv_parameter_digest(&registered_params)
-            .expect("registered BFV parameter digest");
-        let rns_modulus_chain_digest = registered_bfv_rns_modulus_chain_digest(&registered_params)
-            .expect("registered BFV RNS modulus-chain digest");
-        let key_switch_decomposition_chain_digest =
-            registered_bfv_key_switch_decomposition_chain_digest(&registered_params)
-                .expect("registered BFV key-switch decomposition-chain digest");
-        FheParamSetV1 {
-            schema_version: iroha_data_model::soracloud::FHE_PARAM_SET_VERSION_V1,
-            param_set: "bfv-default".parse().expect("valid name"),
-            version: NonZeroU32::new(1).expect("nonzero"),
-            backend: "fhe/bfv-rns/v1".to_string(),
-            scheme: FheSchemeV1::Bfv,
-            ciphertext_modulus_bits: vec![
-                NonZeroU16::new(53).expect("nonzero"),
-                NonZeroU16::new(52).expect("nonzero"),
-            ],
-            plaintext_modulus_bits: NonZeroU16::new(9).expect("nonzero"),
-            polynomial_modulus_degree: NonZeroU32::new(u32::from(
-                registered_params.polynomial_degree,
-            ))
-            .expect("nonzero"),
-            slot_count: NonZeroU32::new(u32::from(registered_params.polynomial_degree))
-                .expect("nonzero"),
-            security_level_bits: NonZeroU16::new(128).expect("nonzero"),
-            max_multiplicative_depth: NonZeroU16::new(1).expect("nonzero"),
-            lifecycle: FheParamLifecycleV1::Active,
-            activation_height: Some(1),
-            deprecation_height: None,
-            withdraw_height: None,
-            parameter_digest,
-            rns_modulus_chain_digest,
-            key_switch_decomposition_chain_digest,
-        }
-    }
-    fn sample_bfv_evaluation_key_bundle() -> BfvEvaluationKeyBundle {
-        let params = ram_lfe_bfv_parameters_v1();
-        let (secret_key, public_key, relinearization_key) =
-            keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("keygen");
-        let packed_half_rotation = u32::from(params.polynomial_degree) / 2;
-        let packed_half_rotation_power =
-            packed_left_rotation_galois_automorphism_power(&params, packed_half_rotation)
-                .expect("registered packed half-rotation must be one Galois automorphism");
-        BfvEvaluationKeyBundle {
-            relinearization_key,
-            rotation_keys: vec![
-                rotation_key_from_seed(&params, &public_key, 1, b"soracloud-fhe-rotation-key")
-                    .expect("rotation key"),
-            ],
-            galois_keys: vec![
-                galois_key_from_seed(&params, &secret_key, 3, b"soracloud-fhe-galois-key")
-                    .expect("Galois key"),
-                galois_key_from_seed(
-                    &params,
-                    &secret_key,
-                    packed_half_rotation_power,
-                    b"soracloud-fhe-packed-rotate-galois-key",
-                )
-                .expect("packed rotation Galois key"),
-            ],
-            bootstrap_key: Some(
-                bootstrap_key_with_max_refresh_rounds_from_seed(
-                    &params,
-                    &public_key,
-                    "bootstrap-test-key",
-                    2,
-                    b"soracloud-fhe-bootstrap-key",
-                )
-                .expect("bootstrap key"),
-            ),
-        }
-    }
-    fn install_full_bootstrap_material(
-        evaluation_keys: &mut BfvEvaluationKeyBundle,
-        params: &BfvParameters,
-        public_key: &BfvPublicKey,
-        material: BfvFullBootstrapCircuitMaterialV1,
-    ) {
-        let key_id = evaluation_keys
-            .bootstrap_key
-            .as_ref()
-            .expect("sample bundle carries a bootstrap key")
-            .key_id
-            .clone();
-        evaluation_keys.bootstrap_key = Some(
-            full_bootstrap_key_from_material_v1(params, public_key, key_id, material)
-                .expect("construct sample full-bootstrap key"),
-        );
-    }
-    fn sample_full_bootstrap_material(params: &BfvParameters) -> BfvFullBootstrapCircuitMaterialV1 {
-        sample_full_bootstrap_material_and_artifacts(params).0
-    }
-    fn sample_full_bootstrap_linear_transform_artifact_payload(
-        params: &BfvParameters,
-        role: BfvFullBootstrapCircuitArtifactRoleV1,
-    ) -> Vec<u8> {
-        let transform = BfvFullBootstrapLinearTransformV1 {
-            input_slot_count: params.polynomial_degree,
-            output_slot_count: params.polynomial_degree,
-            diagonals: vec![BfvFullBootstrapLinearTransformDiagonalV1 {
-                rotation_steps: 0,
-                plaintext: encode_packed_plaintext_slots(
-                    params,
-                    &vec![1; usize::from(params.polynomial_degree)],
-                )
-                .expect("encode identity packed-slot mask"),
-            }],
-        };
-        encode_bfv_full_bootstrap_linear_transform_artifact_v1(params, 1, role, &transform)
-            .expect("encode sample full-bootstrap linear transform artifact")
-    }
-    fn sample_full_bootstrap_accumulator_artifact_payload(params: &BfvParameters) -> Vec<u8> {
-        let accumulator = BfvFullBootstrapAccumulatorV1 {
-            slot_count: params.polynomial_degree,
-            test_vector: encode_packed_plaintext_slots(
-                params,
-                &vec![1; usize::from(params.polynomial_degree)],
-            )
-            .expect("encode sample full-bootstrap accumulator test vector"),
-        };
-        encode_bfv_full_bootstrap_accumulator_artifact_v1(params, 1, &accumulator)
-            .expect("encode sample full-bootstrap accumulator artifact")
-    }
-    fn sample_full_bootstrap_sample_extraction_switch_key_artifact_payload(
-        params: &BfvParameters,
-        secret_key: &BfvSecretKey,
-    ) -> Vec<u8> {
-        let sample_extraction = BfvFullBootstrapSampleExtractionV1 {
-            source_slot_count: params.polynomial_degree,
-            source_ciphertext_component_count: 2,
-            extracted_coefficient_index: 0,
-            output_ciphertext_component_count: 2,
-        };
-        let switch_key = bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1(
-            params,
-            secret_key,
-            sample_extraction,
-            b"soracloud-full-bootstrap-sample-switch-artifact",
-        )
-        .expect("build sample full-bootstrap sample switch key");
-        encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(params, 1, &switch_key)
-            .expect("encode sample full-bootstrap sample switch-key artifact")
-    }
-    fn sample_full_bootstrap_bounded_noise_sample_extraction_switch_key_artifact_payload(
-        params: &BfvParameters,
-        secret_key: &BfvSecretKey,
-    ) -> Vec<u8> {
-        let sample_extraction = BfvFullBootstrapSampleExtractionV1 {
-            source_slot_count: params.polynomial_degree,
-            source_ciphertext_component_count: 2,
-            extracted_coefficient_index: 0,
-            output_ciphertext_component_count: 2,
-        };
-        let switch_key =
-            bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_from_seed_v1(
-                params,
-                secret_key,
-                sample_extraction,
-                b"soracloud-full-bootstrap-bounded-sample-switch-artifact",
-            )
-            .expect("build sample bounded full-bootstrap sample switch key");
-        encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(params, 1, &switch_key)
-            .expect("encode sample bounded full-bootstrap sample switch-key artifact")
-    }
-    fn sample_full_bootstrap_blind_rotation_artifact_payload(
-        params: &BfvParameters,
-        accumulator_digest: Hash,
-    ) -> Vec<u8> {
-        let blind_rotation_key = bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
-            params,
-            accumulator_digest,
-            1,
-        )
-        .expect("build sample full-bootstrap blind-rotation key");
-        encode_bfv_full_bootstrap_blind_rotation_artifact_v1(params, 1, &blind_rotation_key)
-            .expect("encode sample full-bootstrap blind-rotation artifact")
-    }
-    fn sample_full_bootstrap_proof_public_input_schema_artifact_payload(
-        params: &BfvParameters,
-    ) -> Vec<u8> {
-        encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
-            params,
-            1,
-            &bfv_full_bootstrap_proof_public_input_schema_v1(),
-        )
-        .expect("encode sample full-bootstrap proof public-input schema artifact")
-    }
-    fn sample_full_bootstrap_proof_key_artifact_payloads(
-        params: &BfvParameters,
-        public_input_schema_digest: Hash,
-        evaluator_artifact_set_digest: Hash,
-        prover_key_material: &[u8],
-        verifier_key_material: &[u8],
-    ) -> (Vec<u8>, Vec<u8>) {
-        let (prover_key, verifier_key) = bfv_full_bootstrap_proof_key_pair_from_key_material_v1(
-            params,
-            1,
-            public_input_schema_digest,
-            evaluator_artifact_set_digest,
-            prover_key_material,
-            verifier_key_material,
-        )
-        .expect("build sample full-bootstrap proof-key pair");
-        let prover_key = encode_bfv_full_bootstrap_proof_key_artifact_v1(
-            params,
-            1,
-            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-            &prover_key,
-        )
-        .expect("encode sample full-bootstrap prover-key artifact");
-        let verifier_key = encode_bfv_full_bootstrap_proof_key_artifact_v1(
-            params,
-            1,
-            BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
-            &verifier_key,
-        )
-        .expect("encode sample full-bootstrap verifier-key artifact");
-        (prover_key, verifier_key)
-    }
-    fn sample_full_bootstrap_circuit_artifacts(
-        params: &BfvParameters,
-    ) -> BfvFullBootstrapCircuitArtifactBundleV1 {
-        let (secret_key, _public_key, _relinearization_key) =
-            keygen_from_seed(params, b"soracloud-fhe-test-keygen")
-                .expect("sample full-bootstrap artifact keygen");
-        sample_full_bootstrap_circuit_artifacts_for_secret(params, &secret_key)
-    }
-    fn sample_full_bootstrap_circuit_artifacts_for_secret(
-        params: &BfvParameters,
-        secret_key: &BfvSecretKey,
-    ) -> BfvFullBootstrapCircuitArtifactBundleV1 {
-        #[cfg(feature = "zk-stark")]
-        {
-            let verifier_key = sample_fhe_full_bootstrap_execution_vk_box();
-            let prover_key_material =
-                encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1(
-                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
-                )
-                .expect("sample native full-bootstrap prover-key material");
-            let verifier_key_material =
-                sample_full_bootstrap_native_verifier_material_for_core_vk(&verifier_key);
-            sample_full_bootstrap_circuit_artifacts_for_secret_and_proof_keys(
-                params,
-                secret_key,
-                &prover_key_material,
-                &verifier_key_material,
-            )
-        }
-        #[cfg(not(feature = "zk-stark"))]
-        {
-            let prover_key_material =
-                encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1(
-                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
-                )
-                .expect("sample native full-bootstrap prover-key material");
-            let verifier_key_material =
-                iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_v1(
-                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
-                )
-                .expect("sample native full-bootstrap verifier-key material");
-            sample_full_bootstrap_circuit_artifacts_for_secret_and_proof_keys(
-                params,
-                secret_key,
-                &prover_key_material,
-                &verifier_key_material,
-            )
-        }
-    }
-    fn sample_full_bootstrap_circuit_artifacts_for_secret_and_proof_keys(
-        params: &BfvParameters,
-        secret_key: &BfvSecretKey,
-        prover_key_material: &[u8],
-        verifier_key_material: &[u8],
-    ) -> BfvFullBootstrapCircuitArtifactBundleV1 {
-        let accumulator = sample_full_bootstrap_accumulator_artifact_payload(params);
-        let accumulator_digest = Hash::new(&accumulator);
-        let proof_public_input_schema =
-            sample_full_bootstrap_proof_public_input_schema_artifact_payload(params);
-        let proof_public_input_schema_digest = Hash::new(&proof_public_input_schema);
-        let arithmetic_air_constraint_system =
-            encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
-                params,
-                1,
-                &bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(),
-            )
-            .expect("encode sample full-bootstrap arithmetic AIR constraint-system artifact");
-        let coefficient_to_slot_key = sample_full_bootstrap_linear_transform_artifact_payload(
-            params,
-            BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
-        );
-        let slot_to_coefficient_key = sample_full_bootstrap_linear_transform_artifact_payload(
-            params,
-            BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
-        );
-        let blind_rotation_key =
-            sample_full_bootstrap_blind_rotation_artifact_payload(params, accumulator_digest);
-        let sample_extraction_key =
-            sample_full_bootstrap_sample_extraction_switch_key_artifact_payload(params, secret_key);
-        let evaluator_artifact_set_digest = bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
-            params,
-            1,
-            &coefficient_to_slot_key,
-            &slot_to_coefficient_key,
-            &blind_rotation_key,
-            &sample_extraction_key,
-            &accumulator,
-            &proof_public_input_schema,
-            &arithmetic_air_constraint_system,
-        )
-        .expect("sample full-bootstrap evaluator artifact-set digest");
-        let (prover_key, verifier_key) = sample_full_bootstrap_proof_key_artifact_payloads(
-            params,
-            proof_public_input_schema_digest,
-            evaluator_artifact_set_digest,
-            prover_key_material,
-            verifier_key_material,
-        );
-        BfvFullBootstrapCircuitArtifactBundleV1 {
-            coefficient_to_slot_key,
-            slot_to_coefficient_key,
-            blind_rotation_key,
-            sample_extraction_key,
-            accumulator,
-            proof_public_input_schema,
-            arithmetic_air_constraint_system,
-            prover_key,
-            verifier_key,
-        }
-    }
+    include!("soracloud_initial_fixture_tests.rs");
     fn sample_full_bootstrap_bounded_noise_circuit_artifacts_for_secret(
         params: &BfvParameters,
         secret_key: &BfvSecretKey,
@@ -19495,18 +17777,16 @@ mod tests {
         attachment
     }
     #[cfg(all(feature = "zk-stark", feature = "zk-preverify"))]
-    fn sample_verified_fhe_public_key_proof(
+    fn sample_fhe_public_key_binding_air_rejection_proof(
         statement_hash: Hash,
         vk_box: &iroha_data_model::proof::VerifyingKeyBox,
     ) -> SoracloudFhePublicKeyProofV1 {
-        let proof_box = crate::zk::prove_stark_fri_open_verify_envelope(
-            FHE_INPUT_ADMISSION_BACKEND,
-            SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
+        let proof_box = sample_soracloud_fhe_reserved_binding_air_rejection_proof_box(
+            statement_hash,
             vk_box,
+            SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
             SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
-            vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
-        )
-        .expect("prove public-key STARK envelope");
+        );
         SoracloudFhePublicKeyProofV1 {
             schema_version: SORACLOUD_FHE_PUBLIC_KEY_PROOF_VERSION_V1,
             statement_hash,
@@ -19581,26 +17861,24 @@ mod tests {
         attachment
     }
     #[cfg(feature = "zk-stark")]
-    fn sample_verified_fhe_bootstrap_key_proof(
+    fn sample_fhe_bootstrap_key_binding_air_rejection_proof(
         statement_hash: Hash,
         vk_box: &iroha_data_model::proof::VerifyingKeyBox,
     ) -> SoracloudFheBootstrapKeyProofV1 {
-        let proof_box = crate::zk::prove_stark_fri_open_verify_envelope(
-            FHE_INPUT_ADMISSION_BACKEND,
-            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
+        let proof_box = sample_soracloud_fhe_reserved_binding_air_rejection_proof_box(
+            statement_hash,
             vk_box,
+            SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
             SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
-            vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
-        )
-        .expect("prove bootstrap-key STARK envelope");
+        );
         SoracloudFheBootstrapKeyProofV1 {
             schema_version: SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_VERSION_V1,
             statement_hash,
             proof: sample_fhe_bootstrap_key_attachment(proof_box),
         }
     }
-    #[cfg(all(feature = "zk-stark", feature = "zk-preverify"))]
-    fn sample_soracloud_fhe_generic_binding_air_proof_box(
+    #[cfg(feature = "zk-stark")]
+    fn sample_soracloud_fhe_reserved_binding_air_rejection_proof_box(
         statement_hash: Hash,
         vk_box: &iroha_data_model::proof::VerifyingKeyBox,
         circuit_id: &str,
@@ -19609,7 +17887,7 @@ mod tests {
         let backend = FHE_INPUT_ADMISSION_BACKEND;
         assert_eq!(vk_box.backend, backend);
         let vk_payload: crate::zk_stark::StarkFriVerifyingKeyV1 =
-            norito::decode_from_bytes(&vk_box.bytes).expect("decode Soracloud FHE STARK VK");
+            norito::decode_canonical(&vk_box.bytes).expect("decode Soracloud FHE STARK VK");
         let vk_hash = crate::zk::hash_vk(vk_box);
         let public_inputs = vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]];
         let domain_tag = crate::zk::stark_open_verify_domain_tag_current(
@@ -19636,29 +17914,17 @@ mod tests {
             schema_descriptor,
             &public_inputs,
         )
-        .expect("derive Soracloud FHE generic AIR public digest");
+        .expect("derive Soracloud FHE binding AIR public digest");
         let air_circuit_id =
             crate::zk::normalize_stark_fri_circuit_id_for_backend(backend, circuit_id)
-                .expect("normalize Soracloud FHE generic AIR circuit id");
-        let fixture_air_circuit_id = format!("{air_circuit_id}:generic-binding-fixture");
-        let envelope_bytes = crate::zk_stark::prove_stark_fri_air_envelope_bytes(
+                .expect("normalize reserved Soracloud FHE binding AIR circuit id");
+        let envelope_bytes = crate::zk_stark::prove_stark_fri_reserved_air_envelope_bytes(
             params,
             crate::zk::STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1.to_owned(),
-            fixture_air_circuit_id,
+            air_circuit_id,
             public_digest,
         )
-        .expect("build Soracloud FHE generic binding-AIR envelope");
-        let mut native: crate::zk_stark::StarkVerifyEnvelopeV1 =
-            norito::decode_from_bytes(&envelope_bytes)
-                .expect("decode Soracloud FHE generic binding-AIR envelope");
-        native
-            .proof
-            .air
-            .as_mut()
-            .expect("generic binding-AIR fixture carries AIR section")
-            .circuit_id = air_circuit_id;
-        let envelope_bytes = norito::to_bytes(&native)
-            .expect("encode retargeted Soracloud FHE generic binding-AIR envelope");
+        .expect("build reserved Soracloud FHE binding-AIR rejection fixture");
         let open = StarkFriOpenProofV1 {
             version: 1,
             public_inputs,
@@ -19669,11 +17935,12 @@ mod tests {
             circuit_id,
             vk_hash,
             schema_descriptor.to_vec(),
-            norito::to_bytes(&open).expect("encode Soracloud FHE generic STARK wrapper"),
+            norito::to_bytes(&open).expect("encode Soracloud FHE binding-only STARK wrapper"),
         );
         iroha_data_model::proof::ProofBox::new(
             backend.to_owned(),
-            norito::to_bytes(&envelope).expect("encode Soracloud FHE generic OpenVerifyEnvelope"),
+            norito::to_bytes(&envelope)
+                .expect("encode Soracloud FHE binding-only rejection OpenVerifyEnvelope"),
         )
     }
     fn sample_fhe_bootstrap_key_vk_box() -> iroha_data_model::proof::VerifyingKeyBox {
@@ -19866,7 +18133,7 @@ mod tests {
         );
         assert_eq!(
             payload.queries,
-            iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_FRI_QUERIES_V1
+            crate::zk_stark::STARK_FRI_CONSENSUS_MIN_QUERIES
         );
         assert_eq!(
             payload.merkle_arity,
@@ -21410,15 +19677,15 @@ mod tests {
             .max(max_proof_len);
     }
     #[cfg(feature = "zk-stark")]
-    fn enable_full_bootstrap_proof_quotas<I, P>(
+    fn enable_full_bootstrap_proof_quotas<P>(
         state_transaction: &mut StateTransaction<'_, '_>,
-        proofs: I,
+        proofs: impl IntoIterator<Item = P>,
     ) where
-        I: Iterator<Item = P>,
-        P: std::ops::Deref<Target = SoracloudFheFullBootstrapExecutionProofV1>,
+        P: std::borrow::Borrow<SoracloudFheFullBootstrapExecutionProofV1>,
     {
         let lengths = proofs
-            .map(|proof| proof.proof.proof.bytes.len())
+            .into_iter()
+            .map(|proof| proof.borrow().proof.proof.bytes.len())
             .collect::<Vec<_>>();
         enable_stark_sample_proof_quotas(state_transaction, &lengths);
     }
@@ -21586,7 +19853,7 @@ mod tests {
         )
     }
     #[cfg(feature = "zk-stark")]
-    fn sample_verified_fhe_input_admission_proof(
+    fn sample_fhe_input_admission_binding_air_rejection_proof(
         service_name: &Name,
         binding_name: &Name,
         state_key: &str,
@@ -21595,7 +19862,7 @@ mod tests {
         residual_multiple_bound: u128,
         vk_box: &iroha_data_model::proof::VerifyingKeyBox,
     ) -> SoracloudFheInputAdmissionProofV1 {
-        sample_verified_fhe_input_admission_proof_with_bound_mode(
+        sample_fhe_input_admission_binding_air_rejection_proof_with_bound_mode(
             service_name,
             binding_name,
             state_key,
@@ -21607,7 +19874,7 @@ mod tests {
         )
     }
     #[cfg(feature = "zk-stark")]
-    fn sample_verified_fhe_input_admission_proof_with_bound_mode(
+    fn sample_fhe_input_admission_binding_air_rejection_proof_with_bound_mode(
         service_name: &Name,
         binding_name: &Name,
         state_key: &str,
@@ -21617,7 +19884,7 @@ mod tests {
         bound_mode: BfvCiphertextBoundModeV1,
         vk_box: &iroha_data_model::proof::VerifyingKeyBox,
     ) -> SoracloudFheInputAdmissionProofV1 {
-        sample_verified_fhe_input_admission_proof_with_public_key_and_bound_mode(
+        sample_fhe_input_admission_binding_air_rejection_proof_with_public_key_and_bound_mode(
             service_name,
             binding_name,
             state_key,
@@ -21630,7 +19897,7 @@ mod tests {
         )
     }
     #[cfg(feature = "zk-stark")]
-    fn sample_verified_fhe_input_admission_proof_with_public_key_and_bound_mode(
+    fn sample_fhe_input_admission_binding_air_rejection_proof_with_public_key_and_bound_mode(
         service_name: &Name,
         binding_name: &Name,
         state_key: &str,
@@ -21650,9 +19917,9 @@ mod tests {
                 &envelope,
                 residual_multiple_bound,
                 bound_mode,
-                "sample verified FHE input admission",
+                "sample binding-only FHE input admission rejection proof",
             )
-            .expect("sample verified ciphertext proof statement digests");
+            .expect("sample binding-only ciphertext statement digests");
         let statement_hash = expected_fhe_input_admission_statement_hash(
             service_name,
             binding_name,
@@ -21667,14 +19934,12 @@ mod tests {
             bound_mode,
         )
         .expect("statement hash");
-        let proof_box = crate::zk::prove_stark_fri_open_verify_envelope(
-            FHE_INPUT_ADMISSION_BACKEND,
-            FHE_INPUT_ADMISSION_CIRCUIT_ID,
+        let proof_box = sample_soracloud_fhe_reserved_binding_air_rejection_proof_box(
+            statement_hash,
             vk_box,
+            FHE_INPUT_ADMISSION_CIRCUIT_ID,
             SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
-            vec![vec![<[u8; Hash::LENGTH]>::from(statement_hash)]],
-        )
-        .expect("prove FHE input admission STARK envelope");
+        );
         SoracloudFheInputAdmissionProofV1 {
             schema_version:
                 iroha_data_model::soracloud::SORACLOUD_FHE_INPUT_ADMISSION_PROOF_VERSION_V1,
@@ -26504,7 +24769,8 @@ mod tests {
     }
     #[cfg(all(feature = "zk-stark", feature = "zk-preverify"))]
     #[test]
-    fn soracloud_fhe_public_key_proof_accepts_verified_active_record() -> Result<(), eyre::Report> {
+    fn soracloud_fhe_public_key_proof_rejects_registered_binding_only_proof()
+    -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
         let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
@@ -26519,16 +24785,26 @@ mod tests {
         let mut policy = sample_fhe_policy();
         let statement_hash = sample_bfv_public_key_proof_statement_digest();
         policy.public_key_proof_statement_digest = Some(statement_hash);
-        let proof = sample_verified_fhe_public_key_proof(statement_hash, &vk_box);
+        let proof = sample_fhe_public_key_binding_air_rejection_proof(statement_hash, &vk_box);
         stx.apply();
         let mut stx = state_block.transaction();
-        verify_soracloud_fhe_public_key_proof(
+        let err = verify_soracloud_fhe_public_key_proof(
             &mut stx,
             &policy,
             policy.public_key_proof_statement_digest,
             Some(&proof),
         )
-        .expect("active verified public-key proof must satisfy policy-bound admission");
+        .expect_err("binding-only AIR must not admit BFV public-key material");
+        assert_invalid_parameter_contains(err, FHE_PUBLIC_KEY_DEDICATED_WITNESS_AIR_REQUIRED);
+        assert_eq!(
+            (
+                stx.zk_confidential_ops_in_tx,
+                stx.zk_verify_calls_in_tx,
+                stx.zk_proof_bytes_in_tx,
+            ),
+            (0, 0, 0),
+            "binding-only public-key rejection must not consume proof-verification quota"
+        );
         Ok(())
     }
     #[test]
@@ -26739,7 +25015,7 @@ mod tests {
         let residual_bound =
             bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
                 .expect("fresh input residual bound");
-        let base_input_proof = sample_verified_fhe_input_admission_proof(
+        let base_input_proof = sample_fhe_input_admission_binding_air_rejection_proof(
             &service_name,
             &binding_name,
             state_key,
@@ -26765,8 +25041,10 @@ mod tests {
         let (_bootstrap_vk_id, _bootstrap_vk_commitment) =
             install_fhe_bootstrap_key_verifier_record(&mut stx, bootstrap_vk_box.clone());
         let bootstrap_statement = Hash::new(b"bootstrap-key-native-air-binding");
-        let base_bootstrap_proof =
-            sample_verified_fhe_bootstrap_key_proof(bootstrap_statement, &bootstrap_vk_box);
+        let base_bootstrap_proof = sample_fhe_bootstrap_key_binding_air_rejection_proof(
+            bootstrap_statement,
+            &bootstrap_vk_box,
+        );
         for (tamper, expected_error) in native_air_tamper_cases() {
             let mut proof = base_bootstrap_proof.clone();
             mutate_fhe_native_stark_envelope(&mut proof.proof, |native| {
@@ -26810,7 +25088,7 @@ mod tests {
         let residual_bound =
             bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
                 .expect("fresh input residual bound");
-        let base_input_proof = sample_verified_fhe_input_admission_proof(
+        let base_input_proof = sample_fhe_input_admission_binding_air_rejection_proof(
             &service_name,
             &binding_name,
             state_key,
@@ -26834,8 +25112,10 @@ mod tests {
             assert_invalid_parameter_contains(err, expected_error);
         }
         let bootstrap_statement = Hash::new(b"bootstrap-key-preverify-native-air-binding");
-        let base_bootstrap_proof =
-            sample_verified_fhe_bootstrap_key_proof(bootstrap_statement, &bootstrap_vk_box);
+        let base_bootstrap_proof = sample_fhe_bootstrap_key_binding_air_rejection_proof(
+            bootstrap_statement,
+            &bootstrap_vk_box,
+        );
         for (tamper, expected_error) in native_air_tamper_cases() {
             let mut proof = base_bootstrap_proof.clone();
             mutate_fhe_native_stark_envelope(&mut proof.proof, |native| {
@@ -26913,7 +25193,7 @@ mod tests {
             BfvCiphertextBoundModeV1::ExactResidualMultiple,
         )
         .expect("statement hash");
-        let input_proof_box = sample_soracloud_fhe_generic_binding_air_proof_box(
+        let input_proof_box = sample_soracloud_fhe_reserved_binding_air_rejection_proof_box(
             input_statement_hash,
             &wrong_input_vk_box,
             SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1,
@@ -26939,7 +25219,7 @@ mod tests {
             assert_invalid_parameter_contains(err, "circuit id mismatch");
         }
         let public_key_statement_hash = sample_bfv_public_key_proof_statement_digest();
-        let public_key_proof_box = sample_soracloud_fhe_generic_binding_air_proof_box(
+        let public_key_proof_box = sample_soracloud_fhe_reserved_binding_air_rejection_proof_box(
             public_key_statement_hash,
             &wrong_public_key_vk_box,
             SORACLOUD_FHE_PUBLIC_KEY_PROOF_CIRCUIT_ID_V1,
@@ -26961,7 +25241,7 @@ mod tests {
             assert_invalid_parameter_contains(err, "circuit id mismatch");
         }
         let bootstrap_key_statement_hash = sample_bfv_bootstrap_key_proof_statement_digest();
-        let bootstrap_key_proof_box = sample_soracloud_fhe_generic_binding_air_proof_box(
+        let bootstrap_key_proof_box = sample_soracloud_fhe_reserved_binding_air_rejection_proof_box(
             bootstrap_key_statement_hash,
             &wrong_bootstrap_key_vk_box,
             SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_CIRCUIT_ID_V1,
@@ -31543,12 +29823,12 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         #[cfg(feature = "zk-stark")]
         assert_invalid_parameter_contains(err, "native AIR envelope");
         #[cfg(not(feature = "zk-stark"))]
-        assert_invalid_parameter_contains(err, "proof verification failed");
+        assert_invalid_parameter_contains(err, FHE_BOOTSTRAP_KEY_DEDICATED_WITNESS_AIR_REQUIRED);
         Ok(())
     }
     #[cfg(feature = "zk-stark")]
     #[test]
-    fn soracloud_fhe_bootstrap_key_proof_accepts_verified_active_verifier()
+    fn soracloud_fhe_bootstrap_key_proof_rejects_registered_binding_only_proof()
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
@@ -31565,16 +29845,25 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         let (_vk_id, vk_commitment) =
             install_fhe_bootstrap_key_verifier_record(&mut stx, vk_box.clone());
         assert_eq!(vk_commitment, crate::zk::hash_vk(&vk_box));
-        let proof = sample_verified_fhe_bootstrap_key_proof(statement_hash, &vk_box);
-        enable_stark_sample_proof_quotas(&mut stx, &[proof.proof.proof.bytes.len()]);
-        verify_soracloud_fhe_bootstrap_key_proof(
+        let proof = sample_fhe_bootstrap_key_binding_air_rejection_proof(statement_hash, &vk_box);
+        let err = verify_soracloud_fhe_bootstrap_key_proof(
             &mut stx,
             &policy,
             Some(statement_hash),
             Some(&proof),
             true,
         )
-        .expect("active verifier and verified bootstrap-key proof must be accepted");
+        .expect_err("binding-only AIR must not admit BFV bootstrap-key material");
+        assert_invalid_parameter_contains(err, FHE_BOOTSTRAP_KEY_DEDICATED_WITNESS_AIR_REQUIRED);
+        assert_eq!(
+            (
+                stx.zk_confidential_ops_in_tx,
+                stx.zk_verify_calls_in_tx,
+                stx.zk_proof_bytes_in_tx,
+            ),
+            (0, 0, 0),
+            "binding-only bootstrap-key rejection must not consume proof-verification quota"
+        );
         Ok(())
     }
     #[test]
@@ -32378,6 +30667,50 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
             decomposition_product >= 1_u128 << params.decomposition_base_log,
             "decomposition product must cover key-switch decomposition base"
         );
+    }
+    #[test]
+    fn soracloud_bounded_noise_add_matches_plaintext_slots_and_output_bound() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, evaluation_keys, _transcript, _digest) =
+            sample_registered_bounded_noise_bfv_material();
+        let inputs = [
+            decode_soracloud_fhe_envelope(&sample_bounded_noise_fhe_payload(
+                &public_key,
+                &[5, 7],
+                "bounded-direct-add-input-1",
+            ))
+            .expect("decode bounded add input 1"),
+            decode_soracloud_fhe_envelope(&sample_bounded_noise_fhe_payload(
+                &public_key,
+                &[11, 13],
+                "bounded-direct-add-input-2",
+            ))
+            .expect("decode bounded add input 2"),
+        ];
+        let job = sample_fhe_job(Vec::new());
+        let input_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh noise bound");
+        let expected_output_bound =
+            bfv_add_bounded_noise_output_bound(&params, &[input_bound, input_bound])
+                .expect("bounded add output noise bound");
+        let (output, output_bound) = execute_soracloud_fhe_job_with_bounded_noise_bounds(
+            &params,
+            &evaluation_keys,
+            &job,
+            &inputs,
+            &[input_bound, input_bound],
+        )
+        .expect("execute bounded-noise add directly");
+        let plaintext_slots = output
+            .slots
+            .iter()
+            .map(|slot| {
+                decrypt_bounded_noise(&params, &secret_key, slot)
+                    .expect("decrypt bounded add output")[0]
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(plaintext_slots, vec![16, 20]);
+        assert_eq!(output_bound, Some(expected_output_bound));
     }
     #[test]
     fn soracloud_bounded_noise_multiply_uses_target_limb_key_switch_bridge() {
@@ -38022,7 +36355,8 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
     }
     #[cfg(all(feature = "zk-stark", feature = "zk-preverify"))]
     #[test]
-    fn run_soracloud_fhe_job_records_ciphertext_output_state() -> Result<(), eyre::Report> {
+    fn run_soracloud_fhe_job_rejects_binding_only_public_key_proof_without_exact_output()
+    -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
         let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
@@ -38066,8 +36400,10 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         let public_key_statement_hash = policy
             .public_key_proof_statement_digest
             .expect("sample policy binds public-key proof statement");
-        let public_key_proof =
-            sample_verified_fhe_public_key_proof(public_key_statement_hash, &public_key_vk_box);
+        let public_key_proof = sample_fhe_public_key_binding_air_rejection_proof(
+            public_key_statement_hash,
+            &public_key_vk_box,
+        );
         let policy_reference = install_fhe_job_test_material(
             &mut stx,
             &service_name,
@@ -38099,66 +36435,71 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         .execute(&ALICE_ID, &mut stx)
         .expect_err("non-bootstrap FHE jobs must reject out-of-scope bootstrap proofs");
         assert_invalid_parameter_contains(err, "only accepted for bootstrap operations");
-        iroha_data_model::isi::InstructionBox::from(sample_run_fhe_job_instruction(
-            &service_name,
-            &binding_name,
-            &job,
-            &policy_reference,
-            Some(&public_key_proof),
-            None,
-            &[],
-        ))
-        .execute(&ALICE_ID, &mut stx)?;
-        stx.apply();
-        state_block.commit()?;
-        let view = state.view();
-        let world = view.world();
-        let entry = world
-            .soracloud_service_state_entries()
-            .get(&(
-                service_name.as_ref().to_owned(),
-                binding_name.as_ref().to_owned(),
-                job.output_state_key.clone(),
-            ))
-            .expect("fhe output entry");
-        assert_eq!(entry.encryption, SoraStateEncryptionV1::FheCiphertext);
-        assert_eq!(entry.payload_bytes.get(), entry.payload.len() as u64);
-        assert_eq!(entry.payload_commitment, Hash::new(&entry.payload));
+        let state_entry_count = stx.world.soracloud_service_state_entries.len();
+        let audit_count = stx.world.soracloud_service_audit_events.len();
+        let event_count = stx.world.internal_event_buf.len();
+        let err = iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
+            service_name: service_name.clone(),
+            binding_name: binding_name.clone(),
+            job: job.clone(),
+            policy_reference: policy_reference.clone(),
+            public_key_proof: Some(public_key_proof.clone()),
+            bootstrap_key_zero_refresh_proof: None,
+            full_bootstrap_execution_proofs: Vec::new(),
+            provenance: fhe_job_provenance(
+                &service_name,
+                &binding_name,
+                job.clone(),
+                policy_reference,
+                Some(public_key_proof),
+                None,
+                Vec::new(),
+            ),
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("binding-only public-key AIR must fail FHE job admission");
+        assert_invalid_parameter_contains(err, FHE_PUBLIC_KEY_DEDICATED_WITNESS_AIR_REQUIRED);
         assert_eq!(
-            entry.fhe_public_key_digest,
-            Some(sample_bfv_public_key_digest()),
-            "exact evaluator outputs must persist the governed public-key digest"
+            (
+                stx.zk_confidential_ops_in_tx,
+                stx.zk_verify_calls_in_tx,
+                stx.zk_proof_bytes_in_tx,
+            ),
+            (0, 0, 0),
+            "binding-only public-key rejection must not consume proof-verification quota"
+        );
+        assert!(
+            stx.world
+                .soracloud_service_state_entries
+                .get(&(
+                    service_name.as_ref().to_owned(),
+                    binding_name.as_ref().to_owned(),
+                    job.output_state_key,
+                ))
+                .is_none(),
+            "rejected exact FHE job must not persist its output"
         );
         assert_eq!(
-            entry.fhe_residual_multiple_bound,
-            Some(
-                bfv_add_output_residual_multiple_bound(
-                    &ram_lfe_bfv_parameters_v1(),
-                    &[input_residual_bound, input_residual_bound],
-                )
-                .expect("add output residual bound")
-            )
+            stx.world.soracloud_service_state_entries.len(),
+            state_entry_count,
+            "rejected exact FHE job must not change service state"
         );
         assert_eq!(
-            entry.fhe_bound_mode,
-            Some(BfvCiphertextBoundModeV1::ExactResidualMultiple),
-            "exact evaluator outputs must persist their bound semantics"
+            stx.world.soracloud_service_audit_events.len(),
+            audit_count,
+            "rejected exact FHE job must not record an FheJobRun audit event"
         );
-        assert!(!entry.payload.is_empty());
-        assert_eq!(entry.source_action, SoraServiceLifecycleActionV1::FheJobRun);
         assert_eq!(
-            world
-                .soracloud_service_audit_events()
-                .get(&2)
-                .expect("audit")
-                .action,
-            SoraServiceLifecycleActionV1::FheJobRun
+            stx.world.internal_event_buf.len(),
+            event_count,
+            "rejected exact FHE job must not stage internal events"
         );
         Ok(())
     }
     #[cfg(all(feature = "zk-stark", feature = "zk-preverify"))]
     #[test]
-    fn run_soracloud_fhe_job_records_bounded_noise_add_output_state() -> Result<(), eyre::Report> {
+    fn run_soracloud_fhe_job_rejects_binding_only_public_key_proof_without_bounded_add_output()
+    -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
         let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
@@ -38169,7 +36510,7 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         let (service_name, binding_name) = deploy_fhe_job_test_service(&mut stx)?;
         let params = ram_lfe_bfv_parameters_v1();
         let (
-            secret_key,
+            _secret_key,
             public_key,
             evaluation_keys,
             evaluation_key_refresh_transcript,
@@ -38231,8 +36572,10 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         let public_key_statement_hash = policy
             .public_key_proof_statement_digest
             .expect("bounded policy binds public-key proof statement");
-        let public_key_proof =
-            sample_verified_fhe_public_key_proof(public_key_statement_hash, &public_key_vk_box);
+        let public_key_proof = sample_fhe_public_key_binding_air_rejection_proof(
+            public_key_statement_hash,
+            &public_key_vk_box,
+        );
         let policy_reference = install_fhe_job_test_material(
             &mut stx,
             &service_name,
@@ -38243,62 +36586,71 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         )?;
         stx.apply();
         let mut stx = state_block.transaction();
-        iroha_data_model::isi::InstructionBox::from(sample_run_fhe_job_instruction(
-            &service_name,
-            &binding_name,
-            &job,
-            &policy_reference,
-            Some(&public_key_proof),
-            None,
-            &[],
-        ))
-        .execute(&ALICE_ID, &mut stx)?;
-        stx.apply();
-        state_block.commit()?;
-        let view = state.view();
-        let world = view.world();
-        let entry = world
-            .soracloud_service_state_entries()
-            .get(&(
-                service_name.as_ref().to_owned(),
-                binding_name.as_ref().to_owned(),
-                job.output_state_key.clone(),
-            ))
-            .expect("bounded FHE output entry");
-        assert_eq!(entry.encryption, SoraStateEncryptionV1::FheCiphertext);
+        let state_entry_count = stx.world.soracloud_service_state_entries.len();
+        let audit_count = stx.world.soracloud_service_audit_events.len();
+        let event_count = stx.world.internal_event_buf.len();
+        let err = iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
+            service_name: service_name.clone(),
+            binding_name: binding_name.clone(),
+            job: job.clone(),
+            policy_reference: policy_reference.clone(),
+            public_key_proof: Some(public_key_proof.clone()),
+            bootstrap_key_zero_refresh_proof: None,
+            full_bootstrap_execution_proofs: Vec::new(),
+            provenance: fhe_job_provenance(
+                &service_name,
+                &binding_name,
+                job.clone(),
+                policy_reference,
+                Some(public_key_proof),
+                None,
+                Vec::new(),
+            ),
+        })
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("binding-only public-key AIR must fail bounded FHE job admission");
+        assert_invalid_parameter_contains(err, FHE_PUBLIC_KEY_DEDICATED_WITNESS_AIR_REQUIRED);
         assert_eq!(
-            entry.fhe_public_key_digest,
-            Some(public_key_digest),
-            "bounded evaluator outputs must persist the governed public-key digest"
+            (
+                stx.zk_confidential_ops_in_tx,
+                stx.zk_verify_calls_in_tx,
+                stx.zk_proof_bytes_in_tx,
+            ),
+            (0, 0, 0),
+            "binding-only public-key rejection must not consume proof-verification quota"
+        );
+        assert!(
+            stx.world
+                .soracloud_service_state_entries
+                .get(&(
+                    service_name.as_ref().to_owned(),
+                    binding_name.as_ref().to_owned(),
+                    job.output_state_key,
+                ))
+                .is_none(),
+            "rejected bounded add FHE job must not persist its output"
         );
         assert_eq!(
-            entry.fhe_residual_multiple_bound,
-            Some(
-                bfv_add_bounded_noise_output_bound(&params, &[fresh_bound, fresh_bound])
-                    .expect("bounded add output noise bound")
-            )
+            stx.world.soracloud_service_state_entries.len(),
+            state_entry_count,
+            "rejected bounded add FHE job must not change service state"
         );
         assert_eq!(
-            entry.fhe_bound_mode,
-            Some(BfvCiphertextBoundModeV1::BoundedNoise),
-            "bounded evaluator outputs must persist bounded-noise semantics"
+            stx.world.soracloud_service_audit_events.len(),
+            audit_count,
+            "rejected bounded add FHE job must not record an FheJobRun audit event"
         );
-        let output = decode_soracloud_fhe_envelope(&entry.payload)?;
-        let plaintext = output
-            .slots
-            .iter()
-            .map(|slot| {
-                decrypt_bounded_noise(&params, &secret_key, slot)
-                    .expect("decrypt bounded output slot")[0]
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(plaintext, vec![16, 20]);
+        assert_eq!(
+            stx.world.internal_event_buf.len(),
+            event_count,
+            "rejected bounded add FHE job must not stage internal events"
+        );
         Ok(())
     }
     #[cfg(all(feature = "zk-stark", feature = "zk-preverify"))]
     #[test]
-    fn run_soracloud_fhe_job_records_bounded_noise_non_add_output_state() -> Result<(), eyre::Report>
-    {
+    fn run_soracloud_fhe_job_rejects_binding_only_key_proofs_without_bounded_non_add_outputs()
+    -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
         let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
@@ -38442,8 +36794,10 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         let public_key_statement_hash = policy
             .public_key_proof_statement_digest
             .expect("bounded policy binds public-key proof statement");
-        let public_key_proof =
-            sample_verified_fhe_public_key_proof(public_key_statement_hash, &public_key_vk_box);
+        let public_key_proof = sample_fhe_public_key_binding_air_rejection_proof(
+            public_key_statement_hash,
+            &public_key_vk_box,
+        );
         let policy_reference = install_fhe_job_test_material(
             &mut stx,
             &service_name,
@@ -38452,44 +36806,21 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
             evaluation_key_refresh_transcript.clone(),
             b"gov-fhe-bounded-non-add-policy",
         )?;
-        #[cfg(feature = "zk-preverify")]
         let bootstrap_key_proof = {
             let bootstrap_statement_hash = policy
                 .bootstrap_key_zero_refresh_proof_statement_digest
                 .expect("bootstrap-capable policy binds statement hash");
-            #[cfg(feature = "zk-stark")]
             let bootstrap_vk_box = sample_fhe_bootstrap_key_stark_vk_box();
-            #[cfg(feature = "zk-stark")]
             let (_bootstrap_vk_id, _bootstrap_vk_commitment) =
                 install_fhe_bootstrap_key_verifier_record(&mut stx, bootstrap_vk_box.clone());
-            #[cfg(not(feature = "zk-stark"))]
-            let (_bootstrap_vk_id, bootstrap_vk_commitment) =
-                install_fhe_bootstrap_key_verifier_record(
-                    &mut stx,
-                    sample_fhe_bootstrap_key_vk_box(),
-                );
-            #[cfg(feature = "zk-stark")]
-            let proof = sample_verified_fhe_bootstrap_key_proof(
+            let bootstrap_key_proof = sample_fhe_bootstrap_key_binding_air_rejection_proof(
                 bootstrap_statement_hash,
                 &bootstrap_vk_box,
             );
-            #[cfg(not(feature = "zk-stark"))]
-            let proof =
-                sample_fhe_bootstrap_key_proof(bootstrap_statement_hash, bootstrap_vk_commitment);
             stx.apply();
-            proof
+            bootstrap_key_proof
         };
-        #[cfg(feature = "zk-preverify")]
         let mut stx = state_block.transaction();
-        enable_stark_sample_proof_quotas(
-            &mut stx,
-            &[
-                public_key_proof.proof.proof.bytes.len(),
-                public_key_proof.proof.proof.bytes.len(),
-                public_key_proof.proof.proof.bytes.len(),
-                bootstrap_key_proof.proof.proof.bytes.len(),
-            ],
-        );
         let mut multiply_job = sample_fhe_job(vec![
             sample_fhe_input_ref("/state/private/bounded-mul-left", &multiply_lhs_payload),
             sample_fhe_input_ref("/state/private/bounded-mul-right", &multiply_rhs_payload),
@@ -38506,213 +36837,84 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         packed_job.output_state_key = "/state/private/bounded-packed-output".to_string();
         packed_job.operation = FheJobOperationV1::RotateLeft;
         packed_job.rotation_steps = packed_rotation_steps;
-        #[cfg(feature = "zk-preverify")]
         let mut bootstrap_job = sample_fhe_job(vec![sample_fhe_input_ref(
             "/state/private/bounded-bootstrap",
             &bootstrap_payload,
         )]);
-        #[cfg(feature = "zk-preverify")]
-        {
-            bootstrap_job.job_id = "bounded-bootstrap-job".to_string();
-            bootstrap_job.output_state_key = "/state/private/bounded-bootstrap-output".to_string();
-            bootstrap_job.operation = FheJobOperationV1::Bootstrap;
-            bootstrap_job.bootstrap_count = 2;
-        }
-        let jobs = vec![
-            (multiply_job.clone(), b"gov-fhe-bounded-multiply".as_slice()),
-            (
-                packed_job.clone(),
-                b"gov-fhe-bounded-packed-rotate".as_slice(),
-            ),
-        ];
-        #[cfg(feature = "zk-preverify")]
-        let jobs = {
-            let mut jobs = jobs;
-            jobs.push((
-                bootstrap_job.clone(),
-                b"gov-fhe-bounded-bootstrap".as_slice(),
-            ));
-            jobs
-        };
-        for (job, _governance_seed) in jobs {
-            #[cfg(feature = "zk-preverify")]
+        bootstrap_job.job_id = "bounded-bootstrap-job".to_string();
+        bootstrap_job.output_state_key = "/state/private/bounded-bootstrap-output".to_string();
+        bootstrap_job.operation = FheJobOperationV1::Bootstrap;
+        bootstrap_job.bootstrap_count = 2;
+        let state_entry_count = stx.world.soracloud_service_state_entries.len();
+        let audit_count = stx.world.soracloud_service_audit_events.len();
+        let event_count = stx.world.internal_event_buf.len();
+        for job in [multiply_job, packed_job, bootstrap_job] {
+            let is_bootstrap = job.bootstrap_count > 0;
+            let output_state_key = job.output_state_key.clone();
             let bootstrap_key_zero_refresh_proof =
-                (job.bootstrap_count > 0).then(|| bootstrap_key_proof.clone());
-            #[cfg(not(feature = "zk-preverify"))]
-            let bootstrap_key_zero_refresh_proof = None;
-            iroha_data_model::isi::InstructionBox::from(sample_run_fhe_job_instruction(
-                &service_name,
-                &binding_name,
-                &job,
-                &policy_reference,
-                Some(&public_key_proof),
-                bootstrap_key_zero_refresh_proof.as_ref(),
-                &[],
-            ))
-            .execute(&ALICE_ID, &mut stx)?;
-        }
-        stx.apply();
-        state_block.commit()?;
-        let view = state.view();
-        let world = view.world();
-        let multiply_entry = world
-            .soracloud_service_state_entries()
-            .get(&(
-                service_name.as_ref().to_owned(),
-                binding_name.as_ref().to_owned(),
-                multiply_job.output_state_key.clone(),
-            ))
-            .expect("bounded multiply output entry");
-        assert_eq!(
-            multiply_entry.encryption,
-            SoraStateEncryptionV1::FheCiphertext
-        );
-        assert_eq!(
-            multiply_entry.payload_bytes.get(),
-            u64::try_from(multiply_entry.payload.len()).expect("payload len fits u64")
-        );
-        assert_eq!(
-            multiply_entry.payload_commitment,
-            Hash::new(&multiply_entry.payload)
-        );
-        assert_eq!(
-            multiply_entry.source_action,
-            SoraServiceLifecycleActionV1::FheJobRun
-        );
-        assert_eq!(
-            multiply_entry.fhe_bound_mode,
-            Some(BfvCiphertextBoundModeV1::BoundedNoise)
-        );
-        assert_eq!(
-            multiply_entry.fhe_residual_multiple_bound,
-            Some(
-                bfv_multiply_bounded_noise_output_bound(
-                    &params,
-                    &evaluation_keys.relinearization_key,
-                    fresh_bound,
-                    fresh_bound,
-                )
-                .expect("bounded multiply output bound")
-            )
-        );
-        let multiply_output = decode_soracloud_fhe_envelope(&multiply_entry.payload)?;
-        let multiply_plaintext = multiply_output
-            .slots
-            .iter()
-            .map(|slot| {
-                decrypt_bounded_noise(&params, &secret_key, slot)
-                    .expect("decrypt bounded multiply output")[0]
+                is_bootstrap.then(|| bootstrap_key_proof.clone());
+            let expected_error = if is_bootstrap {
+                FHE_BOOTSTRAP_KEY_DEDICATED_WITNESS_AIR_REQUIRED
+            } else {
+                FHE_PUBLIC_KEY_DEDICATED_WITNESS_AIR_REQUIRED
+            };
+            let err = iroha_data_model::isi::InstructionBox::from(isi::RunSoracloudFheJob {
+                service_name: service_name.clone(),
+                binding_name: binding_name.clone(),
+                job: job.clone(),
+                policy_reference: policy_reference.clone(),
+                public_key_proof: Some(public_key_proof.clone()),
+                bootstrap_key_zero_refresh_proof: bootstrap_key_zero_refresh_proof.clone(),
+                full_bootstrap_execution_proofs: Vec::new(),
+                provenance: fhe_job_provenance(
+                    &service_name,
+                    &binding_name,
+                    job,
+                    policy_reference.clone(),
+                    Some(public_key_proof.clone()),
+                    bootstrap_key_zero_refresh_proof,
+                    Vec::new(),
+                ),
             })
-            .collect::<Vec<_>>();
-        assert_eq!(multiply_plaintext, vec![15, 28]);
-        let packed_entry = world
-            .soracloud_service_state_entries()
-            .get(&(
-                service_name.as_ref().to_owned(),
-                binding_name.as_ref().to_owned(),
-                packed_job.output_state_key.clone(),
-            ))
-            .expect("bounded packed output entry");
-        assert_eq!(
-            packed_entry.encryption,
-            SoraStateEncryptionV1::FheCiphertext
-        );
-        assert_eq!(
-            packed_entry.payload_bytes.get(),
-            u64::try_from(packed_entry.payload.len()).expect("payload len fits u64")
-        );
-        assert_eq!(
-            packed_entry.payload_commitment,
-            Hash::new(&packed_entry.payload)
-        );
-        assert_eq!(
-            packed_entry.source_action,
-            SoraServiceLifecycleActionV1::FheJobRun
-        );
-        assert_eq!(
-            packed_entry.fhe_bound_mode,
-            Some(BfvCiphertextBoundModeV1::BoundedNoise)
-        );
-        assert_eq!(
-            packed_entry.fhe_residual_multiple_bound,
-            Some(
-                bfv_packed_rotate_left_bounded_noise_output_bound(
-                    &params,
-                    &evaluation_keys.galois_keys,
-                    fresh_bound,
-                    packed_job.rotation_steps,
-                )
-                .expect("bounded packed rotate output bound")
-            )
-        );
-        let packed_output = decode_soracloud_fhe_envelope(&packed_entry.payload)?;
-        assert_eq!(packed_output.slots.len(), 1);
-        let packed_plaintext = decrypt_bounded_noise(&params, &secret_key, &packed_output.slots[0])
-            .expect("decrypt bounded packed output");
-        let mut expected_packed_slots = packed_input_slots;
-        expected_packed_slots
-            .rotate_left(usize::try_from(packed_rotation_steps).expect("rotation fits usize"));
-        assert_eq!(
-            decode_packed_plaintext_slots(&params, &packed_plaintext)
-                .expect("decode bounded packed output"),
-            expected_packed_slots
-        );
-        #[cfg(feature = "zk-preverify")]
-        {
-            let bootstrap_entry = world
-                .soracloud_service_state_entries()
-                .get(&(
-                    service_name.as_ref().to_owned(),
-                    binding_name.as_ref().to_owned(),
-                    bootstrap_job.output_state_key.clone(),
-                ))
-                .expect("bounded bootstrap output entry");
-            assert_eq!(
-                bootstrap_entry.encryption,
-                SoraStateEncryptionV1::FheCiphertext
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("binding-only key AIR must fail bounded non-add FHE job admission");
+            assert_invalid_parameter_contains(err, expected_error);
+            assert!(
+                stx.world
+                    .soracloud_service_state_entries
+                    .get(&(
+                        service_name.as_ref().to_owned(),
+                        binding_name.as_ref().to_owned(),
+                        output_state_key,
+                    ))
+                    .is_none(),
+                "rejected bounded non-add FHE job must not persist its output"
             );
-            assert_eq!(
-                bootstrap_entry.payload_bytes.get(),
-                u64::try_from(bootstrap_entry.payload.len()).expect("payload len fits u64")
-            );
-            assert_eq!(
-                bootstrap_entry.payload_commitment,
-                Hash::new(&bootstrap_entry.payload)
-            );
-            assert_eq!(
-                bootstrap_entry.source_action,
-                SoraServiceLifecycleActionV1::FheJobRun
-            );
-            assert_eq!(
-                bootstrap_entry.fhe_bound_mode,
-                Some(BfvCiphertextBoundModeV1::BoundedNoise)
-            );
-            assert_eq!(
-                bootstrap_entry.fhe_residual_multiple_bound,
-                Some(
-                    bfv_bootstrap_key_refresh_bounded_noise_output_bound(
-                        &params,
-                        evaluation_keys
-                            .bootstrap_key
-                            .as_ref()
-                            .expect("bounded bootstrap key"),
-                        fresh_bound,
-                        bootstrap_job.bootstrap_count,
-                    )
-                    .expect("bounded bootstrap output bound")
-                )
-            );
-            let bootstrap_output = decode_soracloud_fhe_envelope(&bootstrap_entry.payload)?;
-            let bootstrap_plaintext = bootstrap_output
-                .slots
-                .iter()
-                .map(|slot| {
-                    decrypt_bounded_noise(&params, &secret_key, slot)
-                        .expect("decrypt bounded bootstrap output")[0]
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(bootstrap_plaintext, vec![9, 11]);
         }
+        assert_eq!(
+            (
+                stx.zk_confidential_ops_in_tx,
+                stx.zk_verify_calls_in_tx,
+                stx.zk_proof_bytes_in_tx,
+            ),
+            (0, 0, 0),
+            "binding-only key rejection must not consume proof-verification quota"
+        );
+        assert_eq!(
+            stx.world.soracloud_service_state_entries.len(),
+            state_entry_count,
+            "rejected bounded non-add FHE jobs must not change service state"
+        );
+        assert_eq!(
+            stx.world.soracloud_service_audit_events.len(),
+            audit_count,
+            "rejected bounded non-add FHE jobs must not record FheJobRun audit events"
+        );
+        assert_eq!(
+            stx.world.internal_event_buf.len(),
+            event_count,
+            "rejected bounded non-add FHE jobs must not stage internal events"
+        );
         Ok(())
     }
     #[test]
@@ -39423,7 +37625,7 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
                 | FheInputAdmissionRejectionCase::RegisteredVerifierWrongVersion
                 | FheInputAdmissionRejectionCase::RestoredVerifierWrongCurve
                 | FheInputAdmissionRejectionCase::RestoredVerifierWrongLength => {
-                    sample_verified_fhe_input_admission_proof(
+                    sample_fhe_input_admission_binding_air_rejection_proof(
                         &service_name,
                         &binding_name,
                         spec.state_key,
@@ -39506,7 +37708,7 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
     }
     #[cfg(feature = "zk-stark")]
     #[test]
-    fn mutate_soracloud_state_accepts_registered_fhe_input_admission_proof()
+    fn mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof()
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
@@ -39532,7 +37734,7 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         let residual_bound =
             bfv_encrypted_zero_refresh_residual_multiple_bound(&ram_lfe_bfv_parameters_v1())
                 .expect("fresh input residual bound");
-        let admission_proof = sample_verified_fhe_input_admission_proof(
+        let admission_proof = sample_fhe_input_admission_binding_air_rejection_proof(
             &service_name,
             &binding_name,
             state_key,
@@ -39541,7 +37743,7 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
             residual_bound,
             &vk_box,
         );
-        iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
+        let err = iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
             service_name: service_name.clone(),
             binding_name: binding_name.clone(),
             state_key: state_key.to_string(),
@@ -39563,49 +37765,34 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
                 Some(admission_proof),
             ),
         })
-        .execute(&ALICE_ID, &mut stx)?;
-        stx.apply();
-        state_block.commit()?;
-        let view = state.view();
-        let world = view.world();
-        let entry = world
-            .soracloud_service_state_entries()
-            .get(&(
-                service_name.as_ref().to_owned(),
-                binding_name.as_ref().to_owned(),
-                state_key.to_string(),
-            ))
-            .expect("admitted FHE state entry");
-        assert_eq!(entry.encryption, SoraStateEncryptionV1::FheCiphertext);
-        assert_eq!(entry.payload_commitment, Hash::new(&payload));
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("binding-only AIR must not admit an exact-residual FHE ciphertext");
+        assert_invalid_parameter_contains(err, FHE_INPUT_ADMISSION_DEDICATED_WITNESS_AIR_REQUIRED);
         assert_eq!(
-            entry.fhe_public_key_digest,
-            Some(sample_bfv_public_key_digest()),
-            "verified FHE input admission must persist the admitted public-key digest"
+            (
+                stx.zk_confidential_ops_in_tx,
+                stx.zk_verify_calls_in_tx,
+                stx.zk_proof_bytes_in_tx,
+            ),
+            (0, 0, 0),
+            "binding-only AIR rejection must not consume proof-verification quota"
         );
-        assert_eq!(
-            entry.fhe_residual_multiple_bound,
-            Some(residual_bound),
-            "verified FHE input admission must persist the proven residual bound"
-        );
-        assert_eq!(
-            entry.fhe_bound_mode,
-            Some(BfvCiphertextBoundModeV1::ExactResidualMultiple),
-            "verified FHE input admission must persist exact bound semantics"
-        );
-        assert_eq!(
-            world
-                .verifying_keys()
-                .get(&vk_id)
-                .expect("registered input-admission verifier")
-                .namespace,
-            "soracloud"
+        assert!(
+            stx.world
+                .soracloud_service_state_entries
+                .get(&(
+                    service_name.as_ref().to_owned(),
+                    binding_name.as_ref().to_owned(),
+                    state_key.to_string(),
+                ))
+                .is_none(),
+            "binding-only AIR rejection must not persist FHE input state"
         );
         Ok(())
     }
     #[cfg(feature = "zk-stark")]
     #[test]
-    fn mutate_soracloud_state_accepts_registered_bounded_noise_fhe_input_admission_proof()
+    fn mutate_soracloud_state_rejects_registered_bounded_noise_binding_only_fhe_input_admission_proof()
     -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
@@ -39637,7 +37824,7 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         let noise_bound = bfv_fresh_bounded_noise_ciphertext_bound(&ram_lfe_bfv_parameters_v1())
             .expect("fresh input noise bound");
         let admission_proof =
-            sample_verified_fhe_input_admission_proof_with_public_key_and_bound_mode(
+            sample_fhe_input_admission_binding_air_rejection_proof_with_public_key_and_bound_mode(
                 &service_name,
                 &binding_name,
                 state_key,
@@ -39648,7 +37835,7 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
                 BfvCiphertextBoundModeV1::BoundedNoise,
                 &vk_box,
             );
-        iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
+        let err = iroha_data_model::isi::InstructionBox::from(isi::MutateSoracloudState {
             service_name: service_name.clone(),
             binding_name: binding_name.clone(),
             state_key: state_key.to_string(),
@@ -39670,46 +37857,28 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
                 Some(admission_proof),
             ),
         })
-        .execute(&ALICE_ID, &mut stx)?;
-        stx.apply();
-        state_block.commit()?;
-        let view = state.view();
-        let world = view.world();
-        let entry = world
-            .soracloud_service_state_entries()
-            .get(&(
-                service_name.as_ref().to_owned(),
-                binding_name.as_ref().to_owned(),
-                state_key.to_string(),
-            ))
-            .expect("admitted bounded FHE state entry");
-        assert_eq!(entry.encryption, SoraStateEncryptionV1::FheCiphertext);
-        assert_eq!(entry.payload_commitment, Hash::new(&payload));
+        .execute(&ALICE_ID, &mut stx)
+        .expect_err("binding-only AIR must not admit a bounded-noise FHE ciphertext");
+        assert_invalid_parameter_contains(err, FHE_INPUT_ADMISSION_DEDICATED_WITNESS_AIR_REQUIRED);
         assert_eq!(
-            entry.fhe_public_key_digest,
-            Some(
-                bfv_public_key_digest(&ram_lfe_bfv_parameters_v1(), &public_key)
-                    .expect("bounded public-key digest")
+            (
+                stx.zk_confidential_ops_in_tx,
+                stx.zk_verify_calls_in_tx,
+                stx.zk_proof_bytes_in_tx,
             ),
-            "verified bounded FHE input admission must persist the admitted public-key digest"
+            (0, 0, 0),
+            "binding-only AIR rejection must not consume proof-verification quota"
         );
-        assert_eq!(
-            entry.fhe_residual_multiple_bound,
-            Some(noise_bound),
-            "verified bounded FHE input admission must persist the proven noise bound"
-        );
-        assert_eq!(
-            entry.fhe_bound_mode,
-            Some(BfvCiphertextBoundModeV1::BoundedNoise),
-            "verified bounded FHE input admission must persist bounded-noise semantics"
-        );
-        assert_eq!(
-            world
-                .verifying_keys()
-                .get(&vk_id)
-                .expect("registered input-admission verifier")
-                .namespace,
-            "soracloud"
+        assert!(
+            stx.world
+                .soracloud_service_state_entries
+                .get(&(
+                    service_name.as_ref().to_owned(),
+                    binding_name.as_ref().to_owned(),
+                    state_key.to_string(),
+                ))
+                .is_none(),
+            "binding-only AIR rejection must not persist bounded-noise FHE input state"
         );
         Ok(())
     }
@@ -39805,6 +37974,67 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         );
         Ok(())
     }
+    struct TrainingStartFixture {
+        service_name: iroha_data_model::name::Name,
+    }
+    impl TrainingStartFixture {
+        fn portal() -> Self {
+            Self {
+                service_name: "portal".parse().expect("valid"),
+            }
+        }
+        fn execute(
+            &self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), InstructionExecutionError> {
+            iroha_data_model::isi::InstructionBox::from(isi::StartSoracloudTrainingJob {
+                service_name: self.service_name.clone(),
+                model_name: "vision_model".to_string(),
+                job_id: "job-1".to_string(),
+                worker_group_size: 4,
+                target_steps: 100,
+                checkpoint_interval_steps: 20,
+                max_retries: 3,
+                step_compute_units: 50,
+                compute_budget_units: 40_000,
+                storage_budget_bytes: 8_192,
+                provenance: training_start_provenance(
+                    &self.service_name,
+                    "vision_model",
+                    "job-1",
+                    4,
+                    100,
+                    20,
+                    3,
+                    50,
+                    40_000,
+                    8_192,
+                ),
+            })
+            .execute(&ALICE_ID, state_transaction)
+        }
+        fn checkpoint(
+            &self,
+            state_transaction: &mut StateTransaction<'_, '_>,
+            metrics_hash: Hash,
+        ) -> Result<(), InstructionExecutionError> {
+            iroha_data_model::isi::InstructionBox::from(isi::CheckpointSoracloudTrainingJob {
+                service_name: self.service_name.clone(),
+                job_id: "job-1".to_string(),
+                completed_step: 100,
+                checkpoint_size_bytes: 1_024,
+                metrics_hash,
+                provenance: training_checkpoint_provenance(
+                    &self.service_name,
+                    "job-1",
+                    100,
+                    1_024,
+                    metrics_hash,
+                ),
+            })
+            .execute(&ALICE_ID, state_transaction)
+        }
+    }
     #[test]
     fn start_soracloud_training_job_records_authoritative_job_state() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
@@ -39815,32 +38045,9 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
         deploy_uploaded_model_service(&mut stx)?;
-        let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-        iroha_data_model::isi::InstructionBox::from(isi::StartSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            model_name: "vision_model".to_string(),
-            job_id: "job-1".to_string(),
-            worker_group_size: 4,
-            target_steps: 100,
-            checkpoint_interval_steps: 20,
-            max_retries: 3,
-            step_compute_units: 50,
-            compute_budget_units: 40_000,
-            storage_budget_bytes: 8_192,
-            provenance: training_start_provenance(
-                &service_name,
-                "vision_model",
-                "job-1",
-                4,
-                100,
-                20,
-                3,
-                50,
-                40_000,
-                8_192,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        let training = TrainingStartFixture::portal();
+        training.execute(&mut stx)?;
+        let service_name = training.service_name;
         stx.apply();
         state_block.commit()?;
         let view = state.view();
@@ -39873,48 +38080,11 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
         deploy_uploaded_model_service(&mut stx)?;
-        let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-        iroha_data_model::isi::InstructionBox::from(isi::StartSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            model_name: "vision_model".to_string(),
-            job_id: "job-1".to_string(),
-            worker_group_size: 4,
-            target_steps: 100,
-            checkpoint_interval_steps: 20,
-            max_retries: 3,
-            step_compute_units: 50,
-            compute_budget_units: 40_000,
-            storage_budget_bytes: 8_192,
-            provenance: training_start_provenance(
-                &service_name,
-                "vision_model",
-                "job-1",
-                4,
-                100,
-                20,
-                3,
-                50,
-                40_000,
-                8_192,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        let training = TrainingStartFixture::portal();
+        training.execute(&mut stx)?;
         let metrics_hash = Hash::new(b"metrics");
-        iroha_data_model::isi::InstructionBox::from(isi::CheckpointSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            job_id: "job-1".to_string(),
-            completed_step: 100,
-            checkpoint_size_bytes: 1_024,
-            metrics_hash,
-            provenance: training_checkpoint_provenance(
-                &service_name,
-                "job-1",
-                100,
-                1_024,
-                metrics_hash,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        training.checkpoint(&mut stx, metrics_hash)?;
+        let service_name = training.service_name;
         stx.apply();
         state_block.commit()?;
         let view = state.view();
@@ -39941,32 +38111,9 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
         deploy_uploaded_model_service(&mut stx)?;
-        let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-        iroha_data_model::isi::InstructionBox::from(isi::StartSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            model_name: "vision_model".to_string(),
-            job_id: "job-1".to_string(),
-            worker_group_size: 4,
-            target_steps: 100,
-            checkpoint_interval_steps: 20,
-            max_retries: 3,
-            step_compute_units: 50,
-            compute_budget_units: 40_000,
-            storage_budget_bytes: 8_192,
-            provenance: training_start_provenance(
-                &service_name,
-                "vision_model",
-                "job-1",
-                4,
-                100,
-                20,
-                3,
-                50,
-                40_000,
-                8_192,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        let training = TrainingStartFixture::portal();
+        training.execute(&mut stx)?;
+        let service_name = training.service_name;
         iroha_data_model::isi::InstructionBox::from(isi::RetrySoracloudTrainingJob {
             service_name: service_name.clone(),
             job_id: "job-1".to_string(),
@@ -40008,48 +38155,11 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
         deploy_uploaded_model_service(&mut stx)?;
-        let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-        iroha_data_model::isi::InstructionBox::from(isi::StartSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            model_name: "vision_model".to_string(),
-            job_id: "job-1".to_string(),
-            worker_group_size: 4,
-            target_steps: 100,
-            checkpoint_interval_steps: 20,
-            max_retries: 3,
-            step_compute_units: 50,
-            compute_budget_units: 40_000,
-            storage_budget_bytes: 8_192,
-            provenance: training_start_provenance(
-                &service_name,
-                "vision_model",
-                "job-1",
-                4,
-                100,
-                20,
-                3,
-                50,
-                40_000,
-                8_192,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        let training = TrainingStartFixture::portal();
+        training.execute(&mut stx)?;
         let metrics_hash = Hash::new(b"metrics");
-        iroha_data_model::isi::InstructionBox::from(isi::CheckpointSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            job_id: "job-1".to_string(),
-            completed_step: 100,
-            checkpoint_size_bytes: 1_024,
-            metrics_hash,
-            provenance: training_checkpoint_provenance(
-                &service_name,
-                "job-1",
-                100,
-                1_024,
-                metrics_hash,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        training.checkpoint(&mut stx, metrics_hash)?;
+        let service_name = training.service_name;
         let weight_artifact_hash = Hash::new(b"weights");
         let training_config_hash = Hash::new(b"train-config");
         let reproducibility_hash = Hash::new(b"repro");
@@ -40106,48 +38216,11 @@ audited_prove!(transcript = &all_zero_seed_transcript, release_audit_package = &
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
         deploy_uploaded_model_service(&mut stx)?;
-        let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-        iroha_data_model::isi::InstructionBox::from(isi::StartSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            model_name: "vision_model".to_string(),
-            job_id: "job-1".to_string(),
-            worker_group_size: 4,
-            target_steps: 100,
-            checkpoint_interval_steps: 20,
-            max_retries: 3,
-            step_compute_units: 50,
-            compute_budget_units: 40_000,
-            storage_budget_bytes: 8_192,
-            provenance: training_start_provenance(
-                &service_name,
-                "vision_model",
-                "job-1",
-                4,
-                100,
-                20,
-                3,
-                50,
-                40_000,
-                8_192,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        let training = TrainingStartFixture::portal();
+        training.execute(&mut stx)?;
         let metrics_hash = Hash::new(b"metrics");
-        iroha_data_model::isi::InstructionBox::from(isi::CheckpointSoracloudTrainingJob {
-            service_name: service_name.clone(),
-            job_id: "job-1".to_string(),
-            completed_step: 100,
-            checkpoint_size_bytes: 1_024,
-            metrics_hash,
-            provenance: training_checkpoint_provenance(
-                &service_name,
-                "job-1",
-                100,
-                1_024,
-                metrics_hash,
-            ),
-        })
-        .execute(&ALICE_ID, &mut stx)?;
+        training.checkpoint(&mut stx, metrics_hash)?;
+        let service_name = training.service_name;
         let weight_artifact_hash = Hash::new(b"weights");
         let training_config_hash = Hash::new(b"train-config");
         let reproducibility_hash = Hash::new(b"repro");

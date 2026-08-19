@@ -962,7 +962,6 @@ async fn soracloud_status_routing_counts_only_active_autoscale_capacity_lanes() 
     )
     .expect("future-created autoscale lane catalog");
     let mut nexus = iroha_config::parameters::actual::Nexus {
-        enabled: true,
         lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
         lane_catalog,
         ..iroha_config::parameters::actual::Nexus::default()
@@ -1013,7 +1012,6 @@ async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
     )
     .expect("sparse lane catalog");
     let nexus = iroha_config::parameters::actual::Nexus {
-        enabled: true,
         lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
         lane_catalog,
         ..iroha_config::parameters::actual::Nexus::default()
@@ -1519,54 +1517,6 @@ async fn telemetry_handlers_ok() {
         .expect("ok")
         .into_response();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-}
-#[cfg(feature = "telemetry")]
-#[tokio::test]
-async fn telemetry_commit_qc_null_on_empty() {
-    let app = mk_app_state_for_tests();
-    let headers = HeaderMap::new();
-    let sample_hash = format!("{}", iroha_crypto::Hash::new(b"torii-telemetry-test"));
-    let resp = super::handler_commit_qc(
-        State(app.clone()),
-        headers,
-        crate::loopback_connect_info(),
-        None,
-        axum::extract::Path(sample_hash),
-    )
-    .await
-    .expect("ok")
-    .into_response();
-    assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    let body = http_body_util::BodyExt::collect(resp.into_body())
-        .await
-        .unwrap()
-        .to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
-    assert!(v.get("subject_block_hash").is_some());
-    assert!(v.get("commit_qc").is_some());
-    let resp = super::handler_commit_qc(
-        State(app),
-        HeaderMap::new(),
-        crate::loopback_connect_info(),
-        Some(crate::utils::extractors::ExtractAccept(
-            HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
-        )),
-        axum::extract::Path(format!(
-            "{}",
-            iroha_crypto::Hash::new(b"torii-telemetry-test")
-        )),
-    )
-    .await
-    .expect("ok")
-    .into_response();
-    assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    let bytes = http_body_util::BodyExt::collect(resp.into_body())
-        .await
-        .unwrap()
-        .to_bytes();
-    let decoded_opt: Option<Qc> =
-        norito::decode_from_bytes(&bytes).expect("decode commit_qc norito");
-    assert!(decoded_opt.is_none());
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]

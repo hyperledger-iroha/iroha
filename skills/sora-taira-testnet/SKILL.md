@@ -38,8 +38,17 @@ that as deployment health, not user input failure.
 
 If reads work but live writes fail with `route_unavailable`, report that the
 public ingress still cannot reach authoritative peers for the target lane and
-point operators at
-`configs/soranexus/taira/check_mcp_rollout.sh --public-root https://taira.sora.org --write-config <runtime-only client.toml>`.
+point operators at the protected fleet check. It requires the runtime-only
+operator request-signing pair in addition to the canary signer:
+
+```bash
+configs/soranexus/taira/check_mcp_rollout.sh \
+  --public-root https://taira.sora.org \
+  --operator-network-id RUNTIME_NETWORK_ID \
+  --operator-private-key-file /absolute/runtime-only/operator-private-key \
+  --write-config /absolute/runtime-only/client.toml
+```
+
 For that runtime-only signer config, prefer
 `configs/soranexus/taira/taira-canary-client.example.toml`; the generic
 `defaults/client.toml` targets the zero chain id and is not valid for Taira.
@@ -171,9 +180,13 @@ the caller.
 3. If shell access is available, run the read-only public SoraFS ingress check
    first:
    - `bash configs/soranexus/taira/check_sorafs_rollout.sh --public-root https://taira.sora.org --skip-write-canary`
-4. If the public read path looks healthy and the task needs generic signed
-   writes or native MCP validation, run:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary`
+4. For an anonymous one-node public diagnosis, run
+   `iroha taira doctor --public-root https://taira.sora.org --output-format text`.
+   The protected fleet-evidence script is not an anonymous read probe: even
+   with `--skip-write-canary`, its Sumeragi status reads require
+   `--operator-network-id` and an absolute runtime-only
+   `--operator-private-key-file`. Supply those only from the operator
+   environment when producing rollout evidence.
 5. Only after those checks are green should the agent spend time on signer or
    payload debugging. If the user wants a live write canary, then move to the
    full write checks with either an explicit `--write-config` or the automatic
@@ -285,12 +298,15 @@ bash configs/soranexus/taira/check_sorafs_rollout.sh \
 bash configs/soranexus/taira/check_mcp_rollout.sh \
   --skip-local \
   --public-root https://taira.sora.org \
+  --operator-network-id RUNTIME_NETWORK_ID \
+  --operator-private-key-file /absolute/runtime-only/operator-private-key \
   --skip-write-canary
 ```
 
 Treat `check_sorafs_rollout.sh` as the SoraFS/app-api surface check and
 `check_mcp_rollout.sh` as the generic signed-write and native MCP surface
-check. They can fail independently.
+check. The latter is protected rollout evidence rather than an anonymous
+health probe. They can fail independently.
 
 ## Common Flows
 

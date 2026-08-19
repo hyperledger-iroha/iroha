@@ -9230,6 +9230,7 @@ impl NodeHandle {
             None,
         )
     }
+    #[expect(clippy::too_many_arguments, reason = "explicit audit inputs")]
     fn publish_due_privacy_aggregate_cycle_from_source_events_with_provenance(
         &self,
         now_unix: u64,
@@ -17012,6 +17013,18 @@ mod tests {
             .build();
         (config, temp_dir)
     }
+    fn node_with_temp_storage() -> (NodeHandle, TempDir) {
+        let (config, temp_dir) = storage_config_with_temp_dir();
+        (NodeHandle::new(config), temp_dir)
+    }
+    fn node_with_temp_storage_and_recording_publisher()
+    -> (NodeHandle, Arc<RecordingPublisher>, TempDir) {
+        let (handle, temp_dir) = node_with_temp_storage();
+        let publisher = Arc::new(RecordingPublisher::default());
+        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
+        handle.set_governance_publisher(trait_publisher);
+        (handle, publisher, temp_dir)
+    }
     struct FinalizedProviderIngestFixture {
         config: StorageConfig,
         provider_id: ProviderId,
@@ -18084,6 +18097,39 @@ mod tests {
             ))
             .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
     }
+    fn governance_signer_storage_config(
+        root: &Path,
+        enabled: bool,
+        signer: &TestGovernanceDagSigner,
+        configured_handle: &str,
+        expected_qualification: GovernanceDagRuntimeProviderQualificationV1,
+    ) -> StorageConfig {
+        StorageConfig::builder()
+            .enabled(enabled)
+            .data_dir(root.join("storage"))
+            .governance_dir(Some(root.join("governance")))
+            .governance_dag_publisher_peer_id(Some(
+                String::from_utf8(signer.publisher_peer_id().to_vec())
+                    .expect("test peer id is UTF-8"),
+            ))
+            .governance_dag_signer_handle(Some(configured_handle.to_owned()))
+            .governance_dag_signer_qualification(Some(expected_qualification))
+            .governance_dag_checkpoint_store_handle(Some(
+                TestGovernanceDagCheckpointStore::HANDLE.to_owned(),
+            ))
+            .governance_dag_checkpoint_store_qualification(Some(
+                TestGovernanceDagCheckpointStore::expected_qualification(),
+            ))
+            .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
+            .build()
+    }
+    fn governance_signer_runtime_deps(signer: Arc<TestGovernanceDagSigner>) -> NodeRuntimeDeps {
+        NodeRuntimeDeps::default()
+            .with_governance_dag_signer(signer)
+            .with_governance_dag_checkpoint_store(Arc::new(
+                TestGovernanceDagCheckpointStore::default(),
+            ))
+    }
     struct TestPrivacyCyclePrfProvider {
         mode: TestPrivacyCyclePrfMode,
         handle: &'static str,
@@ -18661,6 +18707,68 @@ mod tests {
             max_deletions_per_run,
             ..Default::default()
         })
+    }
+    fn record_capacity_declaration_fixture(
+        handle: &NodeHandle,
+        provider_id: [u8; 32],
+        pool_id: [u8; 32],
+    ) -> CapacityDeclarationV1 {
+        let declaration = CapacityDeclarationV1 {
+            version: CAPACITY_DECLARATION_VERSION_V1,
+            provider_id,
+            stake: sorafs_manifest::provider_advert::StakePointer {
+                pool_id,
+                stake_amount: xor("1"),
+            },
+            committed_capacity_gib: 100,
+            chunker_commitments: vec![ChunkerCommitmentV1 {
+                profile_id: "sorafs.sf1@1.0.0".into(),
+                profile_aliases: None,
+                committed_gib: 100,
+                capability_refs: Vec::new(),
+            }],
+            lane_commitments: vec![LaneCommitmentV1 {
+                lane_id: "default".into(),
+                max_gib: 100,
+            }],
+            pricing: None,
+            valid_from: 1,
+            valid_until: 2,
+            metadata: vec![],
+        };
+        let payload = to_bytes(&declaration).expect("encode declaration");
+        let record = CapacityDeclarationRecord::new(
+            ProviderId::new(declaration.provider_id),
+            payload,
+            declaration.committed_capacity_gib,
+            1,
+            1,
+            2,
+            Metadata::default(),
+        );
+        handle
+            .record_capacity_declaration(&record)
+            .expect("record declaration");
+        declaration
+    }
+    fn gc_node_with_temp_storage() -> (StorageConfig, NodeHandle, TempDir) {
+        let (config, temp_dir) = storage_config_with_temp_dir();
+        let handle = NodeHandle::new_with_policies(
+            config.clone(),
+            RepairConfig::default(),
+            enabled_gc_config(1),
+        );
+        (config, handle, temp_dir)
+    }
+    fn expired_gc_manifest_fixture(
+        handle: &NodeHandle,
+        seed: u8,
+        now_unix: u64,
+        payload: &[u8],
+    ) -> ([u8; 32], String) {
+        let digest = build_manifest_with_retention(vec![seed; 8], now_unix - 1, payload, handle);
+        let manifest_id = hex::encode(digest);
+        (digest, manifest_id)
     }
     fn ensure_test_capacity_provider(handle: &NodeHandle) -> [u8; 32] {
         if let Some(provider_id) = handle.capacity_usage().provider_id {
@@ -19874,6 +19982,40 @@ mod tests {
             notes: Some("local screening fixture".to_string()),
         }
     }
+    fn record_moderation_quarantine_fixture(
+        handle: &NodeHandle,
+        subject: &str,
+        payload: &[u8],
+    ) -> [u8; 16] {
+        let mut screening =
+            moderation_screening_input_fixture(subject, ModerationScreeningVerdict::Quarantine);
+        screening.subject_digest = *blake3::hash(payload).as_bytes();
+        handle
+            .record_moderation_screening_result(screening)
+            .expect("record quarantine result")
+            .quarantine
+            .expect("quarantine record")
+            .quarantine_id
+    }
+    fn store_moderation_quarantine_fixture(
+        handle: &NodeHandle,
+        subject: &str,
+        payload: &[u8],
+        captured_at_unix: u64,
+        content_type: Option<&str>,
+    ) -> ([u8; 16], ModerationQuarantineObjectRecord) {
+        let quarantine_id = record_moderation_quarantine_fixture(handle, subject, payload);
+        let record = handle
+            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
+                quarantine_id,
+                payload: payload.to_vec(),
+                captured_at_unix,
+                content_type: content_type.map(str::to_owned),
+                notes: None,
+            })
+            .expect("store quarantine object");
+        (quarantine_id, record)
+    }
     fn moderation_quarantine_review_input(
         quarantine_id: [u8; 16],
     ) -> ModerationQuarantineReviewInput {
@@ -19964,22 +20106,13 @@ mod tests {
         expires_at_unix_ms: u64,
         access_events: &[(ModerationEvidenceViewerAccessKind, u64)],
     ) -> ModerationEvidenceViewerSessionRecord {
-        let mut screening =
-            moderation_screening_input_fixture(subject, ModerationScreeningVerdict::Quarantine);
-        screening.subject_digest = *blake3::hash(payload).as_bytes();
-        let outcome = handle
-            .record_moderation_screening_result(screening)
-            .expect("record quarantine result");
-        let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
-        handle
-            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
-                quarantine_id,
-                payload: payload.to_vec(),
-                captured_at_unix: issued_at_unix_ms / 1_000,
-                content_type: None,
-                notes: None,
-            })
-            .expect("store quarantine object");
+        let (quarantine_id, _) = store_moderation_quarantine_fixture(
+            handle,
+            subject,
+            payload,
+            issued_at_unix_ms / 1_000,
+            None,
+        );
         let session = handle
             .create_moderation_evidence_viewer_session(moderation_evidence_viewer_session_input(
                 quarantine_id,
@@ -20361,27 +20494,25 @@ mod tests {
         config::PrivacyAggregatePolicyConfig::new(cycle, privacy_composition_budget_policy())
             .expect("test privacy aggregate policy")
     }
+    fn privacy_aggregate_storage_builder_without_fenced_target(
+        root: &Path,
+    ) -> config::StorageConfigBuilder {
+        StorageConfig::builder()
+            .enabled(true)
+            .provider_id(Some(ProviderId::new([0x91; 32])))
+            .data_dir(root.join("storage"))
+            .privacy_aggregate_schedule(Some(privacy_aggregate_schedule_config()))
+            .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
+            .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
+            .privacy_release_anchor_provider_binding(Some(test_privacy_release_anchor_binding()))
+            .privacy_leader_lease_provider_binding(Some(test_transparency_leader_lease_binding()))
+    }
+    fn privacy_aggregate_storage_builder(root: &Path) -> config::StorageConfigBuilder {
+        privacy_aggregate_storage_builder_without_fenced_target(root)
+            .privacy_fenced_publisher_binding(Some(test_fenced_transparency_provider_binding()))
+    }
     fn privacy_aggregate_storage_config(root: &Path) -> StorageConfig {
-        with_test_signed_governance_config(
-            StorageConfig::builder()
-                .enabled(true)
-                .provider_id(Some(ProviderId::new([0x91; 32])))
-                .data_dir(root.join("storage"))
-                .privacy_aggregate_schedule(Some(privacy_aggregate_schedule_config()))
-                .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
-                .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
-                .privacy_release_anchor_provider_binding(
-                    Some(test_privacy_release_anchor_binding()),
-                )
-                .privacy_leader_lease_provider_binding(Some(
-                    test_transparency_leader_lease_binding(),
-                ))
-                .privacy_fenced_publisher_binding(
-                    Some(test_fenced_transparency_provider_binding()),
-                ),
-            root,
-        )
-        .build()
+        with_test_signed_governance_config(privacy_aggregate_storage_builder(root), root).build()
     }
     fn privacy_aggregate_storage_config_with_temp_dir() -> (StorageConfig, TempDir) {
         let temp_dir = tempfile::tempdir().expect("create privacy aggregate temp dir");
@@ -20390,6 +20521,22 @@ mod tests {
             .canonicalize()
             .expect("canonical privacy aggregate temp dir");
         (privacy_aggregate_storage_config(&root), temp_dir)
+    }
+    fn publish_due_test_privacy_cycle(
+        handle: &NodeHandle,
+        now_unix: u64,
+        cycle_start_unix: u64,
+        cycle_end_unix: u64,
+        idempotency_key: &str,
+    ) -> Result<PrivacyAggregateScheduleOutcome, GovernancePublishError> {
+        handle.publish_due_privacy_aggregate_cycle_from_source_events(
+            now_unix,
+            privacy_aggregate_cycle_id([0xB0; 32], cycle_start_unix, cycle_end_unix),
+            idempotency_key.to_owned(),
+            privacy_aggregate_schedule_config(),
+            privacy_aggregate_cycle_config(),
+            Some(privacy_composition_budget_policy()),
+        )
     }
     fn governance_submission_account(seed: u8) -> AccountId {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -20544,8 +20691,7 @@ mod tests {
     }
     #[test]
     fn moderation_model_registry_admits_repro_manifest_and_rejects_conflict() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let (handle, _dir) = node_with_temp_storage();
         let manifest = moderation_repro_manifest_fixture(0x10, 0x30);
         let expected_manifest_digest = manifest.body.manifest_digest;
         let record = handle
@@ -20575,8 +20721,7 @@ mod tests {
     }
     #[test]
     fn moderation_model_registry_admits_corpus_manifest_snapshot() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let (handle, _dir) = node_with_temp_storage();
         let manifest = adversarial_corpus_manifest_fixture();
         let expected_digest =
             *blake3::hash(&to_bytes(&manifest).expect("encode corpus fixture")).as_bytes();
@@ -20799,25 +20944,14 @@ mod tests {
     fn moderation_quarantine_object_store_persists_encrypted_payload_and_reloads() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
         let payload = b"quarantine payload bytes retained for operator review".to_vec();
-        let mut screening = moderation_screening_input_fixture(
-            "cid:bafy-object-store",
-            ModerationScreeningVerdict::Quarantine,
-        );
-        screening.subject_digest = *blake3::hash(&payload).as_bytes();
         let source = node_with_test_quarantine_key_wrapper(cfg.clone());
-        let outcome = source
-            .record_moderation_screening_result(screening)
-            .expect("record quarantine result");
-        let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
-        let record = source
-            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
-                quarantine_id,
-                payload: payload.clone(),
-                captured_at_unix: 1_800_000_080,
-                content_type: Some("application/octet-stream".to_string()),
-                notes: None,
-            })
-            .expect("store quarantine object");
+        let (quarantine_id, record) = store_moderation_quarantine_fixture(
+            &source,
+            "cid:bafy-object-store",
+            &payload,
+            1_800_000_080,
+            Some("application/octet-stream"),
+        );
         assert_eq!(record.payload_digest, *blake3::hash(&payload).as_bytes());
         assert_eq!(record.payload_len, payload.len() as u64);
         assert_eq!(record.notes, None);
@@ -20883,23 +21017,14 @@ mod tests {
             (0..(crate::moderation::MODERATION_QUARANTINE_OBJECT_CHUNK_BYTES_V1 as usize + 8_192))
                 .map(|index| (index % 251) as u8)
                 .collect::<Vec<_>>();
-        let mut screening = moderation_screening_input_fixture(
-            "cid:bafy-object-range-rewrap",
-            ModerationScreeningVerdict::Quarantine,
-        );
-        screening.subject_digest = *blake3::hash(&payload).as_bytes();
         let old_wrapper: Arc<dyn ModerationQuarantineKeyWrapper> = Arc::new(
             TestQuarantineKeyWrapper::single("kms:test/quarantine-old", 0x31),
         );
         let source =
             NodeHandle::try_new_with_quarantine_key_wrapper(cfg.clone(), Arc::clone(&old_wrapper))
                 .expect("initialise with old wrapping key");
-        let quarantine_id = source
-            .record_moderation_screening_result(screening)
-            .expect("record quarantine result")
-            .quarantine
-            .expect("quarantine record")
-            .quarantine_id;
+        let quarantine_id =
+            record_moderation_quarantine_fixture(&source, "cid:bafy-object-range-rewrap", &payload);
         let record = source
             .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
                 quarantine_id,
@@ -21008,27 +21133,14 @@ mod tests {
     fn moderation_quarantine_startup_recovers_canonical_unindexed_envelope() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
         let payload = b"crash between envelope rename and index commit".to_vec();
-        let mut screening = moderation_screening_input_fixture(
-            "cid:bafy-object-crash-orphan",
-            ModerationScreeningVerdict::Quarantine,
-        );
-        screening.subject_digest = *blake3::hash(&payload).as_bytes();
         let source = node_with_test_quarantine_key_wrapper(cfg.clone());
-        let quarantine_id = source
-            .record_moderation_screening_result(screening)
-            .expect("record quarantine result")
-            .quarantine
-            .expect("quarantine record")
-            .quarantine_id;
-        let record = source
-            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
-                quarantine_id,
-                payload,
-                captured_at_unix: 1_800_000_086,
-                content_type: None,
-                notes: None,
-            })
-            .expect("store quarantine object");
+        let (_, record) = store_moderation_quarantine_fixture(
+            &source,
+            "cid:bafy-object-crash-orphan",
+            &payload,
+            1_800_000_086,
+            None,
+        );
         let envelope_path =
             moderation_quarantine_object_store_root(cfg.data_dir()).join(&record.envelope_path);
         source
@@ -21054,16 +21166,12 @@ mod tests {
     fn moderation_quarantine_object_store_rejects_digest_mismatch() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
         let expected_payload = b"expected quarantined bytes".to_vec();
-        let mut screening = moderation_screening_input_fixture(
-            "cid:bafy-object-digest",
-            ModerationScreeningVerdict::Quarantine,
-        );
-        screening.subject_digest = *blake3::hash(&expected_payload).as_bytes();
         let handle = node_with_test_quarantine_key_wrapper(cfg);
-        let outcome = handle
-            .record_moderation_screening_result(screening)
-            .expect("record quarantine result");
-        let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
+        let quarantine_id = record_moderation_quarantine_fixture(
+            &handle,
+            "cid:bafy-object-digest",
+            &expected_payload,
+        );
         let err = handle
             .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
                 quarantine_id,
@@ -21089,25 +21197,14 @@ mod tests {
     fn moderation_quarantine_object_read_rejects_tampered_envelope() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
         let payload = b"tamper-detected quarantine payload".to_vec();
-        let mut screening = moderation_screening_input_fixture(
-            "cid:bafy-object-tamper",
-            ModerationScreeningVerdict::Quarantine,
-        );
-        screening.subject_digest = *blake3::hash(&payload).as_bytes();
         let handle = node_with_test_quarantine_key_wrapper(cfg.clone());
-        let outcome = handle
-            .record_moderation_screening_result(screening)
-            .expect("record quarantine result");
-        let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
-        let record = handle
-            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
-                quarantine_id,
-                payload,
-                captured_at_unix: 1_800_000_082,
-                content_type: None,
-                notes: None,
-            })
-            .expect("store quarantine object");
+        let (quarantine_id, record) = store_moderation_quarantine_fixture(
+            &handle,
+            "cid:bafy-object-tamper",
+            &payload,
+            1_800_000_082,
+            None,
+        );
         let envelope_path =
             moderation_quarantine_object_store_root(cfg.data_dir()).join(&record.envelope_path);
         let envelope_bytes = fs::read(&envelope_path).expect("read envelope");
@@ -21128,27 +21225,14 @@ mod tests {
     fn moderation_quarantine_store_rejects_authenticated_envelope_tampering_on_restart() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
         let payload = b"restart audit must authenticate every quarantine envelope".to_vec();
-        let mut screening = moderation_screening_input_fixture(
-            "cid:bafy-object-restart-tamper",
-            ModerationScreeningVerdict::Quarantine,
-        );
-        screening.subject_digest = *blake3::hash(&payload).as_bytes();
         let handle = node_with_test_quarantine_key_wrapper(cfg.clone());
-        let quarantine_id = handle
-            .record_moderation_screening_result(screening)
-            .expect("record quarantine result")
-            .quarantine
-            .expect("quarantine record")
-            .quarantine_id;
-        let record = handle
-            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
-                quarantine_id,
-                payload,
-                captured_at_unix: 1_800_000_083,
-                content_type: None,
-                notes: None,
-            })
-            .expect("store quarantine object");
+        let (_, record) = store_moderation_quarantine_fixture(
+            &handle,
+            "cid:bafy-object-restart-tamper",
+            &payload,
+            1_800_000_083,
+            None,
+        );
         drop(handle);
         let envelope_path =
             moderation_quarantine_object_store_root(cfg.data_dir()).join(&record.envelope_path);
@@ -21173,27 +21257,14 @@ mod tests {
     fn moderation_quarantine_store_requires_runtime_wrapper_and_rejects_unknown_orphans() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
         let payload = b"indexed quarantine object requires its runtime key wrapper".to_vec();
-        let mut screening = moderation_screening_input_fixture(
-            "cid:bafy-object-missing-wrapper",
-            ModerationScreeningVerdict::Quarantine,
-        );
-        screening.subject_digest = *blake3::hash(&payload).as_bytes();
         let handle = node_with_test_quarantine_key_wrapper(cfg.clone());
-        let quarantine_id = handle
-            .record_moderation_screening_result(screening)
-            .expect("record quarantine result")
-            .quarantine
-            .expect("quarantine record")
-            .quarantine_id;
-        handle
-            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
-                quarantine_id,
-                payload,
-                captured_at_unix: 1_800_000_084,
-                content_type: None,
-                notes: None,
-            })
-            .expect("store quarantine object");
+        store_moderation_quarantine_fixture(
+            &handle,
+            "cid:bafy-object-missing-wrapper",
+            &payload,
+            1_800_000_084,
+            None,
+        );
         drop(handle);
         assert!(matches!(
             NodeHandle::try_new(cfg.clone()),
@@ -21279,25 +21350,14 @@ mod tests {
     fn moderation_evidence_viewer_session_access_persists_and_reloads() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
         let payload = b"payload-free evidence viewer audit fixture".to_vec();
-        let mut screening = moderation_screening_input_fixture(
-            "cid:bafy-evidence-viewer",
-            ModerationScreeningVerdict::Quarantine,
-        );
-        screening.subject_digest = *blake3::hash(&payload).as_bytes();
         let source = node_with_test_quarantine_key_wrapper(cfg.clone());
-        let outcome = source
-            .record_moderation_screening_result(screening)
-            .expect("record quarantine result");
-        let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
-        let object = source
-            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
-                quarantine_id,
-                payload: payload.clone(),
-                captured_at_unix: 1_800_000_090,
-                content_type: Some("application/octet-stream".to_string()),
-                notes: None,
-            })
-            .expect("store quarantine object");
+        let (quarantine_id, object) = store_moderation_quarantine_fixture(
+            &source,
+            "cid:bafy-evidence-viewer",
+            &payload,
+            1_800_000_090,
+            Some("application/octet-stream"),
+        );
         let session = source
             .create_moderation_evidence_viewer_session(moderation_evidence_viewer_session_input(
                 quarantine_id,
@@ -21341,16 +21401,12 @@ mod tests {
     fn moderation_evidence_viewer_session_rejects_missing_object_and_payload_material() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
         let payload = b"evidence viewer missing object fixture".to_vec();
-        let mut screening = moderation_screening_input_fixture(
-            "cid:bafy-evidence-viewer-missing",
-            ModerationScreeningVerdict::Quarantine,
-        );
-        screening.subject_digest = *blake3::hash(&payload).as_bytes();
         let handle = node_with_test_quarantine_key_wrapper(cfg);
-        let outcome = handle
-            .record_moderation_screening_result(screening)
-            .expect("record quarantine result");
-        let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
+        let quarantine_id = record_moderation_quarantine_fixture(
+            &handle,
+            "cid:bafy-evidence-viewer-missing",
+            &payload,
+        );
         let err = handle
             .create_moderation_evidence_viewer_session(moderation_evidence_viewer_session_input(
                 quarantine_id,
@@ -21389,25 +21445,14 @@ mod tests {
     fn moderation_evidence_viewer_access_rejects_expiry_and_tampered_snapshot() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
         let payload = b"evidence viewer expired access fixture".to_vec();
-        let mut screening = moderation_screening_input_fixture(
-            "cid:bafy-evidence-viewer-expired",
-            ModerationScreeningVerdict::Quarantine,
-        );
-        screening.subject_digest = *blake3::hash(&payload).as_bytes();
         let handle = node_with_test_quarantine_key_wrapper(cfg);
-        let outcome = handle
-            .record_moderation_screening_result(screening)
-            .expect("record quarantine result");
-        let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
-        handle
-            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
-                quarantine_id,
-                payload,
-                captured_at_unix: 1_800_000_092,
-                content_type: None,
-                notes: None,
-            })
-            .expect("store quarantine object");
+        let (quarantine_id, _) = store_moderation_quarantine_fixture(
+            &handle,
+            "cid:bafy-evidence-viewer-expired",
+            &payload,
+            1_800_000_092,
+            None,
+        );
         let session = handle
             .create_moderation_evidence_viewer_session(moderation_evidence_viewer_session_input(
                 quarantine_id,
@@ -21454,28 +21499,17 @@ mod tests {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
         let payload = b"evidence viewer audit report fixture".to_vec();
-        let mut screening = moderation_screening_input_fixture(
-            "cid:bafy-evidence-viewer-report",
-            ModerationScreeningVerdict::Quarantine,
-        );
-        screening.subject_digest = *blake3::hash(&payload).as_bytes();
         let handle = node_with_test_quarantine_key_wrapper(cfg);
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
         handle.set_governance_publisher(trait_publisher);
-        let outcome = handle
-            .record_moderation_screening_result(screening)
-            .expect("record quarantine result");
-        let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
-        handle
-            .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
-                quarantine_id,
-                payload,
-                captured_at_unix: 1_800_000_093,
-                content_type: None,
-                notes: None,
-            })
-            .expect("store quarantine object");
+        let (quarantine_id, _) = store_moderation_quarantine_fixture(
+            &handle,
+            "cid:bafy-evidence-viewer-report",
+            &payload,
+            1_800_000_093,
+            None,
+        );
         let session = handle
             .create_moderation_evidence_viewer_session(moderation_evidence_viewer_session_input(
                 quarantine_id,
@@ -21904,8 +21938,7 @@ mod tests {
     }
     #[test]
     fn manifest_metadata_resolves_by_digest() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let (handle, _dir) = node_with_temp_storage();
         let payload = b"digest-lookup-fixture";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
@@ -22733,11 +22766,7 @@ mod tests {
     }
     #[test]
     fn publish_appeal_finance_report_writes_governance_publisher() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
+        let (handle, publisher, _dir) = node_with_temp_storage_and_recording_publisher();
         let report = appeal_finance_report_fixture();
         let expected = to_bytes(&report).expect("encode appeal finance report");
         handle
@@ -22812,11 +22841,7 @@ mod tests {
     }
     #[test]
     fn publish_transparency_ledger_publication_writes_governance_publisher() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
+        let (handle, publisher, _dir) = node_with_temp_storage_and_recording_publisher();
         let publication = transparency_ledger_publication_fixture();
         let expected = to_bytes(&publication).expect("encode transparency ledger publication");
         handle
@@ -22831,11 +22856,7 @@ mod tests {
     }
     #[test]
     fn direct_privacy_publication_rejects_unfenced_outbox_mutation() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
+        let (handle, publisher, _dir) = node_with_temp_storage_and_recording_publisher();
         let publication = NodeHandle::build_privacy_aggregate_publication(
             *b"cycle-2026-wk-03",
             1_800_000_000,
@@ -22858,11 +22879,7 @@ mod tests {
     }
     #[test]
     fn publish_proof_token_issuance_writes_governance_publisher() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
+        let (handle, publisher, _dir) = node_with_temp_storage_and_recording_publisher();
         let issuance = proof_token_issuance_fixture();
         let expected = to_bytes(&issuance).expect("encode proof-token issuance");
         handle
@@ -22877,11 +22894,7 @@ mod tests {
     }
     #[test]
     fn publish_proof_token_base64_issuance_derives_and_writes_governance_publisher() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
+        let (handle, publisher, _dir) = node_with_temp_storage_and_recording_publisher();
         let issuance = handle
             .publish_proof_token_base64_issuance(
                 VALID_PROOF_TOKEN_B64,
@@ -22915,8 +22928,7 @@ mod tests {
     #[test]
     fn record_transparency_ledger_source_entry_is_idempotent_and_rejects_conflicts() {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let (handle, _dir) = node_with_temp_storage();
         let entry = transparency_ledger_source_entry(
             "gar-1",
             1_800_000_010,
@@ -22944,11 +22956,7 @@ mod tests {
     #[test]
     fn publish_transparency_ledger_source_entries_builds_and_publishes_publication() {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
+        let (handle, publisher, _dir) = node_with_temp_storage_and_recording_publisher();
         for entry in [
             transparency_ledger_source_entry(
                 "redaction-1",
@@ -23029,11 +23037,7 @@ mod tests {
     }
     #[test]
     fn publish_transparency_ledger_source_entries_rejects_empty_window() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
+        let (handle, publisher, _dir) = node_with_temp_storage_and_recording_publisher();
         let err = handle
             .publish_transparency_ledger_cycle_from_source_entries(
                 *b"cycle-src-pub001",
@@ -23051,8 +23055,7 @@ mod tests {
         use iroha_data_model::sorafs::{
             gar::GarEnforcementActionV1, transparency::ModerationLedgerEntryKindV1,
         };
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let (handle, _dir) = node_with_temp_storage();
         handle
             .record_gar_enforcement_receipt_transparency_entry(&gar_enforcement_receipt_fixture(
                 GarEnforcementActionV1::LegalHold,
@@ -23139,11 +23142,7 @@ mod tests {
     #[test]
     fn publish_privacy_aggregate_cycle_builds_and_publishes_publication() {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
+        let (handle, publisher, _dir) = node_with_temp_storage_and_recording_publisher();
         let cycle_id = *b"cycle-2026-wk-03";
         let aggregate_b = privacy_aggregate_fixture("sfm4c-jurisdiction-b", 0xB0);
         let aggregate_a = privacy_aggregate_fixture("sfm4c-jurisdiction-a", 0xA0);
@@ -23217,11 +23216,7 @@ mod tests {
     }
     #[test]
     fn publish_privacy_aggregate_cycle_rejects_out_of_window_without_publishing() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
+        let (handle, publisher, _dir) = node_with_temp_storage_and_recording_publisher();
         let mut aggregate = privacy_aggregate_fixture("sfm4c-jurisdiction-a", 0xA0);
         aggregate.window_start_unix = 1_799_999_999;
         let err = handle
@@ -23242,8 +23237,7 @@ mod tests {
     }
     #[test]
     fn record_privacy_aggregate_source_event_is_idempotent_and_rejects_equivocation() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let (handle, _dir) = node_with_temp_storage();
         let event = privacy_source_event("event-a", "jurisdiction-a", 0xA0, 1_800_000_010);
         assert_eq!(
             handle
@@ -23321,11 +23315,7 @@ mod tests {
         use iroha_data_model::sorafs::transparency::{
             MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1, ModerationLedgerEntryKindV1,
         };
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
+        let (handle, publisher, _dir) = node_with_temp_storage_and_recording_publisher();
         for event in [
             privacy_source_event("alpha-1", "jurisdiction-a", 0xA0, 1_800_000_010),
             privacy_source_event("alpha-2", "jurisdiction-a", 0xA0, 1_800_000_020),
@@ -23380,11 +23370,7 @@ mod tests {
     }
     #[test]
     fn publish_privacy_aggregate_cycle_from_source_events_requires_cycle_prf_output() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
+        let (handle, publisher, _dir) = node_with_temp_storage_and_recording_publisher();
         handle
             .record_privacy_aggregate_source_event(privacy_source_event(
                 "alpha-1",
@@ -23427,15 +23413,7 @@ mod tests {
                 .record_privacy_aggregate_source_event(event)
                 .expect("record source event");
         }
-        let outcome = handle
-            .publish_due_privacy_aggregate_cycle_from_source_events(
-                211,
-                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
-                "publish-once".to_string(),
-                privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(),
-                Some(privacy_composition_budget_policy()),
-            )
+        let outcome = publish_due_test_privacy_cycle(&handle, 211, 100, 200, "publish-once")
             .expect("publish due aggregate cycle");
         let publication = match outcome {
             PrivacyAggregateScheduleOutcome::Published {
@@ -23452,15 +23430,7 @@ mod tests {
         assert_eq!(publication.block.cycle_end_unix, 200);
         assert_eq!(publication.block.generated_at_unix, 200);
         assert_eq!(publication.block.entry_count, 2);
-        let repeated = handle
-            .publish_due_privacy_aggregate_cycle_from_source_events(
-                211,
-                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
-                "publish-once".to_string(),
-                privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(),
-                Some(privacy_composition_budget_policy()),
-            )
+        let repeated = publish_due_test_privacy_cycle(&handle, 211, 100, 200, "publish-once")
             .expect("repeat due aggregate cycle");
         assert!(matches!(
             repeated,
@@ -23491,15 +23461,7 @@ mod tests {
                 .record_privacy_aggregate_source_event(event)
                 .expect("record source event");
         }
-        let first = handle
-            .publish_due_privacy_aggregate_cycle_from_source_events(
-                311,
-                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
-                "catchup-cycle-1".to_string(),
-                privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(),
-                Some(privacy_composition_budget_policy()),
-            )
+        let first = publish_due_test_privacy_cycle(&handle, 311, 100, 200, "catchup-cycle-1")
             .expect("publish first stale aggregate cycle");
         let first_publication = match first {
             PrivacyAggregateScheduleOutcome::Published {
@@ -23515,15 +23477,7 @@ mod tests {
             }
             other => panic!("expected stale published outcome, got {other:?}"),
         };
-        let second = handle
-            .publish_due_privacy_aggregate_cycle_from_source_events(
-                311,
-                privacy_aggregate_cycle_id([0xB0; 32], 200, 300),
-                "catchup-cycle-2".to_string(),
-                privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(),
-                Some(privacy_composition_budget_policy()),
-            )
+        let second = publish_due_test_privacy_cycle(&handle, 311, 200, 300, "catchup-cycle-2")
             .expect("publish latest aggregate cycle after catch-up");
         match second {
             PrivacyAggregateScheduleOutcome::Published {
@@ -23538,15 +23492,7 @@ mod tests {
             }
             other => panic!("expected latest published outcome, got {other:?}"),
         }
-        let replayed = handle
-            .publish_due_privacy_aggregate_cycle_from_source_events(
-                311,
-                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
-                "catchup-cycle-1".to_string(),
-                privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(),
-                Some(privacy_composition_budget_policy()),
-            )
+        let replayed = publish_due_test_privacy_cycle(&handle, 311, 100, 200, "catchup-cycle-1")
             .expect("old exact request replays after the head advances");
         let replayed_publication = match replayed {
             PrivacyAggregateScheduleOutcome::Published { publication, .. } => publication,
@@ -23573,31 +23519,17 @@ mod tests {
                 .to_string()
                 .contains("cadence does not match the configured query lineage")
         );
-        let stale_fresh = handle
-            .publish_due_privacy_aggregate_cycle_from_source_events(
-                411,
-                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
-                "catchup-stale-fresh".to_string(),
-                privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(),
-                Some(privacy_composition_budget_policy()),
-            )
-            .expect_err("a fresh key cannot target an old terminal release");
+        let stale_fresh =
+            publish_due_test_privacy_cycle(&handle, 411, 100, 200, "catchup-stale-fresh")
+                .expect_err("a fresh key cannot target an old terminal release");
         assert!(
             stale_fresh
                 .to_string()
                 .contains("does not match the direct successor")
         );
-        let mismatched_old_key = handle
-            .publish_due_privacy_aggregate_cycle_from_source_events(
-                411,
-                privacy_aggregate_cycle_id([0xB0; 32], 200, 300),
-                "catchup-cycle-1".to_string(),
-                privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(),
-                Some(privacy_composition_budget_policy()),
-            )
-            .expect_err("an old key cannot be rebound to another cycle");
+        let mismatched_old_key =
+            publish_due_test_privacy_cycle(&handle, 411, 200, 300, "catchup-cycle-1")
+                .expect_err("an old key cannot be rebound to another cycle");
         assert!(
             mismatched_old_key
                 .to_string()
@@ -23642,15 +23574,7 @@ mod tests {
                 .record_privacy_aggregate_source_event(event)
                 .expect("record source event");
         }
-        let first = handle
-            .publish_due_privacy_aggregate_cycle_from_source_events(
-                311,
-                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
-                "prf-cycle-1".to_string(),
-                privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(),
-                Some(privacy_composition_budget_policy()),
-            )
+        let first = publish_due_test_privacy_cycle(&handle, 311, 100, 200, "prf-cycle-1")
             .expect("publish first due aggregate cycle");
         match first {
             PrivacyAggregateScheduleOutcome::Published {
@@ -23663,15 +23587,7 @@ mod tests {
             }
             other => panic!("expected first published outcome, got {other:?}"),
         }
-        let second = handle
-            .publish_due_privacy_aggregate_cycle_from_source_events(
-                311,
-                privacy_aggregate_cycle_id([0xB0; 32], 200, 300),
-                "prf-cycle-2".to_string(),
-                privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(),
-                Some(privacy_composition_budget_policy()),
-            )
+        let second = publish_due_test_privacy_cycle(&handle, 311, 200, 300, "prf-cycle-2")
             .expect("publish second due aggregate cycle");
         match second {
             PrivacyAggregateScheduleOutcome::Published {
@@ -24159,23 +24075,8 @@ mod tests {
             .canonicalize()
             .expect("canonical debug-provider temp dir");
         let config = with_test_signed_governance_config(
-            StorageConfig::builder()
-                .enabled(true)
-                .provider_id(Some(ProviderId::new([0x91; 32])))
-                .data_dir(root.join("storage"))
-                .moderation_quarantine_key_provider(Some(test_quarantine_key_provider_config()))
-                .privacy_aggregate_schedule(Some(privacy_aggregate_schedule_config()))
-                .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
-                .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
-                .privacy_release_anchor_provider_binding(
-                    Some(test_privacy_release_anchor_binding()),
-                )
-                .privacy_leader_lease_provider_binding(Some(
-                    test_transparency_leader_lease_binding(),
-                ))
-                .privacy_fenced_publisher_binding(
-                    Some(test_fenced_transparency_provider_binding()),
-                ),
+            privacy_aggregate_storage_builder(&root)
+                .moderation_quarantine_key_provider(Some(test_quarantine_key_provider_config())),
             &root,
         )
         .build();
@@ -24208,26 +24109,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let root = temp_dir.path().canonicalize().expect("canonical temp dir");
         let schedule = privacy_aggregate_schedule_config();
-        let cfg = with_test_signed_governance_config(
-            StorageConfig::builder()
-                .enabled(true)
-                .provider_id(Some(ProviderId::new([0x91; 32])))
-                .data_dir(root.join("storage"))
-                .privacy_aggregate_schedule(Some(schedule))
-                .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
-                .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
-                .privacy_release_anchor_provider_binding(
-                    Some(test_privacy_release_anchor_binding()),
-                )
-                .privacy_leader_lease_provider_binding(Some(
-                    test_transparency_leader_lease_binding(),
-                ))
-                .privacy_fenced_publisher_binding(
-                    Some(test_fenced_transparency_provider_binding()),
-                ),
-            &root,
-        )
-        .build();
+        let cfg = privacy_aggregate_storage_config(&root);
         let handle = node_with_test_privacy_cycle_prf_provider(cfg);
         assert_eq!(
             handle.configured_privacy_aggregate_schedule(),
@@ -24301,27 +24183,7 @@ mod tests {
     fn privacy_publication_budget_state_and_fused_head_restore_atomically() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let root = temp_dir.path().canonicalize().expect("canonical temp dir");
-        let schedule = privacy_aggregate_schedule_config();
-        let cfg = with_test_signed_governance_config(
-            StorageConfig::builder()
-                .enabled(true)
-                .provider_id(Some(ProviderId::new([0x91; 32])))
-                .data_dir(root.join("storage"))
-                .privacy_aggregate_schedule(Some(schedule))
-                .privacy_aggregate_policy(Some(privacy_aggregate_policy_config()))
-                .privacy_cycle_prf_provider_binding(Some(test_privacy_cycle_prf_provider_binding()))
-                .privacy_release_anchor_provider_binding(
-                    Some(test_privacy_release_anchor_binding()),
-                )
-                .privacy_leader_lease_provider_binding(Some(
-                    test_transparency_leader_lease_binding(),
-                ))
-                .privacy_fenced_publisher_binding(
-                    Some(test_fenced_transparency_provider_binding()),
-                ),
-            &root,
-        )
-        .build();
+        let cfg = privacy_aggregate_storage_config(&root);
         let anchor = Arc::new(TestPrivacyReleaseAnchor::default());
         let fused_provider = Arc::new(TestFencedTransparencyProvider::bound());
         let source = NodeHandle::try_new_with_runtime_deps(
@@ -24786,15 +24648,7 @@ mod tests {
     fn publish_due_privacy_aggregate_cycle_from_source_events_emits_fixed_empty_population_set() {
         let (cfg, _dir) = privacy_aggregate_storage_config_with_temp_dir();
         let handle = node_with_test_privacy_cycle_prf_provider(cfg);
-        let empty = handle
-            .publish_due_privacy_aggregate_cycle_from_source_events(
-                211,
-                privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
-                "empty-cycle-1".to_string(),
-                privacy_aggregate_schedule_config(),
-                privacy_aggregate_cycle_config(),
-                Some(privacy_composition_budget_policy()),
-            )
+        let empty = publish_due_test_privacy_cycle(&handle, 211, 100, 200, "empty-cycle-1")
             .expect("empty due aggregate cycle");
         let publication = match empty {
             PrivacyAggregateScheduleOutcome::Published {
@@ -24813,8 +24667,7 @@ mod tests {
     }
     #[test]
     fn governance_publisher_presence_tracks_set_and_clear() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let (handle, _dir) = node_with_temp_storage();
         assert!(!handle.has_governance_publisher());
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher;
@@ -24944,26 +24797,13 @@ mod tests {
             .path()
             .canonicalize()
             .expect("canonical signed publisher root");
-        let signed_config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(signed_root.join("storage"))
-            .governance_dir(Some(signed_root.join("governance")))
-            .governance_dag_publisher_peer_id(Some(
-                String::from_utf8(signer.publisher_peer_id().to_vec())
-                    .expect("test peer id is UTF-8"),
-            ))
-            .governance_dag_signer_handle(Some(signer.handle().to_owned()))
-            .governance_dag_signer_qualification(Some(
-                TestGovernanceDagSigner::expected_qualification(),
-            ))
-            .governance_dag_checkpoint_store_handle(Some(
-                TestGovernanceDagCheckpointStore::HANDLE.to_owned(),
-            ))
-            .governance_dag_checkpoint_store_qualification(Some(
-                TestGovernanceDagCheckpointStore::expected_qualification(),
-            ))
-            .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
-            .build();
+        let signed_config = governance_signer_storage_config(
+            &signed_root,
+            true,
+            &signer,
+            signer.handle(),
+            TestGovernanceDagSigner::expected_qualification(),
+        );
         let error = NodeHandle::try_new(signed_config.clone())
             .expect_err("configured identity without injected signer must fail");
         assert!(matches!(
@@ -24973,11 +24813,7 @@ mod tests {
         ));
         let handle = NodeHandle::try_new_with_runtime_deps(
             signed_config,
-            NodeRuntimeDeps::default()
-                .with_governance_dag_signer(signer.clone())
-                .with_governance_dag_checkpoint_store(Arc::new(
-                    TestGovernanceDagCheckpointStore::default(),
-                )),
+            governance_signer_runtime_deps(signer.clone()),
         )
         .expect("complete runtime-signed Governance DAG publisher starts");
         assert!(handle.has_governance_publisher());
@@ -25068,36 +24904,17 @@ mod tests {
         let data_dir = root.join("storage");
         let governance_dir = root.join("governance");
         let signer = Arc::new(TestGovernanceDagSigner::new());
-        let config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(data_dir.clone())
-            .governance_dir(Some(governance_dir.clone()))
-            .governance_dag_publisher_peer_id(Some(
-                String::from_utf8(signer.publisher_peer_id().to_vec())
-                    .expect("test peer id is UTF-8"),
-            ))
-            .governance_dag_signer_handle(Some(signer.handle().to_owned()))
-            .governance_dag_signer_qualification(Some(
-                TestGovernanceDagSigner::expected_qualification(),
-            ))
-            .governance_dag_checkpoint_store_handle(Some(
-                TestGovernanceDagCheckpointStore::HANDLE.to_owned(),
-            ))
-            .governance_dag_checkpoint_store_qualification(Some(
-                TestGovernanceDagCheckpointStore::expected_qualification(),
-            ))
-            .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
-            .build();
+        let config = governance_signer_storage_config(
+            &root,
+            true,
+            &signer,
+            signer.handle(),
+            TestGovernanceDagSigner::expected_qualification(),
+        );
         signer.qualification_refuse.store(true, Ordering::SeqCst);
-        let error = NodeHandle::try_new_with_runtime_deps(
-            config,
-            NodeRuntimeDeps::default()
-                .with_governance_dag_signer(signer)
-                .with_governance_dag_checkpoint_store(Arc::new(
-                    TestGovernanceDagCheckpointStore::default(),
-                )),
-        )
-        .expect_err("stale signer must fail before node durability opens");
+        let error =
+            NodeHandle::try_new_with_runtime_deps(config, governance_signer_runtime_deps(signer))
+                .expect_err("stale signer must fail before node durability opens");
         let rendered = error.to_string();
         assert!(rendered.contains("stale"));
         assert!(!rendered.contains("must-never-escape"));
@@ -25117,35 +24934,16 @@ mod tests {
         let data_dir = root.join("storage");
         let governance_dir = root.join("governance");
         let signer = Arc::new(TestGovernanceDagSigner::new());
-        let config = StorageConfig::builder()
-            .enabled(true)
-            .data_dir(data_dir.clone())
-            .governance_dir(Some(governance_dir.clone()))
-            .governance_dag_publisher_peer_id(Some(
-                String::from_utf8(signer.publisher_peer_id().to_vec())
-                    .expect("test peer id is UTF-8"),
-            ))
-            .governance_dag_signer_handle(Some("pkcs11:governance-dag:test".to_owned()))
-            .governance_dag_signer_qualification(Some(
-                TestGovernanceDagSigner::expected_qualification(),
-            ))
-            .governance_dag_checkpoint_store_handle(Some(
-                TestGovernanceDagCheckpointStore::HANDLE.to_owned(),
-            ))
-            .governance_dag_checkpoint_store_qualification(Some(
-                TestGovernanceDagCheckpointStore::expected_qualification(),
-            ))
-            .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
-            .build();
-        let error = NodeHandle::try_new_with_runtime_deps(
-            config,
-            NodeRuntimeDeps::default()
-                .with_governance_dag_signer(signer)
-                .with_governance_dag_checkpoint_store(Arc::new(
-                    TestGovernanceDagCheckpointStore::default(),
-                )),
-        )
-        .expect_err("test-marked signer handle must fail before node durability opens");
+        let config = governance_signer_storage_config(
+            &root,
+            true,
+            &signer,
+            "pkcs11:governance-dag:test",
+            TestGovernanceDagSigner::expected_qualification(),
+        );
+        let error =
+            NodeHandle::try_new_with_runtime_deps(config, governance_signer_runtime_deps(signer))
+                .expect_err("test-marked signer handle must fail before node durability opens");
         assert!(error.to_string().contains("test-marked"));
         assert!(!data_dir.exists());
         assert!(!governance_dir.exists());
@@ -25196,31 +24994,16 @@ mod tests {
             signer
                 .drift_on_second_qualification_read
                 .store(drift_on_second_read, Ordering::SeqCst);
-            let config = StorageConfig::builder()
-                .enabled(true)
-                .data_dir(data_dir.clone())
-                .governance_dir(Some(governance_dir.clone()))
-                .governance_dag_publisher_peer_id(Some(
-                    String::from_utf8(signer.publisher_peer_id().to_vec())
-                        .expect("test peer id is UTF-8"),
-                ))
-                .governance_dag_signer_handle(Some(configured_handle.to_owned()))
-                .governance_dag_signer_qualification(Some(expected_qualification))
-                .governance_dag_checkpoint_store_handle(Some(
-                    TestGovernanceDagCheckpointStore::HANDLE.to_owned(),
-                ))
-                .governance_dag_checkpoint_store_qualification(Some(
-                    TestGovernanceDagCheckpointStore::expected_qualification(),
-                ))
-                .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
-                .build();
+            let config = governance_signer_storage_config(
+                &root,
+                true,
+                &signer,
+                configured_handle,
+                expected_qualification,
+            );
             let error = NodeHandle::try_new_with_runtime_deps(
                 config,
-                NodeRuntimeDeps::default()
-                    .with_governance_dag_signer(signer)
-                    .with_governance_dag_checkpoint_store(Arc::new(
-                        TestGovernanceDagCheckpointStore::default(),
-                    )),
+                governance_signer_runtime_deps(signer),
             )
             .expect_err(label);
             assert!(
@@ -25292,26 +25075,13 @@ mod tests {
         let data_dir = root.join("storage");
         let governance_dir = root.join("governance");
         let signer = Arc::new(TestGovernanceDagSigner::new());
-        let config = StorageConfig::builder()
-            .enabled(false)
-            .data_dir(data_dir.clone())
-            .governance_dir(Some(governance_dir.clone()))
-            .governance_dag_publisher_peer_id(Some(
-                String::from_utf8(signer.publisher_peer_id().to_vec())
-                    .expect("test peer id is UTF-8"),
-            ))
-            .governance_dag_signer_handle(Some(signer.handle().to_owned()))
-            .governance_dag_signer_qualification(Some(
-                TestGovernanceDagSigner::expected_qualification(),
-            ))
-            .governance_dag_checkpoint_store_handle(Some(
-                TestGovernanceDagCheckpointStore::HANDLE.to_owned(),
-            ))
-            .governance_dag_checkpoint_store_qualification(Some(
-                TestGovernanceDagCheckpointStore::expected_qualification(),
-            ))
-            .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
-            .build();
+        let config = governance_signer_storage_config(
+            &root,
+            false,
+            &signer,
+            signer.handle(),
+            TestGovernanceDagSigner::expected_qualification(),
+        );
         let error = NodeHandle::try_new_with_runtime_deps(
             config,
             NodeRuntimeDeps::default().with_governance_dag_signer(signer),
@@ -25326,11 +25096,7 @@ mod tests {
     }
     #[test]
     fn publish_appeal_finance_weekly_rollup_writes_governance_publisher() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
+        let (handle, publisher, _dir) = node_with_temp_storage_and_recording_publisher();
         let rollup = appeal_finance_weekly_rollup_fixture();
         let expected = to_bytes(&rollup).expect("encode appeal finance weekly rollup");
         handle
@@ -25345,11 +25111,7 @@ mod tests {
     }
     #[test]
     fn publish_appeal_finance_settlement_receipt_writes_governance_publisher() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
-        let publisher = Arc::new(RecordingPublisher::default());
-        let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
-        handle.set_governance_publisher(trait_publisher);
+        let (handle, publisher, _dir) = node_with_temp_storage_and_recording_publisher();
         let receipt = appeal_finance_settlement_receipt_fixture();
         let expected = to_bytes(&receipt).expect("encode appeal finance settlement receipt");
         handle
@@ -25360,8 +25122,7 @@ mod tests {
     }
     #[test]
     fn publish_por_governance_payloads_use_canonical_outbox_dispatch() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let (handle, _dir) = node_with_temp_storage();
         let publisher = Arc::new(RecordingPublisher::default());
         handle
             .try_set_governance_publisher(publisher.clone())
@@ -25385,8 +25146,7 @@ mod tests {
     }
     #[test]
     fn por_governance_payloads_remain_ordered_and_retryable_after_publish_failure() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let (handle, _dir) = node_with_temp_storage();
         let failing = Arc::new(FailingPublisher::default());
         handle
             .try_set_governance_publisher(failing.clone())
@@ -25416,8 +25176,7 @@ mod tests {
     }
     #[test]
     fn por_ingestion_status_tracks_backlog_and_history() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let (handle, _dir) = node_with_temp_storage();
         let challenge = por_sample_challenge();
         handle
             .record_por_challenge(&challenge)
@@ -25502,8 +25261,7 @@ mod tests {
     }
     #[test]
     fn por_validation_failures_report_no_mutation_for_projection_preservation() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let (handle, _dir) = node_with_temp_storage();
         let challenge = por_sample_challenge();
         handle
             .record_por_challenge_with_authority_update(&challenge)
@@ -25706,8 +25464,7 @@ mod tests {
     }
     #[test]
     fn por_ingestion_status_tracks_failures() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let (handle, _dir) = node_with_temp_storage();
         let challenge = por_sample_challenge();
         handle
             .record_por_challenge(&challenge)
@@ -25780,8 +25537,7 @@ mod tests {
     }
     #[test]
     fn por_ingestion_overview_reports_pending_and_failures() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new(cfg);
+        let (handle, _dir) = node_with_temp_storage();
         let challenge = por_sample_challenge();
         handle
             .record_por_challenge(&challenge)
@@ -25822,42 +25578,7 @@ mod tests {
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
         handle.set_governance_publisher(trait_publisher);
-        let declaration = CapacityDeclarationV1 {
-            version: CAPACITY_DECLARATION_VERSION_V1,
-            provider_id: [0xAB; 32],
-            stake: sorafs_manifest::provider_advert::StakePointer {
-                pool_id: [0xAA; 32],
-                stake_amount: xor("1"),
-            },
-            committed_capacity_gib: 100,
-            chunker_commitments: vec![ChunkerCommitmentV1 {
-                profile_id: "sorafs.sf1@1.0.0".into(),
-                profile_aliases: None,
-                committed_gib: 100,
-                capability_refs: Vec::new(),
-            }],
-            lane_commitments: vec![LaneCommitmentV1 {
-                lane_id: "default".into(),
-                max_gib: 100,
-            }],
-            pricing: None,
-            valid_from: 1,
-            valid_until: 2,
-            metadata: vec![],
-        };
-        let payload = to_bytes(&declaration).expect("encode declaration");
-        let record = CapacityDeclarationRecord::new(
-            ProviderId::new(declaration.provider_id),
-            payload,
-            declaration.committed_capacity_gib,
-            1,
-            1,
-            2,
-            Metadata::default(),
-        );
-        handle
-            .record_capacity_declaration(&record)
-            .expect("record declaration");
+        let declaration = record_capacity_declaration_fixture(&handle, [0xAB; 32], [0xAA; 32]);
         let payload = b"gc-expired-payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let retention_epoch = 1_700_000_000;
@@ -25895,20 +25616,10 @@ mod tests {
     }
     #[test]
     fn gc_eviction_transaction_prepare_checkpoint_failure_prevents_domain_commit() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            RepairConfig::default(),
-            enabled_gc_config(1),
-        );
+        let (cfg, handle, _dir) = gc_node_with_temp_storage();
         let now_unix = 1_710_000_050;
-        let digest = build_manifest_with_retention(
-            vec![0x70; 8],
-            now_unix - 1,
-            b"gc-prepare-checkpoint-failure",
-            &handle,
-        );
-        let manifest_id = hex::encode(digest);
+        let (_, manifest_id) =
+            expired_gc_manifest_fixture(&handle, 0x70, now_unix, b"gc-prepare-checkpoint-failure");
         ensure_test_capacity_provider(&handle);
         let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let committed = fs::read(&checkpoint_path).expect("read committed auxiliary checkpoint");
@@ -25940,20 +25651,10 @@ mod tests {
     }
     #[test]
     fn gc_eviction_transaction_discards_pre_domain_crash_intent() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            RepairConfig::default(),
-            enabled_gc_config(1),
-        );
+        let (cfg, handle, _dir) = gc_node_with_temp_storage();
         let now_unix = 1_710_000_100;
-        let digest = build_manifest_with_retention(
-            vec![0x71; 8],
-            now_unix - 1,
-            b"gc-pre-domain-crash",
-            &handle,
-        );
-        let manifest_id = hex::encode(digest);
+        let (_, manifest_id) =
+            expired_gc_manifest_fixture(&handle, 0x71, now_unix, b"gc-pre-domain-crash");
         let storage = handle.storage.as_ref().expect("storage backend");
         let target = storage.manifest(&manifest_id).expect("GC target");
         {
@@ -26010,20 +25711,10 @@ mod tests {
     }
     #[test]
     fn gc_eviction_transaction_fail_closes_storage_generation_drift() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            RepairConfig::default(),
-            enabled_gc_config(1),
-        );
+        let (cfg, handle, _dir) = gc_node_with_temp_storage();
         let now_unix = 1_710_000_150;
-        let digest = build_manifest_with_retention(
-            vec![0x7B; 8],
-            now_unix - 1,
-            b"gc-generation-drift-target",
-            &handle,
-        );
-        let manifest_id = hex::encode(digest);
+        let (_, manifest_id) =
+            expired_gc_manifest_fixture(&handle, 0x7B, now_unix, b"gc-generation-drift-target");
         let storage = handle.storage.as_ref().expect("storage backend");
         let target = storage.manifest(&manifest_id).expect("GC target");
         let gc_guard = handle.gc_mutation_lock.lock().expect("GC mutation lock");
@@ -26081,16 +25772,10 @@ mod tests {
     }
     #[test]
     fn gc_eviction_transaction_recovers_post_domain_crash_exactly_once() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            RepairConfig::default(),
-            enabled_gc_config(1),
-        );
+        let (cfg, handle, _dir) = gc_node_with_temp_storage();
         let now_unix = 1_710_000_200;
         let payload = b"gc-post-domain-crash";
-        let digest = build_manifest_with_retention(vec![0x72; 8], now_unix - 1, payload, &handle);
-        let manifest_id = hex::encode(digest);
+        let (digest, manifest_id) = expired_gc_manifest_fixture(&handle, 0x72, now_unix, payload);
         let storage = handle.storage.as_ref().expect("storage backend");
         let target = storage.manifest(&manifest_id).expect("GC target");
         {
@@ -26173,16 +25858,10 @@ mod tests {
     }
     #[test]
     fn gc_eviction_transaction_finalization_checkpoint_failure_fail_stops_and_recovers() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            RepairConfig::default(),
-            enabled_gc_config(1),
-        );
+        let (cfg, handle, _dir) = gc_node_with_temp_storage();
         let now_unix = 1_710_000_250;
         let payload = b"gc-finalization-checkpoint-failure";
-        let digest = build_manifest_with_retention(vec![0x7A; 8], now_unix - 1, payload, &handle);
-        let manifest_id = hex::encode(digest);
+        let (_, manifest_id) = expired_gc_manifest_fixture(&handle, 0x7A, now_unix, payload);
         let storage = handle.storage.as_ref().expect("storage backend");
         let target = storage.manifest(&manifest_id).expect("GC target");
         let gc_guard = handle.gc_mutation_lock.lock().expect("GC mutation lock");
@@ -26292,13 +25971,8 @@ mod tests {
             enabled_gc_config(1),
         );
         let now_unix = 1_710_000_300;
-        let digest = build_manifest_with_retention(
-            vec![0x73; 8],
-            now_unix - 1,
-            b"gc-full-outbox-restart",
-            &handle,
-        );
-        let manifest_id = hex::encode(digest);
+        let (_, manifest_id) =
+            expired_gc_manifest_fixture(&handle, 0x73, now_unix, b"gc-full-outbox-restart");
         let issuance = proof_token_issuance_fixture();
         handle
             .publish_proof_token_issuance(issuance)
@@ -26446,12 +26120,7 @@ mod tests {
     }
     #[test]
     fn gc_eviction_transaction_rejects_acknowledged_link_counter_tampering() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            RepairConfig::default(),
-            enabled_gc_config(1),
-        );
+        let (cfg, handle, _dir) = gc_node_with_temp_storage();
         let now_unix = 1_710_000_500;
         build_manifest_with_retention(
             vec![0x76; 8],
@@ -26489,9 +26158,7 @@ mod tests {
     }
     #[test]
     fn gc_blocks_shared_chunks_with_zero_byte_audit() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle =
-            NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
+        let (_cfg, handle, _dir) = gc_node_with_temp_storage();
         let now_unix = 1_710_000_600;
         let payload = b"gc-shared-chunk-zero-byte-audit";
         build_manifest_with_retention(vec![0x76; 8], now_unix + 60, payload, &handle);
@@ -26520,12 +26187,7 @@ mod tests {
     }
     #[test]
     fn gc_eviction_transaction_publisher_failure_retries_durable_audit() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle = NodeHandle::new_with_policies(
-            cfg.clone(),
-            RepairConfig::default(),
-            enabled_gc_config(1),
-        );
+        let (cfg, handle, _dir) = gc_node_with_temp_storage();
         let now_unix = 1_710_000_700;
         build_manifest_with_retention(vec![0x78; 8], now_unix - 1, b"gc-publisher-retry", &handle);
         let failing = Arc::new(FailingPublisher::default());
@@ -26559,9 +26221,7 @@ mod tests {
     }
     #[test]
     fn gc_eviction_transaction_serializes_concurrent_sweeps() {
-        let (cfg, _dir) = storage_config_with_temp_dir();
-        let handle =
-            NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
+        let (_cfg, handle, _dir) = gc_node_with_temp_storage();
         let now_unix = 1_710_000_800;
         for index in 0_u8..4 {
             let payload = vec![0x80 + index; 32];
@@ -26642,42 +26302,7 @@ mod tests {
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
         handle.set_governance_publisher(trait_publisher);
-        let declaration = CapacityDeclarationV1 {
-            version: CAPACITY_DECLARATION_VERSION_V1,
-            provider_id: [0x11; 32],
-            stake: sorafs_manifest::provider_advert::StakePointer {
-                pool_id: [0x22; 32],
-                stake_amount: xor("1"),
-            },
-            committed_capacity_gib: 100,
-            chunker_commitments: vec![ChunkerCommitmentV1 {
-                profile_id: "sorafs.sf1@1.0.0".into(),
-                profile_aliases: None,
-                committed_gib: 100,
-                capability_refs: Vec::new(),
-            }],
-            lane_commitments: vec![LaneCommitmentV1 {
-                lane_id: "default".into(),
-                max_gib: 100,
-            }],
-            pricing: None,
-            valid_from: 1,
-            valid_until: 2,
-            metadata: vec![],
-        };
-        let payload = to_bytes(&declaration).expect("encode declaration");
-        let record = CapacityDeclarationRecord::new(
-            ProviderId::new(declaration.provider_id),
-            payload,
-            declaration.committed_capacity_gib,
-            1,
-            1,
-            2,
-            Metadata::default(),
-        );
-        handle
-            .record_capacity_declaration(&record)
-            .expect("record declaration");
+        let declaration = record_capacity_declaration_fixture(&handle, [0x11; 32], [0x22; 32]);
         let payload = b"reconciliation-payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let mut policy = PinPolicy::default();

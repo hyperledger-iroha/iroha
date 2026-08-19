@@ -34,8 +34,7 @@ fn lane_drain_certificate_aggregates_exact_quorum_and_verifies_after_restart() {
     let encoded = certificate.encode();
     let decoded = LaneDrainCertificateV1::decode(&mut encoded.as_slice())
         .expect("drain certificate round-trips");
-    validate_lane_drain_certificate(&decoded)
-        .expect("round-tripped drain certificate verifies");
+    validate_lane_drain_certificate(&decoded).expect("round-tripped drain certificate verifies");
 }
 
 #[test]
@@ -159,20 +158,13 @@ fn new_view_certificate_projects_four_votes_and_rejects_four_signers_on_wire() {
         .iter()
         .rev()
         .map(|keypair| {
-            LaneBlockNewViewVoteV1::new_signed(
-                body.clone(),
-                peer(keypair),
-                keypair.private_key(),
-            )
-            .expect("NewView vote")
+            LaneBlockNewViewVoteV1::new_signed(body.clone(), peer(keypair), keypair.private_key())
+                .expect("NewView vote")
         })
         .collect::<Vec<_>>();
-    let certificate = aggregate_lane_block_new_view_votes(
-        body,
-        source.descriptor.validator_set.clone(),
-        &votes,
-    )
-    .expect("four NewView votes project to the exact threshold");
+    let certificate =
+        aggregate_lane_block_new_view_votes(body, source.descriptor.validator_set.clone(), &votes)
+            .expect("four NewView votes project to the exact threshold");
     assert_eq!(certificate.signers_bitmap, vec![0b0000_0111]);
     let selected_pops = selected_signer_pops(
         &certificate.validator_set,
@@ -207,12 +199,7 @@ fn availability_qc_projects_four_votes_and_rejects_four_signers_on_wire() {
         .rev()
         .map(|keypair| {
             signed_autonomous_prepare_vote(
-                &payload,
-                proposal,
-                network_id,
-                epoch,
-                keypair,
-                &keypairs,
+                &payload, proposal, network_id, epoch, keypair, &keypairs,
             )
             .payload_availability_vote
             .expect("fixture READY vote")

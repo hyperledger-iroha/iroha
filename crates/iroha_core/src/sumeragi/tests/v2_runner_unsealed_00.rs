@@ -1,61 +1,4 @@
 #[test]
-#[allow(clippy::too_many_lines)]
-fn closed_certified_serve_predecessor_admission_cannot_veto_pacemaker() {
-    let calls = Cell::new(0_u8);
-    service_certified_serve_barrier_pacemaker_turn(false, || {
-        calls.set(calls.get().saturating_add(1));
-        Ok::<(), ()>(())
-    })
-    .expect("live certified Serve barrier services one pacemaker turn");
-    assert_eq!(
-        calls.get(),
-        1,
-        "a closed predecessor admission cannot veto the live pacemaker"
-    );
-
-    service_certified_serve_barrier_pacemaker_turn(false, || {
-        calls.set(calls.get().saturating_add(1));
-        Err::<(), _>("typed pacemaker failure")
-    })
-    .expect_err("live runner propagates a typed pacemaker failure");
-    assert_eq!(calls.get(), 2);
-
-    service_certified_serve_barrier_pacemaker_turn(true, || {
-        calls.set(calls.get().saturating_add(1));
-        Ok::<(), ()>(())
-    })
-    .expect("interrupted-tip recovery does not arm a fresh pacemaker");
-    assert_eq!(calls.get(), 2);
-
-    #[cfg(feature = "bls")]
-    {
-        let mut recovery =
-            super::super::v2_worker::tests::SelectedServeTimeoutRecoveryFixture::new();
-        for _ in 0..16 {
-            recovery
-                .service_exact_serve_runtime_prefix()
-                .expect("service the exact selected-Serve runtime prefix");
-            service_certified_serve_barrier_liveness_turn(false, |action| match action {
-                CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode => {
-                    recovery.service_timeout_vote_episode()
-                }
-                CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
-                    recovery.service_timeout_recovery_prefix()
-                }
-                CertifiedServeBarrierLivenessAction::Pacemaker => recovery.service_pacemaker(),
-            })
-            .expect("the selected-Serve suffix retains typed timeout recovery");
-            if recovery.entered_view_one() {
-                break;
-            }
-        }
-        recovery.assert_complete();
-        let mut late_passive_fetch =
-            super::super::v2_worker::tests::SelectedServeTimeoutRecoveryFixture::new_late_passive_fetch();
-        late_passive_fetch.assert_late_passive_fetch_completion_reopens_selected_serve();
-    }
-}
-#[test]
 fn canonical_body_recovery_batches_all_ordered_heights_before_gate_close() {
     let need = |height: u64| {
         let executed_block_wire_hash = Hash::new(&height.to_le_bytes());
@@ -186,17 +129,6 @@ fn canonical_body_recovery_successor_request_gets_a_fresh_retry_deadline() {
     );
 }
 #[test]
-fn dormant_live_serve_debt_latches_restart_instead_of_waiting_for_requester() {
-    let (mut services, _) = super::super::v2_worker::tests::fixture();
-    assert!(!services.exact_output_restart_required_for_test());
-    let reason = services.fail_closed_dormant_certified_serve(41);
-    assert!(reason.contains("41"));
-    assert!(reason.contains("restart is required for local discharge"));
-    assert!(
-        services.exact_output_restart_required_for_test(),
-        "a carrierless live Serve lifecycle must restart into local startup discharge"
-    );
-}
 fn pending_tip_recovery_gate_precedes_lane_work_construction() {
     let constructed = Cell::new(false);
     let error = construct_after_pending_tip_application_recovery(true, false, || {
@@ -383,279 +315,6 @@ fn admitted_decided_recovery_request(
             .collect(),
     )
 }
-enum RecordedPrepareOutcome {
-    Admitted(u8),
-    Backpressure,
-    Rejected(&'static str),
-    Service(&'static str),
-}
-struct RecordingDecidedLaneAuthorizer {
-    calls: Vec<&'static str>,
-    stage_error: Option<&'static str>,
-    prepare_outcome: Option<RecordedPrepareOutcome>,
-}
-impl RecordingDecidedLaneAuthorizer {
-    fn new(prepare_outcome: RecordedPrepareOutcome) -> Self {
-        Self {
-            calls: Vec::new(),
-            stage_error: None,
-            prepare_outcome: Some(prepare_outcome),
-        }
-    }
-}
-impl ordinary_ingress_consumer::CurrentCertifiedServePreDequeueAuthorizer
-    for RecordingDecidedLaneAuthorizer
-{
-    type Admission = u8;
-    fn stage_negative(
-        &mut self,
-        _request_hash: HashOf<wire::CertifiedBodyRequest>,
-        _outcome: CertifiedServeNegativeOutcome,
-    ) -> Result<(), String> {
-        self.calls.push("stage-negative");
-        self.stage_error
-            .map_or(Ok(()), |reason| Err(reason.to_owned()))
-    }
-    fn prepare_exact(
-        &mut self,
-        _authenticated_via: &PeerId,
-        _request: AuthenticatedCertifiedBodyRequest,
-    ) -> Result<Self::Admission, CertifiedServePrepareError> {
-        self.calls.push("prepare-exact");
-        match self
-            .prepare_outcome
-            .take()
-            .expect("recording authorizer is called at most once")
-        {
-            RecordedPrepareOutcome::Admitted(admission) => Ok(admission),
-            RecordedPrepareOutcome::Backpressure => Err(CertifiedServePrepareError::Backpressure),
-            RecordedPrepareOutcome::Rejected(reason) => {
-                Err(CertifiedServePrepareError::Rejected(reason.to_owned()))
-            }
-            RecordedPrepareOutcome::Service(reason) => {
-                Err(CertifiedServePrepareError::Service(reason.to_owned()))
-            }
-        }
-    }
-}
-struct RecordingDecidedLaneCommitter {
-    calls: Vec<&'static str>,
-    fail_on: Option<&'static str>,
-}
-impl RecordingDecidedLaneCommitter {
-    fn new(fail_on: Option<&'static str>) -> Self {
-        Self {
-            calls: Vec::new(),
-            fail_on,
-        }
-    }
-    fn record(&mut self, operation: &'static str) -> Result<(), V2RunnerError> {
-        self.calls.push(operation);
-        if self.fail_on == Some(operation) {
-            Err(V2RunnerError::Service(format!("{operation} failed")))
-        } else {
-            Ok(())
-        }
-    }
-}
-impl DecidedLaneRecoveryDrainCommitter for RecordingDecidedLaneCommitter {
-    type Admission = u8;
-    fn commit_lane_local(&mut self) -> Result<(), V2RunnerError> {
-        self.record("lane-local")
-    }
-    fn commit_kura_replica_advert(&mut self) -> Result<(), V2RunnerError> {
-        self.record("kura-replica-advert")
-    }
-    fn commit_current_serve(
-        &mut self,
-        current: DecidedLaneRecoveryCurrentDrain<Self::Admission>,
-    ) -> Result<(), V2RunnerError> {
-        match current {
-            DecidedLaneRecoveryCurrentDrain::Admitted(7) => self.record("serve-exact-decided"),
-            DecidedLaneRecoveryCurrentDrain::Rejected(_) => self.record("retire-staged-negative"),
-            DecidedLaneRecoveryCurrentDrain::Admitted(other) => Err(V2RunnerError::Service(
-                format!("unexpected test admission {other}"),
-            )),
-        }
-    }
-    fn bind_leader_wire(&mut self) -> Result<(), V2RunnerError> {
-        self.record("bind-leader-wire")
-    }
-    fn commit_historical_serve(&mut self) -> Result<(), V2RunnerError> {
-        self.record("serve-history")
-    }
-    fn commit_leader_wire_volatile(&mut self) -> Result<(), V2RunnerError> {
-        self.record("retire-volatile")
-    }
-}
-#[test]
-fn decided_lane_checked_drain_requires_staged_or_prepared_outcome() {
-    let (context, keys) = context();
-    let round = wire::ConsensusRound {
-        context_id: context.id(),
-        height: context.height,
-        view: 3,
-    };
-    let subject = proposal_subject(b"decided drain authorization subject");
-    let decided_subject = proposal_subject(b"decided drain authorization winner");
-    let request = decided_recovery_certified_request(&context, &keys[1], round, subject);
-    let inbound = admitted_decided_recovery_request(&context, &request);
-    let prepare = |winner| {
-        prepare_decided_lane_recovery_ingress(
-            &inbound,
-            context.height,
-            winner,
-            |request, sender| {
-                super::super::v2_transport::authenticate_certified_body_request(
-                    &context,
-                    request,
-                    sender,
-                    |_, _| Ok::<(), String>(()),
-                )
-                .map_err(|error| error.to_string())
-            },
-        )
-    };
-    let mut staged = RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
-    let staged_decision =
-        authorize_decided_lane_recovery_drain(prepare(decided_subject), &mut staged);
-    assert!(matches!(
-        staged_decision,
-        DecidedLaneRecoveryDrainDecision::Authorized(
-            DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                DecidedLaneRecoveryCurrentDrain::Rejected(_)
-            )
-        )
-    ));
-    staged.calls.push("checked-drain");
-    assert_eq!(staged.calls, ["stage-negative", "checked-drain"]);
-    let mut failed_stage =
-        RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
-    failed_stage.stage_error = Some("durable negative write failed");
-    assert!(matches!(
-        authorize_decided_lane_recovery_drain(
-            prepare(decided_subject),
-            &mut failed_stage,
-        ),
-        DecidedLaneRecoveryDrainDecision::FailClosed(reason)
-            if reason == "durable negative write failed"
-    ));
-    assert_eq!(failed_stage.calls, ["stage-negative"]);
-    let mut admitted = RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Admitted(7));
-    assert!(matches!(
-        authorize_decided_lane_recovery_drain(prepare(subject), &mut admitted),
-        DecidedLaneRecoveryDrainDecision::Authorized(
-            DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                DecidedLaneRecoveryCurrentDrain::Admitted(7)
-            )
-        )
-    ));
-    admitted.calls.push("checked-drain");
-    assert_eq!(admitted.calls, ["prepare-exact", "checked-drain"]);
-    let mut typed_rejection = RecordingDecidedLaneAuthorizer::new(
-        RecordedPrepareOutcome::Rejected("typed negative was staged"),
-    );
-    assert!(matches!(
-        authorize_decided_lane_recovery_drain(prepare(subject), &mut typed_rejection),
-        DecidedLaneRecoveryDrainDecision::Authorized(
-            DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                DecidedLaneRecoveryCurrentDrain::Rejected(reason)
-            )
-        ) if reason == "typed negative was staged"
-    ));
-    typed_rejection.calls.push("checked-drain");
-    assert_eq!(typed_rejection.calls, ["prepare-exact", "checked-drain"]);
-    let mut backpressured =
-        RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Backpressure);
-    assert!(matches!(
-        authorize_decided_lane_recovery_drain(prepare(subject), &mut backpressured),
-        DecidedLaneRecoveryDrainDecision::Retain
-    ));
-    assert_eq!(backpressured.calls, ["prepare-exact"]);
-    let mut failed_prepare = RecordingDecidedLaneAuthorizer::new(RecordedPrepareOutcome::Service(
-        "Serve preparation failed",
-    ));
-    assert!(matches!(
-        authorize_decided_lane_recovery_drain(prepare(subject), &mut failed_prepare),
-        DecidedLaneRecoveryDrainDecision::FailClosed(reason)
-            if reason == "Serve preparation failed"
-    ));
-    assert_eq!(
-        failed_prepare.calls,
-        ["prepare-exact"],
-        "service failure cannot authorize checked dequeue"
-    );
-}
-#[test]
-fn decided_lane_commit_orders_bind_before_history_or_volatile_retirement() {
-    let mut exact = RecordingDecidedLaneCommitter::new(None);
-    assert_eq!(
-        commit_decided_lane_recovery_drain(
-            DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                DecidedLaneRecoveryCurrentDrain::Admitted(7),
-            ),
-            &mut exact,
-        )
-        .expect("commit exact decided Serve"),
-        DecidedLaneRecoveryDrainCommitOutcome::CurrentServe
-    );
-    assert_eq!(exact.calls, ["serve-exact-decided"]);
-    let mut negative = RecordingDecidedLaneCommitter::new(None);
-    assert_eq!(
-        commit_decided_lane_recovery_drain(
-            DecidedLaneRecoveryDrainAuthorization::CurrentServe(
-                DecidedLaneRecoveryCurrentDrain::Rejected("durable negative staged".to_owned(),),
-            ),
-            &mut negative,
-        )
-        .expect("retire staged negative"),
-        DecidedLaneRecoveryDrainCommitOutcome::CurrentServe
-    );
-    assert_eq!(negative.calls, ["retire-staged-negative"]);
-    let mut kura_replica_advert = RecordingDecidedLaneCommitter::new(None);
-    assert_eq!(
-        commit_decided_lane_recovery_drain(
-            DecidedLaneRecoveryDrainAuthorization::KuraReplicaAdvert,
-            &mut kura_replica_advert,
-        )
-        .expect("route Kura replica advert"),
-        DecidedLaneRecoveryDrainCommitOutcome::KuraReplicaAdvert
-    );
-    assert_eq!(kura_replica_advert.calls, ["kura-replica-advert"]);
-    let mut historical = RecordingDecidedLaneCommitter::new(None);
-    assert_eq!(
-        commit_decided_lane_recovery_drain(
-            DecidedLaneRecoveryDrainAuthorization::HistoricalServe,
-            &mut historical,
-        )
-        .expect("route historical Serve"),
-        DecidedLaneRecoveryDrainCommitOutcome::HistoricalServe
-    );
-    assert_eq!(historical.calls, ["bind-leader-wire", "serve-history"]);
-    let mut volatile = RecordingDecidedLaneCommitter::new(None);
-    assert_eq!(
-        commit_decided_lane_recovery_drain(
-            DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,
-            &mut volatile,
-        )
-        .expect("retire non-Serve terminal traffic"),
-        DecidedLaneRecoveryDrainCommitOutcome::LeaderWireVolatile
-    );
-    assert_eq!(volatile.calls, ["bind-leader-wire", "retire-volatile"]);
-    let mut failed_bind = RecordingDecidedLaneCommitter::new(Some("bind-leader-wire"));
-    assert!(
-        commit_decided_lane_recovery_drain(
-            DecidedLaneRecoveryDrainAuthorization::LeaderWireRetire,
-            &mut failed_bind,
-        )
-        .is_err()
-    );
-    assert_eq!(
-        failed_bind.calls,
-        ["bind-leader-wire"],
-        "a failed bind cannot publish VolatileTerminal"
-    );
-}
 #[test]
 fn kura_replica_advert_error_classification_retires_only_invalid_remote_claims() {
     assert!(matches!(
@@ -671,7 +330,7 @@ fn kura_replica_advert_error_classification_retires_only_invalid_remote_claims()
     ));
 }
 #[test]
-fn drain_decided_lane_recovery_ingress_prepares_exact_and_typed_negative_branches() {
+fn drain_decided_lane_recovery_ingress_retains_current_serve_for_lifecycle() {
     let (context, keys) = context();
     let round = wire::ConsensusRound {
         context_id: context.id(),
@@ -681,66 +340,15 @@ fn drain_decided_lane_recovery_ingress_prepares_exact_and_typed_negative_branche
     let subject = proposal_subject(b"decided recovery exact subject");
     let request = decided_recovery_certified_request(&context, &keys[1], round, subject);
     let inbound = admitted_decided_recovery_request(&context, &request);
-    let authenticate = |request, sender: &PeerId| {
-        super::super::v2_transport::authenticate_certified_body_request(
-            &context,
-            request,
-            sender,
-            |_, _| Ok::<(), String>(()),
-        )
-        .map_err(|error| error.to_string())
-    };
     assert!(matches!(
-        prepare_decided_lane_recovery_ingress(
-            &inbound,
-            context.height,
-            subject,
-            authenticate,
-        ),
-        DecidedLaneRecoveryIngressPreparation::CurrentServe(
-            DecidedLaneRecoveryCurrentServe::Authenticated { request: authenticated, .. }
-        ) if authenticated.request_hash() == HashOf::new(&request)
+        prepare_decided_lane_recovery_ingress(&inbound, context.height),
+        DecidedLaneRecoveryIngressPreparation::CurrentServeRetain
     ));
     assert!(matches!(
-        prepare_decided_lane_recovery_ingress(
-            &inbound,
-            context.height,
-            subject,
-            |_, _| Err("invalid aggregate signature".to_owned()),
+        authorize_decided_lane_recovery_drain(
+            DecidedLaneRecoveryIngressPreparation::CurrentServeRetain
         ),
-        DecidedLaneRecoveryIngressPreparation::CurrentServe(
-            DecidedLaneRecoveryCurrentServe::Negative {
-                request_hash,
-                outcome: CertifiedServeNegativeOutcome::InvalidCertificate,
-                ..
-            }
-        ) if request_hash == HashOf::new(&request)
-    ));
-    let decided_subject = proposal_subject(b"decided recovery winning subject");
-    assert_ne!(decided_subject, subject);
-    assert!(matches!(
-        prepare_decided_lane_recovery_ingress(
-            &inbound,
-            context.height,
-            decided_subject,
-            |request, sender| {
-                super::super::v2_transport::authenticate_certified_body_request(
-                    &context,
-                    request,
-                    sender,
-                    |_, _| Ok::<(), String>(()),
-                )
-                .map_err(|error| error.to_string())
-            },
-        ),
-        DecidedLaneRecoveryIngressPreparation::CurrentServe(
-            DecidedLaneRecoveryCurrentServe::Negative {
-                request_hash,
-                outcome:
-                    CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
-                ..
-            }
-        ) if request_hash == HashOf::new(&request) && decided == decided_subject
+        DecidedLaneRecoveryDrainDecision::Retain
     ));
 }
 #[test]
@@ -755,12 +363,7 @@ fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traf
     let historical = decided_recovery_certified_request(&context, &keys[1], round, subject);
     let historical_inbound = admitted_decided_recovery_request(&context, &historical);
     assert!(matches!(
-        prepare_decided_lane_recovery_ingress(
-            &historical_inbound,
-            context.height,
-            subject,
-            |_, _| panic!("historical classification precedes active Serve authentication"),
-        ),
+        prepare_decided_lane_recovery_ingress(&historical_inbound, context.height),
         DecidedLaneRecoveryIngressPreparation::HistoricalServe
     ));
     let peer = context.roster[0].validator.clone();
@@ -775,236 +378,22 @@ fn drain_decided_lane_recovery_ingress_routes_history_and_volatile_terminal_traf
             signature: vec![0x5A],
         },
     ));
-    let ordinary_non_serve =
-        InboundBlockMessage::new(BlockMessage::V2(non_serve.clone()), Some(peer.clone()));
+    let ordinary_non_serve = InboundBlockMessage::from_authenticated_peer(
+        BlockMessage::V2(non_serve.clone()),
+        peer.clone(),
+    );
     assert!(matches!(
-        prepare_decided_lane_recovery_ingress(
-            &ordinary_non_serve,
-            context.height,
-            subject,
-            |_, _| panic!("non-Serve traffic never reaches Serve authentication"),
-        ),
+        prepare_decided_lane_recovery_ingress(&ordinary_non_serve, context.height),
         DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
     ));
     let mut wrong_version = non_serve;
     wrong_version.protocol_version = wrong_version.protocol_version.saturating_sub(1);
     let wrong_version =
-        InboundBlockMessage::new(BlockMessage::V2(wrong_version), Some(peer.clone()));
+        InboundBlockMessage::from_authenticated_peer(BlockMessage::V2(wrong_version), peer.clone());
     assert!(matches!(
-        prepare_decided_lane_recovery_ingress(
-            &wrong_version,
-            context.height,
-            subject,
-            |_, _| panic!("non-Serve traffic never reaches Serve authentication"),
-        ),
+        prepare_decided_lane_recovery_ingress(&wrong_version, context.height),
         DecidedLaneRecoveryIngressPreparation::LeaderWireRetire
     ));
-}
-fn height_ingress_bindings_fixture(
-    owner_marker: u8,
-) -> (
-    TempDir,
-    Arc<FairV2Ingress>,
-    Arc<AtomicBool>,
-    HeightIngressBindings,
-    CertifiedServeIngressGate,
-    Arc<LeaderWireLifecycleStoreGate>,
-) {
-    let (context, _) = context();
-    let roster = context
-        .roster
-        .iter()
-        .map(|entry| entry.validator.clone())
-        .collect::<BTreeSet<_>>();
-    let directory = TempDir::new().expect("temporary joint height-ingress directory");
-    let ingress = Arc::new(
-        FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-            64,
-            512 * 1024 * 1024,
-            64 * 1024 * 1024,
-            super::super::CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-            8 * 1024 * 1024,
-            8 * 1024 * 1024,
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            None,
-        ),
-    );
-    ingress
-        .configure_roster_for_context(
-            roster.iter().cloned(),
-            &context.network_id,
-            context.da_layout,
-        )
-        .expect("configure joint height ingress");
-    ingress.require_certified_serve_gate();
-    ingress.require_leader_wire_lifecycle_gate();
-    let ingress_ready = Arc::new(AtomicBool::new(false));
-    let (serve_gate, lifecycle_ordinals) =
-        super::super::v2_worker::tests::certified_serve_ingress_gate_fixture();
-    let certified_serve = CertifiedServeIngressBinding::bind(
-        Arc::clone(&ingress_ready),
-        Arc::clone(&ingress),
-        serve_gate.clone(),
-    )
-    .expect("bind joint height Serve gate");
-    let capacity = LeaderWireLifecycleStoreGate::derived_capacity(
-        roster.len(),
-        context.da_layout.max_chunk_count,
-    )
-    .expect("derive joint height leader-wire capacity");
-    let owner = [owner_marker; 32];
-    let recovery_authority =
-        super::super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
-            context.id(),
-            context.height,
-            owner,
-            0,
-            false,
-        );
-    let (leader_gate, restore) = LeaderWireLifecycleStoreGate::open(
-        &directory.path().join("joint-height-ingress.wal"),
-        context.id(),
-        context.height,
-        owner,
-        roster,
-        capacity,
-        context.da_layout.max_chunk_count,
-        recovery_authority,
-        &[],
-        &[],
-    )
-    .expect("open joint height leader-wire gate");
-    let leader_wire = LeaderWireIngressBinding::bind(
-        Arc::clone(&ingress_ready),
-        Arc::clone(&ingress),
-        Arc::clone(&leader_gate),
-        restore,
-        lifecycle_ordinals,
-        context.id(),
-        context.height,
-    )
-    .expect("bind joint height leader-wire gate");
-    let bindings = HeightIngressBindings::new(certified_serve, leader_wire);
-    ingress.open().expect("open joint height ingress");
-    ingress_ready.store(true, Ordering::Release);
-    (
-        directory,
-        ingress,
-        ingress_ready,
-        bindings,
-        serve_gate,
-        leader_gate,
-    )
-}
-#[test]
-fn height_ingress_bindings_retire_both_gates_in_one_closed_cut() {
-    let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
-        height_ingress_bindings_fixture(0xD5);
-    {
-        let state = ingress.state.lock();
-        assert!(state.open);
-        assert!(
-            state
-                .certified_serve_gate
-                .as_ref()
-                .is_some_and(|bound| bound.ptr_eq(&serve_gate))
-        );
-        assert!(
-            state
-                .leader_wire_lifecycle_gate
-                .as_ref()
-                .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate))
-        );
-    }
-    bindings
-        .retire()
-        .expect("retire both per-height ingress gates atomically");
-    assert!(!ingress_ready.load(Ordering::Acquire));
-    assert!(bindings.certified_serve.gate.is_none());
-    assert!(bindings.leader_wire.gate.is_none());
-    {
-        let state = ingress.state.lock();
-        assert!(!state.open);
-        assert!(state.certified_serve_gate.is_none());
-        assert!(state.leader_wire_lifecycle_gate.is_none());
-        assert!(state.leader_wire_lifecycle_ordinals.is_none());
-        assert!(state.leader_wire_context.is_none());
-    }
-    bindings
-        .retire()
-        .expect("joint height retirement remains idempotent");
-}
-#[test]
-fn height_ingress_bindings_drop_fails_closed_on_mismatched_or_partial_ownership() {
-    {
-        let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
-            height_ingress_bindings_fixture(0xD6);
-        bindings.leader_wire.ingress_ready = Arc::new(AtomicBool::new(true));
-        let error = bindings
-            .retire()
-            .expect_err("mismatched readiness ownership must reject joint retirement");
-        assert!(matches!(
-            error,
-            V2RunnerError::Service(ref reason)
-                if reason == "per-height ingress gates changed their shared queue"
-        ));
-        assert!(ingress_ready.load(Ordering::Acquire));
-        assert!(ingress.state.lock().open);
-        drop(bindings);
-        assert!(!ingress_ready.load(Ordering::Acquire));
-        let state = ingress.state.lock();
-        assert!(!state.open);
-        assert!(
-            state
-                .certified_serve_gate
-                .as_ref()
-                .is_some_and(|bound| bound.ptr_eq(&serve_gate)),
-            "a failed joint validation cannot partially detach the Serve gate"
-        );
-        assert!(
-            state
-                .leader_wire_lifecycle_gate
-                .as_ref()
-                .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate)),
-            "a failed joint validation cannot partially detach the leader-wire gate"
-        );
-    }
-    {
-        let (_directory, ingress, ingress_ready, mut bindings, serve_gate, leader_gate) =
-            height_ingress_bindings_fixture(0xD7);
-        bindings.leader_wire.gate = None;
-        let error = bindings
-            .retire()
-            .expect_err("partial child ownership must reject joint retirement");
-        assert!(matches!(
-            error,
-            V2RunnerError::Service(ref reason)
-                if reason == "per-height ingress gates changed joint ownership"
-        ));
-        assert!(ingress_ready.load(Ordering::Acquire));
-        assert!(ingress.state.lock().open);
-        drop(bindings);
-        assert!(!ingress_ready.load(Ordering::Acquire));
-        let state = ingress.state.lock();
-        assert!(!state.open);
-        assert!(
-            state
-                .certified_serve_gate
-                .as_ref()
-                .is_some_and(|bound| bound.ptr_eq(&serve_gate)),
-            "partial child ownership cannot trigger split Serve teardown"
-        );
-        assert!(
-            state
-                .leader_wire_lifecycle_gate
-                .as_ref()
-                .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &leader_gate)),
-            "partial child ownership cannot trigger split leader-wire teardown"
-        );
-    }
 }
 fn leader_wire_runtime_ingress_fixture() -> (
     TempDir,
@@ -1116,9 +505,9 @@ fn leader_wire_runtime_ingress_fixture() -> (
         .expect("bind runner leader-wire gate");
     ingress.open().expect("open runner leader-wire ingress");
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(message.clone()),
-            Some(semantic_origin.clone()),
+            semantic_origin.clone(),
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -1168,9 +557,9 @@ fn fail_closed_authenticated_coalesce_releases_gate_and_suppresses_retry() {
         None
     );
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(message),
-            Some(semantic_origin),
+            semantic_origin,
         )),
         Ok(super::super::FairV2IngressPushDisposition::Coalesced)
     ));

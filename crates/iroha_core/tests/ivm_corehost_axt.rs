@@ -516,7 +516,7 @@ fn nexus_with_lane_catalog(
     };
     let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
     iroha_config::parameters::actual::Nexus {
-        enabled: true,
+
         lane_config,
         lane_catalog,
         dataspace_catalog,

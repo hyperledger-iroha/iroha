@@ -656,8 +656,9 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_transactions_submit_and_wait_tool());
     tools.push(iroha_transactions_wait_tool());
     tools.push(iroha_transactions_status_tool());
-    // Manual tools share the same projection boundary as OpenAPI-derived tools.
-    // Keep this final guard so a custom dispatcher cannot bypass the catalog.
+    // Generated tools and the explicitly non-projected diagnostic/ledger-proof
+    // mirrors require MCP projection. Other purpose-built aliases form the
+    // separate explicit allowlist, while still following catalog feature gates.
     retain_catalog_mcp_tools(&mut tools, CATALOG_PROJECTION_GROUPS);
     apply_catalog_operator_effects_to_manual_tools(&mut tools, CATALOG_PROJECTION_GROUPS);
     apply_catalog_auth_schemas_to_tools(&mut tools, CATALOG_PROJECTION_GROUPS);
@@ -978,8 +979,6 @@ fn is_manual_read_tool_name(name: &str) -> bool {
         || name.ends_with(".state_root")
         || name.ends_with(".state_proof")
         || name.ends_with(".block_proof")
-        || name.ends_with(".commit_certificates")
-        || name.ends_with(".validator_sets")
         || name.ends_with(".rbc")
         || name.ends_with(".pacemaker")
         || name.ends_with(".phases")
@@ -2628,43 +2627,7 @@ fn catalog_method(method: &Method) -> Option<CatalogHttpMethod> {
         _ => None,
     }
 }
-/// Return the explicit MCP decision for a cataloged method/path pair.
-///
-/// `None` means the operation is not represented by one of `groups`. Callers
-/// which generate tools must treat that as deny: OpenAPI presence alone is not
-/// authorization to expose a route through MCP.
-fn catalog_mcp_projection_decision(
-    groups: &[CatalogProjectionGroup],
-    method: &Method,
-    path: &str,
-) -> Option<bool> {
-    let method = catalog_method(method)?;
-    for group in groups {
-        let catalog = RouteCatalog::new(group.routes);
-        let is_cataloged = catalog
-            .routes()
-            .iter()
-            .any(|route| route.method() == method && route.path() == path);
-        if !is_cataloged {
-            continue;
-        }
-        return Some(
-            catalog
-                .project(CatalogProjection::Mcp, group.enabled_features)
-                .into_iter()
-                .any(|route| route.method() == method && route.path() == path),
-        );
-    }
-    None
-}
-fn retain_catalog_mcp_tools(tools: &mut Vec<ToolSpec>, groups: &[CatalogProjectionGroup]) {
-    tools.retain(|tool| {
-        !matches!(
-            catalog_mcp_projection_decision(groups, &tool.method, tool.path_template.as_str()),
-            Some(false)
-        )
-    });
-}
+include!("mcp/catalog_projection.rs");
 fn apply_catalog_operator_effects_to_manual_tools(
     tools: &mut [ToolSpec],
     groups: &[CatalogProjectionGroup],
@@ -7726,12 +7689,12 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
 }
 const MANUAL_STATIC_TOOL_ASSET_VERSION: u64 = 1;
 const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 68;
-const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 94_818;
+const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 94_898;
 const MANUAL_STATIC_TOOL_HISTORICAL_RUST_PREIMAGE_SHA256: &str =
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4";
 const MANUAL_STATIC_TOOL_ASSET_BLAKE3: [u8; 32] = [
-    0xdb, 0x7b, 0xcf, 0xc3, 0x11, 0x26, 0x50, 0x74, 0xc4, 0x3f, 0x67, 0xae, 0x24, 0x68, 0x6d, 0x34,
-    0x5b, 0xe2, 0xa5, 0x4a, 0xe4, 0xb1, 0x11, 0xbe, 0x5c, 0x22, 0xe3, 0x60, 0xe4, 0x63, 0xac, 0x2a,
+    0x3d, 0xb7, 0x99, 0xe4, 0x4e, 0x3a, 0x76, 0x88, 0xd4, 0xef, 0x6e, 0xc4, 0xdb, 0xa1, 0x40, 0x3c,
+    0xeb, 0x08, 0xec, 0x74, 0x8c, 0x56, 0x38, 0xc1, 0x80, 0x90, 0x24, 0x78, 0x6c, 0x41, 0xdf, 0x98,
 ];
 const MANUAL_STATIC_TOOL_ASSET: &[u8] = include_bytes!("mcp/manual_tool_descriptors_v1.json");
 

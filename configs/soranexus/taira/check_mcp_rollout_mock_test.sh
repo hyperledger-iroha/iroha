@@ -85,7 +85,6 @@ PY
   cat >"${root}/state/nexus-lifecycle.json" <<'JSON'
 {
   "version": 1,
-  "nexus_enabled": true,
   "lane_count": 7,
   "lanes": [
     {"id": 0, "dataspace_id": 0, "alias": "core"},
@@ -773,7 +772,8 @@ elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sccp/registry
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/zk/proofs/count" ]]; then
   body='{}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/sumeragi/validator-sets" ]]; then
-  body='{}'
+  status="404"
+  body='{"code":"route_not_found","message":"route not found"}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/nexus/public-lanes/0/validators" ]]; then
   body='{}'
 elif [[ "$method" == "GET" && "$url" == "https://taira.sora.org/v1/nexus/public-lanes/0/stake" ]]; then

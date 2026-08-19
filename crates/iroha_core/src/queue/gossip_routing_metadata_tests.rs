@@ -53,7 +53,6 @@ fn gossip_batch_preserves_admitted_routing_across_policy_change() {
         Some(RoutingDecision::default())
     );
     let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
     nexus.lane_catalog = (*fresh_lanes).clone();
     nexus.dataspace_catalog = (*fresh_dataspaces).clone();
     nexus.fees.base_fee = Quantity::zero();

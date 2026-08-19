@@ -52,7 +52,7 @@ stage('Canonical Build') {
             checkout scm
             sh '''
 set -euo pipefail
-BUILD_PROFILE=deploy bash scripts/build_line.sh
+BUILD_PROFILE=deploy bash scripts/build_canonical_binaries.sh
 '''
         }
     }

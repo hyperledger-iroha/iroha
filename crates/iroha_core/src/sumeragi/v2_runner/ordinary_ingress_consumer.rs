@@ -10,89 +10,38 @@ use super::*;
 
 /// Authentication result for one current-height Certified-Serve carrier.
 ///
-/// The result contains no queue or dequeue authority.  Both the activated
-/// lifecycle turn and terminal recovery must durably prepare the selected
-/// outcome before either path removes the exact fair-ingress occurrence.
+/// The result contains no queue or dequeue authority. The activated lifecycle
+/// turn must durably prepare the selected outcome before removing the exact
+/// fair-ingress occurrence.
 #[allow(variant_size_differences)]
 pub(in crate::sumeragi) enum CurrentCertifiedServePreAdmissionV1 {
     /// The request and its transport ownership were authenticated exactly.
     Authenticated {
-        /// Peer whose authenticated route admitted the carrier.
-        authenticated_via: PeerId,
         /// Signed request authenticated against the active height context.
         request: AuthenticatedCertifiedBodyRequest,
     },
-    /// A deterministic negative outcome must be staged before dequeue.
+    /// Invalid transport input may be retired without lifecycle publication.
     Negative {
-        /// Exact signed-request hash naming the durable negative.
-        request_hash: HashOf<wire::CertifiedBodyRequest>,
-        /// Typed terminal outcome selected by authentication or Decision.
-        outcome: CertifiedServeNegativeOutcome,
         /// Stable diagnostic retained by the ordinary consumer.
         reason: String,
+    },
+    /// Authentication succeeded, but the durable Decision selected a typed
+    /// terminal which must retain the exact signed request through lifecycle
+    /// admission and negative settlement.
+    AuthenticatedNegative {
+        /// Exact request retained by the lifecycle payload/ledger owner.
+        request: AuthenticatedCertifiedBodyRequest,
     },
     /// Local ownership or authentication infrastructure failed closed.
     Service(String),
 }
 
-/// Result of binding a current-height Serve pre-admission to the service owner.
-#[allow(variant_size_differences)]
-pub(in crate::sumeragi) enum ProductionCurrentCertifiedServePreparationV1<
-    Admission = CertifiedServeAdmission,
-> {
-    /// The exact admitted or durable-negative result may accompany dequeue.
-    Prepared(ProductionPreparedCertifiedServeV1<Admission>),
-    /// Capacity retained the carrier and no dequeue is authorized.
-    Retain,
-}
-
-/// Minimal durable owner needed to authorize one classified Serve carrier.
-pub(in crate::sumeragi) trait CurrentCertifiedServePreDequeueAuthorizer {
-    /// Opaque admission transferred only after durable preparation succeeds.
-    type Admission;
-
-    /// Stage one exact deterministic negative before physical dequeue.
-    fn stage_negative(
-        &mut self,
-        request_hash: HashOf<wire::CertifiedBodyRequest>,
-        outcome: CertifiedServeNegativeOutcome,
-    ) -> Result<(), String>;
-
-    /// Reserve or coalesce one exact authenticated Serve request.
-    fn prepare_exact(
-        &mut self,
-        authenticated_via: &PeerId,
-        request: AuthenticatedCertifiedBodyRequest,
-    ) -> Result<Self::Admission, CertifiedServePrepareError>;
-}
-
-impl CurrentCertifiedServePreDequeueAuthorizer for ProductionV2Services {
-    type Admission = CertifiedServeAdmission;
-
-    fn stage_negative(
-        &mut self,
-        request_hash: HashOf<wire::CertifiedBodyRequest>,
-        outcome: CertifiedServeNegativeOutcome,
-    ) -> Result<(), String> {
-        self.stage_certified_serve_rejection(request_hash, outcome)
-    }
-
-    fn prepare_exact(
-        &mut self,
-        authenticated_via: &PeerId,
-        request: AuthenticatedCertifiedBodyRequest,
-    ) -> Result<Self::Admission, CertifiedServePrepareError> {
-        self.prepare_certified_request(authenticated_via, request)
-    }
-}
-
 /// Authenticate one current-height Certified-Serve carrier without touching
 /// the service queue or fair-ingress ownership.
 ///
-/// This is the single production classifier shared by the activated lifecycle
-/// turn, the ordinary recovery drain, and terminal Decision recovery.  It
-/// deliberately accepts only an authentication closure; durable negative
-/// staging and capacity reservation happen in a separate transaction.
+/// This classifier belongs to the activated lifecycle turn. It deliberately
+/// accepts only an authentication closure; durable negative staging and
+/// capacity reservation happen in a separate transaction.
 pub(in crate::sumeragi) fn prepare_current_certified_serve_pre_admission(
     inbound: &InboundBlockMessage,
     active_height: wire::Height,
@@ -122,16 +71,7 @@ pub(in crate::sumeragi) fn prepare_current_certified_serve_pre_admission(
             "current certified-body ingress changed its selected height".to_owned(),
         );
     }
-    let Some(sender) = inbound.sender() else {
-        return CurrentCertifiedServePreAdmissionV1::Service(
-            "current certified-body ingress lost its authenticated sender".to_owned(),
-        );
-    };
-    let Some(authenticated_via) = inbound.via() else {
-        return CurrentCertifiedServePreAdmissionV1::Service(
-            "current certified-body ingress lost its authenticated source".to_owned(),
-        );
-    };
+    let sender = inbound.sender();
     let Some(reply_routes) = inbound.reply_routes() else {
         return CurrentCertifiedServePreAdmissionV1::Service(
             "current certified-body ingress lost its reply capability".to_owned(),
@@ -145,7 +85,7 @@ pub(in crate::sumeragi) fn prepare_current_certified_serve_pre_admission(
     if reply_routes.semantic_target() != sender
         || !ownership.validate_exact()
         || !ownership.matches_message(inbound.message())
-        || !ownership.matches_semantic_origin(Some(sender))
+        || !ownership.matches_semantic_origin(sender)
         || !ownership.matches_reply_routes(Some(reply_routes))
     {
         return CurrentCertifiedServePreAdmissionV1::Service(
@@ -155,98 +95,40 @@ pub(in crate::sumeragi) fn prepare_current_certified_serve_pre_admission(
     let authenticated = match authenticate(request.clone(), sender) {
         Ok(authenticated) => authenticated,
         Err(reason) => {
-            return CurrentCertifiedServePreAdmissionV1::Negative {
-                request_hash: HashOf::new(request),
-                outcome: CertifiedServeNegativeOutcome::InvalidCertificate,
-                reason,
-            };
+            return CurrentCertifiedServePreAdmissionV1::Negative { reason };
         }
     };
     if certified_body_request_is_superseded_after_decision(request, terminal_subject, active_height)
     {
-        let decided = terminal_subject
-            .expect("Decision supersession requires the durable exact terminal subject");
-        return CurrentCertifiedServePreAdmissionV1::Negative {
-            request_hash: authenticated.request_hash(),
-            outcome: CertifiedServeNegativeOutcome::SupersededByDurableDecision(decided),
-            reason: "certified body request was superseded by durable Decision".to_owned(),
+        return CurrentCertifiedServePreAdmissionV1::AuthenticatedNegative {
+            request: authenticated,
         };
     }
     CurrentCertifiedServePreAdmissionV1::Authenticated {
-        authenticated_via: authenticated_via.clone(),
         request: authenticated,
     }
 }
 
-/// Stage the exact deterministic negative or reserve the exact auxiliary Serve
-/// before a caller is allowed to remove the selected ingress occurrence.
-pub(in crate::sumeragi) fn authorize_current_certified_serve_pre_dequeue<
-    A: CurrentCertifiedServePreDequeueAuthorizer,
->(
-    prepared: CurrentCertifiedServePreAdmissionV1,
-    authorizer: &mut A,
-) -> ProductionCurrentCertifiedServePreparationV1<A::Admission> {
-    let prepared = match prepared {
-        CurrentCertifiedServePreAdmissionV1::Service(reason) => {
-            ProductionPreparedCertifiedServeV1::Service(reason)
-        }
-        CurrentCertifiedServePreAdmissionV1::Negative {
-            request_hash,
-            outcome,
-            reason,
-        } => match authorizer.stage_negative(request_hash, outcome) {
-            Ok(()) => ProductionPreparedCertifiedServeV1::Rejected(reason),
-            Err(reason) => ProductionPreparedCertifiedServeV1::Service(reason),
-        },
-        CurrentCertifiedServePreAdmissionV1::Authenticated {
-            authenticated_via,
-            request,
-        } => match authorizer.prepare_exact(&authenticated_via, request) {
-            Ok(admission) => ProductionPreparedCertifiedServeV1::Admitted(admission),
-            Err(CertifiedServePrepareError::Backpressure) => {
-                return ProductionCurrentCertifiedServePreparationV1::Retain;
-            }
-            Err(CertifiedServePrepareError::Rejected(reason)) => {
-                ProductionPreparedCertifiedServeV1::Rejected(reason)
-            }
-            Err(CertifiedServePrepareError::Service(reason)) => {
-                ProductionPreparedCertifiedServeV1::Service(reason)
-            }
-        },
-    };
-    ProductionCurrentCertifiedServePreparationV1::Prepared(prepared)
-}
-
 /// Prepared current-height Certified-Serve state retained beside one dequeue.
-#[allow(variant_size_differences)]
-pub(in crate::sumeragi) enum ProductionPreparedCertifiedServeV1<Admission = CertifiedServeAdmission>
-{
-    /// Exact Serve admission prepared before physical removal.
-    Admitted(Admission),
-    /// Durable deterministic rejection prepared before physical removal.
+pub(in crate::sumeragi) enum ProductionPreparedCertifiedServeV1 {
+    /// Volatile invalid-transport rejection prepared before physical removal.
     Rejected(String),
-    /// Local service failure which must close output when consumed.
-    Service(String),
 }
 
-/// Closed batch-control result of consuming one already-dequeued row.
+/// Closed result of consuming one already-dequeued row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[must_use = "the outer ingress cursor must observe the exact tail result"]
 pub(in crate::sumeragi) enum ProductionPreparedOrdinaryIngressConsumptionV1 {
     /// The row reached its exact terminal and the outer cursor may continue.
     Continue,
-    /// A retained transport owner requires the current outer batch to stop.
-    StopBatch,
 }
 
 /// Test-only closed settlement of one prepared current-height Serve handoff.
 #[cfg(test)]
 #[derive(Debug, PartialEq, Eq)]
 pub(in crate::sumeragi) enum ProductionPreparedCertifiedServeTestSettlementV1 {
-    /// The selected request durably retired as a deterministic negative.
+    /// The selected invalid request retired as a transport rejection.
     Rejected(String),
-    /// The prepared admission was explicitly aborted before worker commit.
-    AdmittedAborted,
 }
 
 /// Opaque ownership of one already-dequeued ordinary ingress row.
@@ -378,17 +260,8 @@ pub(in crate::sumeragi) fn settle_prepared_certified_serve_for_test(
         .take()
         .ok_or_else(|| "ordinary token retained no prepared Serve result".to_owned())?;
     let settlement = match serve {
-        ProductionPreparedCertifiedServeV1::Admitted(admission) => {
-            services.abort_certified_serve_for_test(admission)?;
-            ProductionPreparedCertifiedServeTestSettlementV1::AdmittedAborted
-        }
         ProductionPreparedCertifiedServeV1::Rejected(reason) => {
             ProductionPreparedCertifiedServeTestSettlementV1::Rejected(reason)
-        }
-        ProductionPreparedCertifiedServeV1::Service(reason) => {
-            return Err(format!(
-                "prepared Serve entered a fatal service outcome: {reason}"
-            ));
         }
     };
     drop(prepared.inbound.take());
@@ -523,7 +396,7 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
     match message.payload {
         wire::ConsensusMessageV2Payload::VrfCommit(commit) => {
             drop(ingress_ownership);
-            let outcome = npos_vrf.accept_commit(commit, sender.as_ref());
+            let outcome = npos_vrf.accept_commit(commit, Some(&sender));
             if matches!(
                 outcome,
                 super::super::v2_npos::V2VrfIngressOutcome::Rejected(_)
@@ -533,7 +406,7 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
         }
         wire::ConsensusMessageV2Payload::VrfReveal(reveal) => {
             drop(ingress_ownership);
-            let outcome = npos_vrf.accept_reveal(reveal, sender.as_ref());
+            let outcome = npos_vrf.accept_reveal(reveal, Some(&sender));
             if matches!(
                 outcome,
                 super::super::v2_npos::V2VrfIngressOutcome::Rejected(_)
@@ -616,10 +489,6 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
             mark_leader_wire_volatile(receiver, &ingress_ownership)?;
         }
         wire::ConsensusMessageV2Payload::PayloadChunk(chunk) => {
-            let Some(sender) = sender else {
-                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-                finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-            };
             if terminal_decision
                 && services
                     .fetch_work_for_manifest(chunk.manifest_hash)
@@ -636,10 +505,6 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 .map_err(V2RunnerError::Service)?;
         }
         wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request) => {
-            let Some(sender) = sender else {
-                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-                finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-            };
             let Some(reply_routes) = reply_routes else {
                 iroha_logger::debug!(
                     %sender,
@@ -688,55 +553,16 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                     }
                 }
             } else if request.round.height == executor.context().height {
-                if certified_body_request_is_superseded_after_decision(
-                    &request,
-                    terminal_subject,
-                    executor.context().height,
-                ) {
-                    match prepared_serve.take() {
-                        Some(ProductionPreparedCertifiedServeV1::Rejected(reason)) => {
-                            iroha_logger::debug!(
-                                %reason,
-                                "retired certified body request superseded by Decision"
-                            );
-                            mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-                            finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-                        }
-                        Some(ProductionPreparedCertifiedServeV1::Service(reason)) => {
-                            return Err(V2RunnerError::Service(reason));
-                        }
-                        Some(ProductionPreparedCertifiedServeV1::Admitted(_)) | None => {
-                            return Err(V2RunnerError::Service(
-                                "Decision-superseded certified-body ingress crossed physical drain without its durable negative outcome"
-                                    .to_owned(),
-                            ));
-                        }
-                    }
-                }
-                match prepared_serve.take() {
-                    Some(ProductionPreparedCertifiedServeV1::Admitted(admission)) => {
-                        services
-                            .serve_certified_request_on_routes(
-                                admission,
-                                reply_routes,
-                                ingress_ownership,
-                            )
-                            .map_err(V2RunnerError::Service)?;
-                    }
-                    Some(ProductionPreparedCertifiedServeV1::Rejected(reason)) => {
-                        iroha_logger::debug!(%reason, "rejected certified body request");
-                        mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-                    }
-                    Some(ProductionPreparedCertifiedServeV1::Service(reason)) => {
-                        return Err(V2RunnerError::Service(reason));
-                    }
-                    None => {
-                        return Err(V2RunnerError::Service(
-                            "current-height certified-body ingress crossed fair removal without an atomic Serve admission"
-                                .to_owned(),
-                        ));
-                    }
-                }
+                let Some(ProductionPreparedCertifiedServeV1::Rejected(reason)) =
+                    prepared_serve.take()
+                else {
+                    return Err(V2RunnerError::Service(
+                        "current-height certified-body ingress crossed fair removal without its volatile transport rejection"
+                            .to_owned(),
+                    ));
+                };
+                iroha_logger::debug!(%reason, "rejected certified body request");
+                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
             } else {
                 iroha_logger::debug!(
                     requested_height = request.round.height,
@@ -746,35 +572,12 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 mark_leader_wire_volatile(receiver, &ingress_ownership)?;
             }
         }
-        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response) => {
-            let Some(sender) = sender else {
-                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-                finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-            };
-            let admission = executor.accept_certified_body_response_with_ingress_ownership(
-                response,
-                &sender,
-                &ingress_ownership,
-                services,
-            );
-            match admission {
-                Ok(_) => {}
-                Err(EffectTransportError::Backpressure) => {
-                    finish!(ProductionPreparedOrdinaryIngressConsumptionV1::StopBatch);
-                }
-                Err(EffectTransportError::FailClosed(reason)) => {
-                    return Err(V2RunnerError::Service(reason));
-                }
-                Err(error) => {
-                    iroha_logger::debug!(%error, "rejected certified body response");
-                }
-            }
+        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(_) => {
+            return Err(V2RunnerError::Service(
+                "certified body response bypassed its lifecycle Fetch owner".to_owned(),
+            ));
         }
         wire::ConsensusMessageV2Payload::CommitCertificateRequest(request) => {
-            let Some(sender) = sender else {
-                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-                finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-            };
             let Some(reply_routes) = reply_routes else {
                 iroha_logger::debug!(
                     %sender,
@@ -827,10 +630,6 @@ pub(in crate::sumeragi) fn consume_prepared_dequeued_v2_ingress(
                 mark_leader_wire_volatile(receiver, &ingress_ownership)?;
                 finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
             }
-            let Some(sender) = sender else {
-                mark_leader_wire_volatile(receiver, &ingress_ownership)?;
-                finish!(ProductionPreparedOrdinaryIngressConsumptionV1::Continue);
-            };
             let discovered = match block_sync.authenticate_response(response, &sender) {
                 Ok(discovered) => discovered,
                 Err(error) => {

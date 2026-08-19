@@ -1,9 +1,7 @@
 #[cfg(all(test, feature = "telemetry"))]
 mod tests {
-    use std::{
-        io::Cursor,
-        sync::{Arc, Mutex},
-    };
+    use super::{sorafs_capacity_tests::build_por_challenge, *};
+    use crate::mk_app_state_for_tests;
     use http::StatusCode;
     use http_body_util::BodyExt;
     use iroha_core::{
@@ -30,9 +28,11 @@ mod tests {
     use iroha_telemetry::metrics::{
         Metrics, MicropaymentCreditSnapshot, MicropaymentSampleStatus, MicropaymentTicketCounters,
     };
+    use std::{
+        io::Cursor,
+        sync::{Arc, Mutex},
+    };
     use tokio::runtime::Runtime;
-    use super::{sorafs_capacity_tests::build_por_challenge, *};
-    use crate::mk_app_state_for_tests;
     static SUMERAGI_V2_STATUS_TEST_LOCK: Mutex<()> = Mutex::new(());
     fn install_passive_diagnostic_lane_artifact(
         state: &CoreState,
@@ -325,8 +325,7 @@ mod tests {
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
             None,
-            true,
-            None,
+            ActualLaneRoutingPolicy::default(),
             Some(4_274),
             None,
         )
@@ -364,9 +363,16 @@ mod tests {
             );
         });
         let path = format!("sorafs_micropayments/{provider_hex}");
-        let response = super::handle_status(&telemetry, None, Some(&path), true, None, None, None)
-            .await
-            .expect("status tail succeeds");
+        let response = super::handle_status(
+            &telemetry,
+            None,
+            Some(&path),
+            ActualLaneRoutingPolicy::default(),
+            None,
+            None,
+        )
+        .await
+        .expect("status tail succeeds");
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         let body = response
             .into_body()
@@ -419,8 +425,7 @@ mod tests {
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
             None,
-            true,
-            Some(&policy),
+            policy,
             None,
             None,
         )
@@ -478,8 +483,7 @@ mod tests {
             &telemetry,
             Some(axum::http::HeaderValue::from_static("application/json")),
             None,
-            true,
-            None,
+            ActualLaneRoutingPolicy::default(),
             None,
             Some(offline.clone()),
         )
@@ -510,8 +514,7 @@ mod tests {
             &telemetry,
             None,
             Some("offline/cash_handoff_capability"),
-            true,
-            None,
+            ActualLaneRoutingPolicy::default(),
             None,
             Some(offline),
         )
@@ -529,46 +532,18 @@ mod tests {
     }
     #[cfg(feature = "telemetry")]
     #[tokio::test]
-    async fn status_tail_rejects_nexus_fields_when_disabled() {
-        let telemetry = MaybeTelemetry::for_tests();
-        let err = super::handle_status(
-            &telemetry,
-            None,
-            Some("teu_lane_commit"),
-            false,
-            None,
-            None,
-            None,
-        )
-        .await
-        .expect_err("lane-specific tails must be rejected when nexus is disabled");
-        assert!(matches!(err, Error::StatusSegmentNotFound(_)));
-    }
-    #[cfg(feature = "telemetry")]
-    #[tokio::test]
-    async fn metrics_handler_strips_lane_labels_when_nexus_disabled() {
+    async fn metrics_handler_exports_lane_labels() {
         let telemetry = MaybeTelemetry::for_tests();
         telemetry
             .metrics()
             .await
             .set_lane_block_height("lane-0", "global", 3);
-        let enabled = super::handle_metrics(&telemetry, true)
+        let rendered = super::handle_metrics(&telemetry)
             .await
-            .expect("metrics should render when Nexus is enabled");
+            .expect("metrics should render");
         assert!(
-            enabled.contains("nexus_lane_block_height"),
-            "lane metrics should be present when Nexus is enabled"
-        );
-        let filtered = super::handle_metrics(&telemetry, false)
-            .await
-            .expect("metrics should render when Nexus is disabled");
-        assert!(
-            !filtered.contains("nexus_lane_block_height"),
-            "lane metrics must be stripped when Nexus is disabled: {filtered}"
-        );
-        assert!(
-            filtered.contains("block_height"),
-            "non-lane metrics must remain after filtering: {filtered}"
+            rendered.contains("nexus_lane_block_height"),
+            "lane metrics are part of every first-release Nexus exposition"
         );
     }
     #[tokio::test]
@@ -582,10 +557,13 @@ mod tests {
             iroha_core::kura::Kura::blank_kura_for_testing(),
             iroha_core::query::store::LiveQueryStore::start_test(),
         ));
-        let response =
-            super::handle_v1_sumeragi_status(axum::extract::State(state), None, false, false)
-                .await
-                .expect("status handler");
+        let response = super::handle_v1_sumeragi_status(
+            axum::extract::State(state),
+            None,
+            false,
+        )
+        .await
+        .expect("status handler");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
     #[tokio::test]
@@ -636,7 +614,6 @@ mod tests {
         let response = super::handle_v1_sumeragi_status(
             axum::extract::State(std::sync::Arc::clone(&state)),
             Some(axum::http::HeaderValue::from_static("application/json")),
-            true,
             false,
         )
         .await
@@ -647,7 +624,6 @@ mod tests {
         let restart_response = super::handle_v1_sumeragi_status(
             axum::extract::State(state),
             Some(axum::http::HeaderValue::from_static("application/json")),
-            true,
             true,
         )
         .await
@@ -717,7 +693,6 @@ mod tests {
             axum::extract::State(Arc::clone(&state)),
             None,
             Some(axum::http::HeaderValue::from_static("application/json")),
-            false,
         )
         .await
         .expect("diagnostics handler");
@@ -784,7 +759,6 @@ mod tests {
                 axum::extract::State(Arc::clone(&state)),
                 None,
                 None,
-                true,
             )
             .await
             .expect("passive diagnostics handler");
@@ -866,8 +840,7 @@ mod tests {
                 crate::utils::NORITO_MIME_TYPE,
             )),
             None,
-            true,
-            None,
+            ActualLaneRoutingPolicy::default(),
             None,
             None,
         )
@@ -901,7 +874,6 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
-            prev_roster_evidence_hash: None,
             npos_effects_hash: None,
             sccp_commitment_root: None,
             execution_context_hash: None,
@@ -924,7 +896,6 @@ mod tests {
                 da_proof_policies_hash: None,
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
-                prev_roster_evidence_hash: None,
                 npos_effects_hash: None,
                 sccp_commitment_root: None,
                 execution_context_hash: None,
@@ -943,7 +914,6 @@ mod tests {
             da_proof_policies_hash: None,
             da_commitments_hash: None,
             da_pin_intents_hash: None,
-            prev_roster_evidence_hash: None,
             npos_effects_hash: None,
             sccp_commitment_root: None,
             execution_context_hash: None,
@@ -966,7 +936,6 @@ mod tests {
                 da_proof_policies_hash: None,
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
-                prev_roster_evidence_hash: None,
                 npos_effects_hash: None,
                 sccp_commitment_root: None,
                 execution_context_hash: None,
@@ -1078,10 +1047,10 @@ mod tests {
 }
 #[cfg(feature = "profiling")]
 pub mod profiling {
-    use std::num::{NonZeroU16, NonZeroU64};
+    use super::*;
     use nonzero_ext::nonzero;
     use pprof::protos::Message;
-    use super::*;
+    use std::num::{NonZeroU16, NonZeroU64};
     /// Query params used to configure profile gathering
     #[allow(clippy::unsafe_derive_deserialize)]
     #[derive(
@@ -1166,7 +1135,7 @@ pub mod profiling {
 }
 #[cfg(all(test, feature = "ws_integration_tests"))]
 mod event_stream_tests {
-    use std::{io::ErrorKind, sync::Arc};
+    use super::event::handle_events_stream_with_receiver;
     use axum::{Router, extract::ws::WebSocketUpgrade, routing::get};
     use futures_util::{SinkExt as _, StreamExt as _};
     use iroha_core::EventsSender;
@@ -1183,8 +1152,8 @@ mod event_stream_tests {
         transaction::SignedTransaction,
     };
     use norito::{decode_from_bytes, to_bytes};
+    use std::{io::ErrorKind, sync::Arc};
     use tokio::{net::TcpListener, sync::Mutex};
-    use super::event::handle_events_stream_with_receiver;
     async fn spawn_event_stream_server(
         receiver: tokio::sync::broadcast::Receiver<EventBox>,
     ) -> Option<std::net::SocketAddr> {

@@ -244,17 +244,18 @@ fn preflight_historical_autonomous_lane_recovery_inner(
     let mut expected_validators = if retained_record.is_some() {
         descriptor.validator_set.clone()
     } else {
-        let nexus = state.nexus_snapshot();
-        if super::lane_planner::uses_global_lane_committee(&nexus) {
-            input
-                .historical_context
-                .roster
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect::<Vec<_>>()
-        } else {
-            state.authoritative_lane_peer_ids_at_height(descriptor.lane_id, height)
-        }
+        state
+            .resolve_lane_committee_at_height(
+                crate::state::LaneAuthorityRoute::new(descriptor.lane_id, descriptor.dataspace_id),
+                height,
+            )
+            .map(crate::state::LaneAuthorityCommittee::into_validators)
+            .map_err(|_| {
+                invalid_historical_autonomous_recovery(
+                    input,
+                    "exact lane-route authority is unavailable at the recovery height",
+                )
+            })?
     };
     expected_validators.sort();
     if expected_validators
@@ -342,9 +343,7 @@ fn preflight_historical_autonomous_lane_recovery_inner(
             || !reservation_digests.insert(key.digest())
             || !entrypoint_hashes.insert(key.entrypoint_hash)
             || (require_canonical_carrier_body
-                && state.has_committed_entrypoint(
-                    key.entrypoint_hash,
-                ))
+                && state.has_committed_entrypoint(key.entrypoint_hash))
         {
             return Err(invalid_historical_autonomous_recovery(
                 input,

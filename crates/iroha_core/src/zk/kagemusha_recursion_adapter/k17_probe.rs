@@ -50,6 +50,7 @@ enum KagemushaK17ProbeIterationOutcomeV5 {
         Box<[(&'static str, KagemushaK17AuditInventoryV6); KAGEMUSHA_PASTA_PARENT_SLOTS_V1]>,
     ),
 }
+
 #[cfg(any(test, feature = "kagemusha-generation-memory-lab"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct KagemushaK17AuditCountsV6 {
@@ -397,6 +398,7 @@ where
     };
     KagemushaK17AuditInventoryV6::from_counts(counts, kagemusha_usable_rows_v4(params)?)
 }
+
 #[cfg(feature = "kagemusha-generation-memory-lab")]
 fn kagemusha_k17_capture_required_shape_v5(
     role: &str,
@@ -733,6 +735,7 @@ pub fn run_kagemusha_k17_audit_inventory_probe_v6(
         Ok(())
     })
 }
+
 /// Run the non-shipping compact-k17 populated-shape diagnostic with transparent IPA, empty composite VKs, parseable dummy parents, and arbitrary accumulators.
 /// It only populates the graph; it creates no PK, proof, or witness bytes.
 /// Errors if resource bounds, Eq/Ep derivation, or closure fails.

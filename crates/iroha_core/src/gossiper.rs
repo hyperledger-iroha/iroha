@@ -3446,7 +3446,6 @@ mod tests {
         )
         .expect("authoritative default lane catalog");
         let mut nexus = state.nexus.write();
-        nexus.enabled = true;
         nexus.autoscale.enabled = false;
         nexus.lane_catalog = lane_catalog;
         nexus.lane_config = LaneGeometry::from_catalog(&nexus.lane_catalog);
@@ -3856,8 +3855,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -3952,8 +3950,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -4003,8 +4000,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -4116,8 +4112,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -4936,7 +4931,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        state.nexus.write().enabled = false;
+
         let nexus = state.nexus_snapshot();
         assert_eq!(
             active_gossip_lane_ids(&state, &nexus),
@@ -5377,8 +5372,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -5911,7 +5905,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         )
         .expect("future-created autoscale lane catalog");
         let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
             lane_config: LaneGeometry::from_catalog(&lane_catalog),
             lane_catalog,
             ..iroha_config::parameters::actual::Nexus::default()
@@ -6046,8 +6039,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -6128,8 +6120,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -6166,7 +6157,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         .expect("dataspace catalog");
         {
             let mut nexus = state.nexus.write();
-            nexus.enabled = false;
             nexus.lane_catalog = lane_catalog.clone();
             nexus.lane_config = LaneGeometry::from_catalog(&lane_catalog);
             nexus.dataspace_catalog = dataspace_catalog.clone();
@@ -6229,8 +6219,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             store_dir: WithOrigin::inline(temp_dir.path().to_path_buf()),
             max_disk_usage_bytes: defaults::kura::MAX_DISK_USAGE_BYTES,
             blocks_in_memory: defaults::kura::BLOCKS_IN_MEMORY,
-            block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
@@ -6284,7 +6273,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         .expect("dataspace catalog");
         {
             let mut nexus = state.nexus.write();
-            nexus.enabled = true;
             nexus.autoscale.enabled = false;
             nexus.fees.base_fee = Quantity::zero();
             nexus.fees.per_byte_fee = Quantity::zero();

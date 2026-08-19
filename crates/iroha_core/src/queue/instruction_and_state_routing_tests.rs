@@ -211,59 +211,6 @@ include!("gossip_routing_metadata_tests.rs");
 include!("gossip_route_validation_tests.rs");
 include!("drain_revalidation_tests.rs");
 #[test]
-fn disabled_nexus_consensus_route_accepts_only_single_universal() {
-    let mut nexus = Nexus::default();
-    nexus.enabled = false;
-    assert_eq!(
-        crate::state::consensus_lane_dataspace_at_height(LaneId::SINGLE, &nexus, 1),
-        Some(DataSpaceId::UNIVERSAL)
-    );
-    assert_eq!(
-        crate::state::consensus_lane_dataspace_at_height(LaneId::new(1), &nexus, 1),
-        None
-    );
-}
-#[test]
-fn state_backed_queue_routes_canonical_disabled_nexus_single_lane() {
-    let mut state = State::new(
-        world_with_test_domains(),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
-    let mut nexus = state.nexus_snapshot();
-    nexus.enabled = false;
-    state
-        .set_nexus(nexus)
-        .expect("apply disabled Nexus state for default route test");
-    let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-    let queue = Queue::test(config_factory(), &time_source);
-    let (authority, key_pair) = gen_account_in("wonderland");
-    let tx = accepted_tx_with(
-        authority,
-        &key_pair,
-        &time_source,
-        vec![InstructionBox::from(Log::new(
-            Level::INFO,
-            "disabled Nexus default universal route".into(),
-        ))],
-        Metadata::default(),
-    );
-    let expected =
-        RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
-    assert_eq!(
-        queue
-            .route_plan_with_state(&tx, &state)
-            .expect("disabled Nexus should keep the default universal route admissible"),
-        expected
-    );
-    assert_eq!(
-        queue
-            .route_plan_for_gossip_with_state(&tx, &state)
-            .expect("disabled Nexus gossip should keep the default route admissible"),
-        expected
-    );
-}
-#[test]
 fn route_for_gossip_with_state_falls_back_to_view_router_path() {
     struct ViewOnlyRouter {
         lane: LaneId,
@@ -324,7 +271,6 @@ fn route_plan_with_state_syncs_queue_router_to_fresh_default_lane() {
         (fresh.lane_id, fresh.dataspace_id),
     ]);
     let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
     nexus.lane_catalog = (*fresh_lanes).clone();
     nexus.dataspace_catalog = (*fresh_dataspaces).clone();
     nexus.fees.base_fee = Quantity::zero();
@@ -375,7 +321,6 @@ fn push_in_view_syncs_queue_router_to_fresh_default_lane() {
         (fresh.lane_id, fresh.dataspace_id),
     ]);
     let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
     nexus.autoscale.enabled = false;
     nexus.lane_catalog = (*fresh_lanes).clone();
     nexus.lane_config =
@@ -441,7 +386,7 @@ fn route_plan_with_state_rejects_stale_policy_even_when_old_lane_still_exists() 
         },
     };
     let mut current_nexus = state.nexus_snapshot();
-    current_nexus.enabled = true;
+
     current_nexus.lane_catalog = (*lane_catalog).clone();
     current_nexus.dataspace_catalog = (*dataspace_catalog).clone();
     current_nexus.routing_policy.rules = vec![current_rule.clone()];
@@ -504,7 +449,7 @@ fn precomputed_state_routing_plan_rejects_stale_policy_even_when_old_lane_still_
         description: None,
     };
     let mut current_nexus = state.nexus_snapshot();
-    current_nexus.enabled = true;
+
     current_nexus.lane_catalog = (*lane_catalog).clone();
     current_nexus.dataspace_catalog = (*dataspace_catalog).clone();
     current_nexus.routing_policy.rules = vec![LaneRoutingRule {

@@ -1,7 +1,7 @@
 use super::*;
+use crate::utils::extractors::NoritoJson;
 #[cfg(feature = "telemetry")]
 use crate::{RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto};
-use crate::{routing::handle_v1_sumeragi_commit_qcs, utils::extractors::NoritoJson};
 use axum::{
     extract::State,
     http::{HeaderMap, HeaderValue, StatusCode},
@@ -24,10 +24,6 @@ use iroha_core::{
     queue::{LaneRouter, Queue, RoutingDecision, RoutingResolveError, TransactionRoutingView},
     smartcontracts::Execute,
     state::{State as IrohaState, World},
-    sumeragi::{
-        consensus::{PERMISSIONED_TAG, Phase, Vote, vote_preimage},
-        status::record_commit_qc_for_tests,
-    },
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
@@ -44,7 +40,7 @@ use iroha_data_model::{
         },
     },
     consensus::{
-        ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus, Qc, QcAggregate,
+        ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus,
         VALIDATOR_SET_HASH_VERSION_V1,
     },
     domain::{Domain, DomainId},
@@ -326,7 +322,6 @@ fn configure_nexus_fee_admission_for_test(
     fee_sink_account_id: &AccountId,
 ) {
     let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.enabled = true;
     nexus.fees.base_fee = Quantity::from(1_u32);
     nexus.fees.per_byte_fee = Quantity::zero();
     nexus.fees.per_instruction_fee = Quantity::zero();
@@ -366,7 +361,6 @@ pub(crate) fn configure_multiple_dataspace_routes_for_test(app: &mut SharedAppSt
     ])
     .expect("dataspace catalog");
     let nexus = iroha_config::parameters::actual::Nexus {
-        enabled: true,
         lane_catalog,
         dataspace_catalog,
         ..iroha_config::parameters::actual::Nexus::default()
@@ -441,7 +435,6 @@ pub(crate) fn configure_private_ingress_routes_for_test(
     ])
     .expect("dataspace catalog");
     let nexus = iroha_config::parameters::actual::Nexus {
-        enabled: true,
         lane_catalog,
         dataspace_catalog,
         ..iroha_config::parameters::actual::Nexus::default()
@@ -543,7 +536,6 @@ pub(crate) fn configure_private_ingress_with_offline_foreign_route_for_test(
     ])
     .expect("dataspace catalog");
     let nexus = iroha_config::parameters::actual::Nexus {
-        enabled: true,
         lane_catalog,
         dataspace_catalog,
         ..iroha_config::parameters::actual::Nexus::default()
@@ -602,6 +594,63 @@ fn install_lane_manifest_registry_for_test(
         })
         .collect::<Vec<_>>();
     install_lane_manifest_registry_with_torii_urls_for_test(state, &lanes_with_torii_urls);
+}
+/// Test-only wire twin of the private core committee record.
+///
+/// The explicit schema name keeps its Norito header identical to the record
+/// decoded by `State`; field order and types intentionally mirror that record.
+#[derive(norito::Encode)]
+#[norito(schema_name = "iroha_core::state::AutoscaleLaneCommitteeV1")]
+struct AutoscaleLaneCommitteeFixtureV1 {
+    version: u8,
+    validator_set_hash_version: u16,
+    validator_set_hash: HashOf<Vec<PeerId>>,
+    validator_set: Vec<PeerId>,
+    validator_pops: Vec<Vec<u8>>,
+    validator_count: u32,
+    min_quorum: u32,
+}
+/// Attach a canonical, PoP-valid immutable committee to an autoscale fixture.
+fn pin_autoscale_lane_committee_for_test(
+    lane: &mut iroha_data_model::nexus::LaneConfig,
+    keypairs: &[KeyPair],
+) -> Vec<PeerId> {
+    let mut members = keypairs
+        .iter()
+        .map(|keypair| {
+            let peer_id = PeerId::new(keypair.public_key().clone());
+            let pop = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
+                .expect("autoscale fixture committee PoP");
+            (peer_id, pop)
+        })
+        .collect::<Vec<_>>();
+    members.sort_by(|left, right| left.0.cmp(&right.0));
+    members.dedup_by(|left, right| left.0 == right.0);
+    assert_eq!(
+        members.len(),
+        keypairs.len(),
+        "autoscale fixture committee keys must be unique"
+    );
+    let (validator_set, validator_pops): (Vec<_>, Vec<_>) = members.into_iter().unzip();
+    let committee = AutoscaleLaneCommitteeFixtureV1 {
+        version: 1,
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validator_set),
+        validator_count: u32::try_from(validator_set.len())
+            .expect("autoscale fixture committee length fits u32"),
+        min_quorum: u32::try_from(
+            iroha_core::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
+        )
+        .expect("autoscale fixture committee quorum fits u32"),
+        validator_set: validator_set.clone(),
+        validator_pops,
+    };
+    let encoded = norito::to_bytes(&committee).expect("encode autoscale fixture committee");
+    lane.metadata.insert(
+        iroha_data_model::nexus::AUTOSCALE_META_COMMITTEE.to_owned(),
+        hex::encode(encoded),
+    );
+    validator_set
 }
 fn install_lane_manifest_registry_with_torii_urls_for_test(
     state: &IrohaState,

@@ -685,7 +685,7 @@ fn lane_uses_reserved_autoscale_metadata(lane: &iroha_data_model::nexus::LaneCon
         || lane.metadata.contains_key(AUTOSCALE_META_COMMITTEE)
 }
 fn lane_id_inside_enabled_autoscale_range(lane_id: LaneId, nexus: &Nexus) -> bool {
-    if !nexus.enabled || !nexus.autoscale.enabled {
+    if !nexus.autoscale.enabled {
         return false;
     }
     let min = nexus.autoscale.min_lanes.get();
@@ -1921,7 +1921,6 @@ mod tests {
         )
         .expect("dataspace catalog");
         Nexus {
-            enabled: true,
             lane_config: LaneConfig::from_catalog(&lane_catalog),
             lane_catalog,
             dataspace_catalog,

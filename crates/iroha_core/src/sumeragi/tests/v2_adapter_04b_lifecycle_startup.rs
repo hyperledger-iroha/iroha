@@ -199,7 +199,6 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
             context.da_layout,
         )
         .expect("configure the launchable owner's exact ingress roster");
-    leader_wire_ingress.require_certified_serve_gate();
     leader_wire_ingress.require_leader_wire_lifecycle_gate();
     let ingress_ready = Arc::new(AtomicBool::new(false));
     let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
@@ -593,7 +592,6 @@ fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
             context.da_layout,
         )
         .expect("configure CompleteTip H+1 lifecycle ingress");
-    ingress.require_certified_serve_gate();
     ingress.require_leader_wire_lifecycle_gate();
     let ingress_ready = Arc::new(AtomicBool::new(false));
     let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
@@ -642,7 +640,6 @@ fn complete_tip_launched_lifecycle_shuts_down_without_publishing_successor() {
     assert!(!ingress_ready.load(Ordering::Acquire));
     let ingress_state = ingress.state.lock();
     assert!(!ingress_state.open);
-    assert!(ingress_state.certified_serve_gate.is_none());
     assert!(ingress_state.leader_wire_lifecycle_gate.is_none());
     drop(ingress_state);
     assert!(!output_guard.restart_required());
@@ -876,7 +873,6 @@ fn exercise_pending_kura_production_lifecycle(
             context.da_layout,
         )
         .expect("configure pending Kura lifecycle ingress");
-    leader_wire_ingress.require_certified_serve_gate();
     leader_wire_ingress.require_leader_wire_lifecycle_gate();
     let ingress_ready = Arc::new(AtomicBool::new(false));
     let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
@@ -1017,19 +1013,12 @@ fn exercise_pending_kura_production_lifecycle(
         return;
     }
 
-    let producer_episode = activated
-        .with_runner_runtime(&mut active_runner, |_executor, services, _lane_work| {
-            services.try_begin_certified_serve_producer_episode()
-        })
-        .expect("query exact pending Kura producer episode")
-        .expect("claim pending Kura producer episode");
     let (finalized, mut lane_work) = activated
         .into_finalized_rollover(&mut active_runner)
         .unwrap_or_else(|error| panic!("finalize pending Kura lifecycle owner: {error}"));
     assert_safety_wal_retention(&safety_wal_path, true);
     assert!(!ingress_ready.load(Ordering::Acquire));
     assert!(!leader_wire_ingress.state.lock().open);
-    drop(producer_episode);
     let (_, artifact) = finalized.finality();
     lane_work
         .retain_merge_sidecars_for_global_view(
@@ -1454,7 +1443,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                     recovered_context.da_layout,
                 )
                 .expect("configure recovered-Apply lifecycle ingress");
-            leader_wire_ingress.require_certified_serve_gate();
             leader_wire_ingress.require_leader_wire_lifecycle_gate();
             let ingress_ready = Arc::new(AtomicBool::new(false));
             let output_guard = super::super::output_guard::ConsensusOutputGuard::isolated();
@@ -1508,10 +1496,10 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 },
                 v2_runner::{
                     LifecycleRunnerRankTarget, ProductionLifecyclePreActivationRunnerBorrowV1,
+                    producer_turn_attempt_permit_for_test,
                     with_lifecycle_current_runner_turn_for_test,
                 },
             };
-
             if shutdown_before_activation {
                 let setup_context = super::super::v2_runner::lifecycle_run_inner::
                     launch_non_pending_lifecycle_height_and_shutdown_for_test(
@@ -1539,6 +1527,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 .with_runner_setup(&mut setup_runner, |executor, services| {
                     assert_eq!(executor.context(), &recovered_context);
                     assert!(services.matches_lifecycle_executor_output_guard(executor));
+                    services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
                     Ok::<_, super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1>(
                         executor.current_tag(),
                     )
@@ -1570,7 +1559,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 after_ingress_pass_through,
                 LifecycleRunnerRankTarget::Completion
             );
-
             let ((), after_wrong_class_pass_through) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Runtime,
@@ -1589,7 +1577,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 LifecycleRunnerRankTarget::Ingress
             );
             assert!(!output_guard.restart_required());
-
             let mut foreign_context = recovered_context.clone();
             foreign_context.height = foreign_context
                 .height
@@ -1614,7 +1601,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 LifecycleRunnerRankTarget::Runtime
             );
             assert!(!output_guard.restart_required());
-
             let (queued, after_apply_selection) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Completion,
@@ -1671,7 +1657,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 }
                 std::thread::yield_now();
             }
-
             let (prepared_directive, local_proposal_state) = launched
                 .initialize_recovered_local_proposal(setup_runner)
                 .expect("prepare the fresh runner local-Proposal state for activation");
@@ -1700,15 +1685,16 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 after_activated_completion_pass_through,
                 LifecycleRunnerRankTarget::Runtime
             );
-
             let ordinary_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
             ));
             assert!(matches!(
-                leader_wire_ingress.try_push(crate::sumeragi::InboundBlockMessage::new(
-                    ordinary_message,
-                    Some(local_peer.clone()),
-                )),
+                leader_wire_ingress.try_push(
+                    crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                        ordinary_message,
+                        local_peer.clone(),
+                    )
+                ),
                 Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
             ));
             let ordinary_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
@@ -1725,15 +1711,16 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 wire::ConsensusMessageV2Payload::CertifiedBodyResponse(invalid_response),
             );
             assert!(matches!(
-                leader_wire_ingress.try_push(crate::sumeragi::InboundBlockMessage::new(
-                    crate::sumeragi::message::BlockMessage::V2(invalid_response_message),
-                    Some(local_peer.clone()),
-                )),
+                leader_wire_ingress.try_push(
+                    crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                        crate::sumeragi::message::BlockMessage::V2(invalid_response_message),
+                        local_peer.clone(),
+                    )
+                ),
                 Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
             ));
             let invalid_response_ordinal = leader_wire_ingress.state.lock().last_admission_ordinal;
             assert!(ordinary_ordinal < invalid_response_ordinal);
-
             let (ordinary_turn, after_ordinary_ingress) =
                 with_lifecycle_current_runner_turn_for_test(
                     &recovered_context,
@@ -1798,7 +1785,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
             );
             assert!(!output_guard.restart_required());
-
             let (invalid_turn, after_invalid_ingress) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Ingress,
@@ -1838,15 +1824,16 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             );
             assert_eq!(leader_wire_ingress.len(), 0);
             assert!(!output_guard.restart_required());
-
             let batch_message = BlockMessage::V2(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::PayloadManifest(manifest.clone()),
             ));
             assert!(matches!(
-                leader_wire_ingress.try_push(crate::sumeragi::InboundBlockMessage::new(
-                    batch_message,
-                    Some(local_peer.clone()),
-                )),
+                leader_wire_ingress.try_push(
+                    crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                        batch_message,
+                        local_peer.clone(),
+                    )
+                ),
                 Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
             ));
             let mut batch_runner =
@@ -1867,7 +1854,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             .expect("drain one exact lifecycle-owned ordinary batch");
             assert_eq!(leader_wire_ingress.len(), 0);
             assert!(!output_guard.restart_required());
-
             let (rejected_serve, admitted_serve) =
                 production_serve_requests_for_execution_commitment(
                     &recovered_context,
@@ -1901,7 +1887,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
             let auxiliary_hold = activated
                 .hold_auxiliary_io_admission_for_test()
                 .expect("hold the sole auxiliary I/O admission unit");
-
             let (rejected_turn, after_rejected_serve) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Ingress,
@@ -1930,7 +1915,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 matches!(
                     &rejected_settlement,
                     ProductionPreparedCertifiedServeTestSettlementV1::Rejected(reason)
-                        if reason.contains("not a certified-body retention owner")
+                        if reason.contains("no certified retention authority")
                 ),
                 "unexpected rejected-Serve settlement: {rejected_settlement:?}"
             );
@@ -1943,7 +1928,7 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 |runner| {
                     match activated.drive_ingress_turn(runner) {
                         ProductionLifecycleIngressTurnV1::Selected(
-                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::OrdinaryRetained,
+                            super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CapacityPending,
                         ) => true,
                         ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
                             drop(runner);
@@ -1966,60 +1951,71 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 leader_wire_ingress.state.lock().last_admission_ordinal,
                 admitted_serve_ordinal
             );
-            assert!(
-                activated
-                    .certified_serve_barrier_matches_for_test(admitted_serve.request_hash())
-                    .expect("inspect the exact retained Serve barrier")
-            );
             assert!(!output_guard.restart_required());
 
             drop(auxiliary_hold);
-            let (admitted_turn, after_admitted_serve) = with_lifecycle_current_runner_turn_for_test(
+            let ((), after_admitted_serve) = with_lifecycle_current_runner_turn_for_test(
                 &recovered_context,
                 LifecycleRunnerRankTarget::Ingress,
-                |runner| match activated.drive_ingress_turn(runner) {
-                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => turn,
+                |runner| {
+                    match activated.drive_ingress_turn(runner) {
+                    ProductionLifecycleIngressTurnV1::Selected(
+                        super::super::v2_lifecycle_coordinator::ProductionLifecycleIngressSelectionV1::CertifiedServeQueued,
+                    ) => {}
                     ProductionLifecycleIngressTurnV1::PassThrough(runner) => {
                         drop(runner);
                         panic!("released auxiliary capacity must admit exact Serve")
                     }
+                    ProductionLifecycleIngressTurnV1::Ordinary(turn) => {
+                        drop(turn);
+                        panic!("released certified Serve must enter lifecycle dispatch directly")
+                    }
                     ProductionLifecycleIngressTurnV1::Selected(_) => {
                         panic!("released certified Serve selected the wrong outcome")
                     }
+                }
                 },
             );
             assert_eq!(after_admitted_serve, LifecycleRunnerRankTarget::Completion);
-            assert_eq!(
-                admitted_turn.physical_ordinal_for_test(),
-                admitted_serve_ordinal
-            );
-            assert!(admitted_turn.has_prepared_serve_for_test());
             assert_eq!(leader_wire_ingress.len(), 0);
-            assert_eq!(
-                activated
-                    .consume_prepared_ordinary_ingress_turn(
-                        &mut serve_runner,
-                        admitted_turn,
-                        &mut lane_work,
-                        kura.as_ref(),
-                        &local_signer,
-                        &mut block_sync_server,
-                        &mut block_sync,
-                        &mut block_sync_request,
-                        &mut npos_vrf,
-                    )
-                    .expect("consume exact admitted Serve handoff"),
-                super::super::v2_runner::ordinary_ingress_consumer::ProductionPreparedOrdinaryIngressConsumptionV1::Continue,
-            );
-            assert!(
-                activated
-                    .certified_serve_owners_are_clear_for_test()
-                    .expect("inspect cleared Serve owners")
-            );
-            let producer_episode = activated
-                .take_certified_serve_producer_episode_for_test()
-                .expect("claim the due local-producer episode");
-            assert!(producer_episode.is_some());
+            assert!(!output_guard.restart_required());
+            let completion_deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                let (completed, _) = with_lifecycle_current_runner_turn_for_test(
+                    &recovered_context,
+                    LifecycleRunnerRankTarget::Completion,
+                    |runner| match activated.drive_completion_turn(runner, &mut lane_work) {
+                        ProductionLifecycleCompletionTurnV1::Selected(
+                            ProductionLifecycleCompletionSelectionV1::CertifiedServeCompleted,
+                        ) => true,
+                        ProductionLifecycleCompletionTurnV1::PassThrough(_) => false,
+                        ProductionLifecycleCompletionTurnV1::Selected(selected) => {
+                            assert!(
+                                !selected.restart_required(),
+                                "current Serve completion requires lifecycle restart"
+                            );
+                            false
+                        }
+                    },
+                );
+                if completed {
+                    break;
+                }
+                assert!(
+                    Instant::now() < completion_deadline,
+                    "timed out waiting for current Serve completion"
+                );
+                std::thread::yield_now();
+            }
+            let claimed_producer = activated
+                .claim_producer_turn_for_local_proposal(&mut serve_runner)
+                .expect("authenticate the complete Ready Producer census")
+                .expect("completed Serve must release one adjacent ProducerTurn");
+            let attempted_producer = claimed_producer
+                .into_attempted(producer_turn_attempt_permit_for_test(&mut serve_runner));
+            activated
+                .settle_producer_turn_after_local_proposal(&mut serve_runner, attempted_producer)
+                .expect("durably settle the attempted ProducerTurn");
             assert!(!output_guard.restart_required());
 
             let ((), after_activated_ingress_pass_through) =
@@ -2047,7 +2043,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 activated
                     .into_clean_shutdown(&mut runner)
                     .unwrap_or_else(|error| panic!("cleanly stop active lifecycle owner: {error}"));
-                drop(producer_episode);
                 assert!(!ingress_ready.load(Ordering::Acquire));
                 assert!(!leader_wire_ingress.state.lock().open);
                 assert!(!output_guard.restart_required());
@@ -2060,7 +2055,6 @@ fn production_lifecycle_factory_replays_markers_with_its_retained_apply_dependen
                 super::super::v2_runner::lifecycle_run_inner::finalize_lifecycle_height(
                     activated,
                     &mut runner,
-                    producer_episode,
                     lane_work,
                     64,
                     &mut cleanup_supervisor,

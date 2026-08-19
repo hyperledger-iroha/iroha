@@ -2391,7 +2391,7 @@ export class ToriiBrowserClient {
     });
   }
 
-  /** Fetch the node-provided execution state root recorded at a block height. */
+  /** Fetch exact Sumeragi-v2 finality carrying the authenticated post-state root. */
   getLedgerStateRoot(height, options = {}) {
     const context = "getLedgerStateRoot options";
     const opts = requireSupportedOptions(options, context, LEDGER_READ_OPTION_KEYS);
@@ -2401,7 +2401,7 @@ export class ToriiBrowserClient {
     });
   }
 
-  /** Fetch the node-provided execution QC at a block height. */
+  /** Fetch the same exact Sumeragi-v2 state-finality carrier for proof consumers. */
   getLedgerStateProof(height, options = {}) {
     const context = "getLedgerStateProof options";
     const opts = requireSupportedOptions(options, context, LEDGER_READ_OPTION_KEYS);

@@ -590,7 +590,7 @@ _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        43,
+        42,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-state-governance-unlock-audit", "state::tests", 1),
@@ -616,13 +616,18 @@ _PRODUCTION_MODULES = (
         "sumeragi::serviced_candidate_store::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 47),
+    ("production-v2-adapter", "sumeragi::v2::tests", 48),
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
+    (
+        "production-v2-certified-serve-payload-store",
+        "sumeragi::v2_certified_serve_payload_store::tests",
+        11,
+    ),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 72),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 71),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 65),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     (
@@ -630,8 +635,18 @@ _PRODUCTION_MODULES = (
         "sumeragi::v2_lifecycle_recovery::tests",
         5,
     ),
+    (
+        "production-v2-lifecycle-coordinator",
+        "sumeragi::v2_lifecycle_coordinator",
+        39,
+    ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 135),
+    (
+        "production-v2-runner-lifecycle-height-driver",
+        "sumeragi::v2_runner::lifecycle_height_driver::tests",
+        1,
+    ),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 88),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -783,8 +798,6 @@ _SDK_SOURCE_CLOSURE_SUITES = frozenset(
         _SUMERAGI_SDK_DIAGNOSTICS_SOURCE_CLOSURE_SUITE,
     }
 )
-
-
 
 
 class ReceiptError(RuntimeError):
@@ -4853,8 +4866,6 @@ def _validate_bootstrap_evidence(
         "release_approvals": release_approvals,
     }
     return authentication, bootstrap_evidence, framework_runtime_contracts
-
-
 
 
 def _execute_release_receipt_component(filename: str) -> None:

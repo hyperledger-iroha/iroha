@@ -981,7 +981,7 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-cli-release.yml",
-            '- "specs/release_dual_track_automation_plan*.md"',
+            '- "specs/release_automation_plan*.md"',
         ),
         (
             ".github/workflows/sorafs-fixtures-nightly.yml",

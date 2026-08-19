@@ -500,7 +500,7 @@ fn decode_lower_hex_vec(
     maximum_bytes: usize,
     stage: &'static str,
 ) -> Result<Zeroizing<Vec<u8>>, PrivacyWalletBundleErrorV1> {
-    let valid_length = value.len() % 2 == 0
+    let valid_length = value.len().is_multiple_of(2)
         && (minimum_bytes.saturating_mul(2)..=maximum_bytes.saturating_mul(2))
             .contains(&value.len());
     let valid_alphabet = value

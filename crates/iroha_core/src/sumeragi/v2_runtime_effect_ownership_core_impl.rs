@@ -4,6 +4,7 @@ impl RuntimeEffectOwnership {
             owner,
             causality: RuntimeEffectCausality::Inherit,
             binding: None,
+            producer: None,
             remote_proposal_fetch_replay: None,
         }
     }
@@ -12,15 +13,20 @@ impl RuntimeEffectOwnership {
             owner,
             causality: RuntimeEffectCausality::Fresh(kind),
             binding: None,
+            producer: None,
             remote_proposal_fetch_replay: None,
         }
     }
     fn validate_exact(&self) -> bool {
         self.owner.validate_exact()
-            && self
-                .binding
-                .as_ref()
-                .is_none_or(|binding| binding.validate_exact(&self.owner, self.causality))
+            && match (self.binding.as_ref(), self.producer.as_ref()) {
+                (None, None) => true,
+                (Some(binding), Some(producer)) => {
+                    binding.validate_exact(&self.owner, self.causality)
+                        && producer.validate_exact(&self.owner, binding)
+                }
+                _ => false,
+            }
     }
     fn validate_bound_exact(&self) -> bool {
         self.validate_exact() && self.binding.is_some()
@@ -40,44 +46,18 @@ impl RuntimeEffectOwnership {
                     &production_adapter_effect_semantic_identity(effect),
                 )
     }
-    /// Mint an ordinal-free lifecycle-admission binding only for the exact
-    /// concrete effect named by this legacy ownership sidecar.
-    ///
-    /// This conversion is the inert migration seam: it does not admit or
-    /// execute work, and the returned projection contains no logical ordinal.
-    pub(crate) fn pending_adapter_effect_binding(
+    /// Seal the exact ordinal-free producer which emitted this concrete effect.
+    pub(crate) fn current_effect_producer(
         &self,
         effect: &AdapterEffect,
-    ) -> Option<PendingRuntimeEffectBinding> {
-        // TODO: Delete this legacy-owner conversion once the executor mints
-        // the pending binding before coordinator admission in the one-cut
-        // production scheduler switch.
+    ) -> Option<CurrentRuntimeEffectProducer> {
         if !self.exactly_binds_adapter_effect(effect) {
             return None;
         }
-        let binding = self
-            .binding
+        self.producer
             .as_ref()
-            .expect("an exactly bound ownership has a binding");
-        let causal_lifecycle_key = self.owner.causal_origin.lifecycle_key;
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &causal_lifecycle_key,
-            binding.effect_kind,
-            &binding.effect_identity,
-            binding.candidate_kind,
-            binding.candidate_statement,
-            binding.candidate_semantic_identity.as_ref(),
-        );
-        let pending = PendingRuntimeEffectBinding {
-            causal_lifecycle_key,
-            effect_kind: binding.effect_kind,
-            effect_identity: binding.effect_identity,
-            candidate_kind: binding.candidate_kind,
-            candidate_statement: binding.candidate_statement,
-            candidate_semantic_identity: binding.candidate_semantic_identity,
-            projection_hash,
-        };
-        pending.validate_exact(effect).then_some(pending)
+            .cloned()
+            .map(|binding| CurrentRuntimeEffectProducer { binding })
     }
     /// Clone the opaque authenticated-Proposal replay envelope only for its exact Fetch.
     pub(in crate::sumeragi) fn exact_remote_proposal_fetch_replay(
@@ -85,7 +65,7 @@ impl RuntimeEffectOwnership {
         effect: &AdapterEffect,
     ) -> Option<RemoteProposalFetchReplayEvidenceV1> {
         let replay = self.remote_proposal_fetch_replay.as_ref()?;
-        let pending = self.pending_adapter_effect_binding(effect)?;
+        let pending = self.current_effect_producer(effect)?.mint_pending_binding();
         replay
             .exactly_matches_fetch_pending(effect, &pending)
             .then(|| replay.clone())
@@ -107,10 +87,12 @@ impl RuntimeEffectOwnership {
             wire::ConsensusMessageV2Payload::Proposal(proposal),
         ));
         let message = authenticated.wire_envelope_for_test();
-        let mut admitted = super::fair_v2_ingress_admit_for_test(super::InboundBlockMessage::new(
-            super::message::BlockMessage::V2(message.clone()),
-            None,
-        ));
+        let mut admitted = super::fair_v2_ingress_admit_for_test(
+            super::InboundBlockMessage::from_authenticated_peer(
+                super::message::BlockMessage::V2(message.clone()),
+                super::authenticated_peer_for_test(),
+            ),
+        );
         let Some(fair_ingress) = admitted.take_ingress_ownership() else {
             return false;
         };
@@ -123,9 +105,10 @@ impl RuntimeEffectOwnership {
         else {
             return false;
         };
-        let Some(pending) = self.pending_adapter_effect_binding(effect) else {
+        let Some(producer) = self.current_effect_producer(effect) else {
             return false;
         };
+        let pending = producer.mint_pending_binding();
         let Some(replay) = origin.bind_exact_fetch(effect, pending) else {
             return false;
         };
@@ -231,10 +214,10 @@ impl RuntimeEffectOwnership {
         candidate_position: u8,
         candidate_count: u8,
     ) -> Result<Self, EnqueueError> {
-        if self.binding.is_some() {
+        if self.binding.is_some() || self.producer.is_some() {
             return Err(EnqueueError::FailClosed);
         }
-        self.binding = Some(RuntimeEffectCandidateBinding::new(
+        let binding = RuntimeEffectCandidateBinding::new(
             &self.owner,
             self.causality,
             parent,
@@ -245,7 +228,10 @@ impl RuntimeEffectOwnership {
             effect_count,
             candidate_position,
             candidate_count,
-        )?);
+        )?;
+        let producer = RuntimeEffectProducerBinding::new(&self.owner, &binding)?;
+        self.binding = Some(binding);
+        self.producer = Some(producer);
         self.validate_bound_exact()
             .then_some(self)
             .ok_or(EnqueueError::FailClosed)

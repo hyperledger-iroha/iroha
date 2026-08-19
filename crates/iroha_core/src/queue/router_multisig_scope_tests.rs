@@ -989,7 +989,7 @@ fn multisig_approve_before_sibling_proposal_keeps_account_scope_target() {
     let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
     state.nexus.write().lane_catalog = lane_catalog;
     let expected_plan = RoutingPlan::native_amx(
-        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        RoutingDecision::new(proposed_lane, proposed_dataspace),
         vec![
             RouteLeg::new(
                 RoutingDecision::new(proposed_lane, proposed_dataspace),

@@ -397,14 +397,15 @@ fn validate_signed_manifest_binding(
     }
     Ok(())
 }
-/// Genesis block, represented as a thin wrapper around the signed block emitted by the builder.
+/// Genesis block, represented as a thin wrapper around a signed block.
 ///
-/// If an executor upgrade is specified (see [`RawGenesisTransaction::executor`]), the first
-/// transaction must contain a single [`Upgrade`] instruction to set the executor. Otherwise, the
-/// executor upgrade is omitted and the first transaction may be parameters or other instructions.
-/// Subsequent transactions can contain parameter settings, instructions, topology change, and IVM
-/// triggers. Callers can access the wrapped [`SignedBlock`] via tuple struct syntax
-/// (`GenesisBlock.0`).
+/// If an executor upgrade is specified (see [`RawGenesisTransaction::executor`]), the first transaction
+/// must contain a single [`Upgrade`] instruction; otherwise it may contain parameters or other instructions.
+/// Subsequent transactions can contain parameter settings, instructions, topology change, and IVM triggers.
+/// Callers can access the wrapped [`SignedBlock`] via tuple struct syntax (`GenesisBlock.0`).
+///
+/// Raw manifest builders produce a canonical resultless proposal. A deployment signer such as `kagami genesis sign`
+/// must execute it under the selected runtime configuration and publish the resulting result-bearing block.
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct GenesisBlock(pub SignedBlock);
@@ -3431,7 +3432,7 @@ impl RawGenesisTransaction {
             sumeragi_v2: self.sumeragi_v2,
         }
     }
-    /// Build and sign genesis block.
+    /// Build and sign a resultless genesis proposal.
     ///
     /// # Errors
     ///
@@ -3440,7 +3441,7 @@ impl RawGenesisTransaction {
     pub fn build_and_sign(self, genesis_key_pair: &KeyPair) -> Result<GenesisBlock> {
         self.build_and_sign_with_da_proof_policies(genesis_key_pair, None)
     }
-    /// Build and sign genesis block with an explicit confidential policy hash.
+    /// Build and sign a resultless genesis proposal with an explicit confidential policy hash.
     ///
     /// This does not derive the hash from the manifest. Callers that know the
     /// runtime confidential policy must compute it before signing, so the signed genesis
@@ -3460,7 +3461,7 @@ impl RawGenesisTransaction {
             confidential_policy_hash,
         )
     }
-    /// Build and sign genesis block, overriding the embedded DA proof policies.
+    /// Build and sign a resultless genesis proposal, overriding the embedded DA proof policies.
     ///
     /// # Errors
     ///
@@ -3476,7 +3477,7 @@ impl RawGenesisTransaction {
             None,
         )
     }
-    /// Build and sign genesis block, overriding DA proof policies and the confidential policy hash.
+    /// Build and sign a resultless genesis proposal, overriding DA proof policies and the confidential policy hash.
     ///
     /// # Errors
     ///
@@ -3500,8 +3501,7 @@ impl RawGenesisTransaction {
             genesis_creation_base_ms,
         )
     }
-    /// Build and sign genesis with explicit DA/confidential policy commitments
-    /// and a deterministic transaction creation-time base.
+    /// Build and sign a resultless genesis proposal with explicit DA/confidential policy commitments and a deterministic transaction creation-time base.
     ///
     /// Transaction `i` receives `creation_time_base_ms + i`; the genesis block
     /// timestamp remains one millisecond after the final transaction.
@@ -3565,13 +3565,14 @@ impl RawGenesisTransaction {
             Some(RULES_VERSION),
             Some(confidential_policy_hash.unwrap_or(DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH)),
         );
-        let block = SignedBlock::genesis_with_da_proof_policies(
+        let block = SignedBlock::try_genesis_with_da_proof_policies(
             transactions,
             genesis_key_pair.private_key(),
             Some(confidential_digest),
             None,
             da_proof_policies,
-        );
+        )
+        .wrap_err("failed to sign genesis block")?;
         Ok(GenesisBlock(block))
     }
     /// Parse [`RawGenesisTransaction`] to the list of source instructions of the genesis transactions
@@ -3638,7 +3639,7 @@ impl RawGenesisTransaction {
         let mut aggregated_parameters = Parameters::default();
         let mut ivm_bytecode_total = 0_usize;
         if let Some(executor_path) = executor {
-            let executor = load_genesis_ivm_bytecode(executor_path, &mut ivm_bytecode_total)?;
+            let executor = load_genesis_ivm_bytecode(&executor_path, &mut ivm_bytecode_total)?;
             let upgrade_executor = Upgrade::new(Executor::new(executor)).into();
             instructions_list.push(vec![upgrade_executor]);
         }
@@ -4078,7 +4079,7 @@ impl GenesisBuilder {
         self.transactions.push(GenesisTxBuilder::default());
         self
     }
-    /// Finish building, sign, and produce a [`GenesisBlock`].
+    /// Finish building, sign, and produce a resultless [`GenesisBlock`] proposal.
     ///
     /// # Errors
     ///
@@ -4088,7 +4089,7 @@ impl GenesisBuilder {
         self.build_raw()
             .build_and_sign_with_da_proof_policies(genesis_key_pair, da_proof_policies)
     }
-    /// Finish building, sign, and produce a [`GenesisBlock`] with a confidential policy hash.
+    /// Finish building, sign, and produce a resultless [`GenesisBlock`] proposal with a confidential policy hash.
     ///
     /// # Errors
     ///
@@ -4219,7 +4220,7 @@ impl TryFrom<IvmPath> for IvmBytecode {
     type Error = eyre::Report;
     fn try_from(value: IvmPath) -> Result<Self, Self::Error> {
         let mut total = 0;
-        load_genesis_ivm_bytecode(value, &mut total)
+        load_genesis_ivm_bytecode(&value, &mut total)
     }
 }
 fn checked_genesis_ivm_bytecode_total(current: usize, next: usize) -> Result<usize> {
@@ -4234,7 +4235,7 @@ fn checked_genesis_ivm_bytecode_total(current: usize, next: usize) -> Result<usi
     }
     Ok(total)
 }
-fn load_genesis_ivm_bytecode(value: IvmPath, total: &mut usize) -> Result<IvmBytecode> {
+fn load_genesis_ivm_bytecode(value: &IvmPath, total: &mut usize) -> Result<IvmBytecode> {
     let remaining = GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1
         .checked_sub(*total)
         .ok_or_else(|| {
@@ -4307,7 +4308,7 @@ impl GenesisIvmAction {
     }
     fn try_into_with_ivm_bytecode_budget(self, total: &mut usize) -> Result<Action> {
         Action::new(
-            load_genesis_ivm_bytecode(self.executable, total)?,
+            load_genesis_ivm_bytecode(&self.executable, total)?,
             self.repeats,
             self.authority,
             self.filter,
@@ -4714,81 +4715,75 @@ mod tests {
         Ok(())
     }
     #[test]
-    fn shipped_taira_genesis_binds_sorafs_appeal_xor_at_scale_nine() -> Result<()> {
+    fn soranexus_taira_genesis_binds_sorafs_appeal_xor_at_scale_nine() -> Result<()> {
         const SORA_XOR_ID: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
-        const SORA_XOR_ALIAS: &str = "xor#sora";
+        const SORA_XOR_ALIAS: &str = "xor#sora.universal";
         const SORA_XOR_SCALE: u64 = 9;
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for manifest_path in [
-            repo_root.join("defaults/kagami/iroha3-taira/genesis.json"),
-            repo_root.join("configs/soranexus/taira/genesis.json"),
-        ] {
-            let raw = std::fs::read_to_string(&manifest_path)?;
-            let value = norito::json::parse_value(&raw)?;
-            let transactions = value
-                .get("transactions")
-                .and_then(norito::json::Value::as_array)
-                .ok_or_else(|| eyre!("{} missing transactions array", manifest_path.display()))?;
-            let mut sora_xor_registered = false;
-            let mut sora_xor_scale = None;
-            let mut sora_xor_binding = None;
-            for instruction in transactions
-                .iter()
-                .filter_map(|tx| tx.get("instructions"))
-                .filter_map(norito::json::Value::as_array)
-                .flatten()
+        let manifest_path = repo_root.join("configs/soranexus/taira/genesis.json");
+        let raw = std::fs::read_to_string(&manifest_path)?;
+        let value = norito::json::parse_value(&raw)?;
+        let transactions = value
+            .get("transactions")
+            .and_then(norito::json::Value::as_array)
+            .ok_or_else(|| eyre!("{} missing transactions array", manifest_path.display()))?;
+        let mut sora_xor_registered = false;
+        let mut sora_xor_scale = None;
+        let mut sora_xor_binding = None;
+        for instruction in transactions
+            .iter()
+            .filter_map(|tx| tx.get("instructions"))
+            .filter_map(norito::json::Value::as_array)
+            .flatten()
+        {
+            if let Some(asset_definition) = instruction
+                .get("Register")
+                .and_then(|register| register.get("AssetDefinition"))
+                && asset_definition
+                    .get("id")
+                    .and_then(norito::json::Value::as_str)
+                    == Some(SORA_XOR_ID)
             {
-                if let Some(asset_definition) = instruction
-                    .get("Register")
-                    .and_then(|register| register.get("AssetDefinition"))
-                    && asset_definition
-                        .get("id")
-                        .and_then(norito::json::Value::as_str)
-                        == Some(SORA_XOR_ID)
-                {
-                    if sora_xor_registered {
-                        return Err(eyre!(
-                            "{} registers governed Sora XOR `{SORA_XOR_ID}` more than once",
-                            manifest_path.display()
-                        ));
-                    }
-                    sora_xor_registered = true;
-                    sora_xor_scale = asset_definition
-                        .get("spec")
-                        .and_then(|spec| spec.get("scale"))
-                        .and_then(norito::json::Value::as_u64);
-                }
-                let Some(binding) = instruction.get("SetAssetDefinitionAlias") else {
-                    continue;
-                };
-                if binding.get("alias").and_then(norito::json::Value::as_str)
-                    != Some(SORA_XOR_ALIAS)
-                {
-                    continue;
-                }
-                if sora_xor_binding.is_some() {
+                if sora_xor_registered {
                     return Err(eyre!(
-                        "{} binds governed Sora XOR alias `{SORA_XOR_ALIAS}` more than once",
+                        "{} registers governed Sora XOR `{SORA_XOR_ID}` more than once",
                         manifest_path.display()
                     ));
                 }
-                sora_xor_binding = binding
-                    .get("asset_definition_id")
-                    .and_then(norito::json::Value::as_str);
+                sora_xor_registered = true;
+                sora_xor_scale = asset_definition
+                    .get("spec")
+                    .and_then(|spec| spec.get("scale"))
+                    .and_then(norito::json::Value::as_u64);
             }
-            assert_eq!(
-                sora_xor_binding,
-                Some(SORA_XOR_ID),
-                "{} must bind governed appeal asset `{SORA_XOR_ALIAS}` to `{SORA_XOR_ID}`",
-                manifest_path.display()
-            );
-            assert_eq!(
-                sora_xor_scale,
-                Some(SORA_XOR_SCALE),
-                "{} must register governed appeal asset `{SORA_XOR_ID}` at fixed scale {SORA_XOR_SCALE}; reseed pre-release state instead of mutating a live chain",
-                manifest_path.display()
-            );
+            let Some(binding) = instruction.get("SetAssetDefinitionAlias") else {
+                continue;
+            };
+            if binding.get("alias").and_then(norito::json::Value::as_str) != Some(SORA_XOR_ALIAS) {
+                continue;
+            }
+            if sora_xor_binding.is_some() {
+                return Err(eyre!(
+                    "{} binds governed Sora XOR alias `{SORA_XOR_ALIAS}` more than once",
+                    manifest_path.display()
+                ));
+            }
+            sora_xor_binding = binding
+                .get("asset_definition_id")
+                .and_then(norito::json::Value::as_str);
         }
+        assert_eq!(
+            sora_xor_binding,
+            Some(SORA_XOR_ID),
+            "{} must bind governed appeal asset `{SORA_XOR_ALIAS}` to `{SORA_XOR_ID}`",
+            manifest_path.display()
+        );
+        assert_eq!(
+            sora_xor_scale,
+            Some(SORA_XOR_SCALE),
+            "{} must register governed appeal asset `{SORA_XOR_ID}` at fixed scale {SORA_XOR_SCALE}; reseed pre-release state instead of mutating a live chain",
+            manifest_path.display()
+        );
         Ok(())
     }
     #[test]

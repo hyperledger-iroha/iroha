@@ -115,11 +115,16 @@ def test_runner_admits_all_exact_benchmark_operations(tmp_path: Path) -> None:
         MODULE.K17_AUDIT_INVENTORY_SUBCOMMAND
         == "probe-compact-k17-audit-inventory"
     )
+    assert (
+        MODULE.K17_IPA_AUDIT_BRIDGE_SUBCOMMAND
+        == "probe-compact-k17-ipa-audit-bridge"
+    )
     assert MODULE.BENCHMARK_SUBCOMMANDS == frozenset(
         {
             MODULE.BENCHMARK_SUBCOMMAND,
             MODULE.K17_SHAPE_PROBE_SUBCOMMAND,
             MODULE.K17_AUDIT_INVENTORY_SUBCOMMAND,
+            MODULE.K17_IPA_AUDIT_BRIDGE_SUBCOMMAND,
         }
     )
     for subcommand in MODULE.BENCHMARK_SUBCOMMANDS:
@@ -282,7 +287,7 @@ def test_benchmark_source_cannot_frame_or_publish_a_candidate() -> None:
     candidate_runner_source = CANDIDATE_RUNNER_PATH.read_text(encoding="utf-8")
     core_manifest = CORE_MANIFEST_PATH.read_text(encoding="utf-8")
 
-    assert benchmark_source.count("start_kagemusha_generation_memory_guard_v4") == 4
+    assert benchmark_source.count("start_kagemusha_generation_memory_guard_v4") == 5
     assert "claim_kagemusha_generation_" + "supervisor_permit_v4" not in benchmark_source
     assert "generate_kagemusha_pasta_cycle_artifacts_v4" in benchmark_source
     assert benchmark_source.count("tempfile::tempfile()") == 2
@@ -300,6 +305,7 @@ def test_benchmark_source_cannot_frame_or_publish_a_candidate() -> None:
     assert MODULE.BENCHMARK_SUBCOMMAND not in candidate_runner_source
     assert MODULE.K17_SHAPE_PROBE_SUBCOMMAND not in candidate_runner_source
     assert MODULE.K17_AUDIT_INVENTORY_SUBCOMMAND not in candidate_runner_source
+    assert MODULE.K17_IPA_AUDIT_BRIDGE_SUBCOMMAND not in candidate_runner_source
     assert "MEMORY_ENFORCEMENT_MAX_RSS_OR_FOOTPRINT" in benchmark_runner_source
     assert "MEMORY_ENFORCEMENT_PROCESS_TREE_RSS" in benchmark_runner_source
     assert "physical_footprint_interval_seconds" in benchmark_runner_source

@@ -1398,8 +1398,8 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "initialize_recovered_local_proposal": "8295ba9249430d0f8f6c3ecc65b11b48873adc3b9f3408c313f1425f2a68ff01",
     "prepared_local_proposal_exactly_matches": "666d62c1d4104e6f0e07548434bd2d789514d23531e598032b743ed66e2afc5a",
     "activate_with_prepared_local_proposal": "dbfce16c82f866d3f833f0d04c490851d72ce48fad28e178e16ef059355ddadc",
-    "run_non_pending_lifecycle_loop": "e8f3f96412246ef16424373e71d01d4d80615655e6aaf591ecabba2ed22c6ef5",
-    "run_lifecycle_active_height": "f702cefd43e52a98f0574d8fa162dab5ee234c2421283624d43b7056024e4e4b",
+    "run_non_pending_lifecycle_loop": "fe38b2b2ab597569383e9b693deabb75346eee956713ec26e3c5174eca38f767",
+    "run_lifecycle_active_height": "9132194372fc1d4c4f8a61f44dc019cd4829a5c233b0317c3334355cf284398e",
     "recovered_lifecycle_proposal_attempt_binds_only_the_exact_current_lock_owner": "ad38dabcaf0b4e2464c7aa4ed4d9867949588f617feb74cad713fb78b7cb9510",
     "prepared_local_proposal_state_is_affine_and_context_directive_bound": "e2e8af92151f3b187cdb8eca6f40bb67a5472060ed6fdc79b5fea0127d02c3b3",
     "schedule_local_proposal": "187b6563fb36d2108658af92649719c486d1a895748e833eca35372f7318600e",
@@ -1411,5 +1411,5 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     "submit_exact_body": "bd38de84a86fd4769bf7784324b1ff94c875072d2cab99325897d1390962128e",
     "encode_exact_local_body": "34de57c479e25668c7e77efa06fe00df53d3602157a32fd188984565d6091a22",
     "submit_encoded_body": "78a7d2e2d5cb1e67cfa502ee54e6d5051b1ed0e7b21b24a451742a88e820a39b",
-    "validate_request": "b341fab7be9687fd5db733999adab1a4c78cb7cdddda66e9b6bf9ca6424e6ce3",
+    "validate_request": "72ec6272aa860e4f83012d98cb3d4a5fde13b610e3ce9efbecf7d2a8310bd329",
 }

@@ -2187,6 +2187,208 @@ fn asset_definition_permission_grant_routes_by_named_dataspace_alias() {
     );
 }
 #[test]
+fn multisig_boxed_bilateral_settlement_retains_three_participants() {
+    let (alice_id, alice_keypair) = gen_account_in("wonderland");
+    let (bob_id, _) = gen_account_in("wonderland");
+    let delivery_dataspace = DataSpaceId::new(7);
+    let payment_dataspace = DataSpaceId::new(9);
+    let auxiliary_dataspace = DataSpaceId::new(11);
+    let delivery_lane = LaneId::new(1);
+    let payment_lane = LaneId::new(2);
+    let auxiliary_lane = LaneId::new(3);
+    let dataspace_catalog = dataspace_catalog(&[
+        (delivery_dataspace, "delivery"),
+        (payment_dataspace, "payment"),
+        (auxiliary_dataspace, "auxiliary"),
+    ]);
+    let full_lane_catalog = catalog_with_lane_dataspaces(&[
+        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        (delivery_lane, delivery_dataspace),
+        (payment_lane, payment_dataspace),
+        (auxiliary_lane, auxiliary_dataspace),
+    ]);
+    let delivery_domain = DomainId::try_new("settlement", "delivery").expect("delivery domain id");
+    let payment_domain = DomainId::try_new("settlement", "payment").expect("payment domain id");
+    let delivery_definition = AssetDefinitionId::derive_from_components(
+        delivery_domain.clone(),
+        "bond".parse().expect("asset definition name"),
+    );
+    let payment_definition = AssetDefinitionId::derive_from_components(
+        payment_domain.clone(),
+        "cash".parse().expect("asset definition name"),
+    );
+    let definitions = || {
+        vec![
+            AssetDefinition::numeric(
+                delivery_definition.clone(),
+                "bond".to_owned(),
+                AssetBalancePolicy::DataspaceRestricted,
+                Some(delivery_domain.clone()),
+            )
+            .build(&alice_id),
+            AssetDefinition::numeric(
+                payment_definition.clone(),
+                "cash".to_owned(),
+                AssetBalancePolicy::DataspaceRestricted,
+                Some(payment_domain.clone()),
+            )
+            .build(&alice_id),
+        ]
+    };
+    let payload = vec![
+        InstructionBox::from(SettlementInstructionBox::Dvp(DvpIsi::new(
+            "boxed_multisig_three_party".parse().expect("settlement id"),
+            SettlementLeg::new(
+                delivery_definition.clone(),
+                1_u32,
+                alice_id.clone(),
+                bob_id.clone(),
+            ),
+            SettlementLeg::new(payment_definition.clone(), 1_u32, bob_id, alice_id.clone()),
+            SettlementPlan::default(),
+        ))),
+        InstructionBox::from(Register::domain(Domain::new(
+            DomainId::try_new("merchant", "auxiliary").expect("auxiliary domain id"),
+        ))),
+    ];
+    let instructions_hash = HashOf::new(&payload);
+    let proposal = InstructionBox::from(MultisigPropose::new(
+        alice_id.clone(),
+        payload.clone(),
+        None,
+    ));
+    let tx = sample_transaction(
+        &alice_id,
+        alice_keypair.private_key(),
+        vec![proposal.clone()],
+    );
+    let router = ConfigLaneRouter::new(
+        default_routing_policy(),
+        dataspace_catalog.clone(),
+        full_lane_catalog.clone(),
+    );
+    let state = state_with_asset_definitions(
+        definitions(),
+        dataspace_catalog.clone(),
+        full_lane_catalog.clone(),
+    );
+    install_router_nexus(&state, &router);
+    let expected = RoutingPlan::native_amx(
+        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        vec![
+            RouteLeg::new(
+                RoutingDecision::new(delivery_lane, delivery_dataspace),
+                RouteLegRole::Participant,
+            ),
+            RouteLeg::new(
+                RoutingDecision::new(payment_lane, payment_dataspace),
+                RouteLegRole::Participant,
+            ),
+            RouteLeg::new(
+                RoutingDecision::new(auxiliary_lane, auxiliary_dataspace),
+                RouteLegRole::Participant,
+            ),
+        ],
+    );
+    assert_eq!(
+        router
+            .try_route_plan_with_state(&tx, &state)
+            .expect("boxed multisig settlement plan should resolve"),
+        expected,
+    );
+    let view = state.view();
+    assert_eq!(
+        deferred_instruction_concrete_dataspace_targets(
+            &*proposal,
+            Some(&dataspace_catalog),
+            Some(&view),
+        ),
+        Ok(Some(BTreeSet::from([
+            delivery_dataspace,
+            payment_dataspace,
+            auxiliary_dataspace,
+        ]))),
+    );
+    assert_eq!(
+        evaluate_policy_plan_with_catalog_and_world(
+            &default_routing_policy(),
+            &full_lane_catalog,
+            &dataspace_catalog,
+            &tx,
+            view.world(),
+        )
+        .expect("world-backed boxed multisig settlement plan should resolve"),
+        expected,
+    );
+
+    let collapsed_proposal = SameTransactionMultisigProposalTarget {
+        top_level_instruction_index: 0,
+        account: alice_id.clone(),
+        instructions_hash,
+        instructions: payload,
+        dataspace_id: Some(DataSpaceId::UNIVERSAL),
+        concrete_dataspaces: BTreeSet::from([DataSpaceId::UNIVERSAL]),
+        requires_universal_coordinator: true,
+    };
+    let mut participants = BTreeSet::new();
+    let mut stack = MultisigProposalRoutingStack::default();
+    assert_eq!(
+        collect_top_level_instruction_native_amx_participants(
+            &*proposal,
+            0,
+            &[collapsed_proposal],
+            &dataspace_catalog,
+            view.world(),
+            None,
+            &mut participants,
+            &FxCorridorRoutingOverlay::default(),
+            &mut stack,
+        ),
+        Ok(()),
+    );
+    assert_eq!(
+        participants,
+        BTreeSet::from([delivery_dataspace, payment_dataspace, auxiliary_dataspace,]),
+        "collapsed universal proposal targets must be re-expanded from the payload",
+    );
+    let missing_lane_catalog = catalog_with_lane_dataspaces(&[
+        (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        (delivery_lane, delivery_dataspace),
+        (payment_lane, payment_dataspace),
+    ]);
+    let missing_lane_router = ConfigLaneRouter::new(
+        default_routing_policy(),
+        dataspace_catalog.clone(),
+        missing_lane_catalog.clone(),
+    );
+    let missing_lane_state = state_with_asset_definitions(
+        definitions(),
+        dataspace_catalog.clone(),
+        missing_lane_catalog.clone(),
+    );
+    install_router_nexus(&missing_lane_state, &missing_lane_router);
+    let expected_error = RoutingResolveError::NoLaneForDataspace {
+        dataspace_id: auxiliary_dataspace,
+    };
+    assert_eq!(
+        missing_lane_router.try_route_plan_with_state(&tx, &missing_lane_state),
+        Err(expected_error.clone()),
+        "missing participant lanes must not fall back to the default route",
+    );
+    let missing_lane_view = missing_lane_state.view();
+    assert_eq!(
+        evaluate_policy_plan_with_catalog_and_world(
+            &default_routing_policy(),
+            &missing_lane_catalog,
+            &dataspace_catalog,
+            &tx,
+            missing_lane_view.world(),
+        ),
+        Err(expected_error),
+    );
+}
+
+#[test]
 fn dataspace_scoped_permission_grant_routes_mixed_dataspaces_to_universal() {
     let (alice_id, alice_keypair) = gen_account_in("wonderland");
     let first_dataspace = DataSpaceId::new(7);

@@ -1,9 +1,11 @@
 //! Payload-free immutable audit journal and crash recovery.
+#[cfg(feature = "taira-authority-bin")]
+use super::protocol::SoftwareSignerPublicBindingV1;
 use super::{
     envelope::SoftwareSignerKeyEnvelopeAadV1,
     protocol::{
         SIGNER_AUDIT_MAGIC_V1, SIGNER_MAX_SIGNATURE_BYTES_V1, SIGNER_PROTOCOL_VERSION_V1,
-        SoftwareSignerPublicBindingV1, digest_canonical,
+        digest_canonical,
     },
 };
 use iroha_crypto::{KeyPair, Signature};
@@ -87,6 +89,7 @@ pub(super) struct RecoveredSignCommitV1 {
     pub payload_digest: [u8; 32],
     pub signature: Vec<u8>,
     pub sequence: u64,
+    #[cfg(feature = "taira-authority-bin")]
     pub predecessor_audit_head: [u8; 32],
     pub audit_head: [u8; 32],
 }
@@ -108,6 +111,7 @@ pub(super) struct RecoveredJournalV1 {
 
 /// Public-key-verifiable successor data extracted from one old-key-attested
 /// rotation journal record.
+#[cfg(feature = "taira-authority-bin")]
 pub(super) struct VerifiedRotationSuccessorV1 {
     pub operation_id: [u8; 32],
     pub request_digest: [u8; 32],
@@ -167,7 +171,7 @@ impl SoftwareSignerAuditJournalV1 {
         validate_private_directory(&directory)?;
         let mut inventory = scan_audit_directory(&directory, AUDIT_RETENTION_LIMITS_V1)?;
         recover_pending_record(&directory, &mut inventory)?;
-        let recovered = validate_records_streaming(&directory, inventory)?;
+        let recovered = validate_records_streaming(&directory, &inventory)?;
         Ok((
             Self {
                 directory,
@@ -204,7 +208,7 @@ impl SoftwareSignerAuditJournalV1 {
             event,
         };
         let record_digest = digest_canonical(AUDIT_RECORD_DIGEST_DOMAIN_V1, &body)
-            .map_err(|_| SoftwareSignerJournalErrorV1::Invalid)?;
+            .map_err(|()| SoftwareSignerJournalErrorV1::Invalid)?;
         let attestation_message = audit_attestation_message(record_digest, sequence);
         let attestation = Signature::try_new(keypair.private_key(), &attestation_message)
             .map_err(|_| SoftwareSignerJournalErrorV1::Unavailable)?
@@ -234,6 +238,7 @@ impl SoftwareSignerAuditJournalV1 {
         self.audit_head
     }
 
+    #[cfg(feature = "taira-authority-bin")]
     pub(super) fn rotation_record_bytes(
         &self,
         operation_id: [u8; 32],
@@ -256,6 +261,7 @@ impl SoftwareSignerAuditJournalV1 {
         Err(SoftwareSignerJournalErrorV1::Invalid)
     }
 
+    #[cfg(feature = "taira-authority-bin")]
     pub(super) fn rotation_record_bytes_from_previous(
         &self,
         previous: &SoftwareSignerPublicBindingV1,
@@ -264,16 +270,17 @@ impl SoftwareSignerAuditJournalV1 {
         for sequence in 2..=self.sequence {
             let record = read_record(&self.directory.join(record_name(sequence)))?;
             let bytes = encode_record(&record)?;
-            if verify_rotation_successor_record(&bytes, previous).is_ok() {
-                if found.replace(bytes).is_some() {
-                    return Err(SoftwareSignerJournalErrorV1::Invalid);
-                }
+            if verify_rotation_successor_record(&bytes, previous).is_ok()
+                && found.replace(bytes).is_some()
+            {
+                return Err(SoftwareSignerJournalErrorV1::Invalid);
             }
         }
         found.ok_or(SoftwareSignerJournalErrorV1::Invalid)
     }
 }
 
+#[cfg(feature = "taira-authority-bin")]
 pub(super) fn verify_rotation_successor_record(
     bytes: &[u8],
     previous: &SoftwareSignerPublicBindingV1,
@@ -293,7 +300,7 @@ pub(super) fn verify_rotation_successor_record(
         || record.body.predecessor_digest == [0; 32]
         || record.record_digest == [0; 32]
         || digest_canonical(AUDIT_RECORD_DIGEST_DOMAIN_V1, &record.body)
-            .map_err(|_| SoftwareSignerJournalErrorV1::Invalid)?
+            .map_err(|()| SoftwareSignerJournalErrorV1::Invalid)?
             != record.record_digest
     {
         return Err(SoftwareSignerJournalErrorV1::Invalid);
@@ -363,7 +370,7 @@ struct AuditDirectoryInventoryV1 {
 #[allow(clippy::too_many_lines)]
 fn validate_records_streaming(
     directory: &Path,
-    inventory: AuditDirectoryInventoryV1,
+    inventory: &AuditDirectoryInventoryV1,
 ) -> Result<RecoveredJournalV1, SoftwareSignerJournalErrorV1> {
     if inventory.record_count == 0 {
         return Err(SoftwareSignerJournalErrorV1::Invalid);
@@ -410,7 +417,7 @@ fn validate_records_streaming(
             || body.predecessor_digest != expected_predecessor
             || record_digest == [0; 32]
             || digest_canonical(AUDIT_RECORD_DIGEST_DOMAIN_V1, &body)
-                .map_err(|_| SoftwareSignerJournalErrorV1::Invalid)?
+                .map_err(|()| SoftwareSignerJournalErrorV1::Invalid)?
                 != record_digest
             || attestation.is_empty()
             || attestation.len() != active_key.algorithm.algorithm().signature_payload_len()
@@ -459,6 +466,7 @@ fn validate_records_streaming(
                         payload_digest,
                         signature,
                         sequence: body.sequence,
+                        #[cfg(feature = "taira-authority-bin")]
                         predecessor_audit_head: body.predecessor_digest,
                         audit_head: record_digest,
                     },
@@ -832,7 +840,6 @@ pub enum SoftwareSignerJournalErrorV1 {
 mod tests {
     use super::*;
     use iroha_crypto::Algorithm;
-    use std::{io::Write as _, os::unix::fs::OpenOptionsExt as _};
     fn write_private_file(path: &Path, bytes: &[u8]) {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true).mode(0o600);

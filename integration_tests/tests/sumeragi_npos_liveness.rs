@@ -267,38 +267,6 @@ fn all_peer_heights_advanced(baseline: &[u64], current: &[u64]) -> bool {
             .zip(current)
             .all(|(before, after)| after > before)
 }
-async fn wait_for_all_peer_heights_to_advance(
-    network: &Network,
-    baseline: &[u64],
-    timeout: Duration,
-) -> Result<Vec<u64>> {
-    ensure!(
-        !baseline.is_empty() && baseline.len() == network.peers().len(),
-        "per-peer progress baseline must cover all {} peers, got {baseline:?}",
-        network.peers().len()
-    );
-    let deadline = Instant::now() + timeout;
-    let mut last_snapshot = Vec::new();
-    loop {
-        let last_error = match peer_height_snapshot(network).await {
-            Ok(heights) => {
-                last_snapshot.clone_from(&heights);
-                if all_peer_heights_advanced(baseline, &heights) {
-                    return Ok(heights);
-                }
-                None
-            }
-            Err(error) => Some(format!("{error:?}")),
-        };
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "not every peer advanced within {:?}; baseline={baseline:?} last_snapshot={last_snapshot:?} last_error={last_error:?}",
-                timeout,
-            ));
-        }
-        sleep(Duration::from_millis(250)).await;
-    }
-}
 fn heights_meet_target(heights: &[u64], min_height: u64, allowed_skew: u64) -> bool {
     if heights.is_empty() {
         return false;

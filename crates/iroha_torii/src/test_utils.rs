@@ -588,6 +588,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     use iroha_data_model::peer::Peer;
     use iroha_logger::Level;
     use iroha_primitives::addr::socket_addr;
+    let mut sorafs_storage = A::SorafsStorage::default();
+    sorafs_storage.data_dir = crate::data_dir::base_dir().join("sorafs");
     A::Root {
         common: A::Common {
             chain: ChainId::from("test-chain"),
@@ -980,7 +982,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 reference_data: Default::default(),
             },
             sorafs_discovery: Default::default(),
-            sorafs_storage: iroha_config::parameters::actual::SorafsStorage::default(),
+            sorafs_storage,
             sorafs_repair: Default::default(),
             sorafs_gc: Default::default(),
             sorafs_quota: Default::default(),
@@ -1006,10 +1008,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
             fsync_mode: defaults::kura::FSYNC_MODE,
             fsync_interval: defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
+            lane_history_retention:
+                iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         sumeragi: A::Sumeragi::default(),

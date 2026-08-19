@@ -7,6 +7,7 @@ use std::{
 const LANGUAGES: &[&str] = &["rust", "go", "cpp"];
 #[test]
 fn interop_vectors_stay_in_sync_across_languages() {
+    let _serial = crate::serial_guard();
     let root = workspace_root();
     let mut expected_ids: Option<BTreeSet<String>> = None;
     let mut canonical_payloads: BTreeMap<String, Value> = BTreeMap::new();

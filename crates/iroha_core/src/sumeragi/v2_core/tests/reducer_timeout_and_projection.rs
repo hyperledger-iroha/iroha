@@ -342,11 +342,8 @@ fn enter_view_without_a_lock_carries_and_fetches_nothing() {
         OutboundControlClass::PrepareQc,
         ConsensusMessageV2::TimeoutCertificate(timeout_certificate(&before.context, 0, None)),
     );
-    let invented_prepare_control_projection = before.transition_projection(
-        &event,
-        &invented_prepare_control_state,
-        outcome.effects(),
-    );
+    let invented_prepare_control_projection =
+        before.transition_projection(&event, &invented_prepare_control_state, outcome.effects());
     assert!(
         invented_prepare_control_projection
             .enter_view
@@ -359,11 +356,7 @@ fn enter_view_without_a_lock_carries_and_fetches_nothing() {
             .present
     );
     assert!(!refinement::accepts(invented_prepare_control_projection));
-    assert!(!before.transition_refines(
-        &event,
-        &invented_prepare_control_state,
-        outcome.effects()
-    ));
+    assert!(!before.transition_refines(&event, &invented_prepare_control_state, outcome.effects()));
 }
 #[test]
 fn local_qc_formation_projects_four_votes_to_canonical_three() {
@@ -442,10 +435,7 @@ fn local_tc_formation_projects_four_votes_to_canonical_three() {
         .collect::<BTreeSet<_>>();
     assert_eq!(
         signers,
-        [1_u8, 2, 3]
-            .map(ValidatorId::repeat)
-            .into_iter()
-            .collect()
+        [1_u8, 2, 3].map(ValidatorId::repeat).into_iter().collect()
     );
     certificate
         .validate(&reducer.context)

@@ -90,7 +90,7 @@ VALIDATION_SEQUENCE = (
 
 
 def _block(source: str, kind: str, name: str) -> str:
-    terminator = r"^\};\n" if kind == "const" else r"^\}\n"
+    terminator = r"^\s*\};\n" if kind == "const" else r"^\}\n"
     matches = list(
         re.finditer(
             rf"^{kind} {re.escape(name)}\b.*?{terminator}",

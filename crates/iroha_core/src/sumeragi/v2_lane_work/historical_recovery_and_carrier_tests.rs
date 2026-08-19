@@ -2270,7 +2270,6 @@ fn decided_mixed_carrier_accepts_canonical_successor_while_local_sidecars_lag() 
         &keys,
         &autonomous_proposal,
         autonomous_entrypoint,
-        AutonomousAuthorRule::Autonomous,
         b"mixed-raw-successor-queue-plan-admission-binding",
         b"mixed-raw-successor-reservation-owner",
         "deterministic mixed-carrier autonomous producer",

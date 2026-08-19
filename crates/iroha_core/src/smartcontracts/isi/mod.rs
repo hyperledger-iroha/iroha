@@ -1255,7 +1255,6 @@ mod tests {
         dsid: DataSpaceId,
         lane_id: LaneId,
     ) {
-        state_transaction.nexus.enabled = true;
         let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
             id: dsid,
             alias: format!("ds-{}", dsid.as_u64()),
@@ -1499,7 +1498,6 @@ mod tests {
     }
     #[derive(Clone, Copy)]
     enum LaneRelayRejectionCase {
-        NexusDisabled,
         UnknownLaneId,
         StaleGeometryLaneId,
         LaneDataspaceMismatch,
@@ -1550,10 +1548,6 @@ mod tests {
             use LaneRelayRejectionErrorKind::{InvalidParameter, InvariantViolation};
 
             let (context, message_fragments): (&'static str, &'static [&'static str]) = match self {
-                Case::NexusDisabled => (
-                    "disabled nexus must reject verified lane relay registration",
-                    &["requires nexus.enabled=true"],
-                ),
                 Case::UnknownLaneId => ("unknown lane id must be rejected", &["unknown lane id 4"]),
                 Case::StaleGeometryLaneId => (
                     "stale derived geometry must not register verified relay state",
@@ -1675,7 +1669,7 @@ mod tests {
                 ),
             };
             let kind = match self {
-                Case::NexusDisabled | Case::ConflictingExistingState => InvariantViolation,
+                Case::ConflictingExistingState => InvariantViolation,
                 _ => InvalidParameter,
             };
             LaneRelayRejectionExpectation {
@@ -1689,7 +1683,6 @@ mod tests {
             use LaneRelayRejectionCase as Case;
 
             match self {
-                Case::NexusDisabled => b"register-lane-relay-nexus-disabled",
                 Case::UnknownLaneId => b"register-lane-relay-unknown-lane",
                 Case::StaleGeometryLaneId => b"register-lane-relay-stale-geometry-lane",
                 Case::LaneDataspaceMismatch => b"register-lane-relay-lane-dsid-mismatch",
@@ -1744,10 +1737,7 @@ mod tests {
         let dsid = DataSpaceId::new(10);
         let lane_id = LaneId::new(3);
 
-        match case {
-            Case::NexusDisabled => state_transaction.nexus.enabled = false,
-            _ => configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id),
-        }
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
         if matches!(case, Case::StaleGeometryLaneId) {
             let stale_lane = LaneId::new(4);
             let stale_geometry_catalog = LaneCatalog::new(
@@ -2108,8 +2098,6 @@ mod tests {
     }
 
     register_verified_lane_relay_rejection_tests! {
-        #[test]
-        register_verified_lane_relay_rejects_when_nexus_disabled => NexusDisabled;
         #[test]
         register_verified_lane_relay_rejects_unknown_lane_id => UnknownLaneId;
         #[test]

@@ -100,7 +100,7 @@ mod tests {
         transaction: &SignedTransaction,
     ) {
         super::super::repair::route_test_support::assert_rejected_before_http(
-            format!(
+            &format!(
                 "SoraFS moderation route requires exactly one `{}` native instruction",
                 route.expected_instruction_label()
             ),

@@ -19,7 +19,7 @@ pub(crate) const STATE_OVERLAY_MAX_VALUE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Maximum encoded size of one persisted overlay file.
 pub(crate) const STATE_OVERLAY_MAX_FILE_BYTES_V1: usize = 30 * 1024 * 1024;
 const STATE_OVERLAY_MAX_BASE64_VALUE_BYTES_V1: usize =
-    ((crate::syscalls::STATE_MAX_VALUE_BYTES + 2) / 3) * 4;
+    crate::syscalls::STATE_MAX_VALUE_BYTES.div_ceil(3) * 4;
 const STATE_OVERLAY_MAX_RAW_JSON_PATH_BYTES_V1: usize = crate::syscalls::STATE_MAX_PATH_BYTES * 6;
 const STATE_OVERLAY_MAX_RAW_JSON_VALUE_BYTES_V1: usize =
     STATE_OVERLAY_MAX_BASE64_VALUE_BYTES_V1 * 6;

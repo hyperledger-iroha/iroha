@@ -21,8 +21,8 @@ const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = "REPLACE_WITH_GENESIS_EXPECTED_H
 /// Supported network profiles for the wizard.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub enum Profile {
-    /// Vanilla single-lane Iroha 2 style network (no Sora profile needed).
-    Iroha2,
+    /// Canonical single-lane local network (no Sora profile needed).
+    Local,
     /// Sora Nexus (mainnet).
     Nexus,
     /// Sora Taira (testnet).
@@ -31,7 +31,7 @@ pub enum Profile {
 impl fmt::Display for Profile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Profile::Iroha2 => write!(f, "Iroha2 (single lane)"),
+            Profile::Local => write!(f, "Local (single lane)"),
             Profile::Nexus => write!(f, "Sora Nexus (mainnet)"),
             Profile::Taira => write!(f, "Sora Taira (testnet)"),
         }
@@ -120,7 +120,7 @@ struct ProfileDefaults {
 impl ProfileDefaults {
     fn for_profile(profile: Profile) -> Self {
         match profile {
-            Profile::Iroha2 => Self {
+            Profile::Local => Self {
                 chain: "00000000-0000-0000-0000-000000000000",
                 p2p_port: 1337,
                 torii_port: 8080,
@@ -156,6 +156,10 @@ impl ProfileDefaults {
     }
 }
 impl<T: Write> RunArgs<T> for Args {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the guided command keeps generation, validation, persistence, and the final operator handoff in one linear workflow"
+    )]
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         print_banner();
         let answers = gather_answers(&self)?;
@@ -499,11 +503,11 @@ fn resolve_profile(args: &Args) -> Result<Profile> {
         return Ok(profile);
     }
     if args.non_interactive {
-        return Ok(Profile::Iroha2);
+        return Ok(Profile::Local);
     }
     Select::new(
         "Which profile do you want to set up?",
-        vec![Profile::Iroha2, Profile::Nexus, Profile::Taira],
+        vec![Profile::Local, Profile::Nexus, Profile::Taira],
     )
     .prompt()
     .wrap_err("failed to read profile selection")
@@ -932,7 +936,6 @@ fn build_vanilla_config(
     );
     root.insert("genesis".into(), TomlValue::Table(genesis));
     let mut nexus = TomlTable::new();
-    nexus.insert("enabled".into(), TomlValue::Boolean(false));
     nexus.insert("lane_count".into(), TomlValue::Integer(1));
     root.insert("nexus".into(), TomlValue::Table(nexus));
     TomlValue::Table(root)
@@ -1068,6 +1071,18 @@ mod tests {
         );
         assert!(table.get("trusted_peers").is_some());
         assert!(table.get("trusted_peers_pop").is_some());
+        let nexus = table
+            .get("nexus")
+            .and_then(TomlValue::as_table)
+            .expect("nexus table");
+        assert_eq!(
+            nexus.get("lane_count").and_then(TomlValue::as_integer),
+            Some(1)
+        );
+        assert!(
+            !nexus.contains_key("enabled"),
+            "wizard output must not expose the retired Nexus availability switch"
+        );
         assert_eq!(
             table
                 .get("soranet_transport_public_key")
@@ -1105,7 +1120,7 @@ mod tests {
         let keypair = checked_wizard_bls_keypair();
         let other = checked_wizard_bls_keypair();
         let answers = Answers {
-            profile: Profile::Iroha2,
+            profile: Profile::Local,
             chain: "chain-x".to_string(),
             p2p_host: "127.0.0.1".to_string(),
             p2p_port: 1337,

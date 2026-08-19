@@ -250,7 +250,7 @@ impl JsonDeserialize for Peer {
 fn peer_from_json_str(value: &str) -> Result<Peer, json::Error> {
     let (public_key, address) = match value.rsplit_once('@') {
         None => (value, None),
-        Some(("", _)) | Some((_, "")) => return Err(invalid_peer_json()),
+        Some(("", _) | (_, "")) => return Err(invalid_peer_json()),
         Some((public_key, address)) => (public_key, Some(address)),
     };
     let public_key = PublicKey::from_canonical_str_for_decode(public_key).map_err(|error| {
@@ -260,24 +260,27 @@ fn peer_from_json_str(value: &str) -> Result<Peer, json::Error> {
             invalid_peer_json()
         }
     })?;
-    let address = match address {
-        None => SocketAddr::from_str_for_decode("0.0.0.0:0"),
-        Some(address) => SocketAddr::from_str_for_decode(address).or_else(|error| {
+    let address = address
+        .map_or_else(
+            || SocketAddr::from_str_for_decode("0.0.0.0:0"),
+            |address| {
+                SocketAddr::from_str_for_decode(address).or_else(|error| {
+                    if error.is_decode_resource_limit() {
+                        return Err(error);
+                    }
+                    let body = literal::parse_without_diagnostics("addr", address)
+                        .ok_or(norito::core::Error::LengthMismatch)?;
+                    SocketAddr::from_str_for_decode(body)
+                })
+            },
+        )
+        .map_err(|error| {
             if error.is_decode_resource_limit() {
-                return Err(error);
+                json::Error::from_decode_resource(error)
+            } else {
+                invalid_peer_json()
             }
-            let body = literal::parse_without_diagnostics("addr", address)
-                .ok_or(norito::core::Error::LengthMismatch)?;
-            SocketAddr::from_str_for_decode(body)
-        }),
-    }
-    .map_err(|error| {
-        if error.is_decode_resource_limit() {
-            json::Error::from_decode_resource(error)
-        } else {
-            invalid_peer_json()
-        }
-    })?;
+        })?;
     Ok(Peer::new(address, public_key))
 }
 

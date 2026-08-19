@@ -1097,6 +1097,37 @@ enum EncodedLenKind {
     Exact,
 }
 
+fn enum_field_len_add(binding: &syn::Ident, ty: &syn::Type, kind: EncodedLenKind) -> TokenStream2 {
+    let method = match kind {
+        EncodedLenKind::Hint => format_ident!("encoded_len_hint"),
+        EncodedLenKind::Exact => format_ident!("encoded_len_exact"),
+    };
+    let length = if u8_array_len(ty).is_some() {
+        quote! { core::mem::size_of_val(#binding) }
+    } else {
+        quote! { norito::core::NoritoSerialize::#method(#binding)? }
+    };
+    if is_self_delimiting(ty) || is_fixed_size(ty).is_some() {
+        quote! {
+            let __e = #length;
+            if norito::core::use_packed_struct() {
+                __sum = __sum.checked_add(__e)?;
+            } else {
+                __sum = __sum
+                    .checked_add(norito::core::len_prefix_len(__e))?
+                    .checked_add(__e)?;
+            }
+        }
+    } else {
+        quote! {
+            let __e = #length;
+            __sum = __sum
+                .checked_add(norito::core::len_prefix_len(__e))?
+                .checked_add(__e)?;
+        }
+    }
+}
+
 fn derive_struct_len_body(
     fields: &Fields,
     parsed_fields: &[StructField<'_>],
@@ -2336,6 +2367,16 @@ fn derive_enum_serialize(
                 let bindings: Vec<_> = (0..fields.unnamed.len())
                     .map(|i| format_ident!("field{}", i))
                     .collect();
+                let ignored_bindings = fields
+                    .unnamed
+                    .iter()
+                    .zip(&bindings)
+                    .filter_map(|(field, binding)| {
+                        FieldAttr::parse_validated(&field.attrs)
+                            .skip
+                            .then_some(quote! { let _ = #binding; })
+                    })
+                    .collect::<Vec<_>>();
                 let serialize_calls =
                     fields
                         .unnamed
@@ -2387,90 +2428,37 @@ fn derive_enum_serialize(
                             Some(ser)
                         });
 
-                // Serialization calls without per-field outer length for needs-size fields
-                let _serialize_calls_nohdr =
-                    fields
-                        .unnamed
-                        .iter()
-                        .zip(bindings.iter())
-                        .filter_map(|(f, b)| {
-                            let attrs = FieldAttr::parse_validated(&f.attrs);
-                            if attrs.skip {
-                                return None;
-                            }
-                            let is_sd = is_self_delimiting(&f.ty);
-                            let is_fixed = is_fixed_size(&f.ty).is_some();
-                            let ser = if is_sd || is_fixed {
-                                quote! {
-                                    if __norito_packed {
-                                        norito::core::NoritoSerialize::serialize(#b, writer)?;
-                                    } else {
-                                        norito::core::write_len_prefixed_exact(
-                                            writer,
-                                            #b,
-                                            &mut __norito_tmp,
-                                        )?;
-                                    }
-                                }
-                            } else {
-                                quote! {
-                                    norito::core::write_len_prefixed_exact(
-                                        writer,
-                                        #b,
-                                        &mut __norito_tmp,
-                                    )?;
-                                }
-                            };
-                            Some(ser)
-                        });
                 arms.push(quote! {
                     Self::#v_ident(#(#bindings),*) => {
                         let __norito_packed = norito::core::use_packed_struct();
                         norito::core::NoritoSerialize::serialize(&(#disc as u32), writer)?;
                         let mut __norito_tmp: norito::core::DeriveSmallBuf = norito::core::DeriveSmallBuf::new();
+                        #(#ignored_bindings)*
                         #(#serialize_calls)*
                     }
                 });
-                let mut adds = Vec::new();
-                for b in &bindings {
-                    adds.push(quote! { __sum = __sum.saturating_add(8 + norito::core::NoritoSerialize::encoded_len_hint(#b)?); });
-                }
-                hint_arms.push(quote! {
-                    Self::#v_ident(#(#bindings),*) => { let mut __sum: usize = 4; #(#adds)* Some(__sum) }
-                });
-
-                // exact arms
-                let mut exact_adds = Vec::new();
-                for (i, _b) in bindings.iter().enumerate() {
-                    let b = &bindings[i];
-                    let ty = &fields.unnamed[i].ty;
-                    let is_sd = is_self_delimiting(ty);
-                    let is_fixed = is_fixed_size(ty).is_some();
-                    let add = if is_sd || is_fixed {
-                        quote! {
-                            let __e = norito::core::NoritoSerialize::encoded_len_exact(#b)?;
-                            if norito::core::use_packed_struct() {
-                                __sum = __sum.saturating_add(__e);
-                            } else {
-                                __sum = __sum.saturating_add(norito::core::len_prefix_len(__e) + __e);
-                            }
+                for (kind, length_arms) in [
+                    (EncodedLenKind::Hint, &mut hint_arms),
+                    (EncodedLenKind::Exact, &mut exact_arms),
+                ] {
+                    let adds = fields
+                        .unnamed
+                        .iter()
+                        .zip(&bindings)
+                        .filter_map(|(field, binding)| {
+                            (!FieldAttr::parse_validated(&field.attrs).skip)
+                                .then(|| enum_field_len_add(binding, &field.ty, kind))
+                        })
+                        .collect::<Vec<_>>();
+                    length_arms.push(quote! {
+                        Self::#v_ident(#(#bindings),*) => {
+                            let mut __sum: usize = 4;
+                            #(#ignored_bindings)*
+                            #(#adds)*
+                            Some(__sum)
                         }
-                    } else {
-                        quote! {
-                            let __e = norito::core::NoritoSerialize::encoded_len_exact(#b)?;
-                            let __prefix_len = norito::core::len_prefix_len(__e);
-                            __sum = __sum.saturating_add(__prefix_len + __e);
-                        }
-                    };
-                    exact_adds.push(add);
+                    });
                 }
-                exact_arms.push(quote! {
-                    Self::#v_ident( #( #bindings ),* ) => {
-                        let mut __sum: usize = 4;
-                        #(#exact_adds)*
-                        Some(__sum)
-                    }
-                });
             }
             Fields::Named(fields) => {
                 let names: Vec<_> = fields
@@ -2478,6 +2466,16 @@ fn derive_enum_serialize(
                     .iter()
                     .map(|f| f.ident.as_ref().unwrap())
                     .collect();
+                let ignored_names = fields
+                    .named
+                    .iter()
+                    .zip(&names)
+                    .filter_map(|(field, name)| {
+                        FieldAttr::parse_validated(&field.attrs)
+                            .skip
+                            .then_some(quote! { let _ = #name; })
+                    })
+                    .collect::<Vec<_>>();
                 let serialize_calls = fields.named.iter().filter_map(|f| {
                     let attrs = FieldAttr::parse_validated(&f.attrs);
                     if attrs.skip {
@@ -2530,44 +2528,32 @@ fn derive_enum_serialize(
                         let __norito_packed = norito::core::use_packed_struct();
                         norito::core::NoritoSerialize::serialize(&(#disc as u32), writer)?;
                         let mut __norito_tmp: norito::core::DeriveSmallBuf = norito::core::DeriveSmallBuf::new();
+                        #(#ignored_names)*
                         #(#serialize_calls)*
                     }
                 });
-                let mut adds = Vec::new();
-                for name in &names {
-                    adds.push(quote! { __sum = __sum.saturating_add(8 + norito::core::NoritoSerialize::encoded_len_hint(#name)?); });
-                }
-                hint_arms.push(quote! {
-                    Self::#v_ident { #(#names),* } => { let mut __sum: usize = 4; #(#adds)* Some(__sum) }
-                });
-
-                // exact arm
-                let mut exact_adds = Vec::new();
-                for (i, name) in names.iter().enumerate() {
-                    let ty = &fields.named[i].ty;
-                    let is_sd = is_self_delimiting(ty);
-                    let is_fixed = is_fixed_size(ty).is_some();
-                    let add = if is_sd || is_fixed {
-                        quote! {
-                            let __e = norito::core::NoritoSerialize::encoded_len_exact(#name)?;
-                            if norito::core::use_packed_struct() {
-                                __sum = __sum.saturating_add(__e);
-                            } else {
-                                __sum = __sum.saturating_add(norito::core::len_prefix_len(__e) + __e);
-                            }
+                for (kind, length_arms) in [
+                    (EncodedLenKind::Hint, &mut hint_arms),
+                    (EncodedLenKind::Exact, &mut exact_arms),
+                ] {
+                    let adds = fields
+                        .named
+                        .iter()
+                        .zip(&names)
+                        .filter_map(|(field, name)| {
+                            (!FieldAttr::parse_validated(&field.attrs).skip)
+                                .then(|| enum_field_len_add(name, &field.ty, kind))
+                        })
+                        .collect::<Vec<_>>();
+                    length_arms.push(quote! {
+                        Self::#v_ident { #(#names),* } => {
+                            let mut __sum: usize = 4;
+                            #(#ignored_names)*
+                            #(#adds)*
+                            Some(__sum)
                         }
-                    } else {
-                        quote! {
-                            let __e = norito::core::NoritoSerialize::encoded_len_exact(#name)?;
-                            let __prefix_len = norito::core::len_prefix_len(__e);
-                            __sum = __sum.saturating_add(__prefix_len + __e);
-                        }
-                    };
-                    exact_adds.push(add);
+                    });
                 }
-                exact_arms.push(quote! {
-                    Self::#v_ident { #( #names ),* } => { let mut __sum: usize = 4; #(#exact_adds)* Some(__sum) }
-                });
             }
         }
     }

@@ -41,7 +41,6 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
     install_test_lane_manifests(&state);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -218,7 +217,6 @@ ledger::account::set_detail(
     install_test_lane_manifests(&state);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(1_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();

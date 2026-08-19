@@ -1,6 +1,5 @@
 {
   "version": 1,
-  "nexus_enabled": true,
   "lane_count": 3,
   "lanes": [
     {
@@ -58,7 +57,7 @@
       "metadata": {}
     }
   ],
-  "catalog_hash": "hash:1F5C5709FC3CA25F1ED672DF70BE3A048D021B7F7BE40249D2240E0DD497B9D3#E108",
+  "catalog_hash": "hash:59121A39E8EADD78D47F29F8E0DC978971ADA23E08D595D5AE24933768B5EAF1#7396",
   "incarnations": [
     {
       "lane_id": 0,

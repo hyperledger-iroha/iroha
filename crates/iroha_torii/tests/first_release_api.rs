@@ -120,6 +120,32 @@ async fn unknown_routes_use_negotiated_typed_error_envelopes() {
     }
 }
 #[tokio::test]
+async fn retired_legacy_finality_routes_are_absent() {
+    let router = build_router();
+    for path in [
+        "/v1/sumeragi/commit-certificates",
+        "/v1/sumeragi/commit-qcs/00",
+        "/v1/sumeragi/validator-sets",
+        "/v1/sumeragi/validator-sets/1",
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(path)
+                    .extension(local_connect_info())
+                    .header(ACCEPT, "application/json")
+                    .body(axum::body::Body::empty())
+                    .expect("retired-route request"),
+            )
+            .await
+            .expect("retired-route response");
+        let (status, _, envelope) = decode_error_response(response).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "path={path}");
+        assert_eq!(envelope.code(), "route_not_found", "path={path}");
+    }
+}
+#[tokio::test]
 async fn assembled_router_canonicalizes_early_path_and_accept_failures() {
     let router = build_router();
     let invalid_path = router
@@ -353,7 +379,7 @@ async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
 #[tokio::test]
 async fn canonical_sumeragi_spellings_reach_their_resource_handlers() {
     let router = build_router();
-    for path in ["/v1/sumeragi/bls-keys", "/v1/sumeragi/commit-qcs/deadbeef"] {
+    for path in ["/v1/sumeragi/bls-keys"] {
         let response = router
             .clone()
             .oneshot(

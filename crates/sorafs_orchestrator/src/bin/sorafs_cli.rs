@@ -22056,8 +22056,7 @@ mod tests {
         pending.manifest.status = PinStatus::Pending;
         assert!(
             validate_finalized_pin_manifest(&manifest, digest.as_bytes(), &pending)
-                .err()
-                .expect("pending record must fail")
+                .expect_err("pending record must fail")
                 .contains("Approved")
         );
         let mut wrong_digest = finalized.clone();

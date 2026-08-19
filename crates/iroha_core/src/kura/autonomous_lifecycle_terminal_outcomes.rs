@@ -337,7 +337,7 @@ impl Kura {
                         "autonomous lifecycle per-height retention count overflows",
                     )
                 })?;
-                if *retained > self.roster_sidecar_retention.get() {
+                if *retained > self.lane_history_retention.get() {
                     return Err(Self::invalid_lane_artifact_error(
                         path,
                         "autonomous lifecycle attempts exceed the per-height retention bound",

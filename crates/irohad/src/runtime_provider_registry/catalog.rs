@@ -1,7 +1,7 @@
 //! Canonical, secret-free handoff artifact for deployment-owned provider brokers.
-use std::{cmp::Ordering, fmt};
-use norito::codec::{Decode, Encode};
 use super::*;
+use norito::codec::{Decode, Encode};
+use std::{cmp::Ordering, fmt};
 /// Hard byte ceiling for one canonical V1 runtime-provider catalog artifact.
 ///
 /// The ceiling covers the complete first-release slot inventory, including
@@ -410,6 +410,10 @@ where
     }
     Ok(())
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "the validator keeps all cross-slot catalog invariants in one ordered audit"
+)]
 fn validate_catalog_relationships(
     catalog: &IrohaRuntimeProviderBindingsV1,
 ) -> Result<(), IrohaRuntimeProviderCatalogErrorV1> {
@@ -622,6 +626,10 @@ fn validate_wire_order(
     Ok(())
 }
 impl RuntimeProviderBindingWireV1 {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the conversion explicitly projects every closed V1 provider slot"
+    )]
     fn try_from_binding(
         binding: &IrohaRuntimeProviderBindingV1,
     ) -> Result<Self, IrohaRuntimeProviderCatalogErrorV1> {
@@ -731,6 +739,10 @@ impl RuntimeProviderBindingWireV1 {
                 ),
         })
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the conversion explicitly validates every closed V1 provider slot"
+    )]
     fn try_into_binding(
         self,
     ) -> Result<IrohaRuntimeProviderBindingV1, IrohaRuntimeProviderCatalogErrorV1> {
@@ -2002,6 +2014,10 @@ mod tests {
         assert_invalid_wire(&transaction_exceeds_checkpoint);
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test audits cross-service substitution across one complete catalog fixture"
+    )]
     fn loader_rejects_cross_service_bound_and_identity_substitution() {
         let mut moderation_handle_collision = moderation_wire();
         wire_binding_mut(

@@ -13,7 +13,9 @@ fn openapi_generator_tracked_lock_fails_closed_when_missing_substituted_or_unsta
     let missing = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
         .expect_err("missing tracked Cargo lock must fail");
     assert!(
-        missing.to_string().contains("tracked OpenAPI generator Cargo lock"),
+        missing
+            .to_string()
+            .contains("tracked OpenAPI generator Cargo lock"),
         "unexpected missing-lock error: {missing}"
     );
     let canonical = fs::read(workspace_root().join(OPENAPI_GENERATOR_TRACKED_INPUT))
@@ -33,7 +35,13 @@ fn openapi_generator_tracked_lock_fails_closed_when_missing_substituted_or_unsta
     fs::write(&lock, canonical).expect("restore tracked Cargo lock again");
     git_stdout(
         tmp.path(),
-        &["rm", "--cached", "--quiet", "--", OPENAPI_GENERATOR_TRACKED_INPUT],
+        &[
+            "rm",
+            "--cached",
+            "--quiet",
+            "--",
+            OPENAPI_GENERATOR_TRACKED_INPUT,
+        ],
     )
     .expect("remove tracked Cargo lock from the index");
     let unstaged = git_openapi_generator_input_tree_sha256(tmp.path(), &head)
@@ -48,8 +56,11 @@ fn openapi_generator_tracked_lock_fails_closed_when_missing_substituted_or_unsta
 fn openapi_generator_tracked_lock_requires_the_head_blob_in_the_index() {
     let tmp = tempdir().expect("tempdir");
     initialize_git_fixture(tmp.path());
-    fs::write(tmp.path().join(OPENAPI_GENERATOR_TRACKED_INPUT), b"substituted\n")
-        .expect("substitute tracked Cargo lock");
+    fs::write(
+        tmp.path().join(OPENAPI_GENERATOR_TRACKED_INPUT),
+        b"substituted\n",
+    )
+    .expect("substitute tracked Cargo lock");
     git_stdout(tmp.path(), &["add", "--", OPENAPI_GENERATOR_TRACKED_INPUT])
         .expect("stage substituted Cargo lock");
     let head = std::str::from_utf8(
@@ -72,12 +83,17 @@ fn openapi_generator_tracked_lock_rejects_executable_symlink_and_hardlink_inputs
     use std::os::unix::fs::{PermissionsExt as _, symlink};
     let executable_fixture = tempdir().expect("executable tempdir");
     initialize_git_fixture(executable_fixture.path());
-    let executable_lock = executable_fixture.path().join(OPENAPI_GENERATOR_TRACKED_INPUT);
+    let executable_lock = executable_fixture
+        .path()
+        .join(OPENAPI_GENERATOR_TRACKED_INPUT);
     fs::set_permissions(&executable_lock, fs::Permissions::from_mode(0o700))
         .expect("make tracked Cargo lock executable");
     let executable_head = std::str::from_utf8(
-        &git_stdout(executable_fixture.path(), &["rev-parse", "--verify", "HEAD"])
-            .expect("fixture HEAD"),
+        &git_stdout(
+            executable_fixture.path(),
+            &["rev-parse", "--verify", "HEAD"],
+        )
+        .expect("fixture HEAD"),
     )
     .expect("UTF-8 fixture HEAD")
     .trim()
@@ -107,7 +123,9 @@ fn openapi_generator_tracked_lock_rejects_executable_symlink_and_hardlink_inputs
 
     let hardlink_fixture = tempdir().expect("hardlink tempdir");
     initialize_git_fixture(hardlink_fixture.path());
-    let hardlink_lock = hardlink_fixture.path().join(OPENAPI_GENERATOR_TRACKED_INPUT);
+    let hardlink_lock = hardlink_fixture
+        .path()
+        .join(OPENAPI_GENERATOR_TRACKED_INPUT);
     fs::hard_link(&hardlink_lock, hardlink_fixture.path().join("lock-alias"))
         .expect("hard-link tracked Cargo lock");
     let hardlink_head = std::str::from_utf8(

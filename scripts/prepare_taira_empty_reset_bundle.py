@@ -94,7 +94,9 @@ SOURCE_VALIDATOR_NAMES = {
     "runtime",
     "storage",
 }
-OUTPUT_TOP_LEVEL_NAMES = SOURCE_TOP_LEVEL_NAMES - {"validator-secrets.toml"}
+OUTPUT_TOP_LEVEL_NAMES = (
+    SOURCE_TOP_LEVEL_NAMES - {"validator-secrets.toml"}
+) | {"genesis.identity.toml"}
 STATIC_TREES = ("codec", "configs")
 RUNTIME_SIDECARS = (
     "onboarding-signer.key",
@@ -107,6 +109,7 @@ MAX_RESET_MANIFEST_BYTES = 4 * 1024 * 1024
 MAX_CONFIG_BYTES = 4 * 1024 * 1024
 MAX_GENESIS_SIGNER_OUTPUT_BYTES = 2 * 1024 * 1024
 MAX_GENESIS_EXPECTED_HASH_BYTES = 256
+MAX_GENESIS_IDENTITY_BYTES = 4 * 1024
 GENESIS_SIGNER_TIMEOUT_SECONDS = 600
 GENESIS_SIGNER_CLEANUP_TIMEOUT_SECONDS = 5
 AUTHENTICATED_TOOL_CONTROLLER_CONTRACT = "iroha.authenticated-tool-os-isolation.v1"
@@ -1049,6 +1052,33 @@ def _direct_signer_command_path(
     return path
 
 
+def _genesis_identity_path(expected_hash_path: Path) -> Path:
+    """Return the mandatory deployment identity paired with an expected hash."""
+
+    if expected_hash_path.name != "genesis.expected_hash":
+        fail("external genesis signer expected-hash output name is not exact")
+    identity = expected_hash_path.with_suffix(".identity.toml")
+    if identity.name != "genesis.identity.toml":
+        fail("external genesis signer identity output name is not exact")
+    return identity
+
+
+def _canonical_genesis_identity(expected_hash: str) -> bytes:
+    """Return the only admitted deployment-identity encoding."""
+
+    return (
+        f'network_id = "{expected_hash}"\n\n'
+        f'[genesis]\nexpected_hash = "{expected_hash}"\n'
+    ).encode("ascii")
+
+
+def _validate_genesis_identity(payload: bytes, expected_hash: str) -> None:
+    """Reject identity bytes that do not bind both trust domains exactly."""
+
+    if payload != _canonical_genesis_identity(expected_hash):
+        fail("external genesis signer emitted a noncanonical genesis identity")
+
+
 class _SignerDirectoryGuard:
     """Bound and authenticate the signer's complete visible staging inventory."""
 
@@ -1084,7 +1114,12 @@ class _SignerDirectoryGuard:
             expected_hash = _direct_signer_command_path(
                 command, "--expected-hash-out", temporary_root
             )
-            if unsigned != bound or len({bound, signed, expected_hash}) != 3:
+            identity = _genesis_identity_path(expected_hash)
+            if (
+                identity.parent != temporary_root
+                or unsigned != bound
+                or len({bound, signed, expected_hash, identity}) != 4
+            ):
                 fail("external genesis signer output paths are not exact and distinct")
             executable = Path(command[0]) if command else Path()
             if (
@@ -1098,11 +1133,15 @@ class _SignerDirectoryGuard:
                 bound.name: MAX_PRIVATE_FILE_BYTES,
                 signed.name: MAX_PRIVATE_FILE_BYTES,
                 expected_hash.name: MAX_GENESIS_EXPECTED_HASH_BYTES,
+                identity.name: MAX_GENESIS_IDENTITY_BYTES,
             }
             initial = self._read_inventory()
             if bound.name not in initial:
                 fail("external genesis signer bound input is absent before execution")
-            if signed.name in initial or expected_hash.name in initial:
+            if any(
+                name in initial
+                for name in (signed.name, expected_hash.name, identity.name)
+            ):
                 fail("external genesis signer output exists before execution")
             self.allowed_names = set(initial) | set(self.output_limits)
             self.protected_names = set(initial) - set(self.output_limits)
@@ -1431,16 +1470,23 @@ def _genesis_signer_controller_command(
     bound = _direct_signer_command_path(
         signer_command, "--bound-manifest-out", temporary_root
     )
+    config = _direct_signer_command_path(
+        signer_command, "--peer-config", temporary_root
+    )
     signed = _direct_signer_command_path(
         signer_command, "--signed-genesis-out", temporary_root
     )
     expected_hash = _direct_signer_command_path(
         signer_command, "--expected-hash-out", temporary_root
     )
+    identity = _genesis_identity_path(expected_hash)
+    if identity.parent != temporary_root:
+        fail("external genesis signer identity output is not a direct staging child")
     writable_files = (
         (bound.name, MAX_PRIVATE_FILE_BYTES),
         (signed.name, MAX_PRIVATE_FILE_BYTES),
         (expected_hash.name, MAX_GENESIS_EXPECTED_HASH_BYTES),
+        (identity.name, MAX_GENESIS_IDENTITY_BYTES),
     )
     aggregate_limit = sum(limit for _name, limit in writable_files)
     request = [
@@ -1450,6 +1496,10 @@ def _genesis_signer_controller_command(
         AUTHENTICATED_TOOL_CONTROLLER_CONTRACT,
         "--platform",
         _authenticated_tool_platform(),
+        "--expected-runtime-uid",
+        str(os.geteuid()),
+        "--expected-runtime-gid",
+        str(os.getegid()),
         "--working-directory",
         str(temporary_root),
         "--use-attested-runtime-identity",
@@ -1459,6 +1509,9 @@ def _genesis_signer_controller_command(
         "--exact-tool-stdio",
         "--deny-network",
         "--deny-tool-process-spawn",
+        "--deny-read-outside-allowlist",
+        "--readable-file",
+        str(config),
         "--deny-write-outside-allowlist",
         "--deny-link-rename-unlink",
         "--deny-symlink",
@@ -1542,8 +1595,16 @@ def _sign_genesis(
     rendered_genesis: Path,
     peer_one_config: Path,
     signed_genesis: Path,
+    deployment_identity: Path,
     temporary_root: Path,
 ) -> str:
+    if (
+        not deployment_identity.is_absolute()
+        or deployment_identity.name != "genesis.identity.toml"
+        or deployment_identity in {rendered_genesis, signed_genesis}
+        or temporary_root in deployment_identity.parents
+    ):
+        fail("published genesis identity path is not exact and distinct")
     identity = _executable_identity(external_signer, "external genesis signer")
     if identity[0] != trusted_external_signer_sha256:
         fail("external genesis signer differs from its trusted SHA-256")
@@ -1568,7 +1629,8 @@ def _sign_genesis(
     bound_candidate = temporary_root / "genesis.bound.candidate.json"
     signed_candidate = temporary_root / "genesis.signed.candidate.nrt"
     config_snapshot = temporary_root / "peer-one.config.snapshot.toml"
-    expected_hash_path = temporary_root / "genesis.expected_hash.candidate"
+    expected_hash_path = temporary_root / "genesis.expected_hash"
+    identity_candidate = _genesis_identity_path(expected_hash_path)
     signer_snapshot = temporary_root / "genesis-signer.snapshot"
     controller_snapshot = temporary_root / "authenticated-tool-controller.snapshot"
     for candidate in (
@@ -1576,6 +1638,7 @@ def _sign_genesis(
         signed_candidate,
         config_snapshot,
         expected_hash_path,
+        identity_candidate,
         signer_snapshot,
         controller_snapshot,
     ):
@@ -1667,6 +1730,14 @@ def _sign_genesis(
             or int(expected_text[-3:-1], 16) & 1 == 0
         ):
             fail("external genesis signer emitted a noncanonical genesis expected hash")
+        deployment_identity_payload = read_private_file(
+            identity_candidate,
+            MAX_GENESIS_IDENTITY_BYTES,
+        )
+        _validate_genesis_identity(
+            deployment_identity_payload,
+            expected_text[:-1],
+        )
         if (
             stable_hash_path(
                 rendered_genesis,
@@ -1679,6 +1750,7 @@ def _sign_genesis(
             fail("external genesis signer inputs changed before result publication")
         write_private_file(rendered_genesis, bound)
         write_private_file(signed_genesis, signed)
+        write_private_file(deployment_identity, deployment_identity_payload)
         return expected_text[:-1]
     finally:
         for candidate in (
@@ -1688,6 +1760,7 @@ def _sign_genesis(
             signed_candidate,
             config_snapshot,
             expected_hash_path,
+            identity_candidate,
         ):
             candidate.unlink(missing_ok=True)
 
@@ -1732,6 +1805,7 @@ def _validate_rendered_configs(
 ) -> dict[str, str]:
     hashes: dict[str, str] = {}
     logical_output = published_output if published_output is not None else output
+    expected_hash_literal = renderer._format_literal("hash", expected_hash.upper())
     for index, slug in enumerate(SLUGS, start=1):
         root = output / "rendered" / slug
         logical_root = logical_output / "rendered" / slug
@@ -1740,7 +1814,7 @@ def _validate_rendered_configs(
         genesis = config["genesis"]
         if (
             genesis.get("file") != str(logical_output / "genesis.signed.nrt")
-            or genesis.get("expected_hash") != expected_hash
+            or genesis.get("expected_hash") != expected_hash_literal
         ):
             fail(f"rendered {slug} config is not bound to the signed bundle genesis")
         issuer = config["torii"].get("privacy_bootle_lantern_issuer")
@@ -2222,6 +2296,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 rendered_genesis=rendered / "genesis.json",
                 peer_one_config=rendered / SLUGS[0] / "config.toml",
                 signed_genesis=output / "genesis.signed.nrt",
+                deployment_identity=output / "genesis.identity.toml",
                 temporary_root=temporary,
             )
             if args.kagemusha_release_root is not None and (
@@ -2330,6 +2405,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 "onboarding_token_hash_tool_sha256": token_hash_tool_identity[0],
                 "genesis_public_key": genesis_public_key,
                 "genesis_expected_hash": expected_hash,
+                "genesis_identity_sha256": sha256(output / "genesis.identity.toml"),
                 "signed_genesis_sha256": sha256(output / "genesis.signed.nrt"),
                 "unsigned_genesis_sha256": sha256(output / "genesis.json"),
                 "bound_genesis_manifest_sha256": sha256(output / "genesis.json"),

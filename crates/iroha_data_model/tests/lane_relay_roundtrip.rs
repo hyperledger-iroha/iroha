@@ -244,9 +244,16 @@ fn lane_relay_envelope_detects_tampering_on_verify() {
         tampered.verify().unwrap_err(),
         LaneRelayError::SettlementDataspaceMismatch
     );
-    // Settlement payload tamper (hash mismatch).
-    let mut tampered = envelope;
+    // Settlement shape tamper is rejected before hashing.
+    let mut tampered = envelope.clone();
     tampered.settlement_commitment.tx_count += 1;
+    assert_eq!(
+        tampered.verify().unwrap_err(),
+        LaneRelayError::SettlementTxCountMismatch
+    );
+    // Integrity-preserving payload tamper reaches the hash check.
+    let mut tampered = envelope;
+    tampered.settlement_commitment.receipts[0].timestamp_ms += 1;
     assert_eq!(
         tampered.verify().unwrap_err(),
         LaneRelayError::SettlementHashMismatch

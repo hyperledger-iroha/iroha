@@ -130,8 +130,8 @@ IndexedHistoricalTransport(initialContext) ==
        asyncProducerOriginHistory <- IndexedProducer(initialContext, 3),
        asyncFixedCorridorDeadlines <-
          IndexedFixedCorridorDeadlines(initialContext),
-       asyncServeProducerEpisodeDue <-
-         IndexedServeProducerEpisodeDue(initialContext)
+       asyncServeProducerTurnReady <-
+         IndexedServeProducerTurnDue(initialContext)
 
 (***************************************************************************
 Exact projection.
@@ -159,7 +159,7 @@ BY Isa
        IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
        IndexedRecovery, IndexedProducer,
        IndexedFixedCorridorDeadlines,
-       IndexedServeProducerEpisodeDue
+       IndexedServeProducerTurnDue
 
 THEOREM IndexedInitProjectsEveryHistoricalTransportInit ==
   \A initialContext \in AdmissibleContextRecords:

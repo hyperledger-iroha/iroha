@@ -279,3 +279,7 @@ fn preparse_rejects_escaped_duplicate_keys_recursively() {
             .expect_err("escaped duplicate key must reject before typed decode");
     assert_duplicate_field(error, "value");
 }
+
+#[cfg(feature = "trybuild-tests")]
+#[path = "ui.rs"]
+mod ui;

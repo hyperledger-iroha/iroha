@@ -71,11 +71,6 @@ pub mod block;
 /// Block synchronization protocol and messages.
 /// Bridge finality proof helpers.
 pub mod bridge;
-/// Durable archival commit-roster journal used by internal recovery audits.
-///
-/// Finality authority is the Kura-owned, cryptographically verified v2
-/// artifact; journal records are intentionally not part of the public API.
-pub(crate) mod commit_roster_journal;
 /// Lane compliance policy evaluation.
 pub mod compliance;
 /// Data availability orchestration and ingest helpers.

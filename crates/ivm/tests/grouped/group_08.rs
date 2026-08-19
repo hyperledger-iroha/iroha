@@ -14,8 +14,6 @@ mod simple_run;
 mod sm_syscalls;
 #[path = "../stack_policy_v1.rs"]
 mod stack_policy_v1;
-#[path = "../streaming_access_contract.rs"]
-mod streaming_access_contract;
 #[path = "../syscall_names_complete.rs"]
 mod syscall_names_complete;
 #[path = "../syscall_unknown.rs"]

@@ -1917,9 +1917,7 @@ fn canonical_wsv_member_is_redacted(path: CanonicalWsvPath, key: &str) -> bool {
             key,
             "sumeragi_v2_bootstrap" | "commit_topology" | "prev_commit_topology"
         ),
-        CanonicalWsvPath::World => {
-            matches!(key, "commit_qcs" | "consensus_evidence" | "vrf_epochs")
-        }
+        CanonicalWsvPath::World => matches!(key, "consensus_evidence" | "vrf_epochs"),
         CanonicalWsvPath::Parameters | CanonicalWsvPath::Sumeragi | CanonicalWsvPath::Other => {
             false
         }
@@ -4354,10 +4352,8 @@ fn redact_consensus_sidecars_from_world_value(world: &mut json::Value) {
     let Some(world) = world.as_object_mut() else {
         return;
     };
-    // These stores are asynchronously enriched recovery evidence, not WSV
-    // data committed by the block itself. Including them makes historical
-    // checkpoints depend on which peer supplied later, richer certificates.
-    world.remove("commit_qcs");
+    // Consensus evidence is asynchronously enriched recovery data, not WSV data committed by
+    // the block itself. Including it makes historical checkpoints depend on later peer input.
     world.remove("consensus_evidence");
     // VRF epoch snapshots are maintained by consensus message handling outside
     // block application. Kura replay verifies block-applied WSV data only.

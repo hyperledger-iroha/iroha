@@ -3720,7 +3720,7 @@ pub mod isi {
             .map_err(Error::from)?;
         if let Some(binding) = policy.treasury_payout_binding.as_ref() {
             if binding.treasury_account_id != policy.treasury_account_id
-                || binding.sbd_asset_id != policy.ds_asset_id
+                || binding.ds_asset_id != policy.ds_asset_id
                 || binding.contract_address.subject_id() != policy.treasury_account_id
             {
                 return Err(InstructionExecutionError::InvalidParameter(
@@ -4071,18 +4071,18 @@ pub mod isi {
                     ),
                 ));
             }
-            let sbd_definition = state_transaction
+            let ds_definition = state_transaction
                 .world
-                .asset_definition(&self.payout_binding.sbd_asset_id)
+                .asset_definition(&self.payout_binding.ds_asset_id)
                 .map_err(Error::from)?;
-            if sbd_definition.spec().scale()
+            if ds_definition.spec().scale()
                 != Some(u32::from(
                     iroha_data_model::validation_fee::VALIDATION_FEE_DS_SCALE,
                 ))
             {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
-                        "validation-fee payout lifecycle SBD asset scale must be 2".into(),
+                        "validation-fee payout lifecycle DS asset scale must be 2".into(),
                     ),
                 ));
             }
@@ -6651,7 +6651,7 @@ pub mod isi {
     ) -> Permission {
         iroha_executor_data_model::permission::asset::CanTransferAsset {
             asset: AssetId::new(
-                binding.sbd_asset_id.clone(),
+                binding.ds_asset_id.clone(),
                 binding.treasury_account_id.clone(),
             ),
         }
@@ -6799,7 +6799,7 @@ pub mod isi {
             (
                 validation_fee_payout_effect_permission(binding),
                 binding.pool_vault_account_id.clone(),
-                "the wrapper SBD asset transfer effect",
+                "the wrapper DS asset transfer effect",
             ),
         ]
     }
@@ -9215,7 +9215,9 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if self.owner != *authority {
+            if self.owner != *authority
+                && !crate::executor::is_initial_genesis_context(state_transaction)
+            {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "owner must equal authority".into(),
                 ));
@@ -12086,11 +12088,6 @@ pub mod isi {
                 "bridge receipt requires an active transaction lane",
             ));
         };
-        if !state_transaction.nexus.enabled {
-            return Err(invalid_bridge_receipt(
-                "bridge receipt requires nexus.enabled=true",
-            ));
-        }
         if nexus_active_lane_dataspace(current_lane_id, &state_transaction.nexus).is_none() {
             return Err(invalid_bridge_receipt(format!(
                 "bridge receipt requires active Nexus lane {current_lane_id}"
@@ -12806,11 +12803,6 @@ pub mod isi {
                 "SCCP message recording requires an active transaction lane".into(),
             ));
         };
-        if !state_transaction.nexus.enabled {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "SCCP message recording requires nexus.enabled=true".into(),
-            ));
-        }
         let Some(active_dataspace_id) = nexus_active_lane_dataspace_at_height(
             lane_id,
             &state_transaction.nexus,
@@ -15443,11 +15435,9 @@ pub mod isi {
                 .world
                 .domain_endorsement_policies
                 .get(&canonical_id)
-                .map_or(
-                    state_transaction.nexus.enabled
-                        && state_transaction.nexus.endorsement.quorum > 0,
-                    |policy| policy.required,
-                );
+                .map_or(state_transaction.nexus.endorsement.quorum > 0, |policy| {
+                    policy.required
+                });
             if requires_endorsement {
                 validate_domain_endorsement(&canonical_id, &domain.metadata, state_transaction)?;
             }
@@ -15557,8 +15547,7 @@ pub mod isi {
                     .cloned()
             })
             .or_else(|| {
-                if state_transaction.nexus.enabled && state_transaction.nexus.endorsement.quorum > 0
-                {
+                if state_transaction.nexus.endorsement.quorum > 0 {
                     Some(DomainEndorsementPolicy {
                         committee_id: "default".to_owned(),
                         max_endorsement_age: u64::MAX,
@@ -15953,11 +15942,6 @@ pub mod isi {
                     "not permitted: CanManageLaneRelayEmergency".into(),
                 ));
             }
-            if !state_transaction.nexus.enabled {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "lane relay emergency override requires nexus.enabled=true".into(),
-                ));
-            }
             if !state_transaction.nexus.lane_relay_emergency.enabled {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "lane relay emergency override requires nexus.lane_relay_emergency.enabled=true"
@@ -16121,11 +16105,6 @@ pub mod isi {
         ) -> Result<(), Error> {
             // Registration is permissionless transport. Durable authority comes exclusively from
             // the finalized lane-committee QC authenticated before either state key is written.
-            if !state_transaction.nexus.enabled {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "verified lane relay registration requires nexus.enabled=true".into(),
-                ));
-            }
             if self.effect_proof_blob.is_some() {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(
@@ -16510,11 +16489,6 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !state_transaction.nexus.enabled {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "verified fee sponsor vault allocation requires nexus.enabled=true".into(),
-                ));
-            }
             if *self.program_revision() == 0 {
                 return Err(invalid_fee_sponsor_program(
                     "verified fee sponsor vault allocation revision must be non-zero",
@@ -16860,6 +16834,9 @@ pub mod isi {
         program_id: &iroha_data_model::nexus::FeeSponsorProgramId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        if crate::executor::is_initial_genesis_context(state_transaction) {
+            return Ok(());
+        }
         let delegated = state_transaction
             .world
             .account_permissions
@@ -17590,16 +17567,26 @@ pub mod isi {
                 program_id.sponsor.clone(),
                 fee_sponsor_asset_scope(&definition, dataspace),
             );
-            Transfer::<Asset, Quantity, Account>::asset_quantity(
-                source,
-                self.amount().clone(),
-                state_transaction
-                    .nexus
-                    .fees
-                    .sponsor_vault_custody_account_id
-                    .clone(),
-            )
-            .execute(authority, state_transaction)?;
+            if crate::executor::is_initial_genesis_context(state_transaction) {
+                crate::smartcontracts::isi::asset::isi::execute_initial_genesis_fee_sponsor_funding_transfer(
+                    state_transaction,
+                    authority,
+                    &program_id,
+                    source,
+                    self.amount().clone(),
+                )?;
+            } else {
+                Transfer::<Asset, Quantity, Account>::asset_quantity(
+                    source,
+                    self.amount().clone(),
+                    state_transaction
+                        .nexus
+                        .fees
+                        .sponsor_vault_custody_account_id
+                        .clone(),
+                )
+                .execute(authority, state_transaction)?;
+            }
             let key = FeeSponsorVaultKey {
                 program_id: program_id.clone(),
                 asset_definition_id: self.asset_definition_id().clone(),
@@ -19027,7 +19014,7 @@ pub mod isi {
     }
     #[cfg(test)]
     mod tests {
-        use crate::smartcontracts::triggers::set::SetReadOnly;
+        use crate::{smartcontracts::triggers::set::SetReadOnly, state::StateBlock};
         use core::num::{NonZeroU32, NonZeroU64};
         use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
         use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
@@ -20001,7 +19988,6 @@ pub mod isi {
             }
         }
         fn set_current_lane_for_test(stx: &mut StateTransaction<'_, '_>, lane_id: LaneId) {
-            stx.nexus.enabled = true;
             stx.current_lane_id = Some(lane_id);
         }
         #[derive(Clone)]
@@ -21667,22 +21653,6 @@ pub mod isi {
             }
         }
         #[test]
-        fn record_sccp_message_rejects_when_nexus_disabled() {
-            blank_test_state_transaction!(state, block, stx);
-            enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
-            stx.nexus.enabled = false;
-            let payload = sora_outbound_sccp_payload(50);
-            sccp_message!(key, instruction, payload);
-            let err = instruction
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("SCCP outbox recording must reject when Nexus is disabled");
-            assert!(
-                format!("{err:?}").contains("requires nexus.enabled=true"),
-                "unexpected error: {err:?}"
-            );
-            assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
-        }
-        #[test]
         fn record_sccp_message_rejects_missing_lane_context() {
             blank_test_state_transaction!(state, block, stx);
             stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
@@ -21769,7 +21739,6 @@ pub mod isi {
                 ],
             )
             .expect("recreated SCCP lane catalog");
-            stx.nexus.enabled = true;
             stx.nexus.dataspace_catalog = dataspace_catalog.clone();
             stx.world.dataspace_catalog = dataspace_catalog;
             stx.nexus.lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
@@ -21877,7 +21846,6 @@ pub mod isi {
             )
             .expect("future autoscale SCCP lane catalog");
             configure_universal_dataspace(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.autoscale.enabled = true;
             stx.nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
             stx.nexus.autoscale.max_lanes = NonZeroU32::new(8).expect("nonzero max lanes");
@@ -24884,7 +24852,6 @@ seiyaku GovernanceLifecycle {
         }
         fn configure_active_test_lanes(stx: &mut StateTransaction<'_, '_>, lane_ids: &[LaneId]) {
             assert!(!lane_ids.is_empty(), "test lane catalog cannot be empty");
-            stx.nexus.enabled = true;
             configure_universal_dataspace(stx);
             let lanes = lane_ids
                 .iter()
@@ -24920,7 +24887,6 @@ seiyaku GovernanceLifecycle {
         }
         fn enable_sccp_recording_for_test(stx: &mut StateTransaction<'_, '_>, lane_id: LaneId) {
             stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
-            stx.nexus.enabled = true;
             stx.current_lane_id = Some(lane_id);
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
             stx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -28659,30 +28625,6 @@ seiyaku GovernanceLifecycle {
             }));
         }
         #[test]
-        fn record_bridge_receipt_rejects_when_nexus_disabled() {
-            blank_state_transaction!(state, block, state_block, stx);
-            let (_, proof_hash) = seed_generic_bridge_proof_for_receipt_test(&mut stx, 12);
-            set_current_lane_for_test(&mut stx, LaneId::SINGLE);
-            stx.nexus.enabled = false;
-            stx.world.internal_event_buf.clear();
-            let receipt = bridge_receipt_for_test(proof_hash);
-            let err = RecordBridgeReceipt::new(receipt)
-                .execute(&ALICE_ID, &mut stx)
-                .expect_err("bridge receipt must reject when Nexus is disabled");
-            assert!(
-                format!("{err:?}").contains("requires nexus.enabled=true"),
-                "unexpected error: {err:?}"
-            );
-            assert!(
-                stx.bridge_receipt_proofs_available_in_tx
-                    .contains(&proof_hash),
-                "disabled Nexus validation must not consume proof marker"
-            );
-            assert!(stx.world.internal_event_buf.iter().all(|event| {
-                !matches!(event.as_ref(), DataEvent::Bridge(BridgeEvent::Emitted(_)))
-            }));
-        }
-        #[test]
         fn record_bridge_receipt_rejects_mismatched_transaction_lane() {
             blank_state_transaction!(state, block, state_block, stx);
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE, LaneId::new(7)]);
@@ -29165,7 +29107,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_requires_permission() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29200,35 +29141,9 @@ seiyaku GovernanceLifecycle {
             );
         }
         #[test]
-        fn set_lane_relay_emergency_validators_rejects_when_nexus_disabled() {
-            blank_state_transaction!(state, block, state_block, stx);
-            bootstrap_alice_account(&mut stx);
-            configure_universal_dataspace(&mut stx);
-            stx.nexus.lane_relay_emergency.enabled = true;
-            let authority = register_multisig_authority(&mut stx, 3, 5);
-            grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
-            stx.nexus.enabled = false;
-            let peer_keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            let peer = seed_live_peer(&mut stx, &peer_keypair);
-            let err = SetLaneRelayEmergencyValidators {
-                lane_id: LaneId::new(0),
-                peers: vec![peer],
-                expires_at_height: Some(12),
-                metadata: Metadata::default(),
-            }
-            .execute(&authority, &mut stx)
-            .expect_err("nexus disabled should be rejected");
-            assert!(matches!(
-                err,
-                InstructionExecutionError::InvariantViolation(msg)
-                    if msg.as_ref() == "lane relay emergency override requires nexus.enabled=true"
-            ));
-        }
-        #[test]
         fn set_lane_relay_emergency_validators_rejects_when_disabled() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
             grant_manage_lane_relay_emergency_permission(&mut stx, &authority);
@@ -29253,7 +29168,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_requires_multisig_authority() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             grant_manage_lane_relay_emergency_permission(&mut stx, &ALICE_ID);
@@ -29279,7 +29193,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_rejects_unknown_lane() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29305,7 +29218,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_rejects_stale_geometry_lane() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29366,7 +29278,6 @@ seiyaku GovernanceLifecycle {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.autoscale.enabled = true;
             stx.nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
             stx.nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
@@ -29423,7 +29334,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_rejects_unregistered_peer() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29451,7 +29361,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_rejects_peer_without_live_consensus_key() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29480,7 +29389,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_rejects_peer_outside_commit_topology() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29519,7 +29427,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_requires_expiry_for_non_empty_roster() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29544,7 +29451,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_rejects_expiry_beyond_max_ttl() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29569,7 +29475,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_inserts_and_deduplicates() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29610,7 +29515,6 @@ seiyaku GovernanceLifecycle {
         fn set_lane_relay_emergency_validators_clears_on_empty_list() {
             blank_state_transaction!(state, block, state_block, stx);
             bootstrap_alice_account(&mut stx);
-            stx.nexus.enabled = true;
             stx.nexus.lane_relay_emergency.enabled = true;
             configure_universal_dataspace(&mut stx);
             let authority = register_multisig_authority(&mut stx, 3, 5);
@@ -29832,79 +29736,138 @@ seiyaku GovernanceLifecycle {
                 (BackendTag::Halo2IpaPasta, "pallas", "halo2_default")
             }
         }
-        #[test]
-        fn confidential_transfer_v2_rejects_noncanonical_envelope_metadata_before_proof_decode() {
-            #[derive(Clone, Copy)]
-            enum Tamper {
-                BackendTag,
-                CircuitId,
-                PublicInputsSchema,
-                EmptyCircuitId,
-                EmptyPublicInputs,
-                OversizedPublicInputs,
-                EmptyProofBytes,
-                AuxiliaryBytes,
-                ZeroVerifyingKeyHash,
-                VerifyingKeyHash,
-                MissingCircuitIndex,
-            }
-            for (suffix, tamper, expected_msg) in [
+        #[derive(Clone, Copy)]
+        enum ConfidentialEnvelopeTamper {
+            BackendTag,
+            CircuitId,
+            PublicInputsSchema,
+            EmptyCircuitId,
+            EmptyPublicInputs,
+            OversizedPublicInputs,
+            EmptyProofBytes,
+            AuxiliaryBytes,
+            ZeroVerifyingKeyHash,
+            VerifyingKeyHash,
+            MissingCircuitIndex,
+        }
+        impl ConfidentialEnvelopeTamper {
+            const CASES: [(Self, &'static str, &'static str); 11] = [
                 (
+                    Self::BackendTag,
                     "backend",
-                    Tamper::BackendTag,
                     "unexpected OpenVerifyEnvelope backend tag",
                 ),
+                (Self::CircuitId, "circuit", "verifying key circuit mismatch"),
                 (
-                    "circuit",
-                    Tamper::CircuitId,
-                    "verifying key circuit mismatch",
-                ),
-                (
+                    Self::PublicInputsSchema,
                     "schema",
-                    Tamper::PublicInputsSchema,
                     "public inputs schema mismatch",
                 ),
                 (
+                    Self::EmptyCircuitId,
                     "empty_circuit",
-                    Tamper::EmptyCircuitId,
                     "invalid OpenVerifyEnvelope",
                 ),
                 (
+                    Self::EmptyPublicInputs,
                     "empty_public_inputs",
-                    Tamper::EmptyPublicInputs,
                     "invalid OpenVerifyEnvelope",
                 ),
                 (
+                    Self::OversizedPublicInputs,
                     "oversized_public_inputs",
-                    Tamper::OversizedPublicInputs,
                     "invalid OpenVerifyEnvelope",
                 ),
                 (
+                    Self::EmptyProofBytes,
                     "empty_proof_bytes",
-                    Tamper::EmptyProofBytes,
                     "invalid OpenVerifyEnvelope",
                 ),
                 (
+                    Self::AuxiliaryBytes,
                     "aux",
-                    Tamper::AuxiliaryBytes,
                     "envelope auxiliary bytes must be empty",
                 ),
                 (
+                    Self::ZeroVerifyingKeyHash,
                     "zero_vk_hash",
-                    Tamper::ZeroVerifyingKeyHash,
                     "verifier-key hash must be non-zero",
                 ),
                 (
+                    Self::VerifyingKeyHash,
                     "wrong_vk_hash",
-                    Tamper::VerifyingKeyHash,
                     "verifying key commitment mismatch",
                 ),
                 (
+                    Self::MissingCircuitIndex,
                     "missing_circuit_index",
-                    Tamper::MissingCircuitIndex,
                     "verifying key circuit/version not active",
                 ),
-            ] {
+            ];
+        }
+        #[derive(Clone, Copy)]
+        struct ConfidentialEnvelopeFixture {
+            role: &'static str,
+            label: &'static str,
+            circuit_id: &'static str,
+            expected_schema: &'static [u8],
+            verifying_key: [u8; 4],
+            proof: [u8; 3],
+            invalid_schema: &'static [u8],
+            auxiliary_bytes: &'static [u8],
+        }
+        impl ConfidentialEnvelopeFixture {
+            fn transfer_v2() -> Self {
+                use crate::zk::confidential_v2;
+
+                Self {
+                    role: "transfer_v2",
+                    label: "confidential transfer v2",
+                    circuit_id: confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+                    expected_schema:
+                        confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1,
+                    verifying_key: [1, 3, 3, 7],
+                    proof: [0xAA, 0xBB, 0xCC],
+                    invalid_schema: b"not the confidential transfer schema",
+                    auxiliary_bytes: b"fee-binding",
+                }
+            }
+            fn unshield_v2() -> Self {
+                Self::unshield(
+                    "unshield_v2",
+                    "confidential unshield v2",
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
+                )
+            }
+            fn unshield_v3() -> Self {
+                Self::unshield(
+                    "unshield_v3",
+                    "confidential unshield v3",
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1,
+                )
+            }
+            fn unshield(
+                role: &'static str,
+                label: &'static str,
+                circuit_id: &'static str,
+                expected_schema: &'static [u8],
+            ) -> Self {
+                Self {
+                    role,
+                    label,
+                    circuit_id,
+                    expected_schema,
+                    verifying_key: [5, 8, 13, 21],
+                    proof: [0xDD, 0xEE, 0xFF],
+                    invalid_schema: b"not the confidential unshield schema",
+                    auxiliary_bytes: b"side-channel",
+                }
+            }
+        }
+        fn assert_confidential_envelope_tampers_are_rejected(fixture: ConfidentialEnvelopeFixture) {
+            for (tamper, suffix, expected_msg) in ConfidentialEnvelopeTamper::CASES {
                 let kura = Kura::blank_kura_for_testing();
                 let query_handle = LiveQueryStore::start_test();
                 let state = State::new(World::default(), kura, query_handle);
@@ -29919,24 +29882,24 @@ seiyaku GovernanceLifecycle {
                 let mut block = state.block(header);
                 let mut stx = block.transaction();
                 let vk_id =
-                    VerifyingKeyId::new("halo2/ipa", format!("vk_conf_v2_{suffix}").as_str());
-                let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 3, 3, 7]);
+                    VerifyingKeyId::new("halo2/ipa", format!("vk_conf_{}_{suffix}", fixture.role));
+                let vk_box =
+                    VerifyingKeyBox::new("halo2/ipa".into(), fixture.verifying_key.to_vec());
                 let vk_commitment = hash_vk(&vk_box);
-                let expected_schema =
-                    crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1;
-                let public_inputs_schema_hash = if matches!(tamper, Tamper::PublicInputsSchema) {
-                    [0u8; 32]
-                } else {
-                    CryptoHash::new(expected_schema).into()
-                };
+                let schema_hash =
+                    if matches!(tamper, ConfidentialEnvelopeTamper::PublicInputsSchema) {
+                        [0; 32]
+                    } else {
+                        CryptoHash::new(fixture.expected_schema).into()
+                    };
                 let mut record = VerifyingKeyRecord::new_with_owner(
                     1,
-                    crate::zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID.to_owned(),
+                    fixture.circuit_id.to_owned(),
                     None,
                     "test",
                     BackendTag::Halo2IpaPasta,
                     "pallas",
-                    public_inputs_schema_hash,
+                    schema_hash,
                     vk_commitment,
                 );
                 record.vk_len = 4;
@@ -29946,7 +29909,7 @@ seiyaku GovernanceLifecycle {
                 stx.world
                     .verifying_keys
                     .insert(vk_id.clone(), record.clone());
-                if !matches!(tamper, Tamper::MissingCircuitIndex) {
+                if !matches!(tamper, ConfidentialEnvelopeTamper::MissingCircuitIndex) {
                     stx.world
                         .verifying_keys_by_circuit
                         .insert((record.circuit_id.clone(), record.version), vk_id.clone());
@@ -29955,30 +29918,34 @@ seiyaku GovernanceLifecycle {
                     backend: BackendTag::Halo2IpaPasta,
                     circuit_id: record.circuit_id.clone(),
                     vk_hash: vk_commitment,
-                    public_inputs: expected_schema.to_vec(),
-                    proof_bytes: vec![0xAA, 0xBB, 0xCC],
+                    public_inputs: fixture.expected_schema.to_vec(),
+                    proof_bytes: fixture.proof.to_vec(),
                     aux: Vec::new(),
                 };
                 match tamper {
-                    Tamper::BackendTag => envelope.backend = BackendTag::Stark,
-                    Tamper::CircuitId => envelope.circuit_id = "halo2/pasta/ipa/vote-ballot".into(),
-                    Tamper::PublicInputsSchema => {
-                        envelope.public_inputs = b"not the confidential transfer schema".to_vec();
+                    ConfidentialEnvelopeTamper::BackendTag => envelope.backend = BackendTag::Stark,
+                    ConfidentialEnvelopeTamper::CircuitId => {
+                        envelope.circuit_id = "halo2/pasta/ipa/vote-ballot".into();
                     }
-                    Tamper::EmptyCircuitId => envelope.circuit_id.clear(),
-                    Tamper::EmptyPublicInputs => envelope.public_inputs.clear(),
-                    Tamper::OversizedPublicInputs => {
+                    ConfidentialEnvelopeTamper::PublicInputsSchema => {
+                        envelope.public_inputs = fixture.invalid_schema.to_vec();
+                    }
+                    ConfidentialEnvelopeTamper::EmptyCircuitId => envelope.circuit_id.clear(),
+                    ConfidentialEnvelopeTamper::EmptyPublicInputs => envelope.public_inputs.clear(),
+                    ConfidentialEnvelopeTamper::OversizedPublicInputs => {
                         envelope.public_inputs = vec![
                             0xA5;
                             iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
                                 + 1
                         ];
                     }
-                    Tamper::EmptyProofBytes => envelope.proof_bytes.clear(),
-                    Tamper::AuxiliaryBytes => envelope.aux = b"fee-binding".to_vec(),
-                    Tamper::ZeroVerifyingKeyHash => envelope.vk_hash = [0u8; 32],
-                    Tamper::VerifyingKeyHash => envelope.vk_hash[0] ^= 0x80,
-                    Tamper::MissingCircuitIndex => {}
+                    ConfidentialEnvelopeTamper::EmptyProofBytes => envelope.proof_bytes.clear(),
+                    ConfidentialEnvelopeTamper::AuxiliaryBytes => {
+                        envelope.aux = fixture.auxiliary_bytes.to_vec();
+                    }
+                    ConfidentialEnvelopeTamper::ZeroVerifyingKeyHash => envelope.vk_hash = [0; 32],
+                    ConfidentialEnvelopeTamper::VerifyingKeyHash => envelope.vk_hash[0] ^= 0x80,
+                    ConfidentialEnvelopeTamper::MissingCircuitIndex => {}
                 }
                 let proof_box = ProofBox::new(
                     "halo2/ipa".into(),
@@ -29986,19 +29953,25 @@ seiyaku GovernanceLifecycle {
                 );
                 let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
                 let err = super::validate_confidential_v2_open_verify_envelope_metadata(
-                    "confidential transfer v2",
+                    fixture.label,
                     &attachment,
                     &stx,
                     &record,
-                    expected_schema,
+                    fixture.expected_schema,
                 )
-                .expect_err("tampered confidential transfer v2 envelope must be rejected");
+                .expect_err("tampered confidential envelope must be rejected");
                 let msg = smart_contract_instruction_error_message(err);
                 assert!(
                     msg.contains(expected_msg),
                     "expected {expected_msg:?}, got {msg:?}"
                 );
             }
+        }
+        #[test]
+        fn confidential_transfer_v2_rejects_noncanonical_envelope_metadata_before_proof_decode() {
+            assert_confidential_envelope_tampers_are_rejected(
+                ConfidentialEnvelopeFixture::transfer_v2(),
+            );
         }
         #[test]
         fn confidential_transfer_v2_accepts_canonical_envelope_metadata_before_proof_decode() {
@@ -30055,189 +30028,11 @@ seiyaku GovernanceLifecycle {
         }
         #[test]
         fn confidential_unshield_v2_v3_reject_noncanonical_envelope_metadata_before_proof_decode() {
-            #[derive(Clone, Copy)]
-            enum Tamper {
-                BackendTag,
-                CircuitId,
-                PublicInputsSchema,
-                EmptyCircuitId,
-                EmptyPublicInputs,
-                OversizedPublicInputs,
-                EmptyProofBytes,
-                AuxiliaryBytes,
-                ZeroVerifyingKeyHash,
-                VerifyingKeyHash,
-                MissingCircuitIndex,
-            }
-            for (role_suffix, label, circuit_id, expected_schema) in [
-                (
-                    "unshield_v2",
-                    "confidential unshield v2",
-                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
-                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1,
-                ),
-                (
-                    "unshield_v3",
-                    "confidential unshield v3",
-                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
-                    crate::zk::confidential_v2::CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1,
-                ),
+            for fixture in [
+                ConfidentialEnvelopeFixture::unshield_v2(),
+                ConfidentialEnvelopeFixture::unshield_v3(),
             ] {
-                for (suffix, tamper, expected_msg) in [
-                    (
-                        "backend",
-                        Tamper::BackendTag,
-                        "unexpected OpenVerifyEnvelope backend tag",
-                    ),
-                    (
-                        "circuit",
-                        Tamper::CircuitId,
-                        "verifying key circuit mismatch",
-                    ),
-                    (
-                        "schema",
-                        Tamper::PublicInputsSchema,
-                        "public inputs schema mismatch",
-                    ),
-                    (
-                        "empty_circuit_id",
-                        Tamper::EmptyCircuitId,
-                        "invalid OpenVerifyEnvelope",
-                    ),
-                    (
-                        "empty_public_inputs",
-                        Tamper::EmptyPublicInputs,
-                        "invalid OpenVerifyEnvelope",
-                    ),
-                    (
-                        "oversized_public_inputs",
-                        Tamper::OversizedPublicInputs,
-                        "invalid OpenVerifyEnvelope",
-                    ),
-                    (
-                        "empty_proof_bytes",
-                        Tamper::EmptyProofBytes,
-                        "invalid OpenVerifyEnvelope",
-                    ),
-                    (
-                        "aux",
-                        Tamper::AuxiliaryBytes,
-                        "envelope auxiliary bytes must be empty",
-                    ),
-                    (
-                        "zero_vk_hash",
-                        Tamper::ZeroVerifyingKeyHash,
-                        "verifier-key hash must be non-zero",
-                    ),
-                    (
-                        "wrong_vk_hash",
-                        Tamper::VerifyingKeyHash,
-                        "verifying key commitment mismatch",
-                    ),
-                    (
-                        "missing_circuit_index",
-                        Tamper::MissingCircuitIndex,
-                        "verifying key circuit/version not active",
-                    ),
-                ] {
-                    let kura = Kura::blank_kura_for_testing();
-                    let query_handle = LiveQueryStore::start_test();
-                    let state = State::new(World::default(), kura, query_handle);
-                    let header = iroha_data_model::block::BlockHeader::new(
-                        NonZeroU64::new(1).unwrap(),
-                        None,
-                        None,
-                        None,
-                        0,
-                        0,
-                    );
-                    let mut block = state.block(header);
-                    let mut stx = block.transaction();
-                    let vk_id = VerifyingKeyId::new(
-                        "halo2/ipa",
-                        format!("vk_conf_{role_suffix}_{suffix}").as_str(),
-                    );
-                    let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![5, 8, 13, 21]);
-                    let vk_commitment = hash_vk(&vk_box);
-                    let public_inputs_schema_hash = if matches!(tamper, Tamper::PublicInputsSchema)
-                    {
-                        [0u8; 32]
-                    } else {
-                        CryptoHash::new(expected_schema).into()
-                    };
-                    let mut record = VerifyingKeyRecord::new_with_owner(
-                        1,
-                        circuit_id.to_owned(),
-                        None,
-                        "test",
-                        BackendTag::Halo2IpaPasta,
-                        "pallas",
-                        public_inputs_schema_hash,
-                        vk_commitment,
-                    );
-                    record.vk_len = 4;
-                    record.status = ConfidentialStatus::Active;
-                    record.key = Some(vk_box);
-                    record.gas_schedule_id = Some("halo2_default".into());
-                    stx.world
-                        .verifying_keys
-                        .insert(vk_id.clone(), record.clone());
-                    if !matches!(tamper, Tamper::MissingCircuitIndex) {
-                        stx.world
-                            .verifying_keys_by_circuit
-                            .insert((record.circuit_id.clone(), record.version), vk_id.clone());
-                    }
-                    let mut envelope = OpenVerifyEnvelope {
-                        backend: BackendTag::Halo2IpaPasta,
-                        circuit_id: record.circuit_id.clone(),
-                        vk_hash: vk_commitment,
-                        public_inputs: expected_schema.to_vec(),
-                        proof_bytes: vec![0xDD, 0xEE, 0xFF],
-                        aux: Vec::new(),
-                    };
-                    match tamper {
-                        Tamper::BackendTag => envelope.backend = BackendTag::Stark,
-                        Tamper::CircuitId => {
-                            envelope.circuit_id = "halo2/pasta/ipa/vote-ballot".into();
-                        }
-                        Tamper::PublicInputsSchema => {
-                            envelope.public_inputs =
-                                b"not the confidential unshield schema".to_vec();
-                        }
-                        Tamper::EmptyCircuitId => envelope.circuit_id.clear(),
-                        Tamper::EmptyPublicInputs => envelope.public_inputs.clear(),
-                        Tamper::OversizedPublicInputs => {
-                            envelope.public_inputs = vec![
-                                0xA5;
-                                iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_PUBLIC_INPUT_BYTES
-                                    + 1
-                            ];
-                        }
-                        Tamper::EmptyProofBytes => envelope.proof_bytes.clear(),
-                        Tamper::AuxiliaryBytes => envelope.aux = b"side-channel".to_vec(),
-                        Tamper::ZeroVerifyingKeyHash => envelope.vk_hash = [0u8; 32],
-                        Tamper::VerifyingKeyHash => envelope.vk_hash[0] ^= 0x80,
-                        Tamper::MissingCircuitIndex => {}
-                    }
-                    let proof_box = ProofBox::new(
-                        "halo2/ipa".into(),
-                        norito::to_bytes(&envelope).expect("encode envelope"),
-                    );
-                    let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id);
-                    let err = super::validate_confidential_v2_open_verify_envelope_metadata(
-                        label,
-                        &attachment,
-                        &stx,
-                        &record,
-                        expected_schema,
-                    )
-                    .expect_err("tampered confidential unshield envelope must be rejected");
-                    let msg = smart_contract_instruction_error_message(err);
-                    assert!(
-                        msg.contains(expected_msg),
-                        "expected {expected_msg:?}, got {msg:?}"
-                    );
-                }
+                assert_confidential_envelope_tampers_are_rejected(fixture);
             }
         }
         #[test]
@@ -30267,7 +30062,6 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn register_domain_requires_endorsement_when_configured() {
             blank_state_transaction!(state, block, state_block, stx);
-            stx.nexus.enabled = true;
             let kp = checked_keypair();
             stx.nexus.endorsement.quorum = 1;
             stx.nexus
@@ -30334,7 +30128,6 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn register_domain_rejects_missing_endorsement_when_quorum_set() {
             blank_state_transaction!(state, block, state_block, stx);
-            stx.nexus.enabled = true;
             stx.nexus.endorsement.quorum = 1;
             let kp = checked_keypair();
             stx.nexus
@@ -30367,7 +30160,6 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn register_domain_duplicate_does_not_persist_endorsement() {
             blank_state_transaction!(state, block, state_block, stx);
-            stx.nexus.enabled = true;
             stx.nexus.endorsement.quorum = 1;
             let kp = checked_keypair();
             stx.nexus
@@ -30467,7 +30259,6 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn register_domain_rejects_expired_endorsement() {
             blank_state_transaction!(state, block, state_block, stx);
-            stx.nexus.enabled = true;
             let kp = checked_keypair();
             stx.nexus.endorsement.quorum = 1;
             stx.nexus
@@ -31527,54 +31318,103 @@ seiyaku GovernanceLifecycle {
                 "unexpected msg: {msg}"
             );
         }
-        #[test]
-        fn register_vk_rejects_protocol_names_as_backend_labels() {
-            blank_state_transaction!(state, block, state_block, stx);
-            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
-            stx.apply();
+        #[derive(Clone, Copy)]
+        enum RejectedVerifierBackendFamily {
+            ProtocolName,
+            ProductionClaim,
+            DeveloperOnly,
+            Unsupported,
+        }
+        impl RejectedVerifierBackendFamily {
+            fn key_name(self, index: usize) -> String {
+                let prefix = match self {
+                    Self::ProtocolName => "vk_pending_label",
+                    Self::ProductionClaim => "vk_production_claim",
+                    Self::DeveloperOnly => "vk_developer_only",
+                    Self::Unsupported => "vk_unsupported",
+                };
+                format!("{prefix}_{index}")
+            }
+            fn circuit_id(self, backend: &str) -> String {
+                let suffix = match self {
+                    Self::ProtocolName => "unsupported-protocol-circuit",
+                    Self::ProductionClaim => "claimed-production-circuit",
+                    Self::DeveloperOnly => "developer-only-circuit",
+                    Self::Unsupported => "unsupported-circuit",
+                };
+                format!("{backend}:{suffix}")
+            }
+            fn record_hash_byte(self) -> u8 {
+                match self {
+                    Self::ProtocolName => 0x6C,
+                    Self::ProductionClaim => 0x7B,
+                    Self::DeveloperOnly => 0x72,
+                    Self::Unsupported => 0x73,
+                }
+            }
+            fn expected_message(self) -> &'static str {
+                match self {
+                    Self::ProtocolName | Self::Unsupported => "unsupported verifying key backends",
+                    Self::ProductionClaim => "production-claim verifying key backends",
+                    Self::DeveloperOnly => "developer-only verifying key backends",
+                }
+            }
+        }
+        fn assert_registration_rejects_backend_family(
+            state_block: &mut StateBlock<'_>,
+            backends: &[&str],
+            family: RejectedVerifierBackendFamily,
+        ) {
             let exec = Executor::default();
-            for (idx, backend) in UNSUPPORTED_PROTOCOL_BACKEND_LABELS
-                .iter()
-                .copied()
-                .enumerate()
-            {
+            for (index, backend) in backends.iter().copied().enumerate() {
                 let mut stx = state_block.transaction();
-                let id = VerifyingKeyId::new(backend, format!("vk_pending_label_{idx}"));
+                let id = VerifyingKeyId::new(backend, family.key_name(index));
                 let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
                 let (record_backend, curve, schedule) =
                     unsupported_label_generic_record_profile(backend);
-                let mut rec = VerifyingKeyRecord::new_with_owner(
+                let mut record = VerifyingKeyRecord::new_with_owner(
                     1,
-                    format!("{backend}:unsupported-protocol-circuit"),
+                    family.circuit_id(backend),
                     None,
                     "test",
                     record_backend,
                     curve,
-                    [0x6C; 32],
+                    [family.record_hash_byte(); 32],
                     hash_vk(&vk_box),
                 );
-                rec.vk_len = 3;
-                rec.status = ConfidentialStatus::Active;
-                rec.key = Some(vk_box);
-                rec.gas_schedule_id = Some(schedule.into());
-                let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
+                record.vk_len = 3;
+                record.status = ConfidentialStatus::Active;
+                record.key = Some(vk_box);
+                record.gas_schedule_id = Some(schedule.into());
+                let instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                     id: id.clone(),
-                    record: rec,
+                    record,
                 }
                 .into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("protocol name must not be accepted as a verifier engine");
-                let msg = smart_contract_error_message(err);
+                let error = exec
+                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instruction)
+                    .expect_err("rejected verifier backend must not register");
+                let message = smart_contract_error_message(error);
                 assert!(
-                    msg.contains("unsupported verifying key backends"),
-                    "unexpected msg for {backend}: {msg}"
+                    message.contains(family.expected_message()),
+                    "unexpected message for {backend}: {message}"
                 );
                 assert!(
                     stx.world.verifying_keys.get(&id).is_none(),
                     "{backend} must not be admitted to WSV"
                 );
             }
+        }
+        #[test]
+        fn register_vk_rejects_protocol_names_as_backend_labels() {
+            blank_state_transaction!(state, block, state_block, stx);
+            grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
+            stx.apply();
+            assert_registration_rejects_backend_family(
+                &mut state_block,
+                UNSUPPORTED_PROTOCOL_BACKEND_LABELS,
+                RejectedVerifierBackendFamily::ProtocolName,
+            );
         }
         #[test]
         fn register_vk_reserves_every_active_and_retired_privacy_circuit_label() {
@@ -31696,45 +31536,11 @@ seiyaku GovernanceLifecycle {
             blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let exec = Executor::default();
-            for (idx, backend) in PRODUCTION_CLAIM_VERIFIER_LABELS.iter().copied().enumerate() {
-                let mut stx = state_block.transaction();
-                let id = VerifyingKeyId::new(backend, format!("vk_production_claim_{idx}"));
-                let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
-                let (record_backend, curve, schedule) =
-                    unsupported_label_generic_record_profile(backend);
-                let mut rec = VerifyingKeyRecord::new_with_owner(
-                    1,
-                    format!("{backend}:claimed-production-circuit"),
-                    None,
-                    "test",
-                    record_backend,
-                    curve,
-                    [0x7B; 32],
-                    hash_vk(&vk_box),
-                );
-                rec.vk_len = 3;
-                rec.status = ConfidentialStatus::Active;
-                rec.key = Some(vk_box);
-                rec.gas_schedule_id = Some(schedule.into());
-                let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
-                    id: id.clone(),
-                    record: rec,
-                }
-                .into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("production-claim verifier label must be rejected");
-                let msg = smart_contract_error_message(err);
-                assert!(
-                    msg.contains("production-claim verifying key backends"),
-                    "unexpected msg for {backend}: {msg}"
-                );
-                assert!(
-                    stx.world.verifying_keys.get(&id).is_none(),
-                    "{backend} must not be admitted to WSV"
-                );
-            }
+            assert_registration_rejects_backend_family(
+                &mut state_block,
+                PRODUCTION_CLAIM_VERIFIER_LABELS,
+                RejectedVerifierBackendFamily::ProductionClaim,
+            );
         }
         #[test]
         fn register_vk_rejects_trusted_setup_halo2_backend_labels() {
@@ -31787,206 +31593,45 @@ seiyaku GovernanceLifecycle {
             blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let exec = Executor::default();
-            for (idx, (backend, tag, curve, schedule)) in [
-                (
+            assert_registration_rejects_backend_family(
+                &mut state_block,
+                &[
                     "debug/halo2/ipa",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/mock",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/debug",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/ipa:mock-proof",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/ipa:Mock-Proof",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "stark/fri/debug",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-                (
                     "stark/fri/Debug",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-                (
                     "stark/fri/mock",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let mut stx = state_block.transaction();
-                let id = VerifyingKeyId::new(backend, format!("vk_developer_only_{idx}"));
-                let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
-                let mut rec = VerifyingKeyRecord::new_with_owner(
-                    1,
-                    format!("{backend}:developer-only-circuit"),
-                    None,
-                    "test",
-                    tag,
-                    curve,
-                    [0x72; 32],
-                    hash_vk(&vk_box),
-                );
-                rec.vk_len = 3;
-                rec.status = ConfidentialStatus::Active;
-                rec.key = Some(vk_box);
-                rec.gas_schedule_id = Some(schedule.into());
-                let instr: InstructionBox =
-                    verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("developer-only verifier label must be rejected");
-                let msg = smart_contract_error_message(err);
-                assert!(
-                    msg.contains("developer-only verifying key backends"),
-                    "unexpected msg for {backend}: {msg}"
-                );
-            }
+                ],
+                RejectedVerifierBackendFamily::DeveloperOnly,
+            );
         }
         #[test]
         fn register_vk_rejects_unsupported_backend_labels() {
             blank_state_transaction!(state, block, state_block, stx);
             grant_alice_account_permission(&mut stx, "CanManageVerifyingKeys", "grant manage vk");
             stx.apply();
-            let exec = Executor::default();
-            for (idx, (backend, tag, curve, schedule)) in [
-                (
+            assert_registration_rejects_backend_family(
+                &mut state_block,
+                &[
                     " halo2/ipa",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/ipa ",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/ipa\n",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/ipa\0",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "../halo2/ipa",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/ipa/../tiny-add",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/unknown-native-v1",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "halo2/ipa:unknown-native-v1",
-                    BackendTag::Halo2IpaPasta,
-                    "pallas",
-                    "halo2_default",
-                ),
-                (
                     "stark/unknown-native-v1",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-                (
                     " stark/fri/sha256-goldilocks",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-                (
                     "stark/fri/sha256-goldilocks ",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-                (
                     "stark/fri/sha256-goldilocks\0",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-                (
                     "../stark/fri",
-                    BackendTag::Stark,
-                    "goldilocks",
-                    "stark_default",
-                ),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let mut stx = state_block.transaction();
-                let id = VerifyingKeyId::new(backend, format!("vk_unsupported_{idx}"));
-                let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
-                let mut rec = VerifyingKeyRecord::new_with_owner(
-                    1,
-                    format!("{backend}:unsupported-circuit"),
-                    None,
-                    "test",
-                    tag,
-                    curve,
-                    [0x73; 32],
-                    hash_vk(&vk_box),
-                );
-                rec.vk_len = 3;
-                rec.status = ConfidentialStatus::Active;
-                rec.key = Some(vk_box);
-                rec.gas_schedule_id = Some(schedule.into());
-                let instr: InstructionBox =
-                    verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
-                let err = exec
-                    .execute_instruction(&mut stx, &ALICE_ID.clone(), instr)
-                    .expect_err("unsupported verifier label must be rejected");
-                let msg = smart_contract_error_message(err);
-                assert!(
-                    msg.contains("unsupported verifying key backends"),
-                    "unexpected msg for {backend}: {msg}"
-                );
-            }
+                ],
+                RejectedVerifierBackendFamily::Unsupported,
+            );
         }
         #[test]
         fn register_vk_rejects_trusted_setup_stark_backend_labels() {
@@ -35083,7 +34728,7 @@ seiyaku GovernanceLifecycle {
         #[test]
         fn register_domain_rejects_missing_endorsement_when_required() {
             let mut state = blank_test_state();
-            state.nexus.get_mut().enabled = true;
+
             state.nexus.get_mut().endorsement.quorum = 1;
             state.nexus.get_mut().endorsement.committee_keys =
                 BTreeSet::from([checked_keypair().public_key().clone()]);
@@ -35116,7 +34761,7 @@ seiyaku GovernanceLifecycle {
             let mut state = blank_test_state();
             let kp_a = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let kp_b = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            state.nexus.get_mut().enabled = true;
+
             state.nexus.get_mut().endorsement.quorum = 2;
             state.nexus.get_mut().endorsement.committee_keys =
                 BTreeSet::from([kp_a.public_key().clone(), kp_b.public_key().clone()]);
@@ -35173,7 +34818,7 @@ seiyaku GovernanceLifecycle {
         fn domain_endorsement_rejects_window_and_dataspace_mismatch() {
             let mut state = blank_test_state();
             let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-            state.nexus.get_mut().enabled = true;
+
             state.nexus.get_mut().endorsement.quorum = 1;
             state.nexus.get_mut().endorsement.committee_keys =
                 BTreeSet::from([kp.public_key().clone()]);
@@ -35907,107 +35552,6 @@ seiyaku GovernanceLifecycle {
                 }
             }
             best
-        }
-        fn proof_record_alias_values(record: &ProofRecord, field: &str) -> Vec<String> {
-            match field {
-                "id" => vec![record.id.to_string()],
-                "backend" | "id.backend" => vec![record.id.backend.to_string()],
-                "status" => vec![proof_status_label(record.status).to_owned()],
-                _ => Vec::new(),
-            }
-        }
-        fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
-            if path.is_empty() {
-                return None;
-            }
-            let mut current = value;
-            for segment in path.split('.') {
-                if segment.is_empty() {
-                    return None;
-                }
-                match current {
-                    Value::Object(map) => current = map.get(segment)?,
-                    _ => return None,
-                }
-            }
-            Some(current)
-        }
-        fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
-            matches!(value, Value::String(raw) if raw == expected)
-        }
-        fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
-            values
-                .iter()
-                .any(|value| matches!(value, Value::String(raw) if raw == expected))
-        }
-        fn proof_record_json_value<'a>(
-            cache: &'a mut Option<Value>,
-            record: &ProofRecord,
-        ) -> Option<&'a Value> {
-            if cache.is_none() {
-                *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(record);
-            }
-            cache.as_ref()
-        }
-        fn predicate_matches_proof_record(predicate: &PredicateJson, record: &ProofRecord) -> bool {
-            let mut record_json = None;
-            for cond in &predicate.equals {
-                let aliases = proof_record_alias_values(record, &cond.field);
-                if !aliases.is_empty() {
-                    if !aliases
-                        .iter()
-                        .any(|alias| predicate_value_equals_str(&cond.value, alias))
-                    {
-                        return false;
-                    }
-                    continue;
-                }
-                let Some(value) = proof_record_json_value(&mut record_json, record) else {
-                    continue;
-                };
-                let Some(actual) = predicate_value_at_path(value, &cond.field) else {
-                    return false;
-                };
-                if actual != &cond.value {
-                    return false;
-                }
-            }
-            for cond in &predicate.r#in {
-                let aliases = proof_record_alias_values(record, &cond.field);
-                if !aliases.is_empty() {
-                    if !aliases
-                        .iter()
-                        .any(|alias| predicate_values_contain_str(&cond.values, alias))
-                    {
-                        return false;
-                    }
-                    continue;
-                }
-                let Some(value) = proof_record_json_value(&mut record_json, record) else {
-                    continue;
-                };
-                let Some(actual) = predicate_value_at_path(value, &cond.field) else {
-                    return false;
-                };
-                if !cond.values.iter().any(|candidate| candidate == actual) {
-                    return false;
-                }
-            }
-            for field in &predicate.exists {
-                if !proof_record_alias_values(record, field).is_empty() {
-                    continue;
-                }
-                let Some(value) = proof_record_json_value(&mut record_json, record) else {
-                    continue;
-                };
-                let Some(actual) = predicate_value_at_path(value, field) else {
-                    return false;
-                };
-                if actual.is_null() {
-                    return false;
-                }
-            }
-            true
         }
         include!("world/proof_record_query_impls.rs");
     }

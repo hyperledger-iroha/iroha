@@ -84,10 +84,7 @@ fn native_amx_manifest_artifact_rejects_leaf_or_proof_tampering() {
 include!("10c_native_amx_latest_index_support_and_bounds.rs");
 #[test]
 fn native_amx_latest_index_startup_rejects_fully_unbacked_pointer() {
-    let temp_dir = TempDir::new().expect("temporary Kura directory");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (temp_dir, config, lane_config, kura) = temporary_kura_fixture();
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -130,8 +127,7 @@ fn native_amx_latest_index_startup_rejects_fully_unbacked_pointer() {
 #[test]
 fn native_amx_latest_index_startup_rejects_manifest_binding_drift_without_receipt() {
     for drift_kind in ["executed wire", "finality", "manifest"] {
-        let temp_dir = TempDir::new().expect("temporary Kura directory");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
         let entry = kura
@@ -199,10 +195,7 @@ fn native_amx_latest_index_startup_rejects_manifest_binding_drift_without_receip
 }
 #[test]
 fn native_amx_latest_index_startup_rejects_present_invalid_manifest_proof() {
-    let temp_dir = TempDir::new().expect("temporary Kura directory");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (temp_dir, config, lane_config, kura) = temporary_kura_fixture();
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -316,10 +309,7 @@ fn native_amx_latest_index_binds_route_incarnation_and_exact_receipt() {
 }
 #[test]
 fn native_amx_latest_index_rebuilds_idempotently_after_receipt_append_crash() {
-    let temp_dir = TempDir::new().expect("temporary Kura directory");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (temp_dir, config, lane_config, kura) = temporary_kura_fixture();
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -961,7 +951,7 @@ fn native_amx_prune_exact_object_removal_rejects_same_byte_path_swaps() {
     for swapped in ["first-target", "stable-intent"] {
         let temp_dir = TempDir::new().expect("Native prune path-swap directory");
         let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        config.roster_sidecar_retention =
+        config.lane_history_retention =
             NonZeroUsize::new(1).expect("one-pair Native prune retention");
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) =
@@ -1032,8 +1022,7 @@ fn native_amx_prune_exact_object_removal_rejects_same_byte_path_swaps() {
 #[test]
 fn native_amx_drain_evidence_requires_exact_manifest_receipt_finality_and_latest_index() {
     let fixture = || {
-        let temp_dir = TempDir::new().expect("temporary Kura directory");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
         let entry = kura
@@ -1082,10 +1071,7 @@ fn native_amx_drain_evidence_requires_exact_manifest_receipt_finality_and_latest
 }
 #[test]
 fn native_amx_retirement_scan_rejects_old_incarnation_evidence_after_aba_recreation() {
-    let temp_dir = TempDir::new().expect("temporary Kura directory");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (temp_dir, config, lane_config, kura) = temporary_kura_fixture();
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -1160,8 +1146,7 @@ fn native_amx_prune_intent_v2_rejects_b1_after_b2_recreation() {
 #[test]
 fn native_amx_latest_index_rebuild_accepts_only_narrow_pending_tip_metadata() {
     for pending_shape in ["metadata absent", "unbound checkpoint"] {
-        let temp_dir = TempDir::new().expect("temporary Kura directory");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
         let entry = kura
@@ -1231,8 +1216,7 @@ fn native_amx_latest_index_rebuild_rejects_partial_or_below_tip_metadata() {
         "missing published commit manifest",
         "below-tip metadata gap",
     ] {
-        let temp_dir = TempDir::new().expect("temporary Kura directory");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
         let entry = kura
@@ -1280,10 +1264,7 @@ fn native_amx_latest_index_rebuild_rejects_partial_or_below_tip_metadata() {
 }
 #[test]
 fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
-    let temp_dir = TempDir::new().expect("temporary Kura directory");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (temp_dir, config, lane_config, kura) = temporary_kura_fixture();
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -1414,10 +1395,7 @@ fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
 }
 #[test]
 fn native_amx_latest_index_rebuild_rejects_conflicting_pointer() {
-    let temp_dir = TempDir::new().expect("temporary Kura directory");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (temp_dir, config, lane_config, kura) = temporary_kura_fixture();
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -1446,10 +1424,7 @@ fn native_amx_latest_index_rebuild_rejects_conflicting_pointer() {
 #[test]
 fn native_amx_latest_index_startup_rebuild_rejects_symlink() {
     use std::os::unix::fs::symlink;
-    let temp_dir = TempDir::new().expect("temporary Kura directory");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = RuntimeLaneConfig::default();
-    let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+    let (temp_dir, config, lane_config, kura) = temporary_kura_fixture();
     let entry = kura
         .lane_storage_entry(LaneId::SINGLE)
         .expect("primary lane storage entry");
@@ -1587,306 +1562,6 @@ fn native_amx_latest_index_startup_rebuild_rejects_symlink() {
             "{artifact_kind} publication must preserve displaced evidence byte-exact"
         );
     }
-}
-#[test]
-fn roster_sidecar_roundtrip() {
-    use iroha_config::base::WithOrigin;
-    let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
-    let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let peer = PeerId::new(kp.public_key().clone());
-    let roster = vec![peer];
-    let block_hash = store_dummy_blocks(&kura, 1)[0];
-    let signers_bitmap = vec![0b0000_0001];
-    let bls_aggregate_signature = vec![0xAB; 96];
-    let cert = Qc {
-        phase: Phase::Commit,
-        subject_block_hash: block_hash,
-        parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-        post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-        height: 1,
-        view: 0,
-        epoch: 0,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&roster),
-        validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: roster.clone(),
-        aggregate: QcAggregate {
-            signers_bitmap: signers_bitmap.clone(),
-            bls_aggregate_signature: bls_aggregate_signature.clone(),
-        },
-    };
-    let sidecar = RosterSidecar::new(1, block_hash, Some(cert.clone()), None, None);
-    kura.write_roster_metadata(&sidecar);
-    let got = kura.read_roster_metadata(1).expect("sidecar exists");
-    assert_eq!(got.height, 1);
-    assert_eq!(got.block_hash, block_hash);
-    assert_eq!(got.format_label(), "roster.snapshot");
-    assert_eq!(
-        got.commit_qc.as_ref().map(|c| c.validator_set_hash),
-        Some(HashOf::new(&roster))
-    );
-    assert!(got.stake_snapshot.is_none());
-    assert_eq!(got.roster_snapshot(), Some(roster));
-}
-#[test]
-fn roster_sidecar_retention_pins_genesis_across_compaction_and_restart() {
-    let temp_dir = TempDir::new().expect("tempdir");
-    let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    config.roster_sidecar_retention =
-        NonZeroUsize::new(2).expect("non-zero roster sidecar retention");
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
-    let block_hashes = store_dummy_blocks(&kura, 4);
-    for (index, block_hash) in block_hashes.iter().copied().enumerate() {
-        let height = u64::try_from(index.saturating_add(1)).expect("test height fits u64");
-        assert!(
-            kura.write_roster_metadata(&RosterSidecar::new(height, block_hash, None, None, None,)),
-            "write roster sidecar at height {height}"
-        );
-    }
-    let assert_retained_window = |kura: &Kura| {
-        assert!(
-            kura.read_roster_metadata(1).is_some(),
-            "genesis sidecar must remain pinned outside the recent retention window"
-        );
-        assert!(
-            kura.read_roster_metadata(2).is_none(),
-            "old non-genesis sidecar must be pruned"
-        );
-        assert!(kura.read_roster_metadata(3).is_some());
-        assert!(kura.read_roster_metadata(4).is_some());
-    };
-    assert_retained_window(&kura);
-    drop(kura);
-    let (reopened, BlockCount(block_count)) =
-        Kura::new(&config, &RuntimeLaneConfig::default()).expect("reopen compacted Kura");
-    assert_eq!(block_count, 4);
-    assert_retained_window(&reopened);
-}
-#[test]
-fn roster_sidecar_rejects_height_mismatch() {
-    use iroha_config::base::WithOrigin;
-    let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
-    let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
-    pipeline_dir.push(PIPELINE_DIR_NAME);
-    std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
-    let data_path = pipeline_dir.join(ROSTER_SIDECARS_DATA_FILE);
-    let index_path = pipeline_dir.join(ROSTER_SIDECARS_INDEX_FILE);
-    let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xBC; Hash::LENGTH]));
-    let sidecar = RosterSidecar::new(2, block_hash, None, None, None);
-    let payload = sidecar.encode_framed().expect("encode sidecar");
-    assert!(
-        Kura::append_indexed_sidecar(
-            &data_path,
-            &index_path,
-            1,
-            &payload,
-            "roster sidecar",
-            FsyncMode::Batched,
-            None,
-        ),
-        "append mismatched roster sidecar"
-    );
-    assert!(
-        kura.read_roster_metadata(1).is_none(),
-        "height mismatch should be rejected"
-    );
-}
-#[test]
-fn roster_sidecar_rejects_block_hash_mismatch() {
-    use iroha_config::base::WithOrigin;
-    let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
-    let mut blocks = DummyBlocks::new();
-    let block = blocks.next();
-    let expected_hash = block.hash();
-    kura.store_block(block).expect("store block");
-    let mismatch_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xDD; 32]));
-    assert_ne!(expected_hash, mismatch_hash, "mismatch hash must differ");
-    let sidecar = RosterSidecar::new(1, mismatch_hash, None, None, None);
-    kura.write_roster_metadata(&sidecar);
-    assert!(
-        kura.read_roster_metadata(1).is_none(),
-        "block hash mismatch should be rejected"
-    );
-}
-#[test]
-fn roster_sidecar_without_canonical_kura_hash_is_rejected_and_pruned_above_tip() {
-    let temp_dir = TempDir::new().expect("tempdir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
-    let mut blocks = DummyBlocks::new();
-    let block1 = blocks.next();
-    let block2 = blocks.next();
-    let block2_hash = block2.hash();
-    kura.store_block(block1).expect("store canonical block 1");
-    let stale = RosterSidecar::new(2, block2_hash, None, None, None);
-    assert!(
-        kura.write_roster_metadata(&stale),
-        "fixture sidecar should be durably written before rollback"
-    );
-    let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
-    pipeline_dir.push(PIPELINE_DIR_NAME);
-    let data_path = pipeline_dir.join(ROSTER_SIDECARS_DATA_FILE);
-    let index_path = pipeline_dir.join(ROSTER_SIDECARS_INDEX_FILE);
-    assert_eq!(
-        fs::metadata(&index_path).expect("roster index").len(),
-        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + 2 * PIPELINE_INDEX_ENTRY_SIZE_U64
-    );
-    assert!(
-        fs::metadata(&data_path).expect("roster data").len() > 0,
-        "height-2 fixture payload should exist before rollback"
-    );
-    assert!(
-        kura.read_roster_metadata(2).is_none(),
-        "a sidecar without any canonical Kura hash must never be exposed"
-    );
-    // The requested height equals the current block tip. Rollback still has to remove an
-    // orphaned height+1 sidecar instead of returning early.
-    kura.prune_to_height(1)
-        .expect("equal-tip rollback should prune stale roster artifacts");
-    assert_eq!(
-        fs::metadata(&index_path)
-            .expect("truncated roster index")
-            .len(),
-        INDEXED_SIDECAR_BASE_HEADER_SIZE_U64 + PIPELINE_INDEX_ENTRY_SIZE_U64,
-        "the index must not retain an address for height 2"
-    );
-    assert_eq!(
-        fs::metadata(&data_path)
-            .expect("compacted roster data")
-            .len(),
-        0,
-        "the only payload was above the canonical tip and must be removed"
-    );
-    kura.store_block(block2).expect("store canonical block 2");
-    assert!(
-        kura.read_roster_metadata(2).is_none(),
-        "later canonical growth must not resurrect the removed stale sidecar"
-    );
-}
-#[test]
-fn roster_sidecar_rejects_commit_qc_mismatch() {
-    use iroha_config::base::WithOrigin;
-    let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
-    let mut blocks = DummyBlocks::new();
-    let block = blocks.next();
-    let block_hash = block.hash();
-    kura.store_block(block).expect("store block");
-    let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let peer = PeerId::new(kp.public_key().clone());
-    let roster = vec![peer];
-    let mismatch_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xEE; Hash::LENGTH]));
-    assert_ne!(block_hash, mismatch_hash, "mismatch hash must differ");
-    let cert = Qc {
-        phase: Phase::Commit,
-        subject_block_hash: mismatch_hash,
-        parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-        post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-        height: 1,
-        view: 0,
-        epoch: 0,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&roster),
-        validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: roster,
-        aggregate: QcAggregate {
-            signers_bitmap: vec![0b0000_0001],
-            bls_aggregate_signature: vec![0xAA; 96],
-        },
-    };
-    let sidecar = RosterSidecar::new(1, block_hash, Some(cert), None, None);
-    kura.write_roster_metadata(&sidecar);
-    assert!(
-        kura.read_roster_metadata(1).is_none(),
-        "mismatched commit certificate should be rejected"
-    );
 }
 #[test]
 #[allow(clippy::too_many_lines)]

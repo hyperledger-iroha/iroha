@@ -210,6 +210,24 @@ fn deployment_finalization_recovers_every_crash_phase_and_terminal_outcome_after
                 at_crash.audit_sequence,
                 after_apply.audit_sequence + committed_finalization_records
             );
+            let blocked_assignment = ClientRequestFixtureV1::new(
+                TairaAuthorityRoleV1::DeployIssuance,
+                &format!("deployment-{phase:?}-{outcome}-blocked"),
+                &[],
+            );
+            assert_eq!(
+                service.assign_run_json(
+                    &blocked_assignment.assignment_json(
+                        &service,
+                        TEST_NOW_MILLIS_V1 - 1,
+                        TEST_NOW_MILLIS_V1,
+                        TEST_NOW_MILLIS_V1 + 60_000,
+                    ),
+                    TEST_NOW_MILLIS_V1,
+                ),
+                Err(TairaAuthorityErrorV1::Conflict),
+                "assign-run appended across incomplete finalization at {phase:?} for {outcome}"
+            );
             let state = state_directory(parent.path());
             let inputs: BTreeMap<[u8; 32], StoredDeploymentFinalizationInputV1> =
                 load_canonical_records(&state.join("authority-deployment-finalization-inputs-v1"))

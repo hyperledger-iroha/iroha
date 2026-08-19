@@ -563,7 +563,7 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     fn finalized_artifact_for_block(
         block: &SignedBlock,
-        execution_commitment: ExecutionCommitment,
+        execution_commitment: &ExecutionCommitment,
     ) -> V2FinalityArtifact {
         let mut key_pairs = core::iter::repeat_with(|| {
             KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -620,7 +620,7 @@ mod tests {
             proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
-            execution_commitment,
+            execution_commitment: *execution_commitment,
             signer: 0,
             signature: Vec::new(),
         };
@@ -639,7 +639,7 @@ mod tests {
             proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
-            execution_commitment,
+            execution_commitment: *execution_commitment,
             signers: vec![0, 1, 2],
             aggregate_signature: iroha_crypto::bls_normal_aggregate_signatures(&share_refs)
                 .expect("aggregate fixture CommitQC"),
@@ -721,7 +721,7 @@ mod tests {
         execution_commitment
             .validate()
             .expect("fixture execution commitment is valid");
-        let artifact = finalized_artifact_for_block(&block, execution_commitment);
+        let artifact = finalized_artifact_for_block(&block, &execution_commitment);
         (block, artifact, external_hash, scheduled_hash)
     }
     #[cfg(feature = "transparent_api")]
@@ -854,7 +854,7 @@ mod tests {
                 .expect("wrong fixture wire length fits u64"),
             Hash::new(wrong_executed_block_wire),
         );
-        let artifact = finalized_artifact_for_block(&block, wrong_execution_commitment);
+        let artifact = finalized_artifact_for_block(&block, &wrong_execution_commitment);
         assert_eq!(
             TrustedBlockProofAnchor::from_untrusted_finality_artifact(
                 &block,
@@ -924,7 +924,7 @@ mod tests {
                 .expect("misaligned fixture wire length fits u64"),
             Hash::new(&executed_block_wire),
         );
-        let artifact = finalized_artifact_for_block(&block, execution_commitment);
+        let artifact = finalized_artifact_for_block(&block, &execution_commitment);
         assert_eq!(
             TrustedBlockProofAnchor::from_untrusted_finality_artifact(
                 &block,

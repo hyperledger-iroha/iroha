@@ -1,7 +1,7 @@
 # Merge ledger: certified lane execution and global ordering
 
 This document defines the live merge-ledger validation, replay, and recovery
-contract used when `nexus.enabled = true`. A lane certificate proves that a
+contract used by every first-release node. A lane certificate proves that a
 lane payload is available and accepted by its lane committee; it does **not**
 authorize a shared-world-state mutation by itself. Only a canonical global
 block carrying a merge-committee certificate establishes the order in which
@@ -129,6 +129,14 @@ lane QC, availability certificate, NewView certificate, and Native AMX
 participant check for the incarnation uses the same pin. Later global roster,
 manifest, or key-cache rotation cannot rewrite historical authority and there
 is no live-authority fallback. A pin change is a retire/recreate boundary.
+
+For a static lane, an already-certified source is not re-authorized from the
+current mutable manifest or stake projection. Merge selection loads the
+proposal-height block through the WSV/Kura hash binding, requires its verified
+Sumeragi V2 finality and height context, and recovers the exact committee from
+the unique execution-context ownership matching the complete lane descriptor.
+Missing or ambiguous historical ownership defers the merge; current state is
+never treated as a reconstruction of past authority.
 
 Lane validators durably lock their full commit-vote bodies and highest signed
 drain frontier per incarnation before either artifact can leave the process. A

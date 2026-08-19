@@ -4,14 +4,13 @@ def test_release_inventory_constants_match_current_source_seal(
     tmp_path: Path,
 ) -> None:
     """Every release consumer binds the current production and focus seals."""
-
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 860
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329"
+        "b6457553bc8d41f74ebc708ea3d4e6187117f0f008da2c2dea697b0771741b44"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "97d125f9196963710fd6eb72e98e0b86f6503489f1b1ee492b4cfc628e320d82"
+        "517f8e9e8dc7b522144fc1d6f05ecd0f99142630d5a3dcb456e512ef45b44030"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -22,14 +21,13 @@ def test_release_inventory_constants_match_current_source_seal(
     assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 527
     assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 528
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "4dd855f85b071369ec2457dfa75caacc8f597ce17390b406de8f190dd52c6c18"
+        "db96b6b781b450c4b04dbe1f6d4068a4a2a4f13cea3f0fbd868f50dbce4baabb"
     )
     assert (
         "_production_liveness_release_inventory_guard_errors"
         in module._production_liveness_release_inventory_errors.__code__.co_names
     )
     assert module._sumeragi_v2_package_layout_guard_errors(ROOT_DIR) == []
-
     package_root = tmp_path / "package-layout"
     package_guard = package_root / "scripts" / "check_sumeragi_v2_package_layout.sh"
     package_verifier = package_root / "scripts" / "verify_sumeragi_v2.sh"
@@ -66,7 +64,6 @@ def test_release_inventory_constants_match_current_source_seal(
         timeout=30,
     )
     assert baseline.returncode == 0, baseline.stderr
-
     refinement = package_core_root / "v2_core" / "refinement.rs"
     refinement_source = refinement.read_text(encoding="utf-8")
     layout_mutations = (
@@ -107,7 +104,6 @@ def test_release_inventory_constants_match_current_source_seal(
             in result.stderr
         )
     refinement.write_text(refinement_source, encoding="utf-8")
-
     refinement_cases = package_core_root / "v2_core" / "refinement_cases.rs"
     refinement_cases_source = refinement_cases.read_text(encoding="utf-8")
     nested_include = 'include!("refinement_cases/terminal_body_pipeline.rs");'
@@ -135,7 +131,6 @@ def test_release_inventory_constants_match_current_source_seal(
         in nested_result.stderr
     )
     refinement_cases.write_text(refinement_cases_source, encoding="utf-8")
-
     package_guard_source = package_guard.read_text(encoding="utf-8")
     package_guard.write_text(
         package_guard_source.replace("set -euo pipefail", "set +e", 1),
@@ -147,7 +142,6 @@ def test_release_inventory_constants_match_current_source_seal(
         for error in errors
     ), errors
     package_guard.write_text(package_guard_source, encoding="utf-8")
-
     invocation = 'bash "$REPO_ROOT/scripts/check_sumeragi_v2_package_layout.sh"'
     verifier_source = package_verifier.read_text(encoding="utf-8")
     assert verifier_source.splitlines().count(invocation) == 1
@@ -160,7 +154,6 @@ def test_release_inventory_constants_match_current_source_seal(
         "must invoke the package-layout guard exactly once" in error
         for error in errors
     ), errors
-
     checker_source = SCRIPT.read_text(encoding="utf-8")
     validate_body = checker_source.split("def validate_ledger(", 1)[1].split(
         "\ndef ",
@@ -172,7 +165,6 @@ def test_release_inventory_constants_match_current_source_seal(
         )
         == 1
     )
-
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_current_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -190,12 +182,24 @@ def test_release_inventory_constants_match_current_source_seal(
         for _leg_id, module_name, count in receipt_module._PRODUCTION_MODULES
     }
     assert receipt_module_counts["kura::tests"] == 18
-    assert receipt_module_counts["sumeragi::authoritative_runtime_gate_tests"] == 43
-    assert receipt_module_counts["sumeragi::v2_effects::tests"] == 72
+    assert receipt_module_counts["sumeragi::authoritative_runtime_gate_tests"] == 42
+    assert receipt_module_counts["sumeragi::v2::tests"] == 48
+    assert receipt_module_counts["sumeragi::v2_effects::tests"] == 71
     assert receipt_module_counts["sumeragi::v2_lane_work::tests"] == 63
-    assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 68
+    assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 65
+    assert receipt_module_counts["sumeragi::v2_lifecycle_coordinator"] == 39
+    assert (
+        receipt_module_counts["sumeragi::v2_certified_serve_payload_store::tests"]
+        == 11
+    )
     assert receipt_module_counts["sumeragi::v2_runner::tests"] == 37
-    assert receipt_module_counts["sumeragi::v2_worker::tests"] == 135
+    assert (
+        receipt_module_counts[
+            "sumeragi::v2_runner::lifecycle_height_driver::tests"
+        ]
+        == 1
+    )
+    assert receipt_module_counts["sumeragi::v2_worker::tests"] == 88
     assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
@@ -216,7 +220,6 @@ def test_kura_production_source_boundary_rejects_hostile_test_suffix_mutations(
     mutation_name: str,
 ) -> None:
     """The production Kura inventory must stop at one exact test boundary."""
-
     module = load_checker()
     repo_root = tmp_path / mutation_name
     kura_relative = Path("crates/iroha_core/src/kura.rs")
@@ -224,14 +227,12 @@ def test_kura_production_source_boundary_rejects_hostile_test_suffix_mutations(
         destination = repo_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
-
     kura_path = repo_root / kura_relative
     canonical = kura_path.read_text(encoding="utf-8")
     boundary = "#[cfg(test)]\npub(crate) mod tests {"
     assert canonical.count(boundary) == 1
     _, _, _, baseline_errors = module._kura_production_source_inventory(repo_root)
     assert baseline_errors == []
-
     if mutation_name == "missing_boundary":
         replacement = "pub(crate) mod tests {"
         diagnostic = "exactly one terminal cfg(test) module boundary"
@@ -247,7 +248,6 @@ def test_kura_production_source_boundary_rejects_hostile_test_suffix_mutations(
             + boundary
         )
         diagnostic = "production source must end before all test includes"
-
     mutated = canonical.replace(boundary, replacement, 1)
     assert mutated != canonical
     kura_path.write_text(mutated, encoding="utf-8")
@@ -258,14 +258,12 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
-
     def read_source_bundle(*relative_paths: str) -> str:
         """Read one Rust module together with its lexically included test files."""
         return "\n".join(
             (ROOT_DIR / relative_path).read_text(encoding="utf-8")
             for relative_path in relative_paths
         )
-
     def read_reviewed_source_bundle(relative_path: str) -> str:
         """Mirror the complete source-sealed include manifest for one Rust parent."""
         errors: list[str] = []
@@ -278,7 +276,6 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         assert errors == []
         assert source
         return source
-
     seed_source = (
         ROOT_DIR / "scripts" / "run_sumeragi_v2_seed_matrix.sh"
     ).read_text(encoding="utf-8")
@@ -412,7 +409,6 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     liveness_doc = (
         ROOT_DIR / "specs" / "sumeragi_v2_liveness.md"
     ).read_text(encoding="utf-8")
-
     fidelity_root = tmp_path / "kura-application-receipt-source-fidelity"
     kura_relative = Path("crates/iroha_core/src/kura.rs")
     lane_geometry_relative = Path(
@@ -434,10 +430,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         )
         == []
     )
-
     kura_fidelity_path = fidelity_root / kura_relative
     canonical_kura = kura_fidelity_path.read_text(encoding="utf-8")
-
     def mutate_kura_item(item_name: str, old: str, new: str) -> None:
         items = module.rust_items(canonical_kura, item_name)
         assert len(items) == 1
@@ -451,7 +445,6 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             + canonical_kura[end:],
             encoding="utf-8",
         )
-
     observation_prune = """        if self.prune_recovery_is_required() {
             return None;
         }
@@ -534,7 +527,6 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         )
         assert any(diagnostic in error for error in errors), errors
         kura_fidelity_path.write_text(canonical_kura, encoding="utf-8")
-
     mutate_kura_item(
         "write_lane_block_application_receipt_artifact",
         """            if existing == *artifact {
@@ -554,7 +546,6 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     ):
         assert any(diagnostic in error for error in errors), (diagnostic, errors)
     kura_fidelity_path.write_text(canonical_kura, encoding="utf-8")
-
     release_fidelity_path = fidelity_root / release_relative
     canonical_release = release_fidelity_path.read_text(encoding="utf-8")
     strict_receipt_regression = (
@@ -580,7 +571,6 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         for error in errors
     ), errors
     release_fidelity_path.write_text(canonical_release, encoding="utf-8")
-
     runner_path = ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
     bash = Path(shutil.which("bash") or "").resolve(strict=True)
     for sealed_value in ("0", "1"):
@@ -607,7 +597,6 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             else "production release sealed child requires its authenticated Python"
         )
         assert expected_diagnostic in direct.stderr
-
     assert "export IROHA_TEST_REQUIRE_NETWORK=1" in seed_source
     assert "export IROHA_TEST_NETWORK_START_ATTEMPTS=1" in seed_source
     assert "-- --list --ignored" in seed_source
@@ -615,7 +604,6 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert 'compute_workspace_source_manifest.py --root "$repo_root"' in seed_source
     assert ".seed-matrix.lock" in seed_source
     assert "COMPLETED.tsv" in seed_source
-
     platform_case = release_source[
         release_source.index('case "$(uname -s)-$(uname -m)" in') :
         release_source.index("  esac", release_source.index('case "$(uname -s)-$(uname -m)" in'))
@@ -890,7 +878,6 @@ kura.claim_autonomous_lifecycle_process_generation(
     canonical_lane_geometry = lane_geometry_fidelity_path.read_text(
         encoding="utf-8"
     )
-
     def mutate_lane_geometry_item(
         item_name: str, old: str, new: str
     ) -> None:
@@ -906,7 +893,6 @@ kura.claim_autonomous_lifecycle_process_generation(
             + canonical_lane_geometry[end:],
             encoding="utf-8",
         )
-
     retirement_item = module.rust_items(
         canonical_lane_geometry,
         "ensure_first_release_lane_retirement_admissible_with_certified_locked",
@@ -922,7 +908,6 @@ kura.claim_autonomous_lifecycle_process_generation(
     canonical_fixed_pairs = retirement_item_source[
         fixed_pairs_start:fixed_pairs_end
     ]
-
     def mutate_fixed_progress_pairs(old: str, new: str) -> None:
         assert canonical_fixed_pairs.count(old) == 1, old
         mutate_lane_geometry_item(
@@ -930,7 +915,6 @@ kura.claim_autonomous_lifecycle_process_generation(
             canonical_fixed_pairs,
             canonical_fixed_pairs.replace(old, new, 1),
         )
-
     mutate_fixed_progress_pairs("; 6]", "; 5]")
     errors = module._kura_retirement_progress_production_source_fidelity_errors(
         fidelity_root
@@ -942,7 +926,6 @@ kura.claim_autonomous_lifecycle_process_generation(
     lane_geometry_fidelity_path.write_text(
         canonical_lane_geometry, encoding="utf-8"
     )
-
     for data_name, _index_name, _path_builder, _kind in (
         module._KURA_RETIREMENT_FIXED_PROGRESS_PAIR_CONTRACTS
     ):
@@ -962,7 +945,6 @@ kura.claim_autonomous_lifecycle_process_generation(
         lane_geometry_fidelity_path.write_text(
             canonical_lane_geometry, encoding="utf-8"
         )
-
     lane_geometry_mutations = (
         (
             "ensure_first_release_lane_retirement_admissible_with_certified_locked",
@@ -1006,7 +988,6 @@ kura.claim_autonomous_lifecycle_process_generation(
         lane_geometry_fidelity_path.write_text(
             canonical_lane_geometry, encoding="utf-8"
         )
-
     standalone_native_mutations = (
         (
             "read_geometry_native_amx_per_height_evidence",
@@ -1106,7 +1087,6 @@ kura.claim_autonomous_lifecycle_process_generation(
         lane_geometry_fidelity_path.write_text(
             canonical_lane_geometry, encoding="utf-8"
         )
-
     mutate_kura_item(
         "native_amx_participant_evidence_file_bytes",
         "u64::try_from(self.pending_control_sidecar_limits.aggregate_bytes)",
@@ -1124,7 +1104,6 @@ kura.claim_autonomous_lifecycle_process_generation(
         for error in native_amx_source_errors
     ), native_amx_source_errors
     kura_fidelity_path.write_text(canonical_kura, encoding="utf-8")
-
     mutate_kura_item(
         "native_amx_participant_evidence_file_bytes",
         '.expect("configured pending-control sidecar bytes fit u64")',
@@ -1143,7 +1122,6 @@ kura.claim_autonomous_lifecycle_process_generation(
         for error in native_amx_source_errors
     ), native_amx_source_errors
     kura_fidelity_path.write_text(canonical_kura, encoding="utf-8")
-
     new_production_inventory_additions = (
         (
             "kura::lane_geometry::tests::",
@@ -1930,7 +1908,6 @@ kura.claim_autonomous_lifecycle_process_generation(
         "no unsupported-platform validator release receipt may be emitted"
         in normalized_liveness_doc
     )
-
     bootstrap_validation = release_source.index("for bootstrap_suffix in")
     required_network = release_source.index("export IROHA_TEST_REQUIRE_NETWORK=1")
     production_units = release_source.index("required_production_liveness_tests")
@@ -2246,7 +2223,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert (
         len(receipt_module._corridor_legs())
         == module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT
-        == 88
+        == 91
     )
     assert len(receipt_module._TAIRA_CONTRACT_TESTS) == 6
     assert receipt_module._TAIRA_CONTRACT_TESTS[-1] == (
@@ -2403,8 +2380,8 @@ kura.claim_autonomous_lifecycle_process_generation(
             )
         )
     )
-    assert len(production_modules) == 40
-    assert len(set(production_modules)) == 40
+    assert len(production_modules) == 43
+    assert len(set(production_modules)) == 43
     assert "kura::tests" in production_modules
     assert "kura::lane_geometry::tests" in production_modules
     assert "sumeragi::authoritative_runtime_gate_tests" in production_modules
@@ -2843,7 +2820,6 @@ kura.claim_autonomous_lifecycle_process_generation(
         "--expected-scaling-iroha-cli-sha256",
     ):
         assert expected_flag in release_source
-
     g4p_fidelity_root = tmp_path / "g4p-validator-argument-source-fidelity"
     for relative in _release_inventory_fixture_paths(module, (
         Path("scripts/run_sumeragi_v2_release_gates.sh"),
@@ -2912,7 +2888,6 @@ kura.claim_autonomous_lifecycle_process_generation(
             component_errors,
         )
         component_path.write_text(canonical_component, encoding="utf-8")
-
     for parent_relative, manifest_name, component_name, expected_error in (
         (
             Path("scripts/write_sumeragi_v2_release_receipt.py"),
@@ -2958,7 +2933,6 @@ kura.claim_autonomous_lifecycle_process_generation(
         for error in mutated_errors
     ), mutated_errors
     g4p_runner_path.write_text(canonical_g4p_runner, encoding="utf-8")
-
     for reviewed_focus_test in (
         "sumeragi::v2_lane_work::tests::"
         "repeated_non_empty_retries_never_make_autonomous_routes_ordinary_eligible",
@@ -2984,7 +2958,6 @@ kura.claim_autonomous_lifecycle_process_generation(
             for error in focus_mutation_errors
         ), (reviewed_focus_test, focus_mutation_errors)
         g4p_runner_path.write_text(canonical_g4p_runner, encoding="utf-8")
-
     reviewed_persistence_budget_test = (
         "sumeragi::v2::tests::"
         "persistence_macro_step_budgets_have_exact_four_effect_maximum"
@@ -3008,7 +2981,6 @@ kura.claim_autonomous_lifecycle_process_generation(
         for error in persistence_inventory_errors
     ), persistence_inventory_errors
     g4p_runner_path.write_text(canonical_g4p_runner, encoding="utf-8")
-
     reviewed_timeout_preemption_test = (
         "sumeragi::v2_core::tests::"
         "commit_qc_preempts_hung_timeout_signature_but_not_pending_wal"
@@ -3033,7 +3005,6 @@ kura.claim_autonomous_lifecycle_process_generation(
         for error in timeout_preemption_inventory_errors
     ), timeout_preemption_inventory_errors
     g4p_runner_path.write_text(canonical_g4p_runner, encoding="utf-8")
-
     reviewed_inventory_name_mutations = (
         (
             "sumeragi::authoritative_runtime_gate_tests::"
@@ -3148,7 +3119,6 @@ kura.claim_autonomous_lifecycle_process_generation(
             for error in reviewed_name_errors
         ), (reviewed_name, reviewed_name_errors)
         g4p_runner_path.write_text(canonical_g4p_runner, encoding="utf-8")
-
     late_lane_recovery_path = (
         g4p_fidelity_root
         / "crates"
@@ -3265,7 +3235,6 @@ kura.claim_autonomous_lifecycle_process_generation(
             canonical_late_lane_recovery,
             encoding="utf-8",
         )
-
     scaling_environment = {
         "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
         "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
@@ -3340,13 +3309,11 @@ kura.claim_autonomous_lifecycle_process_generation(
     }
     for name, value in pinned_taira_profile.items():
         assert f"export {name}={value}" in soak_source
-
     chaos_branch = harness_source.index("--chaos-100k)")
     chaos_inventory = harness_source.index("ignored_test_list=", chaos_branch)
     chaos_run = harness_source.index('"$ignored_test" \\\n', chaos_inventory)
     assert chaos_branch < chaos_inventory < chaos_run
     assert "expected exactly one ignored chaos test" in harness_source
-
     unit_branch = harness_source.index("--unit)")
     unit_inventory = harness_source.index("unit_test_list=", unit_branch)
     unit_ignored_inventory = harness_source.index(
@@ -3358,7 +3325,6 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert unit_branch < unit_inventory < unit_ignored_inventory < unit_run
     assert "expected exactly 140 Sumeragi v2 reducer unit tests" in harness_source
     assert "reducer unit gate requires all 140 tests to be runnable" in harness_source
-
     replay_branch = harness_source.index("--model-replay)")
     replay_inventory = harness_source.index("model_replay_test_list=", replay_branch)
     replay_ignored_inventory = harness_source.index(
@@ -3370,7 +3336,6 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert replay_branch < replay_inventory < replay_ignored_inventory < replay_run
     assert "expected exactly eight Sumeragi v2 model-replay tests" in harness_source
     assert "model-replay gate requires all eight tests to be runnable" in harness_source
-
     finalizer = taira_source.index("fn finalize_result")
     fail_closed = taira_source.index(
         "sandbox::enforce_network_start_requirement::<()>(None, context)?", finalizer
@@ -3416,7 +3381,6 @@ def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> Non
     cargo_proxy_source = (
         ROOT_DIR / "scripts" / "sumeragi_v2_release_cargo_proxy.sh"
     ).read_text(encoding="utf-8")
-
     for source in (release_source, soak_source):
         assert "unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN" in source
         assert "CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami" in source
@@ -3494,7 +3458,6 @@ def test_release_corridor_prebuilds_and_publishes_source_bound_binaries() -> Non
     )
     assert cargo_proxy_source.count('run_cargo "$@"') == 1
     assert "command cargo" not in cargo_proxy_source
-
     triplet_contract = (
         "CARGO_TARGET_DIR, IROHA_RELEASE_ARTIFACT_ROOT, and "
         "IROHA_RELEASE_CANCEL_REQUEST_PATH must be supplied all-or-none"
@@ -3536,7 +3499,6 @@ def test_multilane_inventory_seals_standalone_native_evidence_names() -> None:
     kura_source = (
         ROOT_DIR / "crates" / "iroha_core" / "src" / "kura.rs"
     ).read_text(encoding="utf-8")
-
     current_names = (
         "native_amx_manifest_v1_",
         "native_amx_receipt_v1_",
@@ -3548,7 +3510,6 @@ def test_multilane_inventory_seals_standalone_native_evidence_names() -> None:
     for name in current_names:
         assert name in inventory_source
         assert name in kura_source
-
     obsolete_dense_names = (
         "native_amx_evidence_prune_intent_v1.norito",
         "native_amx_evidence_prune_intent_v1.norito.tmp",
@@ -3567,7 +3528,6 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     tmp_path: Path,
 ) -> None:
     """Standalone and aggregate guards reject inventory-seal weakening."""
-
     module = load_checker()
     checker = ROOT_DIR / "ci" / "check_sumeragi_v2_multilane_release_inventory.sh"
     checker_source = checker.read_text(encoding="utf-8")
@@ -3583,7 +3543,6 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     )
     assert checker_source.count(canonical_declaration) == 1
     assert checker_source.count(count_guard) == 1
-
     probe = "\n".join(
         (
             "set -euo pipefail",
@@ -3599,7 +3558,6 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     canonical = "readonly expected_production_liveness_test_count=860"
     weakened = "readonly expected_production_liveness_test_count=859"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
-
     baseline = subprocess.run(
         [bash, "-c", probe, "inventory-count-probe", str(runner)],
         check=False,
@@ -3608,9 +3566,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         timeout=30,
     )
     assert baseline.returncode == 0, baseline.stderr
-
     runner.write_text(f"{weakened}\n", encoding="utf-8")
-
     mutated = subprocess.run(
         [bash, "-c", probe, "inventory-count-probe", str(runner)],
         check=False,
@@ -3624,7 +3580,6 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         in mutated.stderr
     )
     assert canonical in mutated.stderr
-
     assert module._production_liveness_release_inventory_guard_errors(
         ROOT_DIR
     ) == []
@@ -3643,7 +3598,6 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
     ).read_text(encoding="utf-8")
     aggregate_runner.write_text(release_source, encoding="utf-8")
-
     guard_mutations = (
         (
             canonical_declaration,
@@ -3651,13 +3605,13 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "must seal exactly 860 production tests",
         ),
         (
-            '    "sumeragi::v2_effects::tests": 72,',
             '    "sumeragi::v2_effects::tests": 71,',
+            '    "sumeragi::v2_effects::tests": 70,',
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "sumeragi::v2_runtime::tests": 68,',
-            '    "sumeragi::v2_runtime::tests": 67,',
+            '    "sumeragi::v2_runtime::tests": 65,',
+            '    "sumeragi::v2_runtime::tests": 64,',
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
@@ -3671,7 +3625,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "changed-module counts must equal the exact reviewed release inventory",
         ),
         (
-            '    "4082945a72bd97c31bc147f9cd7bbcb7"',
+            '    "b6457553bc8d41f74ebc708ea3d4e618"',
             '    "00000000000000000000000000000000"',
             "canonical production TSV SHA-256 must equal",
         ),
@@ -3737,7 +3691,6 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             aggregate_root
         )
         assert any(expected_error in error for error in errors), errors
-
     aggregate_checker.write_text(checker_source, encoding="utf-8")
     invocation = "bash ci/check_sumeragi_v2_multilane_release_inventory.sh"
     assert release_source.splitlines().count(invocation) == 1
@@ -3754,54 +3707,37 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
         for error in errors
     ), errors
 
-def test_multilane_inventory_checker_rejects_stale_or_duplicated_sdk_manifest_digest(
+def test_multilane_inventory_checker_retains_exact_grouped_fixture_digest_pin(
     tmp_path: Path,
 ) -> None:
-    """The standalone inventory guard binds SDK hashes to the closure ledger."""
-
+    """The standalone inventory guard keeps the immutable grouped fixture pin."""
     checker = ROOT_DIR / "ci" / "check_sumeragi_v2_multilane_release_inventory.sh"
     checker_source = checker.read_text(encoding="utf-8")
     helper_start = checker_source.index("require_exact_digest_occurrences() {")
     helper_end = checker_source.index("\n}\n", helper_start) + 3
     helper = checker_source[helper_start:helper_end]
-    manifest_guard = (
+    fixture_guard = (
         "require_exact_digest_occurrences \\\n"
         '  "$closure_ledger" \\\n'
-        '  "$grouped_suite_source_manifest_sha256" \\\n'
+        '  "$grouped_fixture_sha256" \\\n'
         "  2 \\\n"
-        '  "grouped Native AMX V2 suite-source manifest SHA-256"'
+        '  "grouped Native AMX V2 fixture SHA-256"'
     )
-    assert checker_source.count(manifest_guard) == 1
-
+    assert checker_source.count(fixture_guard) == 1
     fixture_digest = "a" * 64
-    manifest_digest = "b" * 64
-    stale_manifest_digest = "c" * 64
     ledger = tmp_path / "sumeragi_v2_multilane_closure_ledger.md"
-    ledger.write_text(
-        "\n".join(
-            (
-                fixture_digest,
-                fixture_digest,
-                manifest_digest,
-                manifest_digest,
-            )
-        ),
-        encoding="utf-8",
-    )
+    ledger.write_text(f"{fixture_digest}\n{fixture_digest}\n", encoding="utf-8")
     probe = "\n".join(
         (
             "set -euo pipefail",
             helper,
             'readonly closure_ledger="$1"',
             'readonly grouped_fixture_sha256="$2"',
-            'readonly grouped_suite_source_manifest_sha256="$3"',
             'require_exact_digest_occurrences "$closure_ledger" "$grouped_fixture_sha256" 2 "grouped Native AMX V2 fixture SHA-256"',
-            'require_exact_digest_occurrences "$closure_ledger" "$grouped_suite_source_manifest_sha256" 2 "grouped Native AMX V2 suite-source manifest SHA-256"',
         )
     )
     bash = shutil.which("bash")
     assert bash is not None
-
     baseline = subprocess.run(
         [
             bash,
@@ -3810,7 +3746,6 @@ def test_multilane_inventory_checker_rejects_stale_or_duplicated_sdk_manifest_di
             "inventory-sdk-digest-probe",
             str(ledger),
             fixture_digest,
-            manifest_digest,
         ],
         check=False,
         capture_output=True,
@@ -3818,12 +3753,7 @@ def test_multilane_inventory_checker_rejects_stale_or_duplicated_sdk_manifest_di
         timeout=30,
     )
     assert baseline.returncode == 0, baseline.stderr
-
-    source = ledger.read_text(encoding="utf-8")
-    ledger.write_text(
-        source.replace(manifest_digest, stale_manifest_digest, 1),
-        encoding="utf-8",
-    )
+    ledger.write_text(f"{fixture_digest}\n", encoding="utf-8")
     mutated = subprocess.run(
         [
             bash,
@@ -3832,7 +3762,6 @@ def test_multilane_inventory_checker_rejects_stale_or_duplicated_sdk_manifest_di
             "inventory-sdk-digest-probe",
             str(ledger),
             fixture_digest,
-            manifest_digest,
         ],
         check=False,
         capture_output=True,
@@ -3840,19 +3769,9 @@ def test_multilane_inventory_checker_rejects_stale_or_duplicated_sdk_manifest_di
         timeout=30,
     )
     assert mutated.returncode != 0
-    assert "must publish the current grouped Native AMX V2 suite-source manifest" in (
-        mutated.stderr
-    )
-
+    assert "must publish the current grouped Native AMX V2 fixture SHA-256" in mutated.stderr
     ledger.write_text(
-        "\n".join(
-            (
-                fixture_digest,
-                fixture_digest,
-                manifest_digest + manifest_digest,
-                manifest_digest,
-            )
-        ),
+        f"{fixture_digest}{fixture_digest}\n{fixture_digest}\n",
         encoding="utf-8",
     )
     oversupplied = subprocess.run(
@@ -3863,7 +3782,6 @@ def test_multilane_inventory_checker_rejects_stale_or_duplicated_sdk_manifest_di
             "inventory-sdk-digest-probe",
             str(ledger),
             fixture_digest,
-            manifest_digest,
         ],
         check=False,
         capture_output=True,
@@ -3871,15 +3789,129 @@ def test_multilane_inventory_checker_rejects_stale_or_duplicated_sdk_manifest_di
         timeout=30,
     )
     assert oversupplied.returncode != 0
-    assert "must publish the current grouped Native AMX V2 suite-source manifest" in (
+    assert "must publish the current grouped Native AMX V2 fixture SHA-256" in (
         oversupplied.stderr
     )
+
+
+def test_multilane_inventory_checker_uses_resolver_receipt_digest_authority() -> None:
+    """Mutable docs do not participate in the SDK closure digest authority."""
+    checker = ROOT_DIR / "ci" / "check_sumeragi_v2_multilane_release_inventory.sh"
+    checker_source = checker.read_text(encoding="utf-8")
+    assert (
+        '"$resolver_grouped_suite_source_manifest_sha256" \\\n'
+        '    != "$grouped_suite_source_manifest_sha256"'
+        in checker_source
+    )
+    assert (
+        '"$resolver_sdk_diagnostics_suite_source_manifest_sha256" \\\n'
+        '    != "$sdk_diagnostics_suite_source_manifest_sha256"'
+        in checker_source
+    )
+    assert (
+        '"$receipt_suite_source_manifest_sha256" \\\n'
+        '    != "$grouped_suite_source_manifest_sha256"'
+        in checker_source
+    )
+    assert (
+        '"$receipt_sdk_diagnostics_suite_source_manifest_sha256" \\\n'
+        '    != "$sdk_diagnostics_suite_source_manifest_sha256"'
+        in checker_source
+    )
+    assert (
+        'require_exact_digest_occurrences \\\n'
+        '  "$closure_ledger" \\\n'
+        '  "$grouped_suite_source_manifest_sha256"'
+        not in checker_source
+    )
+    assert (
+        'require_exact_digest_occurrences \\\n'
+        '  "$closure_ledger" \\\n'
+        '  "$sdk_diagnostics_suite_source_manifest_sha256"'
+        not in checker_source
+    )
+    documentation_policy = (
+        "Mutable documentation does not embed SDK suite-source digests: the "
+        "executable resolver derives them during immutable-candidate freeze/replay, "
+        "and the release receipt binds the result."
+    )
+    for relative in (
+        "specs/sumeragi_v2_multilane_closure_ledger.md",
+        "roadmap.md",
+        "status.md",
+    ):
+        assert (ROOT_DIR / relative).read_text(encoding="utf-8").count(
+            documentation_policy
+        ) == 1
+    receipt_probe = """
+from pathlib import Path
+import runpy
+import sys
+
+root = Path(sys.argv[1]).resolve(strict=True)
+sys.path.insert(0, str(root))
+symbols = runpy.run_path(str(root / "scripts/write_sumeragi_v2_release_receipt.py"))
+print(symbols["_sdk_suite_source_manifest"](root, sys.argv[2]))
+"""
+    resolver = ROOT_DIR / "ci" / "resolve_sumeragi_v2_sdk_source_closure.py"
+    manifest = ROOT_DIR / "ci" / "sumeragi_v2_sdk_source_closure.json"
+    bash = shutil.which("bash")
+    assert bash is not None
+    suites = (
+        (
+            "native-amx-v2-grouped",
+            ROOT_DIR / "ci" / "run_native_amx_v2_grouped_sdk_parity.sh",
+        ),
+        (
+            "sumeragi-v2-sdk-diagnostics",
+            ROOT_DIR / "ci" / "run_sumeragi_v2_sdk_diagnostics.sh",
+        ),
+    )
+    for suite, harness in suites:
+        resolver_result = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                str(resolver),
+                "--root",
+                str(ROOT_DIR),
+                "--manifest",
+                str(manifest),
+                "--suite",
+                suite,
+                "--manifest-sha256",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        harness_result = subprocess.run(
+            [bash, str(harness), "--suite-source-manifest-sha256"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        receipt_result = subprocess.run(
+            [sys.executable, "-I", "-S", "-", str(ROOT_DIR), suite],
+            input=receipt_probe,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        digest = resolver_result.stdout.strip()
+        assert re.fullmatch(r"[0-9a-f]{64}", digest)
+        assert harness_result.stdout.strip() == digest
+        assert receipt_result.stdout.strip() == digest
+
 
 def test_tlaps_runner_rejects_backend_failure_even_when_tlapm_exits_zero() -> None:
     source = (
         ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_tlaps.sh"
     ).read_text(encoding="utf-8")
-
     completion_check = source.index('TLAPM_COMPLETION_PATTERN=')
     exact_count = source.index('grep -Ec "$TLAPM_COMPLETION_PATTERN"')
     final_line = source.index('tail -n 1 "${LOG_DIR}/${module}.log"')
@@ -3895,7 +3927,6 @@ def test_tla2tools_and_replay_share_the_same_pin() -> None:
         ROOT_DIR / "scripts" / "formal" / "check_sumeragi_v2_replay_trace.sh",
     ]
     sources = [path.read_text(encoding="utf-8") for path in scripts]
-
     assert all('1.7.4' in source for source in sources)
     assert all(
         "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
@@ -3912,7 +3943,6 @@ def test_tlc_entrypoints_use_the_pinned_tlapm_function_library() -> None:
         ROOT_DIR / "scripts" / "formal" / "check_sumeragi_v2_replay_trace.sh",
     ]
     sources = [path.read_text(encoding="utf-8") for path in scripts]
-
     assert all(
         "3ab43c7ff31db4ced850619d4746fa4c841a7681" in source
         for source in sources
@@ -3957,7 +3987,6 @@ def test_tlapm_corridor_uses_one_pinned_identity() -> None:
     )
     for path in exact_identity_paths:
         assert commit in path.read_text(encoding="utf-8"), path
-
     proof_source = (
         ROOT_DIR / "formal" / "sumeragi_v2" / "PROOF.md"
     ).read_text(encoding="utf-8")
@@ -3967,12 +3996,10 @@ def test_liveness_tlc_ceilings_fit_pinned_evaluator_and_service_budget() -> None
     source = (
         ROOT_DIR / "formal" / "sumeragi_v2" / "liveness.cfg"
     ).read_text(encoding="utf-8")
-
     def natural(name: str) -> int:
         match = re.search(rf"^  {name} = ([0-9]+)$", source, re.MULTILINE)
         assert match is not None
         return int(match.group(1))
-
     validator_count = natural("N")
     queue_capacity = natural("AsyncQueueCapacity")
     ingress_capacity = natural("AsyncIngressCapacity")
@@ -3985,7 +4012,6 @@ def test_liveness_tlc_ceilings_fit_pinned_evaluator_and_service_budget() -> None
     delivery_bound = natural("AsyncDeliveryBound")
     retransmit_period = natural("AsyncRetransmitPeriod")
     chunk_count = natural("AsyncChunkCount")
-
     runner_cycle_budget = queue_capacity + 2 * ingress_capacity + 3
     runtime_cycle_budget = 3 * queue_capacity * runner_cycle_budget
     io_drain_budget = io_aux_capacity + io_work_capacity + 1
@@ -4037,7 +4063,6 @@ def test_liveness_tlc_ceilings_fit_pinned_evaluator_and_service_budget() -> None
         + progress_reserve
         + completion_reserve
     )
-
     maximum_timeout = natural("AsyncMaximumRoundTimeout")
     maximum_view = natural("AsyncMaximumView")
     assert natural("MaxEpoch") == 0
@@ -4050,7 +4075,6 @@ def test_liveness_tlc_ceilings_fit_pinned_evaluator_and_service_budget() -> None
     assert worst_case_service_budget < maximum_timeout <= 2_147_483_647
     assert worst_case_service_budget <= maximum_view <= 2_147_483_647
 
-
 def test_workspace_excluded_harness_pins_complete_unit_inventory() -> None:
     source = (
         ROOT_DIR / "scripts/formal/run_sumeragi_v2_harness.sh"
@@ -4059,12 +4083,10 @@ def test_workspace_excluded_harness_pins_complete_unit_inventory() -> None:
     unit_inventory = source.index("unit_test_list=", unit_branch)
     ignored_inventory = source.index("unit_ignored_test_list=", unit_inventory)
     unit_run = source.index("--lib -- --test-threads=1", ignored_inventory)
-
     assert unit_branch < unit_inventory < ignored_inventory < unit_run
     assert "if ((${#listed_unit_tests[@]} != 140)); then" in source
     assert "expected exactly 140 Sumeragi v2 reducer unit tests" in source
     assert "reducer unit gate requires all 140 tests to be runnable" in source
-
 
 def test_workspace_excluded_harness_names_every_required_fast_simulation() -> None:
     source = (
@@ -4083,7 +4105,6 @@ def test_workspace_excluded_harness_names_every_required_fast_simulation() -> No
         "taira_divergent_views_converge_and_commit_within_one_rotation",
         "accelerated_chain_chaos_smoke_preserves_prefix",
     }
-
     required_block = re.search(r"required_tests=\(\n(?P<body>.*?)\n    \)", source, re.S)
     assert required_block is not None
     listed = {
@@ -4100,11 +4121,9 @@ def test_workspace_excluded_harness_names_every_required_fast_simulation() -> No
     assert "--model-replay" in source
     assert "--chaos-100k" in source
 
-
 def test_ledger_validator_enforces_replay_trace_source_fidelity() -> None:
     module = load_checker()
     assert module._replay_trace_source_fidelity_errors() == []
-
     checker_source = SCRIPT.read_text(encoding="utf-8")
     validate_body = checker_source.split("def validate_ledger(", 1)[1].split(
         "\ndef ",
@@ -4117,7 +4136,6 @@ def test_ledger_validator_enforces_replay_trace_source_fidelity() -> None:
         == 1
     )
 
-
 def test_readiness_gate_source_seal_rejects_ci_matrix_drift(
     tmp_path: Path,
 ) -> None:
@@ -4127,22 +4145,18 @@ def test_readiness_gate_source_seal_rejects_ci_matrix_drift(
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
-
     ci_gate = tmp_path / "ci/check_sumeragi_formal.sh"
     source = ci_gate.read_text(encoding="utf-8")
     ci_gate.write_text(source + "\nexit 0\n", encoding="utf-8")
-
     errors = module._readiness_kernel_source_fidelity_errors(
         module.FORMAL_DIR,
         tmp_path,
     )
-
     assert any(
         str(ci_gate) in error
         and "readiness gate source must match exact reviewed SHA-256" in error
         for error in errors
     ), errors
-
 
 @pytest.mark.parametrize(
     ("relative", "old", "new", "semantic_error"),
@@ -4207,25 +4221,21 @@ def test_replay_trace_source_fidelity_mutations_fail_closed(
         destination = tmp_path / sealed_relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
-
     target = tmp_path / relative
     source = target.read_text(encoding="utf-8")
     assert source.count(old) == 1
     target.write_text(source.replace(old, new, 1), encoding="utf-8")
-
     errors = module._replay_trace_source_fidelity_errors(tmp_path)
     assert any(
         "replay trace source must match exact reviewed SHA-256" in error
         for error in errors
     ), errors
-
     if semantic_error is not None:
         module.REPLAY_TRACE_SOURCE_SHA256[str(relative)] = hashlib.sha256(
             target.read_bytes()
         ).hexdigest()
         errors = module._replay_trace_source_fidelity_errors(tmp_path)
         assert any(semantic_error in error for error in errors), errors
-
 
 @pytest.mark.parametrize(
     "arguments",
@@ -4257,7 +4267,6 @@ def test_workspace_excluded_harness_rejects_indirect_cargo_dispatch(
         "positional harness commands are unsupported; select one fixed mode"
         in result.stderr
     )
-
 
 def test_formal_workflows_use_fresh_private_external_layouts() -> None:
     def job(source: str, name: str) -> str:
@@ -4333,7 +4342,6 @@ def test_formal_workflows_use_fresh_private_external_layouts() -> None:
     )
     assert "steps.chaos_layout.outputs.artifact_root" in chaos_job
 
-
 @pytest.mark.parametrize(
     ("relative", "environment_name", "purpose"),
     (
@@ -4387,7 +4395,6 @@ def test_formal_installers_validate_private_external_roots_before_use(
             assert validation_index < normalized.index(first_effect)
     assert f"${{{environment_name}:-${{REPO_ROOT}}/target" not in source
 
-
 def test_installers_use_fixed_urls_and_literal_checksums() -> None:
     installers = [
         ROOT_DIR / "scripts" / "formal" / "install_sumeragi_v2_tlapm.sh",
@@ -4421,7 +4428,6 @@ def test_installers_use_fixed_urls_and_literal_checksums() -> None:
         assert f'ARCHIVE_SHA256="{digest}"' in tlapm_source
     assert "GitHub Actions run 29682668751" in tlapm_source
     assert "TLAPM_ARCHIVE_PATH" in tlapm_source
-
 
 def test_tlapm_immutable_source_build_lock_is_exact_and_self_validating(
     tmp_path: Path,
@@ -4648,7 +4654,6 @@ def test_tlapm_immutable_source_build_lock_is_exact_and_self_validating(
     assert rejected.returncode != 0
     assert "does not match the lock and archive" in rejected.stderr
 
-
 def test_tlapm_locked_wget_is_exact_consuming_and_fail_closed(
     tmp_path: Path,
 ) -> None:
@@ -4757,7 +4762,6 @@ def test_tlapm_locked_wget_is_exact_consuming_and_fail_closed(
     assert frozen_preflight.returncode != 0
     assert "owner-private mode-0700 directory" in frozen_preflight.stderr
 
-
 def test_tlapm_source_builder_checks_every_locked_boundary() -> None:
     formal_scripts = ROOT_DIR / "scripts" / "formal"
     builder = (formal_scripts / "build_sumeragi_v2_tlapm_from_source.sh").read_text(encoding="utf-8")
@@ -4844,7 +4848,6 @@ def test_tlapm_source_builder_checks_every_locked_boundary() -> None:
     assert [normalized.index(fragment) for fragment in depext_order] == sorted(normalized.index(fragment) for fragment in depext_order)
     assert 'clean_command cp "$COMPILER_ATOMS" "$DARWIN_INTERMEDIATE_ATOMS"' in builder and 'printf \'%s\\n\' "${darwin_conf_packages[@]}" >> "$DARWIN_INTERMEDIATE_ATOMS"' in normalized
     assert all(forbidden not in builder for forbidden in ("OPAMASSUMEDEPEXTS", "OPAMDEPEXTS", "opam option depext=false")) and re.search(r"\b(?:brew|sudo)\b", builder) is None
-
 
 def test_tlapm_publication_is_atomic_no_replace_and_preserves_winner(
     tmp_path: Path,
@@ -4944,7 +4947,6 @@ def test_tlapm_publication_is_atomic_no_replace_and_preserves_winner(
     )
     assert second_install.returncode == 3
     assert (install / "winner").read_bytes() == b"first\n"
-
 
 def test_tlapm_archive_precedence_only_falls_back_on_asset_unavailability() -> None:
     installer = (

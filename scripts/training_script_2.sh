@@ -1046,7 +1046,6 @@ for run in $(seq 1 "$RUNS"); do
     fi
 
     if ! "$KAGAMI_BIN" localnet \
-        --build-line "iroha3" \
         --out-dir "$run_dir" \
         --peers "$PEERS" \
         --seed "$SEED" \

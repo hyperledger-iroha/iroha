@@ -179,8 +179,8 @@ def _assert_extended_strong_type_induction_mutations(tmp_path: Path, module) -> 
             "theorem",
             "AsyncNextPreservesStrongTypeInvariant",
             "    <2>2m. /\\ AsyncProducerTypeInvariant\n"
-            "            /\\ AsyncServeProducerEpisodeTypeInvariant\n"
-            "            /\\ AsyncServeProducerEpisodeOwnershipInvariant\n"
+            "            /\\ AsyncServeProducerTurnTypeInvariant\n"
+            "            /\\ AsyncServeProducerTurnOwnershipInvariant\n"
             "            /\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant\n"
             "      BY <1>1 DEF AsyncStrongTypeInvariant\n",
             "",
@@ -209,11 +209,11 @@ def _assert_extended_strong_type_induction_mutations(tmp_path: Path, module) -> 
         (
             "theorem",
             "AsyncNextPreservesStrongTypeInvariant",
-            "    <2>4d. /\\ AsyncServeProducerEpisodeTypeInvariant'\n"
-            "             /\\ AsyncServeProducerEpisodeOwnershipInvariant'\n",
-            "    <2>4d. /\\ AsyncServeProducerEpisodeTypeInvariant'\n"
+            "    <2>4d. /\\ AsyncServeProducerTurnTypeInvariant'\n"
+            "             /\\ AsyncServeProducerTurnOwnershipInvariant'\n",
+            "    <2>4d. /\\ AsyncServeProducerTurnTypeInvariant'\n"
             "             /\\ TRUE\n",
-            "must prime AsyncServeProducerEpisodeOwnershipInvariant through the reviewed admission, retirement, and reset cases",
+            "must prime AsyncServeProducerTurnOwnershipInvariant through the reviewed admission, retirement, and reset cases",
         ),
         (
             "theorem",
@@ -225,9 +225,9 @@ def _assert_extended_strong_type_induction_mutations(tmp_path: Path, module) -> 
         (
             "theorem",
             "AsyncNextPreservesStrongTypeInvariant",
-            "      BY <1>1, AsyncNextPreservesServeProducerEpisodeInvariants\n",
+            "      BY <1>1, AsyncNextPreservesServeProducerTurnInvariants\n",
             "",
-            "must prime AsyncServeProducerEpisodeOwnershipInvariant through the reviewed admission, retirement, and reset cases",
+            "must prime AsyncServeProducerTurnOwnershipInvariant through the reviewed admission, retirement, and reset cases",
         ),
         (
             "theorem",

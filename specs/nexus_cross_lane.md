@@ -121,8 +121,8 @@ currently active, valid `autoscale.managed` elastic lanes. A managed lane must:
 - have a committed, never-reused incarnation; and
 - have reached its first eligible proposal height.
 
-Malformed ownership markers, manual occupants of reserved IDs, disabled Nexus
-or autoscale state, future creation heights, off-default dataspaces, or catalog
+Malformed ownership markers, manual occupants of reserved IDs, disabled
+autoscale state, future creation heights, off-default dataspaces, or catalog
 drift fail closed.
 
 ## Automatic lane creation and retirement
@@ -354,6 +354,11 @@ context, while each leg retains its lane-local height. Validation checks chain,
 source ID, typed entrypoint hash, routing-plan digest, lane/dataspace roles,
 authority height, participant committees, QCs, grouped bounds, and duplicate
 sources before state execution.
+The participant `LaneBlockProposalV1` keeps its canonical proposal-level
+`payload_block_hint` key in Torii JSON. Because Native AMX legs are control-only,
+that required key is always the explicit value `null`; a missing key, a non-null
+hint, or any unknown proposal field is malformed. OpenAPI and every maintained
+SDK decoder enforce the same closed shape.
 
 All entrypoints in one merge batch execute in canonical order on one revertible
 overlay. Any divergence in results, settlement evidence, write-set roots, or

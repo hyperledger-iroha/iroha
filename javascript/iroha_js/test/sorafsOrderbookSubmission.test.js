@@ -42,7 +42,13 @@ function receiptJson() {
 
 function nativeBinding(overrides = {}) {
   return {
-    inspectSorafsOrderbookSubmissionV1(route, network, discriminant, signer, body) {
+    inspectSorafsOrderbookSubmissionForDiscriminantV1(
+      route,
+      network,
+      discriminant,
+      signer,
+      body,
+    ) {
       assert.ok(["order", "cancel", "receipt"].includes(route));
       assert.equal(Buffer.from(network).byteLength, 32);
       assert.equal(discriminant, 369);
@@ -135,9 +141,9 @@ test("orderbook submit snapshots bytes and sends one exact authenticated Norito 
 
 test("orderbook submit binds snapshotted native callables to their native receiver", async () => {
   const native = nativeBinding();
-  const inspect = native.inspectSorafsOrderbookSubmissionV1;
+  const inspect = native.inspectSorafsOrderbookSubmissionForDiscriminantV1;
   const verify = native.verifySorafsOrderbookSubmissionReceiptV1;
-  native.inspectSorafsOrderbookSubmissionV1 = function (...args) {
+  native.inspectSorafsOrderbookSubmissionForDiscriminantV1 = function (...args) {
     assert.equal(this, native);
     return Reflect.apply(inspect, this, args);
   };
@@ -344,7 +350,7 @@ test("orderbook submit fails before HTTP without its signer and strict native ve
     client(fetchImpl, {}).submitSorafsOrderbookOrder(Buffer.of(1), {
       expectedReceiptSigner: SIGNER,
     }),
-    /missing inspectSorafsOrderbookSubmissionV1/u,
+    /missing inspectSorafsOrderbookSubmissionForDiscriminantV1/u,
   );
   assert.equal(fetches, 0);
 });

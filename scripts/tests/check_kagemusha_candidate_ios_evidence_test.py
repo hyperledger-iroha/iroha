@@ -20,6 +20,14 @@ from typing import Any, Callable
 
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+OFFICIAL_APPLE_2026_ATTESTATION_OBJECT = (
+    REPOSITORY_ROOT
+    / "fixtures/sdk/apple_app_attest_official_2026_attestation_object.base64"
+)
+OFFICIAL_APPLE_2026_ATTESTATION_OBJECT_SHA256 = (
+    "e4ca508153f6619a29d0887eb0ffe19540b9f15c5a6aeccdac26c49affd5f61a"
+)
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
@@ -269,11 +277,11 @@ def device(session: dict[str, Any]) -> dict[str, Any]:
 
 def code_identity() -> dict[str, Any]:
     return {
-        "app_bundle_id": "org.hyperledger.iroha.KagemushaCandidateEvidenceLab",
+        "app_bundle_id": "org.hyperledger.iroha.kagemusha.appattestlab",
         "app_version": "1.0",
         "app_build": "1",
         "app_executable_sha256": nonzero_digest("app-executable"),
-        "test_bundle_id": "org.hyperledger.iroha.KagemushaCandidateEvidenceLabTests",
+        "test_bundle_id": "org.hyperledger.iroha.kagemusha-candidate-lab.tests",
         "test_executable_sha256": nonzero_digest("test-executable"),
     }
 
@@ -782,7 +790,7 @@ class ProductionFixture:
                 "version": 1,
                 "policy_id": "taira-production-ios-app-attest-v1",
                 "app_id_prefix": "A1B2C3D4E5",
-                "bundle_id": "org.hyperledger.iroha.KagemushaCandidateEvidenceLab",
+                "bundle_id": "org.hyperledger.iroha.kagemusha.appattestlab",
                 "environment": "production",
                 "allowed_validation_categories": [4],
                 "allowed_bundle_versions": ["1"],
@@ -807,6 +815,24 @@ class ProductionFixture:
         policy_value = json.loads(self.policy.read_text(encoding="utf-8"))
         policy_sha256 = digest(self.policy)
         evaluated_at = self.evaluated_at_unix_ms
+        self.capture_app_code_sign_measurements = {
+            "schema": production_evidence.CAPTURE_APP_CODE_SIGN_MEASUREMENTS_SCHEMA,
+            "version": 1,
+            "bundle_id": policy_value["bundle_id"],
+            "bundle_version": "1",
+            "team_id": policy_value["app_id_prefix"],
+            "application_identifier": (
+                policy_value["app_id_prefix"] + "." + policy_value["bundle_id"]
+            ),
+            "app_attest_environment": "production",
+            "executable_sha256": nonzero_digest("prepared-capture-app-executable"),
+            "cdhash": "1" * 40,
+        }
+        capture_app_measurements_sha256 = sha256(
+            evidence_lib.canonical_json_bytes(
+                self.capture_app_code_sign_measurements
+            )
+        )
         attestation_nonce = base64.b64encode(bytes(range(32))).decode("ascii")
         assertion_nonce = base64.b64encode(bytes(range(32, 64))).decode("ascii")
         attestation_client_data = production_evidence._challenge_bindings(
@@ -816,6 +842,9 @@ class ProductionFixture:
             policy_id=policy_value["policy_id"],
             policy_sha256=policy_sha256,
             release_manifest_sha256=self.release_manifest_sha256,
+            capture_app_code_sign_measurements_sha256=(
+                capture_app_measurements_sha256
+            ),
             evaluated_at_unix_ms=evaluated_at,
             nonce_base64=attestation_nonce,
         )
@@ -849,7 +878,7 @@ class ProductionFixture:
         )
         attestation_auth_data = (
             rp_id_hash
-            + b"\xc0"
+            + b"\x40"
             + (0).to_bytes(4, "big")
             + b"appattest"
             + b"\0" * 7
@@ -904,6 +933,9 @@ class ProductionFixture:
             policy_id=policy_value["policy_id"],
             policy_sha256=policy_sha256,
             release_manifest_sha256=self.release_manifest_sha256,
+            capture_app_code_sign_measurements_sha256=(
+                capture_app_measurements_sha256
+            ),
             evaluated_at_unix_ms=evaluated_at,
             nonce_base64=assertion_nonce,
         )
@@ -918,7 +950,7 @@ class ProductionFixture:
         )
         assertion_auth_data = (
             rp_id_hash
-            + b"\x80"
+            + b"\x00"
             + (1).to_bytes(4, "big")
             + cbor({"validationCategory": 4, "bundleVersion": "1"})
         )
@@ -958,6 +990,9 @@ class ProductionFixture:
                 "assertion_object_base64": base64.b64encode(
                     assertion_object
                 ).decode("ascii"),
+                "capture_app_code_sign_measurements": (
+                    self.capture_app_code_sign_measurements
+                ),
             },
             "artifact_digests": artifact_digests,
             "signer_key_id": self.key_id,
@@ -1161,6 +1196,107 @@ class ProductionFixture:
 
 
 class IosCandidateEvidenceTest(unittest.TestCase):
+    def test_apple_2026_attestation_auth_data_accepts_at_without_ed(self) -> None:
+        """Accept Apple's published App Attest authData flag contract."""
+
+        # Source: Apple's 2026 "Attestation Object Validation Guide" sample.
+        # https://developer.apple.com/documentation/devicecheck/attestation-object-validation-guide
+        auth_data = base64.b64decode(
+            "9EZtaPketsEGIMt+Y8coMkRoXuHWRntUFg51MXIFfwNAAAAAAGFwcGF0dGVzdAAA"
+            "AAAAAAAAIM4EmPWEg/u02g17LGOlpTj1UtSty5pPqRYZXElhPmVdpQECAyYgASFY"
+            "IEMyVErPMj23dEQ8qvM59W5+lcck+sLBQlnzZeJEVlCyIlggtfsoW89Um8tgWUQS"
+            "52gqJCfuran7Ut/tCxqxftCfqb2id2FwcGxlX2J1bmRsZV92ZXJzaW9uXzAxYTF4"
+            "HGFwcGxlX3ZhbGlkYXRpb25fY2F0ZWdvcnlfMDFEAQAAAA=="
+        )
+        key_id = base64.b64decode(
+            "zgSY9YSD+7TaDXssY6WlOPVS1K3Lmk+pFhlcSWE+ZV0="
+        )
+        public_key = bytes.fromhex(
+            "044332544acf323db774443caaf339f56e7e95c724fac2c14259f365e2445650"
+            "b2b5fb285bcf549bcb60594412e7682a2427eeada9fb52dfed0b1ab17ed09fa9bd"
+        )
+        policy = {
+            "app_id_prefix": "1234567890",
+            "bundle_id": "com.example.myapp",
+            "allowed_validation_categories": [1],
+            "allowed_bundle_versions": ["1"],
+        }
+
+        self.assertEqual(auth_data[32], 0x40)
+        production_evidence._validate_attestation_auth_data(
+            auth_data,
+            key_id,
+            public_key,
+            policy,
+        )
+
+    def test_apple_2026_attestation_chain_auth_data_and_nonce_are_compatible(
+        self,
+    ) -> None:
+        """Validate Apple's complete primary attestation vector."""
+
+        encoded_text = OFFICIAL_APPLE_2026_ATTESTATION_OBJECT.read_text(
+            encoding="ascii"
+        )
+        self.assertTrue(encoded_text.endswith("\n"))
+        encoded = "".join(encoded_text.splitlines())
+        attestation_object = base64.b64decode(encoded, validate=True)
+        self.assertEqual(
+            hashlib.sha256(attestation_object).hexdigest(),
+            OFFICIAL_APPLE_2026_ATTESTATION_OBJECT_SHA256,
+        )
+        outer = production_evidence._cbor_object(
+            production_evidence._decode_cbor(
+                attestation_object,
+                "official Apple 2026 attestation object",
+            ),
+            {"fmt", "attStmt", "authData"},
+            "official Apple 2026 attestation object",
+        )
+        statement = production_evidence._cbor_object(
+            outer["attStmt"],
+            {"x5c", "receipt"},
+            "official Apple 2026 attestation statement",
+        )
+        chain = tuple(statement["x5c"])
+        key_id = base64.b64decode(
+            "zgSY9YSD+7TaDXssY6WlOPVS1K3Lmk+pFhlcSWE+ZV0="
+        )
+        public_key = bytes.fromhex(
+            "044332544acf323db774443caaf339f56e7e95c724fac2c14259f365e2445650"
+            "b2b5fb285bcf549bcb60594412e7682a2427eeada9fb52dfed0b1ab17ed09fa9bd"
+        )
+        trusted_root = (REPOSITORY_ROOT / "certs/apple_app_attestation_root.der").read_bytes()
+        policy = {
+            "app_id_prefix": "1234567890",
+            "bundle_id": "com.example.myapp",
+            "allowed_validation_categories": [1],
+            "allowed_bundle_versions": ["1"],
+            "revoked_certificate_sha256": [],
+            "trusted_app_attest_roots": [
+                {"der_base64": base64.b64encode(trusted_root).decode("ascii")}
+            ],
+        }
+
+        production_evidence._validate_attestation_auth_data(
+            outer["authData"],
+            key_id,
+            public_key,
+            policy,
+        )
+        nonce = production_evidence._validate_attestation_certificate_chain(
+            chain,
+            policy,
+            1_776_795_192_153,
+            public_key,
+            outer["authData"],
+            b"example_server_challenge",
+        )
+        self.assertEqual(
+            base64.b64encode(nonce).decode("ascii"),
+            "h7fQbZOkKU5G8BHma2zEAPC6sgcpl2xhlYC0KuYL/24=",
+        )
+
     @classmethod
     def setUpClass(cls) -> None:
         openssl = shutil.which("openssl")
@@ -1784,6 +1920,29 @@ class IosCandidateEvidenceTest(unittest.TestCase):
                 errors,
             )
 
+    def test_production_ios_challenge_binds_exact_capture_app_measurement(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.production_fixture(temporary)
+
+            def substitute_capture_app(value: dict[str, Any]) -> None:
+                measurements = value["platform_evidence"][
+                    "capture_app_code_sign_measurements"
+                ]
+                measurements["executable_sha256"] = nonzero_digest(
+                    "substituted-capture-app"
+                )
+
+            fixture.mutate(substitute_capture_app)
+            errors = fixture.errors()
+            self.assertTrue(
+                any(
+                    "does not bind the exact production policy and benchmark artifacts"
+                    in error
+                    for error in errors
+                ),
+                errors,
+            )
+
     def test_production_ios_missing_raw_artifact_fails_closed_without_crash(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = self.production_fixture(temporary)
@@ -1839,6 +1998,27 @@ class IosCandidateEvidenceTest(unittest.TestCase):
                 ),
                 errors,
             )
+
+    def test_production_ios_assertion_flags_reject_at_and_reserved_bits(self) -> None:
+        for label, flag in (("attested-credential", 0x40), ("reserved", 0x02)):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                fixture = self.production_fixture(temporary)
+
+                def mutate(assertion: dict[str, Any]) -> None:
+                    auth_data = assertion["authenticatorData"]
+                    assertion["authenticatorData"] = (
+                        auth_data[:32] + bytes([flag]) + auth_data[33:]
+                    )
+
+                fixture.mutate_assertion(mutate, resign_assertion=True)
+                errors = fixture.errors()
+                self.assertTrue(
+                    any(
+                        "assertion flags contain AT or reserved bits" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
 
     def test_production_ios_rp_id_and_counter_are_semantic_not_booleans(self) -> None:
         for label, mutate_auth_data, expected in (

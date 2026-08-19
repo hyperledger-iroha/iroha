@@ -1734,6 +1734,10 @@ impl ResolvedWorkspaceGraphV1 {
             .map_err(|error| registry_diagnostic(error, ErrorCode::Registry))
     }
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "preserves resolver transaction ordering"
+)]
 fn resolve_and_update_workspace_lock(
     workspace: &Workspace,
     selected_packages: &[MusubiPackageSelectorV1],
@@ -2841,12 +2845,11 @@ fn recover_publication_sidecars_at(
         account_chain_discriminant,
     };
     let platform_cache;
-    let cache = match injected_cache {
-        Some(cache) => cache,
-        None => {
-            platform_cache = open_user_cache()?;
-            &platform_cache
-        }
+    let cache = if let Some(cache) = injected_cache {
+        cache
+    } else {
+        platform_cache = open_user_cache()?;
+        &platform_cache
     };
     ensure_graph_archives(cache, &graph, args.mode)?;
     let interface_digest = validate_packaged_plan(

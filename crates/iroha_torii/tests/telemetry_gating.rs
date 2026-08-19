@@ -2,7 +2,7 @@
 #![doc = "Telemetry gating integration tests exercising profile-based access."]
 #![cfg(feature = "telemetry")]
 use axum::{http::StatusCode, response::IntoResponse};
-use iroha_config::parameters::actual::TelemetryProfile;
+use iroha_config::parameters::actual::{LaneRoutingPolicy, TelemetryProfile};
 use iroha_core::telemetry::Telemetry;
 use iroha_telemetry::metrics::Metrics;
 use iroha_torii::{MaybeTelemetry, handle_metrics, handle_status, handle_v1_sumeragi_pacemaker};
@@ -21,14 +21,21 @@ fn telemetry_for(profile: TelemetryProfile, configure: impl Fn(&Arc<Metrics>)) -
 #[tokio::test]
 async fn disabled_profile_hides_status_and_metrics() {
     let telemetry = telemetry_disabled();
-    let status_err = handle_status(&telemetry, None, None, true, None, None, None)
+    let status_err = handle_status(
+        &telemetry,
+        None,
+        None,
+        LaneRoutingPolicy::default(),
+        None,
+        None,
+    )
         .await
         .unwrap_err();
     assert_eq!(
         status_err.into_response().status(),
         StatusCode::SERVICE_UNAVAILABLE
     );
-    let metrics_err = handle_metrics(&telemetry, true).await.unwrap_err();
+    let metrics_err = handle_metrics(&telemetry).await.unwrap_err();
     assert_eq!(
         metrics_err.into_response().status(),
         StatusCode::SERVICE_UNAVAILABLE
@@ -37,11 +44,18 @@ async fn disabled_profile_hides_status_and_metrics() {
 #[tokio::test]
 async fn operator_profile_exposes_status_only() {
     let telemetry = telemetry_for(TelemetryProfile::Operator, |_| {});
-    let status_resp = handle_status(&telemetry, None, None, true, None, None, None)
+    let status_resp = handle_status(
+        &telemetry,
+        None,
+        None,
+        LaneRoutingPolicy::default(),
+        None,
+        None,
+    )
         .await
         .unwrap();
     assert_eq!(status_resp.status(), StatusCode::OK);
-    let metrics_err = handle_metrics(&telemetry, true).await.unwrap_err();
+    let metrics_err = handle_metrics(&telemetry).await.unwrap_err();
     assert_eq!(
         metrics_err.into_response().status(),
         StatusCode::SERVICE_UNAVAILABLE
@@ -52,11 +66,18 @@ async fn extended_profile_exposes_prometheus_metrics() {
     let telemetry = telemetry_for(TelemetryProfile::Extended, |metrics| {
         metrics.sumeragi_new_view_publish_total.inc();
     });
-    let status_resp = handle_status(&telemetry, None, None, true, None, None, None)
+    let status_resp = handle_status(
+        &telemetry,
+        None,
+        None,
+        LaneRoutingPolicy::default(),
+        None,
+        None,
+    )
         .await
         .unwrap();
     assert_eq!(status_resp.status(), StatusCode::OK);
-    let prometheus = handle_metrics(&telemetry, true).await.unwrap();
+    let prometheus = handle_metrics(&telemetry).await.unwrap();
     assert!(
         !prometheus.trim().is_empty(),
         "expected non-empty Prometheus payload"
@@ -79,7 +100,7 @@ async fn developer_profile_allows_developer_routes_only() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let metrics_err = handle_metrics(&developer, true).await.unwrap_err();
+    let metrics_err = handle_metrics(&developer).await.unwrap_err();
     assert_eq!(
         metrics_err.into_response().status(),
         StatusCode::SERVICE_UNAVAILABLE
@@ -93,7 +114,7 @@ async fn full_profile_combines_all_capabilities() {
         metrics.sumeragi_pacemaker_rtt_floor_ms.set(120);
         metrics.sumeragi_pacemaker_max_backoff_ms.set(5_000);
     });
-    let prometheus = handle_metrics(&telemetry, true).await.unwrap();
+    let prometheus = handle_metrics(&telemetry).await.unwrap();
     assert!(prometheus.contains("sumeragi_pacemaker_backoff_ms"));
     let response = handle_v1_sumeragi_pacemaker(&telemetry, None)
         .await

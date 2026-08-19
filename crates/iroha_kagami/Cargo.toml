@@ -22,10 +22,10 @@ iroha_schema_gen.workspace = true
 iroha_primitives.workspace = true
 iroha_genesis.workspace = true
 iroha_test_samples.workspace = true
+iroha_version.workspace = true
 iroha_schema.workspace = true
 iroha_core = { workspace = true, features = ["node", "iroha-core-tests"], default-features = false }
 iroha_config.workspace = true
-iroha_version.workspace = true
 
 iroha_swarm = { path = "../iroha_swarm" }
 
@@ -75,6 +75,11 @@ required-features = ["dev-tools"]
 [[bin]]
 name = "pk3_genesis_binding_verify"
 path = "src/bin/pk3_genesis_binding_verify.rs"
+required-features = ["dev-tools"]
+
+[[bin]]
+name = "iroha_authenticated_tool_controller"
+path = "src/bin/iroha_authenticated_tool_controller.rs"
 required-features = ["dev-tools"]
 
 [[example]]

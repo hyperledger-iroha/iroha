@@ -62,8 +62,6 @@ use iroha_data_model::{
     },
     sns::NameStatus,
     transaction::Executable,
-    transaction::signed::TransactionResultInner,
-    trigger::DataTriggerSequence,
 };
 #[cfg(test)]
 use iroha_data_model::{da::commitment::DaProofPolicyBundle, isi::register::RegisterBox};
@@ -6003,49 +6001,17 @@ fn normalize_genesis_consensus_handshake(
         .next()
         .map(|sig| sig.index())
         .unwrap_or(0);
-    let placeholder_sig = iroha_data_model::block::BlockSignature::new(
+    let proposal_signature = iroha_data_model::block::BlockSignature::new(
         signer_index,
         iroha_crypto::SignatureOf::try_from_hash(genesis_key_pair.private_key(), header.hash())
-            .expect("sign normalized genesis placeholder header"),
+            .expect("sign normalized resultless genesis header"),
     );
-    let mut working = iroha_data_model::block::SignedBlock::presigned(
-        placeholder_sig,
-        header,
-        transactions.clone(),
-    );
-    working.set_da_commitments(source.0.da_commitments().cloned());
-    working.set_da_proof_policies(source.0.da_proof_policies().cloned());
-    working.set_da_pin_intents(source.0.da_pin_intents().cloned());
-    let hashes = transactions
-        .iter()
-        .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
-        .collect::<Vec<_>>();
-    let placeholder_results =
-        std::iter::repeat_with(|| TransactionResultInner::Ok(DataTriggerSequence::default()))
-            .take(hashes.len())
-            .collect::<Vec<_>>();
-    working
-        .set_transaction_results(Vec::new(), &hashes, placeholder_results.clone())
-        .expect("normalized genesis placeholder hashes must match payload");
-    working.set_committed_fragment_count(0);
-    let signature = iroha_data_model::block::BlockSignature::new(
-        signer_index,
-        iroha_crypto::SignatureOf::try_from_hash(genesis_key_pair.private_key(), working.hash())
-            .expect("sign normalized genesis header"),
-    );
-    let mut rebuilt = iroha_data_model::block::SignedBlock::presigned(
-        signature,
-        working.payload().header,
-        transactions,
-    );
-    rebuilt.set_da_commitments(source.0.da_commitments().cloned());
-    rebuilt.set_da_proof_policies(source.0.da_proof_policies().cloned());
-    rebuilt.set_da_pin_intents(source.0.da_pin_intents().cloned());
-    rebuilt
-        .set_transaction_results(Vec::new(), &hashes, placeholder_results)
-        .expect("normalized genesis placeholder hashes must match payload");
-    rebuilt.set_committed_fragment_count(0);
-    GenesisBlock(rebuilt)
+    let mut proposal =
+        iroha_data_model::block::SignedBlock::presigned(proposal_signature, header, transactions);
+    proposal.set_da_commitments(source.0.da_commitments().cloned());
+    proposal.set_da_proof_policies(source.0.da_proof_policies().cloned());
+    proposal.set_da_pin_intents(source.0.da_pin_intents().cloned());
+    GenesisBlock(proposal)
 }
 include!("lib/genesis_handshake_normalization.rs");
 fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) -> Parameter {
@@ -6153,7 +6119,6 @@ impl NetworkBuilder {
         let concurrency_threads =
             i64::try_from(test_concurrency_threads()).expect("test concurrency threads fit in i64");
         writer
-            .write(["nexus", "enabled"], false)
             .write(["telemetry_enabled"], true)
             .write(
                 ["concurrency", "scheduler_min_threads"],
@@ -6761,7 +6726,6 @@ impl NetworkBuilder {
             let mut bootstrap_layer = Table::new();
             let mut writer = TomlWriter::new(&mut bootstrap_layer);
             writer
-                .write(["nexus", "enabled"], true)
                 .write(["nexus", "fees", "fee_asset_id"], fee_asset_id.to_string())
                 .write(
                     ["nexus", "staking", "stake_asset_id"],
@@ -12150,7 +12114,6 @@ exit 0
                     lane1.insert("metadata".into(), Value::Table(Table::new()));
                     let lane_catalog = Value::Array(vec![Value::Table(lane0), Value::Table(lane1)]);
                     layer
-                        .write(["nexus", "enabled"], true)
                         .write(["nexus", "lane_count"], 2i64)
                         .write(["nexus", "lane_catalog"], lane_catalog);
                 },
@@ -12165,10 +12128,9 @@ exit 0
             .get("nexus")
             .and_then(Value::as_table)
             .expect("nexus table should exist");
-        assert_eq!(
-            nexus.get("enabled").and_then(Value::as_bool),
-            Some(true),
-            "config should enable nexus when lane_count is set"
+        assert!(
+            !nexus.contains_key("enabled"),
+            "config must not synthesize the retired Nexus switch"
         );
         assert_eq!(
             nexus.get("lane_count").and_then(Value::as_integer),
@@ -12236,10 +12198,6 @@ exit 0
         ensure_sora_profile_trusted_peer_pop(&mut merged);
         let actual = parse_actual_config_for_genesis(merged, &config_layers)
             .expect("should resolve runtime-equivalent config");
-        assert!(
-            actual.nexus.enabled,
-            "Sora profile should enable nexus in resolved config"
-        );
         assert!(
             actual.nexus.lane_config.entries().len() > 1,
             "Sora profile should expand lane catalog beyond single-lane defaults"
@@ -12926,14 +12884,14 @@ exit 0
         );
     }
     #[test]
-    fn default_builder_disables_nexus() {
+    fn default_builder_omits_retired_nexus_switch() {
         let NetworkBuilder { config_layers, .. } = NetworkBuilder::new();
-        let disabled = config_layers
+        let omits_retired_switch = config_layers
             .iter()
-            .any(|layer| read_bool(layer, &["nexus", "enabled"]) == Some(false));
+            .all(|layer| read_bool(layer, &["nexus", "enabled"]).is_none());
         assert!(
-            disabled,
-            "default NetworkBuilder must set nexus.enabled=false"
+            omits_retired_switch,
+            "default NetworkBuilder must not write the retired Nexus switch"
         );
     }
     #[test]
@@ -14389,9 +14347,7 @@ exit 0
                 .with_base_seed(SEED)
                 .with_npos_consensus()
                 .without_npos_genesis_bootstrap()
-                .with_config_layer(|layer| {
-                    layer.write(["nexus", "enabled"], true);
-                }),
+                .with_config_layer(|_| {}),
         );
         let baseline_genesis = baseline.genesis();
         assert_signed_nexus_amx_context_matches_preexecution(&baseline, &baseline_genesis);
@@ -14422,9 +14378,7 @@ exit 0
                 .with_base_seed(SEED)
                 .with_npos_consensus()
                 .without_npos_genesis_bootstrap()
-                .with_config_layer(|layer| {
-                    layer.write(["nexus", "enabled"], true);
-                })
+                .with_config_layer(|_| {})
                 .with_genesis_block(|topology, topology_entries| {
                     let peer_id = topology
                         .iter()

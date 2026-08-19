@@ -35,7 +35,7 @@ SWIFT_CI_FEED?=dashboards/data/mobile_ci.sample.json
 SWIFT_PIPELINE_METADATA_FEED?=dashboards/data/mobile_pipeline_metadata.sample.json
 
 build:
-	@bash scripts/build_line.sh
+	@bash scripts/build_canonical_binaries.sh
 
 dev-workflow:
 	@bash scripts/dev_workflow.sh

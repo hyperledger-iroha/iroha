@@ -342,7 +342,6 @@ pub struct LaneShardCursor {
     /// Sequence tied to the latest observed commitment.
     pub sequence: u64,
     /// Block height that last advanced the cursor.
-    #[norito(default)]
     pub last_block_height: u64,
 }
 /// Persisted representation of shard cursors.
@@ -352,7 +351,6 @@ struct PersistedShardCursors {
     version: u32,
     /// Per-lane reset watermarks. Records at or before the watermark belong to
     /// an earlier lane incarnation and must not rehydrate active DA indexes.
-    #[norito(default)]
     canonical_reset_heights: BTreeMap<LaneId, u64>,
     /// Stored cursor entries.
     entries: Vec<LaneShardCursor>,
@@ -1231,6 +1229,24 @@ mod tests {
         path::{Path, PathBuf},
     };
     use tempfile::tempdir;
+    #[derive(Encode)]
+    struct PreReleaseLaneShardCursor {
+        shard_id: ShardId,
+        lane_id: LaneId,
+        epoch: u64,
+        sequence: u64,
+    }
+    #[derive(Encode)]
+    struct PreReleaseJournalWithoutCursorHeight {
+        version: u32,
+        canonical_reset_heights: BTreeMap<LaneId, u64>,
+        entries: Vec<PreReleaseLaneShardCursor>,
+    }
+    #[derive(Encode)]
+    struct PreReleaseJournalWithoutResetHeights {
+        version: u32,
+        entries: Vec<LaneShardCursor>,
+    }
     fn sample_record(lane_id: u32, epoch: u64, sequence: u64) -> DaCommitmentRecord {
         let lane_byte = u8::try_from(lane_id).expect("lane fits in u8 for test record");
         let epoch_byte = u8::try_from(epoch).expect("epoch fits in u8 for test record");
@@ -2368,6 +2384,56 @@ mod tests {
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+    #[test]
+    fn rejects_pre_release_journal_without_cursor_height() {
+        let dir = tempdir().expect("tempdir");
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let config = lane_config_with_mapping(0, 0);
+        let payload = PreReleaseJournalWithoutCursorHeight {
+            version: DaShardCursorJournal::JOURNAL_VERSION,
+            canonical_reset_heights: BTreeMap::new(),
+            entries: vec![PreReleaseLaneShardCursor {
+                shard_id: ShardId::new(0),
+                lane_id: LaneId::new(0),
+                epoch: 1,
+                sequence: 2,
+            }],
+        };
+        fs::write(
+            &path,
+            to_bytes(&payload).expect("encode pre-release journal"),
+        )
+        .expect("write pre-release journal");
+        assert!(
+            matches!(
+                DaShardCursorJournal::load(&config, path),
+                Err(ShardCursorJournalError::Decode { .. })
+            ),
+            "a missing last_block_height must not be defaulted"
+        );
+    }
+    #[test]
+    fn rejects_pre_release_journal_without_reset_heights() {
+        let dir = tempdir().expect("tempdir");
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let config = lane_config_with_mapping(0, 0);
+        let payload = PreReleaseJournalWithoutResetHeights {
+            version: DaShardCursorJournal::JOURNAL_VERSION,
+            entries: vec![journal_entry(0, 0, 1, 2, 3)],
+        };
+        fs::write(
+            &path,
+            to_bytes(&payload).expect("encode pre-release journal"),
+        )
+        .expect("write pre-release journal");
+        assert!(
+            matches!(
+                DaShardCursorJournal::load(&config, path),
+                Err(ShardCursorJournalError::Decode { .. })
+            ),
+            "missing canonical_reset_heights must not be defaulted"
+        );
     }
     #[test]
     fn rejects_duplicate_journal_entries() {

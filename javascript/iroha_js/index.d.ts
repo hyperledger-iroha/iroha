@@ -4675,6 +4675,8 @@ export interface ToriiNativeAmxParticipantLaneBlockDescriptor {
 export interface ToriiNativeAmxParticipantLaneBlockProposal {
   descriptor: Readonly<ToriiNativeAmxParticipantLaneBlockDescriptor>;
   proposal_hash: string;
+  /** Required control-only marker; Native AMX payload recovery hints are forbidden. */
+  payload_block_hint: null;
 }
 
 export interface ToriiNativeAmxLeg {
@@ -6087,36 +6089,6 @@ export interface ToriiConsensusCaps {
   rbc_store_soft_sessions: number;
   rbc_store_max_bytes: number;
   rbc_store_soft_bytes: number;
-}
-
-export interface ToriiSumeragiCommitQcSummary {
-  height: number;
-  view: number;
-  epoch: number;
-  block_hash: string | null;
-  validator_set_hash: string | null;
-  validator_set_len: number;
-  signatures_total: number;
-}
-
-export interface ToriiSumeragiCommitQcRecord {
-  subject_block_hash: string;
-  commit_qc: ToriiSumeragiCommitQc | null;
-}
-
-export interface ToriiSumeragiCommitQc {
-  phase: string;
-  parent_state_root: string;
-  post_state_root: string;
-  height: number;
-  view: number;
-  epoch: number;
-  mode_tag: string;
-  validator_set_hash: string;
-  validator_set_hash_version: number;
-  validator_set: ReadonlyArray<string>;
-  signers_bitmap: string;
-  bls_aggregate_signature: string;
 }
 
 export interface ToriiSumeragiCommitQuorumSummary {
@@ -10198,12 +10170,12 @@ export interface ValidationFeeVerifiedPayoutV1 {
   readonly contractAddress: string;
   readonly codeHash: string;
   readonly entrypoint: "autonomous_validation_fee_tick";
-  readonly sbdAssetDefinitionId: string;
+  readonly dsAssetDefinitionId: string;
   readonly xorAssetDefinitionId: string;
   readonly treasuryAccountId: string;
   readonly vaultAccountId: string;
-  readonly batchSbdMinorUnits: "1000";
-  readonly sbdScale: 2;
+  readonly batchDsMinorUnits: "1000";
+  readonly dsScale: 2;
   readonly xorOutputMin: "4";
   readonly xorOutputMax: "100";
   readonly recipients: ReadonlyArray<
@@ -11099,10 +11071,6 @@ export declare class ToriiClient {
   getSumeragiQc(options?: {
     signal?: AbortSignal;
   }): Promise<ToriiSumeragiV2QcResponse>;
-  getSumeragiCommitQc(
-    blockHashHex: string,
-    options?: { signal?: AbortSignal },
-  ): Promise<ToriiSumeragiCommitQcRecord>;
   getSumeragiBlsKeys(options?: {
     signal?: AbortSignal;
   }): Promise<Record<string, string | null>>;

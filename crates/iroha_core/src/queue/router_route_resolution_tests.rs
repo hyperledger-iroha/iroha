@@ -92,13 +92,7 @@ fn route_resolution_rejects_unknown_lane() {
     let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
     let state = blank_state();
     install_router_nexus(&state, &router);
-    let tx = sample_transaction(
-        &alice_id,
-        alice_keypair.private_key(),
-        vec![InstructionBox::from(Register::domain(Domain::new(
-            DomainId::try_new("fallback", "universal").expect("domain"),
-        )))],
-    );
+    let tx = sample_transaction(&alice_id, alice_keypair.private_key(), Vec::new());
     let direct_err = router
         .try_route_with_view(&tx, &state.view())
         .expect_err("unknown lane must not fall back to the universal route");
@@ -209,20 +203,26 @@ fn route_resolution_rejects_missing_default_dataspace() {
             DomainId::try_new("fallback", "universal").expect("domain"),
         )))],
     );
+    let state = blank_state();
+    install_router_nexus(&state, &router);
     let direct_err = router
-        .try_route_with_view(&tx, &blank_state().view())
+        .try_route_with_view(&tx, &state.view())
         .expect_err("missing default dataspace must not fall back to the universal route");
-    assert!(matches!(
+    assert_eq!(
         direct_err,
-        RoutingResolveError::UnknownDataspace { .. }
-    ));
+        RoutingResolveError::UnknownDataspace {
+            dataspace_id: DataSpaceId::new(11),
+        }
+    );
     let helper_err =
         evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
             .expect_err("missing default dataspace must be rejected");
-    assert!(matches!(
+    assert_eq!(
         helper_err,
-        RoutingResolveError::UnknownDataspace { .. }
-    ));
+        RoutingResolveError::UnknownDataspace {
+            dataspace_id: DataSpaceId::new(11),
+        }
+    );
 }
 #[test]
 fn route_resolution_rejects_unknown_dataspace_on_default_public_lane() {

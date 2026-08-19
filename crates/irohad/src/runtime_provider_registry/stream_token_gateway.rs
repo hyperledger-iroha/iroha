@@ -64,14 +64,14 @@ const fn map_provider_error(
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use super::*;
     use iroha_torii::sorafs::{
         StreamTokenGatewayAdmissionAckV1, StreamTokenGatewayAdmissionErrorV1,
         StreamTokenGatewayAdmissionProviderV1, StreamTokenGatewayAdmissionQualificationV1,
         StreamTokenGatewayAdmissionReadbackV1, StreamTokenGatewayAdmissionRecordV1,
         StreamTokenGatewayAdmissionRequestV1, StreamTokenGatewayAdmissionResultV1,
     };
-    use super::*;
+    use std::sync::Arc;
     const HANDLE: &str = "sealed://sorafs/stream-admission/eu-1";
     fn qualification(revision: u64) -> StreamTokenGatewayAdmissionQualificationV1 {
         StreamTokenGatewayAdmissionQualificationV1 {

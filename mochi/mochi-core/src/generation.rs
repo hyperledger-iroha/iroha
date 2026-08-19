@@ -66,7 +66,7 @@ pub(crate) struct VerifiedGeneration {
 /// Exclusive, unpublished generation transaction.
 #[derive(Debug)]
 pub(crate) struct GenerationTransaction {
-    root: PathBuf,
+    network_root: PathBuf,
     generation_root: PathBuf,
     id: String,
     expected_base_generation: Option<String>,
@@ -183,7 +183,7 @@ impl GenerationTransaction {
                     #[cfg(unix)]
                     fs::set_permissions(&generation_root, fs::Permissions::from_mode(0o700))?;
                     return Ok(Self {
-                        root: root.clone(),
+                        network_root: root.clone(),
                         generation_root,
                         id,
                         expected_base_generation,
@@ -228,8 +228,8 @@ impl GenerationTransaction {
                 "peer alias `{alias}` is not one safe path component"
             )));
         }
-        let peers = self.root.join("peers");
-        ensure_direct_child_directory(&self.root, &peers, "runtime peers directory")?;
+        let peers = self.network_root.join("peers");
+        ensure_direct_child_directory(&self.network_root, &peers, "runtime peers directory")?;
         let peer = peers.join(alias);
         ensure_direct_child_directory(&peers, &peer, "runtime peer directory")?;
         let storage_generations = peer.join("storage-generations");
@@ -267,12 +267,14 @@ impl GenerationTransaction {
             Err(mut failure) => Err(failure.take_error()),
         }
     }
+    #[expect(clippy::result_large_err, reason = "failure retains generation lock")]
     pub(crate) fn publish_retaining_failure(
         self,
         context: GenerationInventoryContext<'_>,
     ) -> std::result::Result<PublishedGeneration, FailedGenerationPublication> {
         self.publish_inner(context, None)
     }
+    #[expect(clippy::result_large_err, reason = "failure retains generation lock")]
     pub(crate) fn publish_with_fault_retaining_failure(
         self,
         context: GenerationInventoryContext<'_>,
@@ -280,6 +282,7 @@ impl GenerationTransaction {
     ) -> std::result::Result<PublishedGeneration, FailedGenerationPublication> {
         self.publish_inner(context, Some(fault))
     }
+    #[expect(clippy::result_large_err, reason = "failure retains generation lock")]
     fn publish_inner(
         mut self,
         context: GenerationInventoryContext<'_>,
@@ -320,21 +323,21 @@ impl GenerationTransaction {
         // Persist the `generations/` and `peers/` root entries before the
         // pointer can select either hierarchy. The post-rename sync below is
         // then responsible only for committing the pointer replacement.
-        sync_directory(&self.root)?;
+        sync_directory(&self.network_root)?;
         #[cfg(test)]
         inject_fault(fault, PublicationFaultPoint::AfterRuntimeStorageSync)?;
         // The transaction has held the exclusive generation lock since its
         // candidate was allocated. Compare the selected base immediately
         // before creating the replacement pointer so a stale Supervisor can
         // never roll the sandbox back to paths derived from a retired base.
-        let actual_base_generation = current_generation_id(&self.root)?;
+        let actual_base_generation = current_generation_id(&self.network_root)?;
         if actual_base_generation != self.expected_base_generation {
             return Err(SupervisorError::GenerationSelectionChanged {
                 expected: self.expected_base_generation.clone(),
                 actual: actual_base_generation,
             });
         }
-        let pointer = self.root.join(CURRENT_GENERATION_FILE);
+        let pointer = self.network_root.join(CURRENT_GENERATION_FILE);
         reject_symlink(&pointer, "current generation pointer")?;
         let mut file = self.pointer_temporary_file.take().ok_or_else(|| {
             SupervisorError::GenerationValidation(
@@ -368,7 +371,7 @@ impl GenerationTransaction {
         if fault == Some(PublicationFaultPoint::AfterPointerSync) {
             return Err(injected_fault(PublicationFaultPoint::AfterPointerSync));
         }
-        let verified = verify_selected_generation(&self.root, &self.id)?;
+        let verified = verify_selected_generation(&self.network_root, &self.id)?;
         ensure_inventory_context(&verified, context)?;
         if let Err(error) = fs::rename(&self.pointer_temporary, &pointer) {
             return Err(error.into());
@@ -381,13 +384,13 @@ impl GenerationTransaction {
                 "injected generation publication fault after pointer rename",
             ))
         } else {
-            sync_directory(&self.root).err()
+            sync_directory(&self.network_root).err()
         };
         Ok(durability_error)
     }
     fn sync_runtime_storage_roots(&self) -> Result<()> {
         for storage in &self.runtime_storage_roots {
-            if !candidate_runtime_storage_is_safe(&self.root, &self.id, storage) {
+            if !candidate_runtime_storage_is_safe(&self.network_root, &self.id, storage) {
                 return Err(SupervisorError::GenerationValidation(format!(
                     "candidate runtime storage `{}` escaped its managed generation",
                     storage.display()
@@ -404,7 +407,7 @@ impl GenerationTransaction {
             sync_directory(peer)?;
         }
         if !self.runtime_storage_roots.is_empty() {
-            sync_directory(&self.root.join("peers"))?;
+            sync_directory(&self.network_root.join("peers"))?;
         }
         Ok(())
     }
@@ -494,9 +497,9 @@ impl Drop for GenerationTransaction {
             return;
         }
         drop(self.pointer_temporary_file.take());
-        let generations = self.root.join(GENERATIONS_DIRECTORY);
+        let generations = self.network_root.join(GENERATIONS_DIRECTORY);
         let _ = reclaim_abandoned_generation_transaction(
-            &self.root,
+            &self.network_root,
             &generations,
             &self.id,
             &self.pointer_temporary,
@@ -1625,7 +1628,13 @@ fn encode_lower_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_crypto::KeyPair;
+    use iroha_crypto::{Algorithm, KeyPair, bls_normal_pop_prove};
+    use iroha_data_model::{ChainId, peer::PeerId};
+    use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
+    const FIXTURE_CONFIGURED_HASH: &str =
+        "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E";
+    const FIXTURE_GENESIS_PUBLIC_KEY: &str =
+        "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4";
     #[test]
     fn generation_file_hash_streams_across_multiple_chunks() {
         let temp = tempfile::tempdir().expect("temporary root");
@@ -1695,6 +1704,84 @@ mod tests {
             vec!["nested/a.bin", "z.bin"]
         );
     }
+    fn write_genesis_execution_config(
+        peer_dir: &Path,
+        chain_id: &ChainId,
+        chain_discriminant: u16,
+        genesis_public_key: &PublicKey,
+        expected_hash: &str,
+    ) -> PathBuf {
+        let managed_directory = peer_dir.join("managed");
+        fs::create_dir_all(&managed_directory).expect("create managed fixture directory");
+        let rans_tables_path = managed_directory.join("rans_tables.toml");
+        fs::write(
+            &rans_tables_path,
+            include_bytes!("../../../codec/rans/tables/rans_seed0.toml"),
+        )
+        .expect("write signed rANS tables fixture");
+        let rans_tables_literal = rans_tables_path.to_string_lossy().replace('\\', "\\\\");
+        let mut config =
+            include_str!("../../../crates/iroha_config/iroha_test_config.toml").to_owned();
+        config = config.replacen(
+            "chain = \"00000000-0000-0000-0000-000000000000\"",
+            &format!("chain = \"{chain_id}\"\nchain_discriminant = {chain_discriminant}"),
+            1,
+        );
+        config = config.replacen(
+            &format!("[genesis]\npublic_key = \"{FIXTURE_GENESIS_PUBLIC_KEY}\""),
+            &format!("[genesis]\npublic_key = \"{genesis_public_key}\""),
+            1,
+        );
+        config = config.replacen(
+            "file = \"./genesis.signed.nrt\"",
+            "file = \"../../genesis/genesis.signed.nrt\"\nmanifest_json = \"../../genesis/genesis.json\"",
+            1,
+        );
+        config = config.replacen(FIXTURE_CONFIGURED_HASH, expected_hash, 1);
+        config.push_str(
+            r#"
+
+[kura]
+store_dir = "managed/kura"
+
+[snapshot]
+store_dir = "managed/snapshot"
+
+[torii.da_ingest]
+replay_cache_store_dir = "managed/torii/da-replay"
+manifest_store_dir = "managed/torii/da-manifests"
+
+[sorafs.storage]
+data_dir = "managed/sorafs"
+
+[streaming.codec]
+rans_tables_path = "__RANS_TABLES_PATH__"
+
+[streaming.soranet]
+provision_spool_dir = "managed/streaming/soranet"
+
+[streaming.soravpn]
+provision_spool_dir = "managed/streaming/soravpn"
+
+[network.soranet_handshake.pow]
+revocation_store_path = "managed/soranet/revocations.norito"
+"#,
+        );
+        config = config.replacen("__RANS_TABLES_PATH__", &rans_tables_literal, 1);
+        config = config.replacen(
+            "session_store_dir = \"./storage/streaming\"",
+            "session_store_dir = \"managed/streaming\"",
+            1,
+        );
+        config = config.replacen(
+            "[torii]\naddress = \"addr:127.0.0.1:8080#8942\"",
+            "[torii]\naddress = \"addr:127.0.0.1:8080#8942\"\ndata_dir = \"managed/torii\"",
+            1,
+        );
+        let config_path = peer_dir.join("config.toml");
+        fs::write(&config_path, config).expect("write executable genesis fixture config");
+        config_path
+    }
     fn write_complete_candidate(
         root: &Path,
         chain_id: &str,
@@ -1705,29 +1792,89 @@ mod tests {
         fs::create_dir_all(&genesis_dir).expect("create fixture genesis directory");
         fs::create_dir_all(&peer_dir).expect("create fixture peer directory");
         let key_pair = KeyPair::random();
-        let manifest = iroha_genesis::GenesisBuilder::new_without_executor(
-            chain_id.parse().expect("fixture chain id is canonical"),
-            ".",
-        )
-        .build_raw()
-        .with_chain_discriminant(chain_discriminant)
-        .with_consensus_meta();
-        let block = manifest
-            .clone()
-            .build_and_sign(&key_pair)
-            .expect("sign generation fixture")
-            .0;
-        let expected_hash = block.hash();
+        let chain_id: ChainId = chain_id.parse().expect("fixture chain id is canonical");
+        let topology = (0..4)
+            .map(|_| {
+                let validator = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
+                    .expect("generate fixture validator key");
+                let pop = bls_normal_pop_prove(validator.private_key())
+                    .expect("generate fixture validator proof of possession");
+                GenesisTopologyEntry::new(PeerId::new(validator.public_key().clone()), pop)
+            })
+            .collect::<Vec<_>>();
+        let manifest = iroha_genesis::GenesisBuilder::new_without_executor(chain_id.clone(), ".")
+            .set_topology(topology)
+            .build_raw()
+            .with_chain_discriminant(chain_discriminant)
+            .with_consensus_meta();
+        let manifest_path = genesis_dir.join("genesis.json");
         fs::write(
-            genesis_dir.join("genesis.json"),
+            &manifest_path,
             json::to_vec_pretty(&manifest).expect("encode fixture manifest"),
         )
         .expect("write fixture manifest");
-        fs::write(
-            genesis_dir.join("genesis.signed.nrt"),
-            block.encode_wire().expect("encode fixture block"),
+        let config_path = write_genesis_execution_config(
+            &peer_dir,
+            &chain_id,
+            chain_discriminant,
+            key_pair.public_key(),
+            izanami::genesis_support::UNRESOLVED_GENESIS_EXPECTED_HASH,
+        );
+        let block = crate::supervisor::sign_kagami_stub_genesis_from_config(
+            &manifest_path,
+            &config_path,
+            &key_pair,
+            Some(iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned),
         )
-        .expect("write fixture block");
+        .expect("execute and sign generation fixture against its node config");
+        assert!(block.has_results());
+        assert_eq!(block.results().len(), block.entrypoint_hashes().len());
+        assert!(block.results().all(|result| result.as_ref().is_ok()));
+        assert_eq!(
+            block.committed_fragment_count(),
+            Some(u64::try_from(block.results().len()).expect("fixture result count fits u64"))
+        );
+        block
+            .validate_entrypoint_merkle_cache()
+            .expect("generation fixture entrypoint Merkle cache");
+        block
+            .validate_result_merkle_cache()
+            .expect("generation fixture result Merkle cache");
+        assert_eq!(
+            block.header().result_merkle_root(),
+            block
+                .result_merkle_commitment()
+                .map(|commitment| *commitment.root())
+        );
+        let mut signatures = block.signatures();
+        let signature = signatures
+            .next()
+            .expect("result-bearing generation fixture signature");
+        assert_eq!(signature.index(), 0);
+        assert!(signatures.next().is_none());
+        signature
+            .signature()
+            .verify_hash(key_pair.public_key(), block.hash())
+            .expect("verify result-bearing generation fixture signature");
+        let expected_hash = block.hash();
+        let finalized_config_path = write_genesis_execution_config(
+            &peer_dir,
+            &chain_id,
+            chain_discriminant,
+            key_pair.public_key(),
+            &expected_hash.to_string(),
+        );
+        assert_eq!(finalized_config_path, config_path);
+        let wire = block.encode_wire().expect("encode fixture block");
+        izanami::genesis_support::validate_prepared_genesis_for_startup(
+            &wire,
+            &RawGenesisTransaction::from_path(&manifest_path).expect("read fixture manifest"),
+            key_pair.public_key(),
+            expected_hash,
+            &chain_id,
+        )
+        .expect("generation fixture must satisfy exact startup genesis validation");
+        fs::write(genesis_dir.join("genesis.signed.nrt"), wire).expect("write fixture block");
         fs::write(
             genesis_dir.join("genesis.public_key"),
             format!("{}\n", key_pair.public_key()),
@@ -1738,7 +1885,6 @@ mod tests {
             format!("{expected_hash}\n"),
         )
         .expect("write fixture hash");
-        fs::write(peer_dir.join("config.toml"), b"fixture config\n").expect("write fixture config");
         (key_pair, expected_hash)
     }
     fn publish_complete_generation(root: &Path, chain_id: &str) -> String {
@@ -1788,9 +1934,7 @@ mod tests {
     fn lock_contention_fails_fast_and_releases_on_drop() {
         let temp = tempfile::tempdir().expect("temporary root");
         let first = GenerationTransaction::begin(temp.path()).expect("acquire first lock");
-        let error = GenerationTransaction::begin(temp.path())
-            .err()
-            .expect("second lock must fail");
+        let error = GenerationTransaction::begin(temp.path()).expect_err("second lock must fail");
         assert!(matches!(error, SupervisorError::GenerationLocked { .. }));
         drop(first);
         GenerationTransaction::begin(temp.path()).expect("lock released after drop");
@@ -2061,8 +2205,7 @@ mod tests {
                 if generation_id == &candidate_id
         ));
         let contention = GenerationTransaction::begin(temp.path())
-            .err()
-            .expect("uncertain committed guard must retain the generation lock");
+            .expect_err("uncertain committed guard must retain the generation lock");
         assert!(matches!(
             contention,
             SupervisorError::GenerationLocked { .. }
@@ -2096,8 +2239,7 @@ mod tests {
         assert_eq!(publication.id(), candidate_id);
         assert!(publication.take_uncertainty().is_none());
         let contention = GenerationTransaction::begin(temp.path())
-            .err()
-            .expect("committed guard must retain the generation lock");
+            .expect_err("committed guard must retain the generation lock");
         assert!(matches!(
             contention,
             SupervisorError::GenerationLocked { .. }
@@ -2591,8 +2733,7 @@ mod tests {
         symlink(outside.path(), root.path().join(GENERATIONS_DIRECTORY))
             .expect("create generations symlink");
         let error = GenerationTransaction::begin(root.path())
-            .err()
-            .expect("symlinked generations parent must fail closed");
+            .expect_err("symlinked generations parent must fail closed");
         assert!(error.to_string().contains("symbolic link"));
         assert!(
             fs::read_dir(outside.path())

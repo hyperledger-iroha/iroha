@@ -104,15 +104,6 @@ iroha --operator-private-key-file /run/secrets/iroha/operator.key \
   --output-format text ops sumeragi diagnostics
 ```
 
-Fetch commit QC (if present) for a block hash:
-
-```bash
-iroha --operator-private-key-file /run/secrets/iroha/operator.key \
-  ops sumeragi commit-qc-get --hash BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2
-# Prints JSON with fields: subject_block_hash, parent_state_root, post_state_root (hex), height, view, epoch,
-# signers_bitmap (hex), bls_aggregate_signature (hex). If missing, commit_qc is null.
-```
-
 Tip: You can combine these with `jq` for consistency checks.
 
 ### SoraFS gateway helpers

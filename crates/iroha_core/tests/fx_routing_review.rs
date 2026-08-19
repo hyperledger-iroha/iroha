@@ -243,7 +243,6 @@ fn fixture(active_sns_alias: Option<&str>) -> Fixture {
     let dataspaces = dataspace_catalog();
     let policy = routing_policy();
     let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
     nexus.lane_catalog = lanes.clone();
     nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lanes);
     nexus.dataspace_catalog = dataspaces.clone();

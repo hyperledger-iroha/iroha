@@ -62,7 +62,7 @@ class Verifier:
         self.inspected: bytes | None = None
         self.during_inspect = None
 
-    def inspect_sorafs_orderbook_submission_v1(
+    def inspect_sorafs_orderbook_submission_for_discriminant_v1(
         self, route: str, network: object, discriminant: int, signer: str, body: bytes
     ) -> dict[str, str]:
         assert route in {"order", "cancel", "receipt"}

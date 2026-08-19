@@ -45,7 +45,7 @@ bounds, and the durable deduplication key before admission. Torii and the SDKs
 The binary `Evidence` shape is also v2-only. Retired global-v1 kind/payload
 records fail decode and are never reconstructed from mutable topology state.
 
-Additional consensus status and commit QC proofs
+Additional consensus status
 
 - GET `/v1/sumeragi/status` — returns the typed Norito `SumeragiV2StatusResponse`
   envelope by default. With `Accept: application/json`, Torii flattens the authoritative reducer
@@ -56,38 +56,7 @@ Additional consensus status and commit QC proofs
   `specs/sumeragi_v2.md` and the `SumeragiStatusResponse` OpenAPI schema for the exact fields.
 - GET `/v1/sumeragi/qc` — returns the canonical `SumeragiV2QcResponse` by default. Its required `highest_prepare_qc` and `locked_prepare_qc` slots are nullable; each non-null value carries the full context-bound `QuorumCertificateRef`. Set `Accept: application/json` for the identical schema, including explicit `null` for an unavailable reference.
 - GET `/v1/sumeragi/status/sse` — SSE stream of the same payload (≈1s cadence).
-- GET `/v1/sumeragi/commit-qcs/{block_hash}` — returns a Norito-encoded `Option<Qc>` for `:hash` (block hash) by default. With `Accept: application/json` the response expands to:
-  - If present, `{ subject_block_hash, commit_qc: { phase, parent_state_root, post_state_root, height, view, epoch, mode_tag, validator_set_hash, validator_set_hash_version, validator_set, signers_bitmap, bls_aggregate_signature } }`.
-  - If missing, returns `{ subject_block_hash, commit_qc: null }`.
 
-Example (CLI)
-
-```bash
-# Replace HASH with a real block hash (hex, 32 bytes)
-HASH=BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2
-
-iroha --operator-private-key-file /run/secrets/iroha/operator.key \
-  ops sumeragi commit-qc-get --hash "$HASH"
-
-# Example response (when present):
-# {
-#   "subject_block_hash": "BA6733…F5B2",
-#   "commit_qc": {
-#     "phase": "Commit",
-#     "parent_state_root": "1f9a7d…2c0e",
-#     "post_state_root": "9b2f11…a12c",
-#     "height": 42,
-#     "view": 3,
-#     "epoch": 0,
-#     "mode_tag": "iroha2-consensus::permissioned-sumeragi@v2",
-#     "validator_set_hash": "…",
-#     "validator_set_hash_version": 1,
-#     "validator_set": ["…"],
-#     "signers_bitmap": "0700",
-#     "bls_aggregate_signature": ""
-#   }
-# }
-```
-
-Note
-- Commit QCs always bind the parent/post state roots; there is no separate execution-root endpoint.
+The current authenticated ledger state-root and proof contract is specified in
+[`ledger_state_finality.md`](ledger_state_finality.md). Retired mutable-QC and
+validator-set projections are not exposed by Torii.

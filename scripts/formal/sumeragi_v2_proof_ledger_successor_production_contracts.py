@@ -118,7 +118,7 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
         "crates/iroha_core/src/sumeragi/v2_runner.rs"
     )
     height_binding_path, height_binding_source = load(
-        "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs"
+        "crates/iroha_core/src/sumeragi/v2_runner.rs"
     )
     lifecycle_runner_path, lifecycle_runner_source = load(
         "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs"

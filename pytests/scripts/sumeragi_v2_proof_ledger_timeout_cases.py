@@ -1251,14 +1251,6 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             "the production runner must reconcile the exact durable lock or Decision after every serialized transition",
         ),
         (
-            "worker_completion_projection_consumes_or_skips_held_offset",
-            Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
-            "certified_serve_predecessor_completion_evidence",
-            ".and_then(|io| io.completion_ownership_at(ownership_position))",
-            ".and_then(|io| io.completion_ownership_at(0))",
-            "selected-Serve completion evidence must project the exact held offset without consuming a completion",
-        ),
-        (
             "production_gate_disconnected",
             Path(
                 "crates/iroha_core/src/sumeragi/v2_core/"

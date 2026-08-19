@@ -142,29 +142,30 @@ pub fn read_bounded_file(path: &Path, max_bytes: usize, label: &str) -> Result<V
         .map_err(|_| eyre!("{label} byte limit does not fit u64"))?
         .checked_add(1)
         .ok_or_else(|| eyre!("{label} byte limit overflow"))?;
-    let mut bounded = (&mut file).take(read_limit);
-    let mut scratch = [0_u8; 8192];
-    loop {
-        let read = bounded
-            .read(&mut scratch)
-            .wrap_err_with(|| format!("failed to read {label} `{}`", path.display()))?;
-        if read == 0 {
-            break;
+    {
+        let mut bounded = (&mut file).take(read_limit);
+        let mut scratch = [0_u8; 8192];
+        loop {
+            let read = bounded
+                .read(&mut scratch)
+                .wrap_err_with(|| format!("failed to read {label} `{}`", path.display()))?;
+            if read == 0 {
+                break;
+            }
+            let next_len = bytes
+                .len()
+                .checked_add(read)
+                .ok_or_else(|| eyre!("{label} length overflow"))?;
+            if next_len > max_bytes {
+                bail!(
+                    "{label} `{}` exceeds the {max_bytes}-byte limit",
+                    path.display()
+                );
+            }
+            reserve_observed_append(&mut bytes, next_len, max_bytes, label)?;
+            bytes.extend_from_slice(&scratch[..read]);
         }
-        let next_len = bytes
-            .len()
-            .checked_add(read)
-            .ok_or_else(|| eyre!("{label} length overflow"))?;
-        if next_len > max_bytes {
-            bail!(
-                "{label} `{}` exceeds the {max_bytes}-byte limit",
-                path.display()
-            );
-        }
-        reserve_observed_append(&mut bytes, next_len, max_bytes, label)?;
-        bytes.extend_from_slice(&scratch[..read]);
     }
-    drop(bounded);
     let opened_after = file
         .metadata()
         .wrap_err_with(|| format!("failed to re-inspect opened {label} `{}`", path.display()))?;

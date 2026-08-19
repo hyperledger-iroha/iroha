@@ -193,12 +193,23 @@ def test_rollout_budget_fails_runner_queue_stalls_with_action_only_write_scope()
 
 
 def test_release_readiness_fails_before_any_native_builder() -> None:
+    source = WORKFLOW.read_text(encoding="utf-8")
     jobs = _workflow()
     readiness_job = jobs["release-readiness"]
     assert readiness_job["runs-on"] == "ubuntu-latest"
     assert readiness_job["timeout-minutes"] == 2
     assert readiness_job["permissions"] == {"contents": "read"}
-    assert "check_taira_release_prerequisites.py" in _job_text(readiness_job)
+    readiness_text = _job_text(readiness_job)
+    assert "check_taira_release_prerequisites.py" in readiness_text
+    assert (
+        "Verify all authenticated release-authority source paths" in readiness_text
+    )
+    assert "source-disabled" not in readiness_text
+    assert (
+        "# Audit the complete fixed native client and all eight authenticated authority"
+        in source
+    )
+    assert "source barriers on a hosted runner" not in source
     assert jobs["public-privacy-input"]["needs"] == "release-readiness"
     assert jobs["macos-native-build"]["needs"] == "release-readiness"
 
@@ -274,9 +285,32 @@ def _assert_fixed_controller_contract(source: str) -> None:
         "Remove the exact sealed",
     ):
         assert forbidden not in source
+    authenticated_tool_sudo = (
+        'sudo -n /bin/test ! -d "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH"',
+        'sudo -n /bin/test ! -L "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH"',
+        'sudo -n /bin/test ! -e "$controller_candidate"',
+        'sudo -n /bin/test ! -L "$controller_candidate"',
+        "sudo -n /usr/bin/install -o root -g wheel -m 0555 "
+        '"$built_controller" "$controller_candidate"',
+        'sudo -n /usr/bin/shasum -a 256 "$controller_candidate"',
+        'sudo -n /usr/bin/cmp "$built_controller" "$controller_candidate"',
+        'sudo -n /bin/mv -f -- "$controller_candidate" '
+        '"$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH"',
+        "sudo -n /usr/bin/shasum -a 256 "
+        '"$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH"',
+        'sudo -n /usr/bin/cmp "$built_controller" '
+        '"$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH"',
+        "sudo -n /usr/bin/env -i LANG=C LC_ALL=C PATH=/usr/bin:/bin "
+        'TMPDIR=/private/var/tmp "$TAIRA_AUTHENTICATED_TOOL_CONTROLLER_PATH" '
+        "qualify-host-v1",
+    )
+    for command in authenticated_tool_sudo:
+        assert source.count(command) == 2, command
     for line in source.splitlines():
         if "sudo -n " in line:
-            assert 'sudo -n "$TAIRA_CONTROLLER_COMMAND"' in line
+            assert 'sudo -n "$TAIRA_CONTROLLER_COMMAND"' in line or any(
+                command in line for command in authenticated_tool_sudo
+            )
         if any(
             token in line
             for token in (
@@ -307,7 +341,7 @@ def _assert_fixed_controller_contract(source: str) -> None:
     assert "--expected-artifact-handoff-sha256" in source
 
 
-def test_workflow_uses_only_preprovisioned_digest_and_identity_attested_controller() -> None:
+def test_workflow_uses_preprovisioned_release_controller_and_exact_native_tool_controller() -> None:
     _assert_fixed_controller_contract(WORKFLOW.read_text(encoding="utf-8"))
 
 

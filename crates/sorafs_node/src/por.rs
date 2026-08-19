@@ -1437,11 +1437,13 @@ pub struct PorPendingRepairWorkV1 {
     pub repair_task_id: [u8; 32],
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(clippy::large_enum_variant, reason = "by-value replay contract")]
 pub(crate) enum PorChallengeRecordOutcomeV1 {
     Inserted,
     ExactReplay(PorChallengeStatusV1),
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[expect(clippy::large_enum_variant, reason = "by-value replay contract")]
 pub(crate) enum PorProofRecordOutcomeV1 {
     Inserted,
     ExactReplay(PorChallengeStatusV1),

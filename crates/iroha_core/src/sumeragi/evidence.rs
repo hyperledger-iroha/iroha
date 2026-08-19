@@ -48,6 +48,7 @@ pub fn evidence_key(ev: &Evidence) -> Vec<u8> {
 }
 fn evidence_key_inner(ev: &Evidence) -> Vec<u8> {
     use norito::codec::Encode as _;
+
     ev.encode()
 }
 fn canonicalize_evidence(ev: &Evidence) -> Evidence {
@@ -810,7 +811,6 @@ mod tests {
         prelude::ChainId,
     };
     use mv::cell::Cell;
-    use norito::codec::Encode as _;
     fn test_network_id(seed: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             seed,

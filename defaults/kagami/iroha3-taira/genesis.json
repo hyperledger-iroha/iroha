@@ -86,7 +86,7 @@
       "ivm_triggers": [],
       "parameters": {
         "sumeragi": {
-          "block_cadence_ms": 1000,
+          "block_cadence_ms": 4000,
           "max_clock_drift_ms": 1000,
           "key_activation_lead_blocks": 1,
           "key_overlap_grace_blocks": 8,
@@ -574,7 +574,7 @@
   ],
   "consensus_mode": "Npos",
   "wire_protocol_version": 4,
-  "consensus_fingerprint": "0xb4b7677163f266b28d6d34d8187961d77e8b94af8b1beeac823c469d846bf2af",
+  "consensus_fingerprint": "0x0cbe9f23d02faae8cdb64ca14ccd4fa3f9703c15d10fb78826170d76ec8f19ad",
   "sumeragi_v2": {
     "da_layout": {
       "encoding": {
@@ -587,8 +587,8 @@
       "max_payload_size_bytes": 16777216,
       "max_chunk_count": 1024
     },
-    "nexus_amx_context_hash": "26DC4C3BBAC07EEAD588A67AF10184A8DA0A288EC4100116A29A4FB26D814F33",
-    "execution_policy_hash": "52E9209214D9B09CA9AE55FDAAAEADB00EA152D406049C335A79BFC61AC30AEF"
+    "nexus_amx_context_hash": "79691AC5095A827B5214F32530624E84FB97AF3715D02ABB0C3BD4B63A0A842F",
+    "execution_policy_hash": "3CFA3C0B865506ACD69BB14CB6CBF9B699F1A65309E522600AEE980892BB7B6D"
   },
   "crypto": {
     "sm_openssl_preview": false,

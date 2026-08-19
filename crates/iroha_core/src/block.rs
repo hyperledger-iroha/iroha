@@ -52,12 +52,12 @@
 //!
 //! Flow: Having [`SignedBlock`], [`ValidBlock::validate_unchecked`] (infallible),
 //! [`ValidBlock::commit_unchecked`] (infallible)
+mod native_amx_certified_coordinator_authority;
+
 use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
 #[cfg(test)]
 use iroha_data_model::block::consensus::{CertPhase, NativeAmxAttestationBodyV2};
-#[cfg(test)]
-use iroha_data_model::consensus::ValidatorSetCheckpoint;
 #[cfg(feature = "bls")]
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::{
@@ -73,8 +73,8 @@ use iroha_data_model::{
     },
     confidential::ConfidentialFeatureDigest,
     consensus::{
-        ConsensusKeyRole, NposConsensusEffects, PreviousRosterEvidence,
-        VALIDATOR_SET_HASH_VERSION_V1, VrfEpochRecord, VrfParticipantRecord,
+        ConsensusKeyRole, NposConsensusEffects, VALIDATOR_SET_HASH_VERSION_V1, VrfEpochRecord,
+        VrfParticipantRecord,
     },
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
@@ -521,15 +521,13 @@ fn transaction_requires_fee_postprocessing(
     if !pipeline_cfg.gas.accepted_assets.is_empty() {
         return true;
     }
-    if nexus_cfg.enabled {
-        let fees = &nexus_cfg.fees;
-        if !fees.base_fee.is_zero()
-            || !fees.per_byte_fee.is_zero()
-            || !fees.per_instruction_fee.is_zero()
-            || !fees.per_gas_unit_fee.is_zero()
-        {
-            return true;
-        }
+    let fees = &nexus_cfg.fees;
+    if !fees.base_fee.is_zero()
+        || !fees.per_byte_fee.is_zero()
+        || !fees.per_instruction_fee.is_zero()
+        || !fees.per_gas_unit_fee.is_zero()
+    {
+        return true;
     }
     false
 }
@@ -638,7 +636,11 @@ pub(crate) trait NativeAmxAuthorityContext {
         height: u64,
     ) -> bool;
     fn lane_incarnation_at_height(&self, lane_id: LaneId, height: u64) -> Option<Hash>;
-    fn authoritative_lane_peer_ids_at_height(&self, lane_id: LaneId, height: u64) -> Vec<PeerId>;
+    fn resolve_lane_committee_at_height(
+        &self,
+        route: crate::state::LaneAuthorityRoute,
+        height: u64,
+    ) -> Result<Vec<PeerId>, crate::state::LaneAuthorityError>;
     fn consensus_pop_matches_authority(
         &self,
         lane_id: LaneId,
@@ -690,8 +692,13 @@ impl<T: StateReadOnly> NativeAmxAuthorityContext for T {
     fn lane_incarnation_at_height(&self, lane_id: LaneId, height: u64) -> Option<Hash> {
         StateReadOnly::lane_incarnation_at_height(self, lane_id, height)
     }
-    fn authoritative_lane_peer_ids_at_height(&self, lane_id: LaneId, height: u64) -> Vec<PeerId> {
-        StateReadOnly::authoritative_lane_peer_ids_at_height(self, lane_id, height)
+    fn resolve_lane_committee_at_height(
+        &self,
+        route: crate::state::LaneAuthorityRoute,
+        height: u64,
+    ) -> Result<Vec<PeerId>, crate::state::LaneAuthorityError> {
+        StateReadOnly::resolve_lane_committee_at_height(self, route, height)
+            .map(crate::state::LaneAuthorityCommittee::into_validators)
     }
     fn consensus_pop_matches_authority(
         &self,
@@ -830,10 +837,15 @@ enum NativeAmxValidationAuthority<'a> {
 pub(crate) enum HistoricalNativeAmxSourceAuthority<'a> {
     /// The enclosing merge QC authenticates this exact historical lane set.
     MergeQcActiveLanes(&'a [MergeLaneBinding]),
-    /// No merge entry exists yet. Current authority is used only to establish
-    /// the still-active coordinator and its certified committee; participant
-    /// controls remain self-contained historical evidence.
-    CertifiedCoordinator(&'a dyn NativeAmxAuthorityContext),
+    /// No merge entry exists yet. Proposal-block/V2-finality ownership
+    /// authenticates the exact coordinator committee; the state context is
+    /// consulted only for height-scoped durable key/PoP records.
+    CertifiedCoordinator {
+        /// Exact historical committee recovered from authenticated ownership.
+        committee: &'a [PeerId],
+        /// Height-scoped durable key authority used to check embedded PoPs.
+        key_authority: &'a dyn NativeAmxAuthorityContext,
+    },
 }
 fn validate_historical_native_amx_route_binding(
     active_lanes: &[MergeLaneBinding],
@@ -901,85 +913,6 @@ fn validate_historical_native_amx_receipt_against_plan(
         expected_v2_context,
     )
 }
-fn validate_historical_native_amx_certified_coordinator_authority(
-    bundle: &crate::kura::AutonomousLaneMergeBundleV1,
-    authority: &dyn NativeAmxAuthorityContext,
-) -> Result<(), String> {
-    let descriptor = &bundle.certified.proposal.descriptor;
-    if !authority.route_active_at_height(
-        descriptor.lane_id,
-        descriptor.dataspace_id,
-        descriptor.proposal_height,
-    ) || authority.lane_incarnation_at_height(descriptor.lane_id, descriptor.proposal_height)
-        != Some(descriptor.lane_incarnation)
-    {
-        return Err(
-            "historical native AMX certified coordinator route/incarnation is not active"
-                .to_owned(),
-        );
-    }
-    let mut authoritative_validators = authority
-        .authoritative_lane_peer_ids_at_height(descriptor.lane_id, descriptor.proposal_height);
-    authoritative_validators.sort();
-    authoritative_validators.dedup();
-    authoritative_validators.retain(|peer| {
-        peer.public_key().try_algorithm().ok() == Some(iroha_crypto::Algorithm::BlsNormal)
-    });
-    if authoritative_validators.is_empty() || descriptor.validator_set != authoritative_validators {
-        return Err(
-            "historical native AMX certified coordinator committee is not authoritative".to_owned(),
-        );
-    }
-    let availability = bundle
-        .certified
-        .prepare_qc
-        .payload_availability_qc
-        .as_ref()
-        .ok_or_else(|| {
-            "historical native AMX certified coordinator lacks availability authority".to_owned()
-        })?;
-    for (validator, pop) in availability
-        .validator_set
-        .iter()
-        .zip(&availability.validator_set_pops)
-    {
-        if !authority.consensus_pop_matches_authority(
-            descriptor.lane_id,
-            validator,
-            descriptor.proposal_height,
-            pop,
-        ) {
-            return Err(
-                "historical native AMX certified coordinator availability PoP is not authoritative"
-                    .to_owned(),
-            );
-        }
-    }
-    for (public_key, pop) in &bundle.certified.signer_pops {
-        let Some(validator) = descriptor
-            .validator_set
-            .iter()
-            .find(|validator| validator.public_key() == public_key)
-        else {
-            return Err(
-                "historical native AMX certified coordinator signer is outside its committee"
-                    .to_owned(),
-            );
-        };
-        if !authority.consensus_pop_matches_authority(
-            descriptor.lane_id,
-            validator,
-            descriptor.proposal_height,
-            pop,
-        ) {
-            return Err(
-                "historical native AMX certified coordinator signer PoP is not authoritative"
-                    .to_owned(),
-            );
-        }
-    }
-    Ok(())
-}
 /// Decode and authenticate one exact historical autonomous Native AMX source.
 ///
 /// The returned bundle has passed canonical decoding, producer-signature,
@@ -1002,8 +935,15 @@ pub(crate) fn validate_historical_native_amx_source_bundle(
     .map_err(str::to_owned)?;
     let merge_active_lanes = match source_authority {
         HistoricalNativeAmxSourceAuthority::MergeQcActiveLanes(active_lanes) => Some(active_lanes),
-        HistoricalNativeAmxSourceAuthority::CertifiedCoordinator(authority) => {
-            validate_historical_native_amx_certified_coordinator_authority(&bundle, authority)?;
+        HistoricalNativeAmxSourceAuthority::CertifiedCoordinator {
+            committee,
+            key_authority,
+        } => {
+            native_amx_certified_coordinator_authority::validate_historical_native_amx_certified_coordinator_authority(
+                &bundle,
+                committee,
+                key_authority,
+            )?;
             None
         }
     };
@@ -1231,10 +1171,18 @@ fn validate_native_amx_receipt_against_plan_with_authority(
         }
         let authoritative_validators = match validation_authority {
             NativeAmxValidationAuthority::Live { authority, .. } => {
-                let mut validators = authority.authoritative_lane_peer_ids_at_height(
-                    leg.lane_id,
-                    receipt.authority_context_height,
-                );
+                let mut validators = authority
+                    .resolve_lane_committee_at_height(
+                        crate::state::LaneAuthorityRoute::new(leg.lane_id, leg.dataspace_id),
+                        receipt.authority_context_height,
+                    )
+                    .map_err(|error| {
+                        format!(
+                            "native AMX participant lane {} authority is unavailable at height {}: {error}",
+                            leg.lane_id.as_u32(),
+                            receipt.authority_context_height,
+                        )
+                    })?;
                 validators.sort();
                 validators.dedup();
                 validators.retain(|peer| {
@@ -2115,12 +2063,11 @@ mod prefetch_tests {
     use iroha_data_model::{
         Registrable,
         account::{Account, AccountAlias, AccountAliasDomain, AccountDetails, AccountValue},
-        asset::AssetDefinitionId,
         block::BlockHeader,
         domain::{Domain, DomainId},
         isi::{InstructionBox, Log},
         name::Name,
-        nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneConfig},
+        nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
         role::RoleId,
     };
     use iroha_logger::Level;
@@ -3129,12 +3076,12 @@ pub enum BlockValidationError {
     },
     /// An empty DA pin-intent sidecar must be represented as `None`.
     NonCanonicalEmptyDaPinIntentBundle,
-    /// Previous-roster evidence is invalid: {0}
-    PreviousRosterEvidenceInvalid(String),
     /// DA commitment bundle failed validation: {0}
     DaCommitmentBundle(#[from] DaCommitmentValidationError),
     /// DA pin-intent bundle failed validation: {0}
     DaPinIntentBundle(#[from] DaPinIntentValidationError),
+    /// DA index hydration failed before block validation: {0}
+    DaIndexHydration(String),
     /// DA receipt cursor gate failed: {0}
     DaReceiptCursor(#[from] DaReceiptCursorError),
     /// DA shard cursor gate failed: {0}
@@ -3151,6 +3098,7 @@ impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
             crate::state::DaIndexHydrationError::ReceiptCursor(error) => {
                 Self::DaReceiptCursor(error)
             }
+            other => Self::DaIndexHydration(other.to_string()),
         }
     }
 }
@@ -3195,8 +3143,21 @@ pub enum InvalidGenesisError {
     GenesisAuthorityNotSingleKey,
     /// Genesis transaction must be authorized by genesis account
     UnexpectedAuthority,
+    /// Genesis block must carry deterministic execution results
+    MissingResults,
+    /// Genesis execution result count {actual} does not match entrypoint count {expected}
+    ResultCountMismatch {
+        /// Number of canonical genesis entrypoints.
+        expected: usize,
+        /// Number of attached execution results.
+        actual: usize,
+    },
     /// Genesis transactions must not contain errors
     ContainsErrors,
+    /// Genesis entrypoint Merkle cache does not match the canonical entrypoints
+    EntrypointMerkleCacheMismatch,
+    /// Genesis result Merkle cache does not match the canonical execution results
+    ResultMerkleCacheMismatch,
     /// Genesis transaction must contain instructions
     NotInstructions,
     /// Genesis block must have 1 to 16 transactions (executor upgrade, parameters, ordinary instructions, IVM trigger registrations, initial topology)
@@ -3207,6 +3168,15 @@ pub enum InvalidGenesisError {
     MerkleRootMismatch,
     /// Genesis result Merkle root does not match recorded results
     ResultMerkleMismatch,
+    /// Genesis result count exceeds the canonical `u64` range
+    GenesisResultCountOverflow,
+    /// Genesis committed fragment count {actual:?} is below the result-count lower bound {minimum}
+    CommittedFragmentCountBelowResultCount {
+        /// Minimum number of committed fragments implied by the genesis results.
+        minimum: u64,
+        /// Fragment count advertised by the attached block result, if present.
+        actual: Option<u64>,
+    },
     /// A genesis transaction does not carry the explicit genesis-only domain.
     TransactionDomainMismatch,
     /// Genesis DA commitment hash does not match embedded bundle
@@ -3328,12 +3298,43 @@ fn authenticate_genesis_block_intents(
     Ok(())
 }
 fn check_genesis_execution_results(block: &SignedBlock) -> Result<(), InvalidGenesisError> {
-    if !block.has_results() || block.results().any(|result| result.as_ref().is_err()) {
+    if !block.has_results() {
+        return Err(InvalidGenesisError::MissingResults);
+    }
+    let entrypoint_count = block.entrypoint_hashes().len();
+    let result_count = block.results().len();
+    if result_count != entrypoint_count {
+        return Err(InvalidGenesisError::ResultCountMismatch {
+            expected: entrypoint_count,
+            actual: result_count,
+        });
+    }
+    if block.results().any(|result| result.as_ref().is_err()) {
         return Err(InvalidGenesisError::ContainsErrors);
     }
+    block
+        .validate_entrypoint_merkle_cache()
+        .map_err(|_| InvalidGenesisError::EntrypointMerkleCacheMismatch)?;
+    block
+        .validate_result_merkle_cache()
+        .map_err(|_| InvalidGenesisError::ResultMerkleCacheMismatch)?;
     let expected_result_root = block.result_hashes().collect::<MerkleTree<_>>().root();
     if block.header().result_merkle_root() != expected_result_root {
         return Err(InvalidGenesisError::ResultMerkleMismatch);
+    }
+    let minimum_committed_fragment_count =
+        u64::try_from(result_count).map_err(|_| InvalidGenesisError::GenesisResultCountOverflow)?;
+    let actual_committed_fragment_count = block.committed_fragment_count();
+    if !matches!(
+        actual_committed_fragment_count,
+        Some(actual) if actual >= minimum_committed_fragment_count
+    ) {
+        return Err(
+            InvalidGenesisError::CommittedFragmentCountBelowResultCount {
+                minimum: minimum_committed_fragment_count,
+                actual: actual_committed_fragment_count,
+            },
+        );
     }
     Ok(())
 }
@@ -3540,7 +3541,6 @@ mod pending {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
                 execution_context: None,
             })
@@ -3567,7 +3567,6 @@ mod pending {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
                 execution_context: None,
             })
@@ -3586,7 +3585,6 @@ mod chained {
         pub(super) da_commitments: Option<DaCommitmentBundle>,
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
-        pub(super) previous_roster_evidence: Option<PreviousRosterEvidence>,
         pub(super) npos_consensus_effects: Option<NposConsensusEffects>,
         pub(super) execution_context: Option<BlockExecutionContextBundle>,
     }
@@ -3657,17 +3655,6 @@ mod chained {
                 .and_then(DaPinIntentBundle::merkle_commitment);
             self.0.header.set_da_pin_intents_hash(hash);
             self.0.da_pin_intents = intents;
-            self
-        }
-        /// Attach previous-height roster evidence and update the header hash accordingly.
-        #[must_use]
-        pub fn with_previous_roster_evidence(
-            mut self,
-            evidence: Option<PreviousRosterEvidence>,
-        ) -> Self {
-            let hash = evidence.as_ref().map(HashOf::new);
-            self.0.header.set_prev_roster_evidence_hash(hash);
-            self.0.previous_roster_evidence = evidence;
             self
         }
         /// Attach deterministic `NPoS` effects and update the header hash accordingly.
@@ -3751,7 +3738,6 @@ mod chained {
                 da_commitments: builder.0.da_commitments,
                 da_proof_policies: builder.0.da_proof_policies,
                 da_pin_intents: builder.0.da_pin_intents,
-                previous_roster_evidence: builder.0.previous_roster_evidence,
                 npos_consensus_effects: builder.0.npos_consensus_effects,
                 execution_context: builder.0.execution_context,
             }))
@@ -3798,7 +3784,6 @@ mod new {
         pub(super) da_commitments: Option<DaCommitmentBundle>,
         pub(super) da_proof_policies: Option<DaProofPolicyBundle>,
         pub(super) da_pin_intents: Option<DaPinIntentBundle>,
-        pub(super) previous_roster_evidence: Option<PreviousRosterEvidence>,
         pub(super) npos_consensus_effects: Option<NposConsensusEffects>,
         pub(super) execution_context: Option<BlockExecutionContextBundle>,
     }
@@ -3837,10 +3822,6 @@ mod new {
         pub fn da_pin_intents(&self) -> Option<&DaPinIntentBundle> {
             self.da_pin_intents.as_ref()
         }
-        /// Previous-height roster evidence embedded in this block, if any.
-        pub fn previous_roster_evidence(&self) -> Option<&PreviousRosterEvidence> {
-            self.previous_roster_evidence.as_ref()
-        }
         /// `NPoS` consensus effects embedded in this block, if any.
         pub fn npos_consensus_effects(&self) -> Option<&NposConsensusEffects> {
             self.npos_consensus_effects.as_ref()
@@ -3860,7 +3841,6 @@ mod new {
                 da_commitments: self.da_commitments,
                 da_proof_policies: self.da_proof_policies,
                 da_pin_intents: self.da_pin_intents,
-                previous_roster_evidence: self.previous_roster_evidence,
                 npos_consensus_effects: self.npos_consensus_effects,
                 execution_context: self.execution_context,
             }
@@ -3881,7 +3861,6 @@ mod new {
                     da_commitments: block.da_commitments,
                     da_proof_policies: block.da_proof_policies,
                     da_pin_intents: block.da_pin_intents,
-                    previous_roster_evidence: block.previous_roster_evidence,
                     npos_consensus_effects: block.npos_consensus_effects,
                 },
             )
@@ -3990,18 +3969,16 @@ pub(crate) mod valid {
     use super::{event::map_block_err_to_reason, *};
     use crate::{
         smartcontracts::ivm::cache::IvmCache,
-        state::{
-            StateBlock, StateReadOnlyWithTransactions, storage_transactions::TransactionsReadOnly,
-        },
+        state::{StateBlock, storage_transactions::TransactionsReadOnly},
         sumeragi::network_topology::Role,
     };
-    #[cfg(test)]
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     use crate::{
         soracloud_runtime::{
             SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
             SoracloudRuntimeExecutionError,
         },
-        state::{StateReadOnly, StateTransaction},
+        state::{StateReadOnly, StateReadOnlyWithTransactions, StateTransaction},
     };
     use commit::CommittedBlock;
     #[cfg(test)]
@@ -6488,7 +6465,7 @@ pub(crate) mod valid {
                         "Invalid genesis block rejected during validation: execution results missing"
                     );
                     return Err(BlockValidationError::InvalidGenesis(
-                        InvalidGenesisError::ContainsErrors,
+                        InvalidGenesisError::MissingResults,
                     ));
                 }
                 if let Err(err) = check_genesis_block(block, genesis_account) {
@@ -6722,9 +6699,9 @@ pub(crate) mod valid {
         /// signature set. A body which is wire-empty may pass only when the
         /// shared semantic-work gate proves state-derived clock progress or
         /// autonomous/internal work; genuinely idle bodies are rejected.
-        /// Canonical v2 blocks do not carry previous-roster evidence: the
-        /// authenticated height context and its parent CommitQC are the sole
-        /// reconfiguration proof.
+        /// The authenticated height context and its parent CommitQC are the
+        /// sole reconfiguration proof; the block payload carries no parallel
+        /// authority surface.
         /// Transaction signatures, stateless checks, state-dependent invariants,
         /// and deterministic execution all remain mandatory. Genesis additionally
         /// retains its configured-authority block signature over the ordered intents.
@@ -7365,7 +7342,6 @@ pub(crate) mod valid {
             skip_block_signatures: bool,
             validation_profile: ConsensusValidationProfile,
         ) -> Result<StaticValidationData, BlockValidationError> {
-            let allow_archival_previous_roster_evidence = validation_profile.replay_compatibility();
             let state_height = state.block_hashes().len();
             let expected_block_height = if soft_fork {
                 state_height
@@ -7430,12 +7406,6 @@ pub(crate) mod valid {
                 // is allowed to execute against the bootstrap state.
                 authenticate_genesis_block_intents(block, genesis_account)?;
             }
-            Self::validate_previous_roster_evidence(
-                block,
-                block.header().height().get(),
-                actual_prev_block_hash,
-                allow_archival_previous_roster_evidence,
-            )?;
             Self::validate_npos_effects_header(block)?;
             Self::validate_da_sidecar_hashes(block)?;
             Self::validate_da_pin_intent_bundle(block, state)?;
@@ -7943,90 +7913,6 @@ pub(crate) mod valid {
             }
             Ok(())
         }
-        fn validate_previous_roster_evidence(
-            block: &SignedBlock,
-            block_height: u64,
-            prev_block_hash: Option<HashOf<BlockHeader>>,
-            allow_for_replay_fixture: bool,
-        ) -> Result<(), BlockValidationError> {
-            let embedded = block.previous_roster_evidence();
-            let header_hash = block.header().prev_roster_evidence_hash();
-            if !allow_for_replay_fixture && (header_hash.is_some() || embedded.is_some()) {
-                return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
-                    "previous-roster evidence is not part of canonical Sumeragi v2 blocks"
-                        .to_owned(),
-                ));
-            }
-            match (header_hash, embedded) {
-                (None, None) => {}
-                (Some(_), None) => {
-                    return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
-                        "header references previous-roster evidence but payload is missing"
-                            .to_owned(),
-                    ));
-                }
-                (None, Some(_)) => {
-                    return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
-                        "payload includes previous-roster evidence but header hash is absent"
-                            .to_owned(),
-                    ));
-                }
-                (Some(hash), Some(evidence)) => {
-                    if HashOf::new(evidence) != hash {
-                        return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
-                            "previous-roster evidence hash mismatch".to_owned(),
-                        ));
-                    }
-                }
-            }
-            let Some(evidence) = embedded else {
-                return Ok(());
-            };
-            let expected_prev_height = block_height.saturating_sub(1);
-            if evidence.height != expected_prev_height {
-                return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
-                    format!(
-                        "previous-roster evidence height mismatch: expected {expected_prev_height}, got {}",
-                        evidence.height
-                    ),
-                ));
-            }
-            if Some(evidence.block_hash) != prev_block_hash {
-                return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
-                    "previous-roster evidence block hash does not match header parent hash"
-                        .to_owned(),
-                ));
-            }
-            let checkpoint = &evidence.validator_checkpoint;
-            if checkpoint.height != evidence.height || checkpoint.block_hash != evidence.block_hash
-            {
-                return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
-                    "previous-roster evidence checkpoint metadata mismatch".to_owned(),
-                ));
-            }
-            if checkpoint.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1 {
-                return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
-                    format!(
-                        "unsupported validator-set hash version in previous-roster evidence: {}",
-                        checkpoint.validator_set_hash_version
-                    ),
-                ));
-            }
-            if checkpoint.validator_set_hash != HashOf::new(&checkpoint.validator_set) {
-                return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
-                    "previous-roster evidence checkpoint validator-set hash mismatch".to_owned(),
-                ));
-            }
-            if let Some(stake_snapshot) = evidence.stake_snapshot.as_ref()
-                && !stake_snapshot.matches_roster(&checkpoint.validator_set)
-            {
-                return Err(BlockValidationError::PreviousRosterEvidenceInvalid(
-                    "previous-roster evidence stake snapshot does not match validator set"
-                        .to_owned(),
-                ));
-            }
-            Ok(())
-        }
         fn execution_context_error(message: impl Into<String>) -> BlockValidationError {
             BlockValidationError::ExecutionContextInvalid(message.into())
         }
@@ -8285,31 +8171,19 @@ pub(crate) mod valid {
             Ok(())
         }
         fn execution_context_lane_descriptor_validator_set(
-            topology: &Topology,
+            _topology: &Topology,
             state: &impl StateReadOnly,
             proposal_height: u64,
             lane_id: LaneId,
+            dataspace_id: DataSpaceId,
         ) -> Result<Vec<PeerId>, String> {
-            let validators = if !state.nexus().enabled {
-                let topology_peers: &[PeerId] = topology.as_ref();
-                if state.world().consensus_keys().is_empty() {
-                    topology_peers.to_vec()
-                } else {
-                    topology_peers
-                        .iter()
-                        .filter(|peer| {
-                            crate::state::peer_has_live_consensus_key(
-                                state.world(),
-                                peer,
-                                proposal_height,
-                            )
-                        })
-                        .cloned()
-                        .collect()
-                }
-            } else {
-                state.authoritative_lane_peer_ids_at_height(lane_id, proposal_height)
-            };
+            let validators = state
+                .resolve_lane_committee_at_height(
+                    crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
+                    proposal_height,
+                )
+                .map(crate::state::LaneAuthorityCommittee::into_validators)
+                .map_err(|error| format!("has no exact lane authority: {error}"))?;
             Self::execution_context_canonical_lane_descriptor_validators(lane_id, validators)
         }
         fn execution_context_canonical_lane_descriptor_validators(
@@ -8518,6 +8392,7 @@ pub(crate) mod valid {
                     state,
                     proposal_height,
                     ownership.lane_id,
+                    ownership.dataspace_id,
                 )
                 .map_err(|message| {
                     Self::execution_context_error(format!(
@@ -9257,6 +9132,7 @@ pub(crate) mod valid {
                     state,
                     proposal_height,
                     descriptor.lane_id,
+                    descriptor.dataspace_id,
                 )
                 .map_err(|message| {
                     Self::execution_context_error(format!(
@@ -10882,38 +10758,37 @@ pub(crate) mod valid {
             let height_usize = height_u64.try_into().expect("block height fits usize");
             let block_height =
                 std::num::NonZeroUsize::new(height_usize).expect("block height greater than zero");
-            state_block
-                .transactions
-                .insert_block(tx_hashes, block_height);
+            // Contextless routing is a block-level gate: do not stage transaction membership or
+            // construct any route-bearing output until every entrypoint has a canonical route.
             let embedded_routing = Self::embedded_routing_decisions_for_entrypoints(block, n);
-            let (routing_decisions, routing_errors) = if let Some(decisions) = embedded_routing {
-                (decisions, vec![None; n])
+            let routing_decisions = if let Some(decisions) = embedded_routing {
+                decisions
             } else {
                 let mut decisions = Vec::with_capacity(n);
-                let mut errors = Vec::with_capacity(n);
-                for entrypoint in &entrypoints {
+                for (idx, entrypoint) in entrypoints.iter().enumerate() {
                     let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
                         Cow::Borrowed(entrypoint),
                     );
-                    match evaluate_policy_plan_with_nexus_and_world_at_block_height(
+                    let decision = evaluate_policy_plan_with_nexus_and_world_at_block_height(
                         &state_block.nexus,
                         &accepted,
                         &state_block.world,
                         routing_ledger_time_ms,
                         height_u64,
-                    ) {
-                        Ok(plan) => {
-                            decisions.push(plan.coordinator_route());
-                            errors.push(None);
-                        }
-                        Err(err) => {
-                            decisions.push(crate::queue::RoutingDecision::default());
-                            errors.push(Some(err));
-                        }
-                    }
+                    )
+                    .map(|plan| plan.coordinator_route())
+                    .map_err(|error| {
+                        Self::execution_context_error(format!(
+                            "transaction routing could not be resolved for entrypoint index {idx}: {error}"
+                        ))
+                    })?;
+                    decisions.push(decision);
                 }
-                (decisions, errors)
+                decisions
             };
+            state_block
+                .transactions
+                .insert_block(tx_hashes, block_height);
             let transaction_event_hashes: Vec<_> = entrypoints
                 .iter()
                 .map(Self::signed_transaction_from_entrypoint)
@@ -10945,27 +10820,16 @@ pub(crate) mod valid {
             let mut results: Vec<Option<TransactionResultInner>> = vec![None; n];
             for idx in execution_order {
                 let entrypoint = entrypoints[idx].clone();
-                let entrypoint_hash = entrypoint.hash();
                 let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
                     Cow::Owned(entrypoint),
                 );
-                let (hash, result) = if let Some(err) = routing_errors[idx].as_ref() {
-                    (
-                        entrypoint_hash,
-                        Err(TransactionRejectionReason::Validation(
-                            iroha_data_model::ValidationFail::NotPermitted(format!(
-                                "transaction routing could not be resolved: {err}"
-                            )),
-                        )),
-                    )
-                } else {
-                    state_block.validate_transaction_with_entrypoint_index_and_routing_context(
+                let (hash, result) = state_block
+                    .validate_transaction_with_entrypoint_index_and_routing_context(
                         accepted,
                         &mut ivm_cache,
                         idx,
                         routing_decisions[idx],
-                    )
-                };
+                    );
                 hashes[idx] = Some(hash);
                 results[idx] = Some(result);
             }
@@ -11299,9 +11163,8 @@ pub(crate) mod valid {
             let height_usize = height_u64.try_into().expect("block height fits usize");
             let block_height =
                 std::num::NonZeroUsize::new(height_usize).expect("block height greater than zero");
-            state_block
-                .transactions
-                .insert_block(tx_hashes, block_height);
+            // Contextless routing is a block-level gate: do not stage transaction membership or
+            // construct any route-bearing output until every entrypoint has a canonical route.
             // Strategy controlled by configuration (no env reliance)
             let dynamic_prepass = state_block.pipeline.dynamic_prepass;
             // Load worker bound from config once to reuse across stages
@@ -11397,8 +11260,8 @@ pub(crate) mod valid {
             }
             let embedded_routing =
                 Self::embedded_routing_decisions_for_signed_transactions(block, txs.len());
-            let (routing_decisions, routing_errors) = if let Some(decisions) = embedded_routing {
-                (decisions, vec![None; txs.len()])
+            let routing_decisions = if let Some(decisions) = embedded_routing {
+                decisions
             } else {
                 let routing_results: Vec<_> = if workers > 1 {
                     if let Some(pool) = pool.as_ref() {
@@ -11453,21 +11316,19 @@ pub(crate) mod valid {
                         .collect()
                 };
                 let mut routing_decisions = Vec::with_capacity(routing_results.len());
-                let mut routing_errors = Vec::with_capacity(routing_results.len());
-                for routing in routing_results {
-                    match routing {
-                        Ok(decision) => {
-                            routing_decisions.push(decision);
-                            routing_errors.push(None);
-                        }
-                        Err(err) => {
-                            routing_decisions.push(crate::queue::RoutingDecision::default());
-                            routing_errors.push(Some(err));
-                        }
-                    }
+                for (idx, routing) in routing_results.into_iter().enumerate() {
+                    let decision = routing.map_err(|error| {
+                        Self::execution_context_error(format!(
+                            "transaction routing could not be resolved for entrypoint index {idx}: {error}"
+                        ))
+                    })?;
+                    routing_decisions.push(decision);
                 }
-                (routing_decisions, routing_errors)
+                routing_decisions
             };
+            state_block
+                .transactions
+                .insert_block(tx_hashes, block_height);
             let mut prechecked_signature_results: Vec<
                 Option<Result<(), crate::tx::SignatureVerificationFail>>,
             > = vec![None; txs.len()];
@@ -11955,13 +11816,6 @@ pub(crate) mod valid {
             let t_stateless_start = Instant::now();
             let mut stateless_rejections: Vec<Option<TransactionRejectionReason>> = {
                 let validate_tx = |(idx, tx): (usize, &&SignedTransaction)| {
-                    if let Some(err) = routing_errors[idx].as_ref() {
-                        return Some(TransactionRejectionReason::Validation(
-                            iroha_data_model::ValidationFail::NotPermitted(format!(
-                                "transaction routing could not be resolved: {err}"
-                            )),
-                        ));
-                    }
                     if !skip_stateless_checks && tx.creation_time() >= block_creation_time {
                         return Some(TransactionRejectionReason::Validation(
                             iroha_data_model::ValidationFail::NotPermitted(format!(
@@ -15373,7 +15227,6 @@ pub(crate) mod valid {
                 da_commitments: None,
                 da_proof_policies: None,
                 da_pin_intents: None,
-                previous_roster_evidence: None,
                 npos_consensus_effects: None,
                 execution_context: None,
             });
@@ -15475,8 +15328,8 @@ pub(crate) mod valid {
             },
             sorafs::pin_registry::ManifestDigest,
             transaction::{
-                Executable, IvmBytecode, IvmProved, SignedTransaction, TransactionBuilder,
-                error::TransactionLimitError,
+                Executable, ExecutionStep, IvmBytecode, IvmProved, SignedTransaction,
+                TimeTriggerEntrypoint, TransactionBuilder, error::TransactionLimitError,
             },
             trigger::DataTriggerSequence,
         };
@@ -15786,7 +15639,6 @@ pub(crate) mod valid {
                     da_commitments: None,
                     da_proof_policies: Some(policies),
                     da_pin_intents: None,
-                    previous_roster_evidence: None,
                     npos_consensus_effects: None,
                 },
             );
@@ -15888,7 +15740,7 @@ pub(crate) mod valid {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let state = State::new_for_testing(World::new(), Arc::clone(&kura), query);
-            state.nexus.write().enabled = true;
+
             let network_id = state.network_id;
             let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let parent_hash = HashOf::from_untyped_unchecked(Hash::new(b"equal-vote-merge-parent"));
@@ -18165,6 +18017,120 @@ pub(crate) mod valid {
                 .unpack(|_| {});
             (state, topology, time_source, new_block.into())
         }
+        fn assert_contextless_unknown_default_route_is_pristine(
+            state: &State,
+            block: &mut SignedBlock,
+            unknown_dataspace: DataSpaceId,
+        ) {
+            let entrypoint_hash = block
+                .external_entrypoints_cloned()
+                .next()
+                .expect("routing failure fixture has one entrypoint")
+                .hash();
+            let mut state_block = state.block(block.header());
+            assert_eq!(
+                state_block.transactions.get(&entrypoint_hash),
+                None,
+                "routing failure fixture starts without a transaction-index row"
+            );
+            let error =
+                ValidBlock::validate_and_record_transactions(block, &mut state_block, None, true)
+                    .expect_err("an unknown default dataspace must invalidate the whole block");
+            assert_eq!(
+                error,
+                BlockValidationError::ExecutionContextInvalid(format!(
+                    "transaction routing could not be resolved for entrypoint index 0: dataspace {unknown_dataspace} is not present in the dataspace catalog"
+                ))
+            );
+            assert_eq!(
+                state_block.transactions.get(&entrypoint_hash),
+                None,
+                "failed routing must not stage a transaction-index row"
+            );
+            assert!(
+                !block.has_results(),
+                "failed routing must not attach transaction results or routed metadata"
+            );
+            assert!(
+                block.execution_context().is_none(),
+                "contextless routing must not fabricate a lane-0/dataspace-0 context"
+            );
+            assert!(
+                block.lane_finality_statements().is_empty(),
+                "failed routing must not fabricate lane finality metadata"
+            );
+        }
+        #[test]
+        fn contextless_parallel_validation_fails_before_routing_metadata_or_index_mutation() {
+            let (mut state, _, _, mut block) = signed_default_lane_block_with_execution_context(
+                "contextless-parallel-routing-failure",
+                1,
+                |transactions, _, _| {
+                    BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                        transactions[0].hash_as_entrypoint(),
+                        LaneId::SINGLE,
+                        DataSpaceId::UNIVERSAL,
+                    )])
+                },
+            );
+            let unknown_dataspace = DataSpaceId::new(4_242);
+            {
+                let mut nexus = state.nexus.write();
+                assert!(nexus.dataspace_catalog.by_id(unknown_dataspace).is_none());
+                nexus.routing_policy.default_dataspace = unknown_dataspace;
+            }
+            let mut pipeline = state.view().pipeline().clone();
+            pipeline.workers = 2;
+            state.set_pipeline(pipeline);
+            block.set_execution_context(None);
+
+            assert_contextless_unknown_default_route_is_pristine(
+                &state,
+                &mut block,
+                unknown_dataspace,
+            );
+        }
+        #[test]
+        fn contextless_sequential_validation_fails_before_routing_metadata_or_index_mutation() {
+            let (state, _, _, mut block) = signed_default_lane_block_with_execution_context(
+                "contextless-sequential-routing-failure",
+                1,
+                |transactions, _, _| {
+                    BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                        transactions[0].hash_as_entrypoint(),
+                        LaneId::SINGLE,
+                        DataSpaceId::UNIVERSAL,
+                    )])
+                },
+            );
+            let unknown_dataspace = DataSpaceId::new(4_243);
+            {
+                let mut nexus = state.nexus.write();
+                assert!(nexus.dataspace_catalog.by_id(unknown_dataspace).is_none());
+                nexus.routing_policy.default_dataspace = unknown_dataspace;
+            }
+            let (authority, _) = gen_account_in("contextless-time-routing-failure");
+            block.set_external_entrypoints(vec![TransactionEntrypoint::Time(
+                TimeTriggerEntrypoint {
+                    id: "contextless-time-routing-failure"
+                        .parse()
+                        .expect("time-trigger id"),
+                    instructions: ExecutionStep(Vec::<InstructionBox>::new().into()),
+                    authority,
+                },
+            )]);
+            block.set_execution_context(None);
+            assert!(
+                ValidBlock::sequential_entrypoints_for_live_execution(&block).is_some(),
+                "time-trigger entrypoints must exercise the sequential validation path"
+            );
+
+            assert_contextless_unknown_default_route_is_pristine(
+                &state,
+                &mut block,
+                unknown_dataspace,
+            );
+        }
         fn install_future_created_autoscale_lane(
             state: &State,
             lane_id: LaneId,
@@ -18187,7 +18153,6 @@ pub(crate) mod valid {
                 LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
                     .expect("future-created autoscale lane catalog");
             let mut nexus = state.nexus.write();
-            nexus.enabled = true;
             nexus.autoscale.enabled = true;
             nexus.autoscale.min_lanes = nonzero!(1_u32);
             nexus.autoscale.max_lanes = nonzero!(3_u32);
@@ -18210,7 +18175,6 @@ pub(crate) mod valid {
             crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
             {
                 let mut nexus = state.nexus.write();
-                nexus.enabled = true;
                 nexus.autoscale.enabled = true;
                 nexus.autoscale.min_lanes = nonzero!(1_u32);
                 nexus.autoscale.max_lanes = nonzero!(8_u32);
@@ -19811,35 +19775,7 @@ pub(crate) mod valid {
                 .expect("matching lane payload ownership must validate");
         }
         #[test]
-        fn validate_static_state_dependent_accepts_single_lane_context_when_nexus_disabled() {
-            let (state, _kura, topology, time_source, leader) = lane_payload_context_fixture();
-            {
-                let mut nexus = state.nexus.write();
-                nexus.enabled = false;
-            }
-            assert_eq!(
-                crate::state::consensus_lane_dataspace_at_height(
-                    LaneId::SINGLE,
-                    &state.nexus_snapshot(),
-                    2,
-                ),
-                Some(DataSpaceId::UNIVERSAL)
-            );
-            let signed = signed_lane_payload_context_block(
-                &state,
-                &topology,
-                &leader,
-                &time_source,
-                "single-lane-payload-context-with-nexus-disabled",
-                1,
-                None,
-            );
-            let view = state.query_view();
-            validate_static_test_block!(&signed, &topology, &view, &time_source)
-                .expect("disabled Nexus must retain the canonical single-lane route");
-        }
-        #[test]
-        fn enabled_single_lane_context_uses_lane_authority_not_commit_topology() {
+        fn single_lane_context_uses_lane_authority_not_commit_topology() {
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
             let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -19867,7 +19803,7 @@ pub(crate) mod valid {
                 );
             }
             let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            state.nexus.write().enabled = true;
+
             install_test_lane_manifests_for_keypairs(&state, &lane_keypairs);
             let _prev_hash =
                 commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
@@ -19881,14 +19817,14 @@ pub(crate) mod valid {
                 &topology,
                 &leader,
                 &time_source,
-                "enabled-single-lane-topology-authority",
+                "single-lane-topology-authority",
                 1,
                 None,
             );
             let view = state.query_view();
             let error =
                 validate_static_test_block!(&topology_authored, &topology, &view, &time_source)
-                    .expect_err("global topology must not authorize an enabled Nexus lane");
+                    .expect_err("global topology must not authorize a Nexus lane");
             assert!(
                 matches!(
                     error,
@@ -19903,14 +19839,14 @@ pub(crate) mod valid {
                 &state,
                 &leader,
                 &time_source,
-                "enabled-single-lane-canonical-authority",
+                "single-lane-canonical-authority",
                 1,
                 None,
                 &lane_authority,
             );
             let view = state.query_view();
             validate_static_test_block!(&lane_authored, &topology, &view, &time_source)
-                .expect("enabled Nexus must accept its exact lane authority");
+                .expect("Nexus must accept its exact lane authority");
         }
         #[test]
         fn validate_static_state_dependent_rejects_nonzero_planner_origin_lane_view() {
@@ -20659,7 +20595,6 @@ pub(crate) mod valid {
             let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
             {
                 let mut nexus = state.nexus_snapshot();
-                nexus.enabled = true;
                 nexus.lane_catalog = LaneCatalog::new(
                     nonzero!(4_u32),
                     vec![
@@ -20964,7 +20899,6 @@ pub(crate) mod valid {
             .expect("stale derived geometry catalog");
             {
                 let mut nexus = state.nexus.write();
-                nexus.enabled = true;
                 nexus.lane_catalog = LaneCatalog::default();
                 nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(
                     &stale_geometry_catalog,
@@ -21123,7 +21057,7 @@ pub(crate) mod valid {
                 .expect("height-aware DA policy hash must validate before autoscale lane creation");
         }
         #[test]
-        fn validate_static_state_dependent_rejects_elastic_context_when_nexus_disabled() {
+        fn validate_static_state_dependent_rejects_elastic_context_after_lane_removal() {
             setup_elastic_lane_validation_state!(kura, key_pairs, topology, leader, state);
             let (time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(1));
             let mut selected = None;
@@ -21151,7 +21085,7 @@ pub(crate) mod valid {
                         u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
                         2,
                     )
-                    .expect("enabled Nexus should resolve default elastic route")
+                    .expect("catalogued elastic lane should resolve its route")
                 };
                 if plan.coordinator_route().lane_id == LaneId::new(1) {
                     selected = Some((tx, plan));
@@ -21165,12 +21099,14 @@ pub(crate) mod valid {
             let coordinator = plan.coordinator_route();
             let lane_incarnation = state
                 .lane_incarnation_at_height(coordinator.lane_id, 2)
-                .expect("elastic lane incarnation before disabling Nexus");
+                .expect("elastic lane incarnation before removing the lane");
             let descriptor_validators =
                 state.authoritative_lane_peer_ids_at_height(coordinator.lane_id, 2);
             {
                 let mut nexus = state.nexus.write();
-                nexus.enabled = false;
+                nexus.lane_catalog = LaneCatalog::default();
+                nexus.lane_config =
+                    iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
             }
             assert_eq!(
                 crate::state::consensus_lane_dataspace_at_height(
@@ -21179,7 +21115,7 @@ pub(crate) mod valid {
                     2,
                 ),
                 None,
-                "disabled Nexus must not retain a catalogued elastic route"
+                "a removed elastic lane must no longer be routable"
             );
             time_handle.advance(Duration::from_millis(1));
             let mut ownership = sample_lane_payload_ownership_for_context(
@@ -21209,7 +21145,7 @@ pub(crate) mod valid {
             let signed: SignedBlock = new_block.into();
             let view = state.query_view();
             let err = validate_static_test_block!(&signed, &topology, &view, &time_source)
-                .expect_err("disabled Nexus must reject stale elastic execution context");
+                .expect_err("lane removal must reject stale elastic execution context");
             assert!(
                 matches!(
                     err,
@@ -21218,7 +21154,7 @@ pub(crate) mod valid {
                             "lane payload ownership 0 does not target the active proposal-height lane route"
                         )
                 ),
-                "unexpected disabled-Nexus rejection: {err:?}"
+                "unexpected removed-lane rejection: {err:?}"
             );
         }
         #[test]
@@ -21250,7 +21186,7 @@ pub(crate) mod valid {
                         u64::try_from(time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
                         2,
                     )
-                    .expect("enabled Nexus should resolve default elastic route")
+                    .expect("Nexus should resolve the default elastic route")
                 };
                 if plan.coordinator_route().lane_id == LaneId::new(1) {
                     selected = Some((tx, plan));
@@ -21320,62 +21256,6 @@ pub(crate) mod valid {
                 ),
                 "unexpected corrupt-range rejection: {err:?}"
             );
-        }
-        #[test]
-        fn validate_sumeragi_v2_rejects_embedded_previous_roster_evidence() {
-            setup_single_leader_world!(kura, query, key_pairs, topology, leader, world);
-            let state = State::new_for_testing(world, Arc::clone(&kura), query);
-            let genesis_hash =
-                commit_block_at_height(&state, &kura, &topology, leader.private_key(), 1, None, 1);
-            let prev_hash = commit_block_at_height(
-                &state,
-                &kura,
-                &topology,
-                leader.private_key(),
-                2,
-                Some(genesis_hash),
-                2,
-            );
-            let candidate =
-                ValidBlock::new_dummy_and_modify_header(leader.private_key(), |header| {
-                    header.set_height(nonzero!(3_u64));
-                    header.set_prev_block_hash(Some(prev_hash));
-                    header.creation_time_ms = 3;
-                });
-            let mut signed: SignedBlock = candidate.into();
-            let evidence = PreviousRosterEvidence {
-                height: 2,
-                block_hash: prev_hash,
-                validator_checkpoint: ValidatorSetCheckpoint::new(
-                    2,
-                    0,
-                    prev_hash,
-                    Hash::new(b"previous-roster-parent-root"),
-                    Hash::new(b"previous-roster-post-root"),
-                    topology.as_ref().to_owned(),
-                    vec![0b0000_0001],
-                    vec![0xCC; 96],
-                    VALIDATOR_SET_HASH_VERSION_V1,
-                    None,
-                ),
-                stake_snapshot: None,
-            };
-            signed.set_previous_roster_evidence(Some(evidence));
-            let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(3));
-            let err = {
-                let view = state.query_view();
-                match validate_static_test_block!(&signed, &topology, &view, &time_source) {
-                    Ok(_) => panic!("canonical v2 blocks must reject previous-roster evidence"),
-                    Err(err) => err,
-                }
-            };
-            assert!(matches!(
-                err,
-                BlockValidationError::PreviousRosterEvidenceInvalid(ref message)
-                    if message.contains("not part of canonical Sumeragi v2 blocks")
-            ));
-            ValidBlock::validate_previous_roster_evidence(&signed, 3, Some(prev_hash), true)
-                .expect("the explicitly test-gated replay fixture still validates exact archives");
         }
         #[test]
         fn validate_and_record_transactions_skip_stateless_matches_full() {
@@ -21514,7 +21394,6 @@ pub(crate) mod valid {
             .expect("stale derived geometry catalog");
             {
                 let mut nexus = state.nexus.write();
-                nexus.enabled = true;
                 nexus.lane_catalog = LaneCatalog::default();
                 nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(
                     &stale_geometry_catalog,
@@ -21580,7 +21459,6 @@ pub(crate) mod valid {
             .expect("stale derived geometry catalog");
             {
                 let mut nexus = state.nexus.write();
-                nexus.enabled = true;
                 nexus.lane_catalog = LaneCatalog::default();
                 nexus.lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(
                     &stale_geometry_catalog,
@@ -21640,7 +21518,6 @@ pub(crate) mod valid {
             crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
             {
                 let mut nexus = state.nexus.write();
-                nexus.enabled = true;
                 nexus.autoscale.enabled = true;
                 nexus.autoscale.min_lanes = nonzero!(1_u32);
                 nexus.autoscale.max_lanes = nonzero!(3_u32);
@@ -21868,7 +21745,6 @@ pub(crate) mod valid {
                     da_commitments: chained.0.da_commitments,
                     da_proof_policies: chained.0.da_proof_policies,
                     da_pin_intents: chained.0.da_pin_intents,
-                    previous_roster_evidence: chained.0.previous_roster_evidence,
                     npos_consensus_effects: chained.0.npos_consensus_effects,
                 },
             );
@@ -22830,7 +22706,6 @@ pub(crate) mod valid {
                 .into()
             };
             let candidate: SignedBlock = candidate_at(1_000_000, "v2-wall-clock-work");
-            assert!(candidate.previous_roster_evidence().is_none());
             let (_clock, local_time) = TimeSource::new_mock(Duration::ZERO);
             let mut replay_voting_block = None;
             let replay = validate_voting_test_block!(
@@ -23897,85 +23772,8 @@ pub(crate) mod valid {
                 other => panic!("unexpected rejection reason: {other:?}"),
             }
         }
-        // The executor upgrade is optional; a genesis without it must still pass static checks.
-        #[test]
-        fn genesis_block_without_upgrade_is_valid() {
-            use iroha_data_model::prelude::*;
-            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-            let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
-            let tx = TransactionBuilder::new_genesis(
-                genesis_account.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-            let block = SignedBlock::genesis(
-                vec![tx],
-                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-                None,
-                None,
-            );
-            assert!(check_genesis_block(&block, &genesis_account).is_ok());
-        }
-        #[test]
-        fn check_genesis_block_rejects_proof_policy_sidecar_substitution() {
-            use iroha_data_model::prelude::*;
-            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-            let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
-            let tx = TransactionBuilder::new_genesis(
-                genesis_account.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-            let mut block = SignedBlock::genesis(
-                vec![tx],
-                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-                None,
-                None,
-            );
-            let signed_header = block.header();
-            block.set_da_proof_policies(Some(
-                iroha_data_model::da::commitment::DaProofPolicyBundle::new(Vec::new()),
-            ));
-            block.replace_header_for_testing(signed_header);
-            assert_eq!(
-                check_genesis_block(&block, &genesis_account),
-                Err(InvalidGenesisError::DaProofPolicyMismatch)
-            );
-        }
-        #[test]
-        fn check_genesis_block_rejects_height_above_one() {
-            use iroha_data_model::prelude::*;
-            use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-            let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
-            let tx = TransactionBuilder::new_genesis(
-                genesis_account.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-            .with_instructions([Log::new(Level::INFO, "genesis".to_owned())])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-            let mut block = SignedBlock::genesis(
-                vec![tx],
-                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-                None,
-                None,
-            );
-            let mut header = block.header();
-            header.set_height(nonzero!(2_u64));
-            block.replace_header_for_testing(header);
-            let signature = BlockSignature::new(
-                0,
-                checked_block_signature(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(), block.hash()),
-            );
-            block
-                .replace_signatures([signature].into_iter().collect())
-                .expect("replace signature after changing test header");
-            assert_eq!(
-                check_genesis_block(&block, &genesis_account),
-                Err(InvalidGenesisError::InvalidHeader)
-            );
-        }
+        // Direct fragment preserves canonical genesis validation test paths and source order.
+        include!("block/canonical_genesis_validation_tests.rs");
         #[test]
         fn check_genesis_block_rejects_parent_hash() {
             use iroha_data_model::prelude::*;
@@ -24238,7 +24036,7 @@ pub(crate) mod valid {
                 Some(bundle),
             );
             assert_eq!(block.header().da_commitments_hash(), Some(tree_commitment));
-            assert!(check_genesis_block(&block, &genesis_account).is_ok());
+            assert!(authenticate_genesis_block_intents(&block, &genesis_account).is_ok());
         }
         #[test]
         fn genesis_asset_definition_in_genesis_domain_is_authorized() {
@@ -24267,7 +24065,7 @@ pub(crate) mod valid {
                 None,
                 None,
             );
-            assert!(check_genesis_block(&block, &genesis_account).is_ok());
+            assert!(authenticate_genesis_block_intents(&block, &genesis_account).is_ok());
         }
         #[test]
         fn signed_genesis_validation_rejects_a_non_genesis_header() {
@@ -26751,12 +26549,12 @@ mod event {
             | BlockValidationError::NonCanonicalEmptyDaPinIntentBundle => {
                 Reason::DaShardCursorViolation
             }
-            BlockValidationError::PreviousRosterEvidenceInvalid(_) => Reason::TopologyMismatch,
             BlockValidationError::DaCommitmentBundle(
                 crate::da::DaCommitmentValidationError::ProofPolicy(_),
             ) => Reason::DaProofPolicyMismatch,
             BlockValidationError::DaCommitmentBundle(_) => Reason::DaShardCursorViolation,
             BlockValidationError::DaPinIntentBundle(_) => Reason::DaShardCursorViolation,
+            BlockValidationError::DaIndexHydration(_) => Reason::DaShardCursorViolation,
             BlockValidationError::DaReceiptCursor(_) => Reason::DaShardCursorViolation,
             BlockValidationError::DaShardCursor(_) => Reason::DaShardCursorViolation,
             BlockValidationError::AxtEnvelopeValidationFailed(_) => {
@@ -27654,16 +27452,21 @@ mod tests {
         fn lane_incarnation_at_height(&self, lane_id: LaneId, height: u64) -> Option<Hash> {
             (height == 42).then(|| Hash::new(lane_id.as_u32().to_be_bytes()))
         }
-        fn authoritative_lane_peer_ids_at_height(
+        fn resolve_lane_committee_at_height(
             &self,
-            _lane_id: LaneId,
+            route: crate::state::LaneAuthorityRoute,
             height: u64,
-        ) -> Vec<PeerId> {
-            if height == 42 {
-                self.committee.clone()
-            } else {
-                Vec::new()
+        ) -> Result<Vec<PeerId>, crate::state::LaneAuthorityError> {
+            if height == 42
+                && self.route_active_at_height(route.lane_id(), route.dataspace_id(), height)
+            {
+                return Ok(self.committee.clone());
             }
+            Err(crate::state::LaneAuthorityError::InactiveRoute {
+                lane_id: route.lane_id(),
+                dataspace_id: route.dataspace_id(),
+                authority_height: height,
+            })
         }
         fn consensus_pop_matches_authority(
             &self,
@@ -27703,13 +27506,12 @@ mod tests {
         fn lane_incarnation_at_height(&self, lane_id: LaneId, height: u64) -> Option<Hash> {
             self.inner.lane_incarnation_at_height(lane_id, height)
         }
-        fn authoritative_lane_peer_ids_at_height(
+        fn resolve_lane_committee_at_height(
             &self,
-            lane_id: LaneId,
+            route: crate::state::LaneAuthorityRoute,
             height: u64,
-        ) -> Vec<PeerId> {
-            self.inner
-                .authoritative_lane_peer_ids_at_height(lane_id, height)
+        ) -> Result<Vec<PeerId>, crate::state::LaneAuthorityError> {
+            self.inner.resolve_lane_committee_at_height(route, height)
         }
         fn consensus_pop_matches_authority(
             &self,
@@ -27760,13 +27562,12 @@ mod tests {
                 self.inner.lane_incarnation_at_height(lane_id, height)
             }
         }
-        fn authoritative_lane_peer_ids_at_height(
+        fn resolve_lane_committee_at_height(
             &self,
-            lane_id: LaneId,
+            route: crate::state::LaneAuthorityRoute,
             height: u64,
-        ) -> Vec<PeerId> {
-            self.inner
-                .authoritative_lane_peer_ids_at_height(lane_id, height)
+        ) -> Result<Vec<PeerId>, crate::state::LaneAuthorityError> {
+            self.inner.resolve_lane_committee_at_height(route, height)
         }
         fn consensus_pop_matches_authority(
             &self,
@@ -29020,7 +28821,10 @@ mod tests {
             &fixture.source_bundle,
             fixture.network_id,
             fixture.epoch,
-            HistoricalNativeAmxSourceAuthority::CertifiedCoordinator(&fixture.authority),
+            HistoricalNativeAmxSourceAuthority::CertifiedCoordinator {
+                committee: &fixture.authority.committee,
+                key_authority: &fixture.authority,
+            },
         )
         .expect("bundle-only diagnostics must authenticate the still-active coordinator");
         let foreign_coordinator_key =
@@ -29034,9 +28838,10 @@ mod tests {
                 &fixture.source_bundle,
                 fixture.network_id,
                 fixture.epoch,
-                HistoricalNativeAmxSourceAuthority::CertifiedCoordinator(
-                    &foreign_coordinator_authority,
-                ),
+                HistoricalNativeAmxSourceAuthority::CertifiedCoordinator {
+                    committee: &foreign_coordinator_authority.committee,
+                    key_authority: &foreign_coordinator_authority,
+                },
             )
             .expect_err("self-selected coordinator committee must fail closed")
             .contains("committee is not authoritative")
@@ -30826,120 +30631,7 @@ seiyaku DynamicTarget {
         // The 1st transaction should be confirmed and the 2nd rejected
         assert_eq!(valid_block.as_ref().errors().next().unwrap().0, 1);
     }
-    #[tokio::test]
-    async fn tx_order_same_in_validation_and_revalidation() {
-        // Predefined world state
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
-        let account = Account::new(alice_id.clone()).build(&alice_id);
-        let domain = Domain::new(domain_id).build(&alice_id);
-        let domain_a_id = DomainId::try_new("domain-a", "universal").unwrap();
-        let domain_b_id = DomainId::try_new("domain-b", "universal").unwrap();
-        let mut world = World::with([domain], [account], []);
-        seed_domain_name_lease(&mut world, &alice_id, &domain_a_id);
-        seed_domain_name_lease(&mut world, &alice_id, &domain_b_id);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        install_test_lane_manifests(&state);
-        let (max_clock_drift, tx_limits) = {
-            let state_view = state.world.view();
-            let params = state_view.parameters();
-            (params.sumeragi().max_clock_drift(), params.transaction())
-        };
-        // Two independent register instructions (no ordering dependencies)
-        let domain_a = Register::domain(Domain::new(domain_a_id));
-        let domain_b = Register::domain(Domain::new(domain_b_id));
-        let tx = TransactionBuilder::new(
-            state.network_id,
-            alice_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions::<InstructionBox>([domain_a.into()])
-        .sign(alice_keypair.private_key());
-        let crypto_cfg = state.crypto();
-        let tx = AcceptedTransaction::accept(
-            tx,
-            &state.network_id,
-            max_clock_drift,
-            tx_limits,
-            crypto_cfg.as_ref(),
-        )
-        .expect("Valid");
-        let fail_domain_id = DomainId::try_new("missing-domain", "universal").expect("valid id");
-        let fail_instruction = Unregister::domain(fail_domain_id);
-        let succeed_instruction = domain_b;
-        let tx0 = TransactionBuilder::new(
-            state.network_id,
-            alice_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions::<InstructionBox>([fail_instruction.into()])
-        .sign(alice_keypair.private_key());
-        let tx0 = AcceptedTransaction::accept(
-            tx0,
-            &state.network_id,
-            max_clock_drift,
-            tx_limits,
-            crypto_cfg.as_ref(),
-        )
-        .expect("Valid");
-        let tx2 = TransactionBuilder::new(
-            state.network_id,
-            alice_id,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions::<InstructionBox>([succeed_instruction.into()])
-        .sign(alice_keypair.private_key());
-        let tx2 = AcceptedTransaction::accept(
-            tx2,
-            &state.network_id,
-            max_clock_drift,
-            tx_limits,
-            crypto_cfg.as_ref(),
-        )
-        .expect("Valid");
-        let fail_hash = tx0.as_ref().hash_as_entrypoint();
-        let register_hash = tx.as_ref().hash_as_entrypoint();
-        let succeed_hash = tx2.as_ref().hash_as_entrypoint();
-        // Creating a block of two identical transactions and validating it
-        let transactions = vec![tx0, tx, tx2];
-        let unverified_block = BlockBuilder::new(transactions)
-            .chain(0, state.view().latest_block().as_deref())
-            .sign(alice_keypair.private_key())
-            .unpack(|_| {});
-        let mut state_block = state.block(unverified_block.header);
-        let valid_block = unverified_block
-            .validate_and_record_transactions(&mut state_block)
-            .unpack(|_| {});
-        state_block.commit().unwrap();
-        // The 1st transaction should fail and 2nd succeed
-        let block_ref = valid_block.as_ref();
-        let outcomes: Vec<_> = block_ref
-            .entrypoint_hashes()
-            .zip(block_ref.results())
-            .collect();
-        let lookup = |hash: &_, label: &str| {
-            outcomes
-                .iter()
-                .find(|(entry_hash, _)| entry_hash == hash)
-                .unwrap_or_else(|| panic!("missing result for {label}"))
-                .1
-                .as_ref()
-        };
-        let fail_result = lookup(&fail_hash, "fail tx");
-        assert!(fail_result.is_err(), "fail tx must be rejected");
-        let register_result = lookup(&register_hash, "register tx");
-        assert!(
-            register_result.is_ok(),
-            "register tx must succeed, got {register_result:?}"
-        );
-        let succeed_result = lookup(&succeed_hash, "succeed tx");
-        assert!(
-            succeed_result.is_ok(),
-            "succeed tx must succeed, got {succeed_result:?}"
-        );
-    }
+    include!("block/tx_order_validation_revalidation_test.rs");
     #[tokio::test]
     async fn failed_transactions_revert() {
         // Predefined world state

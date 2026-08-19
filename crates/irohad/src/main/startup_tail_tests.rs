@@ -161,12 +161,12 @@ fn user_can_provide_any_extension() {
         .expect("should allow doing this as well");
 }
 #[test]
-fn config_router_disabled_for_single_lane_defaults() {
+fn canonical_single_lane_topology_is_not_custom() {
     let nexus = iroha_config::parameters::actual::Nexus::default();
-    assert!(!should_use_config_router(&nexus));
+    assert!(!nexus_topology_is_custom(&nexus));
 }
 #[test]
-fn config_router_enabled_when_lane_catalog_expands() {
+fn expanded_lane_catalog_is_custom_topology() {
     use iroha_data_model::nexus::{LaneCatalog, LaneConfig};
     use std::num::NonZeroU32;
     let lane_catalog = LaneCatalog::new(
@@ -183,28 +183,16 @@ fn config_router_enabled_when_lane_catalog_expands() {
     )
     .expect("lane catalog");
     let nexus = iroha_config::parameters::actual::Nexus {
-        enabled: true,
         lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
         lane_catalog,
         ..Default::default()
     };
-    assert!(should_use_config_router(&nexus));
+    assert!(nexus_topology_is_custom(&nexus));
 }
 #[test]
-fn multilane_config_requires_nexus_enabled_flag() {
-    let err = Config::from_toml_source(TomlSource::inline(multilane_config_table(false)))
-        .expect_err("multi-lane catalog must require nexus.enabled");
-    let rendered = format!("{err:?}");
-    assert!(
-        rendered.contains("nexus.enabled"),
-        "error should mention nexus.enabled, got: {rendered}"
-    );
-}
-#[test]
-fn multilane_config_parses_when_enabled_flag_set() {
-    let config = Config::from_toml_source(TomlSource::inline(multilane_config_table(true)))
-        .expect("multi-lane config with nexus enabled should parse");
-    assert!(config.nexus.enabled);
+fn multilane_config_parses() {
+    let config = Config::from_toml_source(TomlSource::inline(multilane_config_table()))
+        .expect("multi-lane config should parse");
     assert_eq!(config.nexus.lane_catalog.lane_count().get(), 2);
     assert_eq!(config.nexus.lane_config.entries().len(), 2);
 }

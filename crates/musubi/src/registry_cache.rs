@@ -303,7 +303,7 @@ impl ResolverIndexCacheCatalogV1 {
                 entry.value.network_id,
                 entry.value.account_chain_discriminant,
             );
-            let key = (deployment.clone(), entry.value.snapshot.finalized_height);
+            let key = (deployment, entry.value.snapshot.finalized_height);
             let identity = (
                 entry.value.snapshot.finalized_block_hash,
                 entry.value.snapshot.index_revision,

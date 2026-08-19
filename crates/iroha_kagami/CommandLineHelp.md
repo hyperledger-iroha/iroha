@@ -95,8 +95,8 @@ Guided node/bootstrap flow for configuring a peer against an existing network pr
 * `--profile <PROFILE>` — Optional preset profile; if omitted, the wizard prompts for one
 
   Possible values:
-  - `iroha2`:
-    Vanilla single-lane Iroha 2 style network (no Sora profile needed)
+  - `local`:
+    Canonical single-lane local network (no Sora profile needed)
   - `nexus`:
     Sora Nexus (mainnet)
   - `taira`:
@@ -144,13 +144,7 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 * `--fresh-random-keys` — Generate every private key from a fresh OS-random, process-local seed.
 
    The seed is never accepted through argv, written to the generated bundle, or printed. This mode is intended for real first-release custody; use `--seed` only for reproducible development fixtures.
-* `--build-line <LINE>` — Select the build line (`iroha2` or `iroha3`) for genesis compatibility. Defaults to `iroha3`; consensus still defaults to `permissioned` unless a profile or perf preset requires `npos`
-
-  Default value: `iroha3`
-
-  Possible values: `iroha2`, `iroha3`
-
-* `--sora-profile <PROFILE>` — Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS). Requires `--build-line iroha3` and at least 4 peers
+* `--sora-profile <PROFILE>` — Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS). Requires at least 4 peers
 
   Possible values: `dataspace`, `nexus`
 
@@ -363,7 +357,7 @@ Generate a genesis configuration and standard-output in JSON format
 * `--ivm-dir <PATH>` — Relative path from the directory of output file to the directory that contains IVM bytecode libraries
 * `--genesis-public-key <MULTI_HASH>`
 * `--ivm-gas-limit-per-block <U64>` — Optional: set the custom parameter `ivm_gas_limit_per_block` (u64) in genesis so all peers agree on the block gas budget. If omitted, a sensible default (1,680,000) is applied
-* `--consensus-mode <MODE>` — Select the consensus mode snapshot to seed in the genesis parameters (public dataspace requires NPoS; other Iroha3 dataspaces may use permissioned or NPoS; Iroha2 defaults to permissioned)
+* `--consensus-mode <MODE>` — Select the consensus mode snapshot to seed in the genesis parameters (public dataspace requires NPoS; other dataspaces may use permissioned or NPoS)
 
   Possible values: `permissioned`, `npos`
 

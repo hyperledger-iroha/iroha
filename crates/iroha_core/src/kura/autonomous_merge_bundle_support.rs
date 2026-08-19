@@ -1805,7 +1805,7 @@ impl Kura {
         Ok(bundle)
     }
     fn autonomous_lane_merge_bundle_pair_entry_limit(&self) -> usize {
-        self.roster_sidecar_retention
+        self.lane_history_retention
             .get()
             .saturating_add(usize::try_from(MAX_INDEXED_SIDECAR_GAP_ENTRIES).unwrap_or(usize::MAX))
             .min(MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES)

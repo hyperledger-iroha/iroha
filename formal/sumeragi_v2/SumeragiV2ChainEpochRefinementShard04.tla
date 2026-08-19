@@ -47,8 +47,8 @@ VerificationProducer(component) ==
 VerificationFixedCorridorDeadlines ==
   IndexedFixedCorridorDeadlines(VerificationContext)
 
-VerificationServeProducerEpisodeDue ==
-  IndexedServeProducerEpisodeDue(VerificationContext)
+VerificationServeProducerTurnDue ==
+  IndexedServeProducerTurnDue(VerificationContext)
 
 VerificationAsyncProof ==
   INSTANCE SumeragiV2AsyncTemporalClosureProofs
@@ -157,8 +157,8 @@ VerificationAsyncProof ==
        asyncProducerConsumedEpisodes <- VerificationProducer(2),
        asyncProducerOriginHistory <- VerificationProducer(3),
        asyncFixedCorridorDeadlines <- VerificationFixedCorridorDeadlines,
-       asyncServeProducerEpisodeDue <-
-         VerificationServeProducerEpisodeDue
+       asyncServeProducerTurnReady <-
+         VerificationServeProducerTurnDue
 
 AdmissibleContextRecords ==
   {initialContext \in ContextRecords:
@@ -1803,7 +1803,7 @@ BY Isa DEF IndexedAsyncStateShape, IndexedAsyncStateAt,
            IndexedDuplicatedGst, IndexedCore, IndexedScheduler,
            IndexedRecovery, IndexedProducer,
            IndexedFixedCorridorDeadlines,
-           IndexedServeProducerEpisodeDue
+           IndexedServeProducerTurnDue
 
 (***************************************************************************
 Exact indexed field-order pins.

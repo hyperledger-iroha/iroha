@@ -162,7 +162,6 @@ struct CliOverrides {
     readiness_timeout: Option<Duration>,
     restart_policy: Option<RestartPolicy>,
     nexus_config: Option<toml::Table>,
-    nexus_enabled: Option<bool>,
     nexus_lane_count: Option<u32>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -216,9 +215,6 @@ impl CliOverrides {
         }
         if let Some(nexus) = self.nexus_config.as_ref() {
             builder = builder.nexus_config(nexus.clone());
-        }
-        if let Some(enabled) = self.nexus_enabled {
-            builder = builder.nexus_enabled(enabled);
         }
         if let Some(lane_count) = self.nexus_lane_count {
             builder = builder.nexus_lane_count(lane_count);
@@ -361,12 +357,6 @@ where
                 let value = next_value_string(&mut iter, "--nexus-config")?;
                 overrides.nexus_config = Some(parse_nexus_config_file(&value)?);
             }
-            "--enable-nexus" => {
-                overrides.nexus_enabled = Some(true);
-            }
-            "--disable-nexus" => {
-                overrides.nexus_enabled = Some(false);
-            }
             "--nexus-lane-count" => {
                 let value = next_value_string(&mut iter, "--nexus-lane-count")?;
                 overrides.nexus_lane_count = Some(parse_u32_flag(&value, "--nexus-lane-count")?);
@@ -480,7 +470,6 @@ fn merge_overrides(env: CliOverrides, cli: CliOverrides) -> CliOverrides {
         readiness_timeout: cli.readiness_timeout.or(env.readiness_timeout),
         restart_policy: cli.restart_policy.or(env.restart_policy),
         nexus_config: cli.nexus_config.or(env.nexus_config),
-        nexus_enabled: cli.nexus_enabled.or(env.nexus_enabled),
         nexus_lane_count: cli.nexus_lane_count.or(env.nexus_lane_count),
     }
 }
@@ -864,8 +853,6 @@ fn print_cli_usage() {
     println!("                               Use a Kagami genesis preset.");
     println!("  --vrf-seed-hex <hex>         VRF seed (32-byte hex) for genesis profile.");
     println!("  --nexus-config <path>        Load Nexus lane/dataspace config from TOML.");
-    println!("  --enable-nexus               Enable Nexus/multi-lane features.");
-    println!("  --disable-nexus              Disable Nexus/multi-lane features.");
     println!("  --nexus-lane-count <count>   Override nexus.lane_count in generated configs.");
     println!("  --irohad <path>              Override the iroha3d binary path.");
     println!("  --kagami <path>              Override the kagami binary path.");
@@ -2020,7 +2007,6 @@ struct MochiApp {
     settings_p2p_port_input: String,
     settings_chain_id_input: String,
     settings_profile_input: String,
-    settings_nexus_enabled: bool,
     settings_nexus_lane_count_input: String,
     settings_nexus_lane_catalog_input: String,
     settings_nexus_dataspace_catalog_input: String,
@@ -2059,7 +2045,6 @@ struct FirstRunWizardState {
     completed: bool,
     workspace_input: String,
     preset: ProfilePreset,
-    enable_nexus: bool,
 }
 impl Default for FirstRunWizardState {
     fn default() -> Self {
@@ -2068,7 +2053,6 @@ impl Default for FirstRunWizardState {
             completed: false,
             workspace_input: String::new(),
             preset: ProfilePreset::FourPeerBft,
-            enable_nexus: false,
         }
     }
 }
@@ -2269,7 +2253,6 @@ impl MochiApp {
             settings_p2p_port_input: String::new(),
             settings_chain_id_input: String::new(),
             settings_profile_input: String::new(),
-            settings_nexus_enabled: false,
             settings_nexus_lane_count_input: String::new(),
             settings_nexus_lane_catalog_input: String::new(),
             settings_nexus_dataspace_catalog_input: String::new(),
@@ -4571,9 +4554,6 @@ impl MochiApp {
             self.settings_build_binaries = self.configured_build_binaries();
             self.settings_readiness_smoke = self.configured_readiness_smoke();
         }
-        self.settings_nexus_enabled = nexus_table
-            .and_then(|table| table.get("enabled").and_then(TomlValue::as_bool))
-            .unwrap_or_else(|| nexus_table.is_some());
         self.settings_nexus_lane_count_input = nexus_table
             .and_then(|table| table.get("lane_count").and_then(TomlValue::as_integer))
             .and_then(|value| u32::try_from(value).ok())
@@ -4626,9 +4606,6 @@ impl MochiApp {
             self.settings_build_binaries = self.configured_build_binaries();
             self.settings_readiness_smoke = self.configured_readiness_smoke();
         }
-        self.settings_nexus_enabled = nexus_table
-            .and_then(|table| table.get("enabled").and_then(TomlValue::as_bool))
-            .unwrap_or_else(|| nexus_table.is_some());
         self.settings_nexus_lane_count_input = nexus_table
             .and_then(|table| table.get("lane_count").and_then(TomlValue::as_integer))
             .and_then(|value| u32::try_from(value).ok())
@@ -4653,10 +4630,6 @@ impl MochiApp {
                 .profile()
                 .preset
                 .unwrap_or(ProfilePreset::FourPeerBft);
-            self.first_run_wizard.enable_nexus = supervisor
-                .nexus_config_overrides()
-                .and_then(|table| table.get("enabled").and_then(TomlValue::as_bool))
-                .unwrap_or_else(|| supervisor.nexus_config_overrides().is_some());
         } else if self.first_run_wizard.workspace_input.trim().is_empty() {
             self.first_run_wizard.workspace_input =
                 PathBuf::from("dist/mochi").display().to_string();
@@ -4906,57 +4879,32 @@ impl MochiApp {
         resolved
             .config
             .set_readiness_smoke(Some(self.settings_readiness_smoke));
-        let has_lane_overrides = lane_count.is_some_and(|count| count > 1)
-            || lane_catalog.is_some()
-            || dataspace_catalog.is_some();
-        if !self.settings_nexus_enabled && has_lane_overrides {
-            return Err(
-                "nexus.enabled = false requires lane_count = 1 and empty lane/dataspace catalogs"
-                    .to_owned(),
-            );
-        }
         let mut nexus_table = resolved.config.nexus.clone().unwrap_or_default();
-        if self.settings_nexus_enabled || has_lane_overrides || !nexus_table.is_empty() {
-            if self.settings_nexus_enabled || has_lane_overrides {
-                nexus_table.insert(
-                    "enabled".into(),
-                    TomlValue::Boolean(self.settings_nexus_enabled),
-                );
-            } else {
-                nexus_table.remove("enabled");
+        match lane_count {
+            Some(count) => {
+                nexus_table.insert("lane_count".into(), TomlValue::Integer(count.into()));
             }
-            match lane_count {
-                Some(count) => {
-                    nexus_table.insert("lane_count".into(), TomlValue::Integer(count.into()));
-                }
-                None => {
-                    nexus_table.remove("lane_count");
-                }
+            None => {
+                nexus_table.remove("lane_count");
             }
-            match lane_catalog {
-                Some(values) => {
-                    nexus_table.insert("lane_catalog".into(), TomlValue::Array(values));
-                }
-                None => {
-                    nexus_table.remove("lane_catalog");
-                }
-            }
-            match dataspace_catalog {
-                Some(values) => {
-                    nexus_table.insert("dataspace_catalog".into(), TomlValue::Array(values));
-                }
-                None => {
-                    nexus_table.remove("dataspace_catalog");
-                }
-            }
-            if nexus_table.is_empty() {
-                resolved.config.nexus = None;
-            } else {
-                resolved.config.nexus = Some(nexus_table);
-            }
-        } else {
-            resolved.config.nexus = None;
         }
+        match lane_catalog {
+            Some(values) => {
+                nexus_table.insert("lane_catalog".into(), TomlValue::Array(values));
+            }
+            None => {
+                nexus_table.remove("lane_catalog");
+            }
+        }
+        match dataspace_catalog {
+            Some(values) => {
+                nexus_table.insert("dataspace_catalog".into(), TomlValue::Array(values));
+            }
+            None => {
+                nexus_table.remove("dataspace_catalog");
+            }
+        }
+        resolved.config.nexus = Some(nexus_table);
         if let Err(err) = resolved.config.write_to_path(&resolved.path) {
             return Err(err.to_string());
         }
@@ -5067,12 +5015,6 @@ impl MochiApp {
         let Some(nexus) = nexus else {
             return Vec::new();
         };
-        if matches!(
-            nexus.get("enabled").and_then(TomlValue::as_bool),
-            Some(false)
-        ) {
-            return Vec::new();
-        }
         let snapshot = lane_catalog_snapshot(Some(nexus));
         snapshot
             .lane_ids()
@@ -5905,10 +5847,7 @@ impl MochiApp {
                         egui::CollapsingHeader::new("Nexus lanes and DA storage")
                             .default_open(false)
                             .show(ui, |ui| {
-                                ui.checkbox(
-                                    &mut self.settings_nexus_enabled,
-                                    "Enable Nexus / multi-lane mode",
-                                );
+                                ui.label("Nexus routing is mandatory in the first release.");
                                 ui.add_space(6.0);
                                 ui.label("Lane count (blank = default 1):");
                                 ui.add(
@@ -6018,9 +5957,8 @@ impl MochiApp {
                                     for info in &report.versions {
                                         ui.label(format!("{}:", info.name));
                                         ui.label(format!(
-                                            "{} ({}, {})",
+                                            "{} ({})",
                                             info.path.display(),
-                                            info.build_line,
                                             info.source_label()
                                         ));
                                         ui.end_row();

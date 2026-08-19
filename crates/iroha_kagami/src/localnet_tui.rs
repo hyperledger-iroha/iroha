@@ -1,9 +1,8 @@
 use crate::{
     Outcome, RunArgs,
     localnet::{
-        AssetSpec, BuildLineArg, DEFAULT_BIND_HOST, DEFAULT_PUBLIC_HOST,
-        LOCALNET_SAMPLE_ASSET_NAME, LocalnetOptions, SoraProfile,
-        canonical_asset_definition_literal, generate_localnet,
+        AssetSpec, DEFAULT_BIND_HOST, DEFAULT_PUBLIC_HOST, LOCALNET_SAMPLE_ASSET_NAME,
+        LocalnetOptions, SoraProfile, canonical_asset_definition_literal, generate_localnet,
     },
     tui,
 };
@@ -67,17 +66,7 @@ fn default_localnet_output_directory() -> String {
         .to_string_lossy()
         .into_owned()
 }
-fn consensus_mode_prompt(
-    build_line: iroha_version::BuildLine,
-    sora_profile: Option<SoraProfile>,
-) -> ConsensusModePrompt {
-    if !build_line.is_iroha3() {
-        return ConsensusModePrompt {
-            choices: vec![ConsensusModeChoice::Permissioned],
-            default_index: 0,
-            locked: true,
-        };
-    }
+fn consensus_mode_prompt(sora_profile: Option<SoraProfile>) -> ConsensusModePrompt {
     if matches!(sora_profile, Some(SoraProfile::Nexus)) {
         return ConsensusModePrompt {
             choices: vec![ConsensusModeChoice::Npos],
@@ -102,33 +91,22 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
             .prompt()?
             .try_into()
             .map_err(|_| color_eyre::eyre::eyre!("peer count must be > 0"))?;
-        let build_line = Select::new(
-            "Build line?",
-            vec![BuildLineArg::Iroha3, BuildLineArg::Iroha2],
+        let choice = Select::new(
+            "Sora profile?",
+            vec![
+                SoraProfileChoice::None,
+                SoraProfileChoice::Dataspace,
+                SoraProfileChoice::Nexus,
+            ],
         )
         .with_starting_cursor(0)
         .prompt()?;
-        let build_line = iroha_version::BuildLine::from(build_line);
-        let sora_profile = if build_line.is_iroha3() {
-            let choice = Select::new(
-                "Sora profile?",
-                vec![
-                    SoraProfileChoice::None,
-                    SoraProfileChoice::Dataspace,
-                    SoraProfileChoice::Nexus,
-                ],
-            )
-            .with_starting_cursor(0)
-            .prompt()?;
-            match choice {
-                SoraProfileChoice::None => None,
-                SoraProfileChoice::Dataspace => Some(SoraProfile::Dataspace),
-                SoraProfileChoice::Nexus => Some(SoraProfile::Nexus),
-            }
-        } else {
-            None
+        let sora_profile = match choice {
+            SoraProfileChoice::None => None,
+            SoraProfileChoice::Dataspace => Some(SoraProfile::Dataspace),
+            SoraProfileChoice::Nexus => Some(SoraProfile::Nexus),
         };
-        let consensus_prompt = consensus_mode_prompt(build_line, sora_profile);
+        let consensus_prompt = consensus_mode_prompt(sora_profile);
         let consensus_mode = if consensus_prompt.locked {
             consensus_prompt.choices[consensus_prompt.default_index].into()
         } else {
@@ -198,7 +176,6 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
             }
         }
         let opts = LocalnetOptions {
-            build_line,
             sora_profile,
             perf_profile: None,
             peers,
@@ -221,23 +198,15 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
 mod tests {
     use super::*;
     #[test]
-    fn consensus_prompt_locks_permissioned_for_iroha2() {
-        let prompt = consensus_mode_prompt(iroha_version::BuildLine::Iroha2, None);
-        assert!(prompt.locked);
-        assert_eq!(prompt.choices, vec![ConsensusModeChoice::Permissioned]);
-        assert_eq!(prompt.default_index, 0);
-    }
-    #[test]
     fn consensus_prompt_locks_npos_for_sora_nexus() {
-        let prompt =
-            consensus_mode_prompt(iroha_version::BuildLine::Iroha3, Some(SoraProfile::Nexus));
+        let prompt = consensus_mode_prompt(Some(SoraProfile::Nexus));
         assert!(prompt.locked);
         assert_eq!(prompt.choices, vec![ConsensusModeChoice::Npos]);
         assert_eq!(prompt.default_index, 0);
     }
     #[test]
-    fn consensus_prompt_allows_choice_for_non_nexus_iroha3() {
-        let prompt = consensus_mode_prompt(iroha_version::BuildLine::Iroha3, None);
+    fn consensus_prompt_allows_choice_without_sora_nexus() {
+        let prompt = consensus_mode_prompt(None);
         assert!(!prompt.locked);
         assert_eq!(
             prompt.choices,

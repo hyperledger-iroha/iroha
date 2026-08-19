@@ -16,13 +16,6 @@
 //! ephemeral signer serializes reads and retains one exact signed response so
 //! cancellation or response loss can retry a generation byte-for-byte without
 //! selecting a later head.
-#[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{
-    fmt, io,
-    path::{Component, Path, PathBuf},
-    sync::{Arc, Mutex},
-};
 use iroha_config::parameters::actual::SorafsProviderIngestFinalizedArchive;
 use iroha_core::{
     kura::Kura,
@@ -61,6 +54,13 @@ use sorafs_node::{
     ProviderIngestFinalizedCursorV1, ProviderIngestFinalizedLedgerErrorV1,
     ProviderIngestFinalizedLedgerV1, ProviderIngestFutureV1,
     provider_ingest_completed_musubi_capture_transcript_digest_v1,
+};
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    fmt, io,
+    path::{Component, Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 const LIVE_SELECTION_ATTEMPTS_V1: usize = 4;
 /// Typed failure while opening and qualifying the provider-ingest archive.
@@ -338,6 +338,10 @@ fn classify_pending_replay_completion(
 /// durable storage, a substituted State/Kura/pending-tip boundary, nonempty
 /// height-zero storage, incomplete coverage, a fork, or a configured lag
 /// violation.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "startup binds the complete authenticated State/Kura archive boundary"
+)]
 pub(crate) fn prepare_provider_ingest_finalized_archive_v1(
     config: &SorafsProviderIngestFinalizedArchive,
     network_id: NetworkId,
@@ -1223,7 +1227,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
                 {
                     return Err(ProviderIngestFinalizedLedgerErrorV1::Rejected);
                 }
-                (retained.key.clone(), Some(retained.cursor.clone()))
+                (retained.key, Some(retained.cursor))
             }
         };
         let archive_page = self
@@ -1338,8 +1342,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
         if signed_read.last_request.as_ref() == Some(&request) {
             return signed_read
                 .last_response
-                .as_ref()
-                .cloned()
+                .clone()
                 .ok_or(ProviderIngestFinalizedLedgerErrorV1::Unavailable);
         }
         let expected_generation = match signed_read.last_request.as_ref() {
@@ -1392,7 +1395,7 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
                 .read_provider_page(key, self.provider_id, None, 1)
                 .map_err(|_| ProviderIngestFinalizedLedgerErrorV1::Unavailable)?;
             Some(ProviderIngestFinalizedArchiveCursorV1 {
-                key: key.clone(),
+                key: *key,
                 provider_id: self.provider_id,
                 provider_state_root: first.provider_state_root,
                 after_order_id: ReplicationOrderId::new(after_order_id),
@@ -1655,6 +1658,7 @@ fn map_archive_capture_source_page(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_core::{
         query::{
             provider_ingest_finalized::{
@@ -1687,7 +1691,6 @@ mod tests {
         REPLICATION_ORDER_VERSION_V1, ReplicationAssignmentV1, ReplicationOrderSlaV1,
         ReplicationOrderV1,
     };
-    use super::*;
     fn physical_tempdir() -> std::io::Result<tempfile::TempDir> {
         let temp_root = std::env::temp_dir().canonicalize()?;
         tempfile::Builder::new()
@@ -1742,7 +1745,7 @@ mod tests {
         };
         let mut pin_manifest = PinManifestRecord::new(
             digest,
-            root.clone(),
+            root,
             chunker,
             [order_seed.wrapping_add(0x40); 32],
             [order_seed.wrapping_add(0x50); 32],
@@ -1836,7 +1839,7 @@ mod tests {
         };
         let pin_manifest = PinManifestRecord::new(
             digest,
-            root_cid.clone(),
+            root_cid,
             chunker.clone(),
             [0x73; 32],
             [0x74; 32],
@@ -1849,7 +1852,7 @@ mod tests {
             Metadata::default(),
         );
         let commitment = MusubiArchiveCommitmentV1 {
-            root_cid: root_cid.clone(),
+            root_cid,
             chunker,
             chunk_plan_digest: MusubiContentDigestV1::new([0x73; 32]),
             por_root: MusubiContentDigestV1::new([0x74; 32]),
@@ -1870,7 +1873,7 @@ mod tests {
         )
         .expect("archive key");
         ProviderIngestFinalizedArchivePageV1 {
-            key: key.clone(),
+            key,
             provider_id,
             provider_state_root: [0x7A; 32],
             rows: vec![ProviderIngestFinalizedArchiveAssignmentV1 {
@@ -1953,6 +1956,10 @@ mod tests {
         ));
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the test validates the full height-zero archive activation boundary"
+    )]
     fn fresh_height_zero_opens_empty_archive_for_genesis_capture() {
         let daemon_root = physical_tempdir().expect("daemon root");
         let kura = Kura::blank_kura_for_testing();
@@ -2023,7 +2030,7 @@ mod tests {
         let key = ProviderIngestFinalizedArchiveKeyV1::try_new(network_id, 1, [0x52; 32], 1_000)
             .expect("test archive key");
         let runtime_scan = ActiveArchiveScanV1 {
-            key: key.clone(),
+            key,
             cursor: ProviderIngestFinalizedArchiveCursorV1 {
                 key,
                 provider_id: ProviderId::new([0x51; 32]),
@@ -2187,7 +2194,7 @@ mod tests {
             .expect("capture replay key");
         archive
             .insert(ProviderIngestFinalizedProjectionV1 {
-                key: key.clone(),
+                key,
                 providers: vec![ProviderIngestFinalizedProviderProjectionV1 {
                     provider_id,
                     expected_owner: None,
@@ -2269,12 +2276,56 @@ mod tests {
             FeePaymentIntent::authority(Vec::new(), None),
         )
         .sign(genesis_signer.private_key());
-        let genesis = SignedBlock::genesis(
+        let mut genesis = SignedBlock::genesis(
             vec![genesis_transaction],
             genesis_signer.private_key(),
             None,
             None,
         );
+        let entrypoint_hashes = genesis
+            .external_entrypoints_cloned()
+            .map(|entrypoint| entrypoint.hash())
+            .collect::<Vec<_>>();
+        genesis
+            .set_transaction_results(
+                Vec::new(),
+                &entrypoint_hashes,
+                vec![Ok(
+                    iroha_data_model::transaction::DataTriggerSequence::default(),
+                )],
+            )
+            .expect("attach canonical successful archive genesis result");
+        let final_signature = iroha_data_model::block::BlockSignature::new(
+            0,
+            iroha_crypto::SignatureOf::try_from_hash(genesis_signer.private_key(), genesis.hash())
+                .expect("sign result-bearing archive genesis"),
+        );
+        genesis
+            .replace_signatures(std::collections::BTreeSet::from([final_signature]))
+            .expect("replace result-bearing archive genesis signature");
+        genesis
+            .validate_entrypoint_merkle_cache()
+            .expect("archive genesis entrypoint Merkle cache must be canonical");
+        genesis
+            .validate_result_merkle_cache()
+            .expect("archive genesis result Merkle cache must be canonical");
+        assert_eq!(genesis.committed_fragment_count(), Some(1));
+        assert_eq!(
+            genesis.header().result_merkle_root(),
+            genesis
+                .result_merkle_commitment()
+                .map(|commitment| *commitment.root())
+        );
+        let mut final_signatures = genesis.signatures();
+        let final_signature = final_signatures
+            .next()
+            .expect("result-bearing archive genesis signature");
+        assert_eq!(final_signature.index(), 0);
+        assert!(final_signatures.next().is_none());
+        final_signature
+            .signature()
+            .verify_hash(genesis_signer.public_key(), genesis.hash())
+            .expect("verify result-bearing archive genesis signature");
         let genesis_hash = *genesis.hash().as_ref();
         let network_id = NetworkId::from_genesis_hash(genesis.hash());
         let kura = Kura::blank_kura_for_testing();
@@ -2285,7 +2336,7 @@ mod tests {
                 .expect("signed capture first key");
         archive
             .insert(ProviderIngestFinalizedProjectionV1 {
-                key: first_key.clone(),
+                key: first_key,
                 providers: vec![ProviderIngestFinalizedProviderProjectionV1 {
                     provider_id,
                     expected_owner: None,
@@ -2464,7 +2515,7 @@ mod tests {
         .expect("exact key");
         let after_order_id = ReplicationOrderId::new([0x81; 32]);
         *query.active.lock().expect("active cursor lock") = Some(ActiveArchiveScanV1 {
-            key: key.clone(),
+            key,
             cursor: ProviderIngestFinalizedArchiveCursorV1 {
                 key,
                 provider_id,

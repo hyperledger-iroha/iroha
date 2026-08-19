@@ -178,6 +178,10 @@ mod rpt_digest_json {
     pub fn serialize(value: &Option<[u8; 32]>, out: &mut String) {
         crate::json_helpers::fixed_bytes::option::serialize(value, out);
     }
+    #[expect(
+        clippy::ref_option,
+        reason = "Norito bounded serializers receive optional fields by shared reference"
+    )]
     pub fn serialize_bounded(
         value: &Option<[u8; 32]>,
         out: &mut dyn JsonWriteSink,

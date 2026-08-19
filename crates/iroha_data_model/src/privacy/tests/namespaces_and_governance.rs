@@ -1,4 +1,8 @@
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the namespace variants and role/publication invariants are one closed matrix"
+)]
 fn namespaces_root_roles_and_publications_are_closed_and_typed() {
     for statement in sample_statements() {
         let namespace = PrivacyNamespaceV1::from_statement(&statement);
@@ -283,6 +287,10 @@ fn orchard_pool_bootstrap_has_one_node_derived_origin_and_distinct_provenance() 
     );
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "all proof-managed bootstrap variants share one self-authentication matrix"
+)]
 fn proof_managed_pool_bootstraps_are_closed_bounded_and_self_authenticating() {
     let variants = [
         PrivacyProofManagedPoolBootstrapV1::MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1 {
@@ -1059,6 +1067,10 @@ fn vega_figure9_public_inputs_are_closed_and_non_degenerate() {
     );
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "issuer lifecycle mutations are checked together as one forward-only matrix"
+)]
 fn vega_issuer_records_are_self_digested_forward_only_and_policy_closed() {
     let issuer_id = PrivacyIssuerIdV1::new(raw(0x91));
     let origin = PrivacyVegaIssuerRecordV1::new(
@@ -1609,6 +1621,10 @@ fn assert_zk_x509_certificate_policy_record_roundtrip(
         .is_err()
     );
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "trust-anchor and certificate-policy digest tampering share one exhaustive helper"
+)]
 fn assert_zk_x509_record_tampering_rejected(
     trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
     certificate_policy: &PrivacyZkX509CertificatePolicyRecordV1,
@@ -1755,6 +1771,10 @@ fn zk_x509_governance_records_are_self_digested_strict_and_roundtrip() {
     assert_zk_x509_record_tampering_rejected(trust_anchor, &certificate_policy);
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "signed-CRL canonicality, binding, and transition cases form one closed matrix"
+)]
 fn zk_x509_signed_crl_records_are_canonical_bound_and_fail_closed() {
     let origin = zk_x509_crl(
         ZK_X509_INITIAL_RECORD_EPOCH_V1,

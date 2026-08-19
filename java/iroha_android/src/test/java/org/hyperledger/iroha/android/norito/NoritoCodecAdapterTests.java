@@ -45,7 +45,7 @@ import org.junit.Test;
 
 public final class NoritoCodecAdapterTests {
 
-  private static final String SBD_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
+  private static final String DS_ASSET_DEFINITION_ID = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
   private static final NetworkId TEST_NETWORK_ID =
       NetworkId.parse(
           "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0");
@@ -127,7 +127,7 @@ public final class NoritoCodecAdapterTests {
 
     final InstructionBox transfer =
         TransferWirePayloadEncoder.encodeAssetTransfer(
-            SBD_ASSET_DEFINITION_ID + "#" + authority, "10", destination);
+            DS_ASSET_DEFINITION_ID + "#" + authority, "10", destination);
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setFeePayment(FeePaymentIntent.authority(Collections.emptyList()))
@@ -157,7 +157,7 @@ public final class NoritoCodecAdapterTests {
         TransferWirePayloadEncoder.decodeAssetTransferPayload(
             ((InstructionBox.WirePayload) decodedInstruction.payload()).payloadBytes(),
             SccpV1.TAIRA_I105_DISCRIMINANT_V1);
-    assert (SBD_ASSET_DEFINITION_ID + "#" + authority).equals(decodedTransfer.assetId())
+    assert (DS_ASSET_DEFINITION_ID + "#" + authority).equals(decodedTransfer.assetId())
         : "signed transfer asset owner must preserve exact Taira I105";
     assert destination.equals(decodedTransfer.destinationAccountId())
         : "signed transfer destination must preserve exact Taira I105";

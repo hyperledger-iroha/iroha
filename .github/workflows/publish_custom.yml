@@ -81,7 +81,7 @@ jobs:
         if: ${{ inputs.image_type == 'glibc' }}
         with:
           push: true
-          tags: docker.soramitsu.co.jp/iroha2/iroha:glibc-${{ steps.checkout_meta.outputs.sha }}
+          tags: docker.soramitsu.co.jp/iroha3/iroha:glibc-${{ steps.checkout_meta.outputs.sha }}
           labels: commit=${{ steps.checkout_meta.outputs.sha }}
           build-args: |
             "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
@@ -107,7 +107,7 @@ jobs:
         if: ${{ inputs.image_type == 'profiling' }}
         with:
           push: true
-          tags: docker.soramitsu.co.jp/iroha2/iroha:profiling-${{ env.TAG }}-${{ steps.checkout_meta.outputs.sha }}
+          tags: docker.soramitsu.co.jp/iroha3/iroha:profiling-${{ env.TAG }}-${{ steps.checkout_meta.outputs.sha }}
           labels: commit=${{ steps.checkout_meta.outputs.sha }}
           build-args: |
             "IROHA_RUST_BUILDER_IMAGE=${{ env.IROHA_RUST_BUILDER_IMAGE }}"
@@ -124,7 +124,7 @@ jobs:
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           push: true
-          tags: docker.soramitsu.co.jp/iroha2/iroha:alpine-${{ steps.checkout_meta.outputs.sha }}
+          tags: docker.soramitsu.co.jp/iroha3/iroha:alpine-${{ steps.checkout_meta.outputs.sha }}
           labels: commit=${{ steps.checkout_meta.outputs.sha }}
           file: Dockerfile.musl
           build-args: |

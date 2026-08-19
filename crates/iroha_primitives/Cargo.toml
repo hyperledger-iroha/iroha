@@ -1,5 +1,6 @@
 [package]
 name = "iroha_primitives"
+autotests = false
 
 edition.workspace = true
 version.workspace = true
@@ -58,5 +59,10 @@ name = "smallvec"
 harness = false
 
 [[test]]
+name = "addr_parsing"
+path = "tests/addr_parsing.rs"
+
+[[test]]
 name = "ui"
+path = "tests/ui.rs"
 required-features = ["trybuild-tests"]

@@ -1909,125 +1909,17 @@ async fn public_pipeline_status_does_not_expose_rejection_details() {
     let encoded = norito::json::to_json(&payload).expect("public status JSON");
     assert!(!encoded.contains(&reason.to_string()));
 }
-fn sample_commit_qc(
-    network_id: &NetworkId,
-    block_hash: HashOf<BlockHeader>,
-    post_state_root: iroha_crypto::Hash,
-    height: u64,
-    view: u64,
-    epoch: u64,
-) -> (Qc, Vec<u8>) {
-    let parent_state_root = iroha_crypto::Hash::prehashed([0x11; 32]);
-    let keypair = checked_torii_test_bls_keypair(0x2f, "derive Torii commit-QC fixture key");
-    let vote = Vote {
-        phase: Phase::Commit,
-        block_hash,
-        parent_state_root,
-        post_state_root,
-        height,
-        view,
-        epoch,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        highest_qc: None,
-        signer: 0,
-        bls_sig: Vec::new(),
-    };
-    let preimage = vote_preimage(network_id, PERMISSIONED_TAG, &vote);
-    let signature =
-        checked_torii_test_signature(&keypair, &preimage, "sign Torii commit-QC fixture vote");
-    let sig_bytes = signature.payload().to_vec();
-    let sig_refs = vec![sig_bytes.as_slice()];
-    let aggregate_signature =
-        iroha_crypto::bls_normal_aggregate_signatures(&sig_refs).expect("aggregate signatures");
-    let validator_pop =
-        iroha_crypto::bls_normal_pop_prove(keypair.private_key()).expect("generate validator pop");
-    let peer_id = PeerId::from(keypair.public_key().clone());
-    let validator_set = vec![peer_id];
-    (
-        Qc {
-            phase: Phase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root,
-            post_state_root,
-            height,
-            view,
-            epoch,
-            chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![0b0000_0001],
-                bls_aggregate_signature: aggregate_signature,
-            },
-        },
-        validator_pop,
-    )
-}
-fn record_commit_cert(height: u64) -> Qc {
-    let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed(
-        [0x42; Hash::LENGTH],
-    )));
-    let keypair =
-        checked_torii_test_bls_keypair(0x30, "derive Torii recorded commit-cert fixture key");
-    let peer_id = PeerId::from(keypair.public_key().clone());
-    let block_hash = HashOf::from_untyped_unchecked(Hash::prehashed([height as u8; 32]));
-    let parent_state_root = iroha_crypto::Hash::prehashed([0x22; 32]);
-    let post_state_root = iroha_crypto::Hash::prehashed([0x33; 32]);
-    let vote = Vote {
-        phase: Phase::Commit,
-        block_hash,
-        parent_state_root,
-        post_state_root,
-        height,
-        view: 0,
-        epoch: 0,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        highest_qc: None,
-        signer: 0,
-        bls_sig: Vec::new(),
-    };
-    let preimage = vote_preimage(&network_id, PERMISSIONED_TAG, &vote);
-    let signature = checked_torii_test_signature(
-        &keypair,
-        &preimage,
-        "sign Torii recorded commit-cert fixture vote",
-    );
-    let cert = Qc {
-        phase: Phase::Commit,
-        height,
-        subject_block_hash: block_hash,
-        parent_state_root,
-        post_state_root,
-        view: 0,
-        epoch: 0,
-        chain_order_hash: iroha_data_model::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&vec![peer_id.clone()]),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: vec![peer_id],
-        aggregate: QcAggregate {
-            signers_bitmap: vec![0b0000_0001],
-            bls_aggregate_signature: signature.payload().to_vec(),
-        },
-    };
-    record_commit_qc_for_tests(cert.clone());
-    cert
-}
 #[tokio::test]
 async fn ledger_headers_respect_from_and_limit() {
     let app = mk_app_state_for_tests();
     let (block1, _) = make_signed_block(1, None);
+    let first_header = block1.header();
     let first_hash = store_block(&app, block1);
+    record_committed_block_hash_for_test(&app, first_header, first_hash);
     let (block2, _) = make_signed_block(2, Some(first_hash));
-    store_block(&app, block2);
+    let second_header = block2.header();
+    let second_hash = store_block(&app, block2);
+    record_committed_block_hash_for_test(&app, second_header, second_hash);
     let resp = super::handler_ledger_headers(
         State(app.clone()),
         crate::NoritoQuery(routing::HistoryWindowQuery {
@@ -2073,122 +1965,31 @@ async fn ledger_headers_respect_from_and_limit() {
     assert_eq!(decoded[1].height().get(), 1);
 }
 #[tokio::test]
-async fn commit_qc_window_clamped() {
-    let high = 10_000;
-    let latest = record_commit_cert(high + 1);
-    let older = record_commit_cert(high);
-    let resp = handle_v1_sumeragi_commit_qcs(
-        crate::NoritoQuery(routing::HistoryWindowQuery {
-            from: Some(high + 1),
-            limit: Some(1),
-        }),
-        None,
-    )
-    .await
-    .expect("ok");
-    let bytes = torii_body_bytes(resp, "bytes").await;
-    let certs: Vec<Qc> = norito::json::from_slice(&bytes).expect("decode certs json");
-    assert_eq!(certs.len(), 1);
-    assert_eq!(certs[0].height, latest.height);
-    let norito_resp = handle_v1_sumeragi_commit_qcs(
-        crate::NoritoQuery(routing::HistoryWindowQuery {
-            from: Some(high + 1),
-            limit: Some(2),
-        }),
-        Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
-    )
-    .await
-    .expect("ok");
-    let norito_bytes = torii_body_bytes(norito_resp, "bytes").await;
-    let archived = norito::from_bytes::<Vec<Qc>>(&norito_bytes).expect("arch");
-    let decoded: Vec<Qc> = norito::core::NoritoDeserialize::deserialize(archived);
-    assert!(decoded.iter().any(|c| c.height == latest.height));
-    assert!(decoded.iter().any(|c| c.height == older.height));
-}
-#[tokio::test]
-async fn validator_set_history_returns_snapshots() {
-    let high = 5;
-    let latest = record_commit_cert(high + 1);
-    let older = record_commit_cert(high);
-    let resp = routing::handle_v1_sumeragi_validator_sets(
-        crate::NoritoQuery(routing::HistoryWindowQuery {
-            from: Some(high + 1),
-            limit: Some(2),
-        }),
-        None,
-    )
-    .await
-    .expect("ok");
-    let bytes = torii_body_bytes(resp, "json").await;
-    let sets: Vec<routing::ValidatorSetSnapshot> =
-        norito::json::from_slice(&bytes).expect("decode json");
-    assert_eq!(sets.len(), 2);
-    assert_eq!(sets[0].height, latest.height);
-    assert_eq!(sets[1].height, older.height);
-    let norito_resp = routing::handle_v1_sumeragi_validator_sets(
-        crate::NoritoQuery(routing::HistoryWindowQuery {
-            from: Some(high + 1),
-            limit: Some(1),
-        }),
-        Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
-    )
-    .await
-    .expect("ok");
-    let norito_bytes = torii_body_bytes(norito_resp, "bytes").await;
-    let archived =
-        norito::from_bytes::<Vec<routing::ValidatorSetSnapshot>>(&norito_bytes).expect("arch");
-    let decoded: Vec<routing::ValidatorSetSnapshot> =
-        norito::core::NoritoDeserialize::deserialize(archived);
-    assert_eq!(decoded.len(), 1);
-    assert_eq!(decoded[0].height, latest.height);
-    assert_eq!(decoded[0].validator_set_hash, latest.validator_set_hash);
-}
-#[tokio::test]
-async fn validator_set_by_height_returns_exact_match() {
-    let high = 20;
-    record_commit_cert(high);
-    let wanted = record_commit_cert(high + 1);
-    let resp = routing::handle_v1_sumeragi_validator_set_by_height(
-        axum::extract::Path(high + 1),
-        Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
-    )
-    .await
-    .expect("ok");
-    let bytes = torii_body_bytes(resp, "norito body").await;
-    let archived = norito::from_bytes::<routing::ValidatorSetSnapshot>(&bytes).expect("archive");
-    let decoded: routing::ValidatorSetSnapshot =
-        norito::core::NoritoDeserialize::deserialize(archived);
-    assert_eq!(decoded.height, wanted.height);
-    assert_eq!(decoded.block_hash, wanted.subject_block_hash);
-}
-#[tokio::test]
-async fn ledger_state_root_uses_result_merkle_root_when_no_commit_qc() {
-    let app = mk_app_state_for_tests();
-    let (mut block, _) = make_signed_block(1, None);
-    let entry_hashes = [block
-        .payload()
-        .transactions
-        .first()
-        .expect("tx")
-        .hash_as_entrypoint()];
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        )
-        .expect("test block entrypoint hash should match payload");
-    let result_root = block
+async fn ledger_state_endpoints_return_exact_v2_finality_in_json_and_norito() {
+    let (app, _, expected_artifact) = app_with_indexed_sccp_message_for_test(true);
+    let expected_root = expected_artifact
+        .commit_qc
+        .execution_commitment
+        .post_state_root;
+    let result_root = app
+        .state
+        .block_by_height(NonZeroUsize::new(1).expect("nonzero height"))
+        .expect("committed fixture block")
         .header()
         .result_merkle_root()
-        .map(|hash| iroha_crypto::Hash::prehashed(*hash.as_ref()))
-        .expect("result root");
-    let block_hash = block.hash();
-    store_block(&app, block);
-    let resp =
-        handler_ledger_state_root(State(app.clone()), axum::extract::Path(1), HeaderMap::new())
-            .await
-            .expect("ok");
+        .map(|hash| Hash::prehashed(*hash.as_ref()))
+        .expect("fixture result root");
+    assert_ne!(
+        expected_root, result_root,
+        "the result Merkle root must be an adversarially distinct fallback candidate"
+    );
+    let resp = handler_ledger_state_root(
+        State(Arc::clone(&app)),
+        axum::extract::Path(1),
+        HeaderMap::new(),
+    )
+    .await
+    .expect("authenticated state-root response");
     assert_eq!(
         resp.headers()
             .get(axum::http::header::CONTENT_TYPE)
@@ -2196,93 +1997,82 @@ async fn ledger_state_root_uses_result_merkle_root_when_no_commit_qc() {
         Some(b"application/json".as_slice())
     );
     let bytes = torii_body_bytes(resp, "json body").await;
-    let payload: StateRootResponse = norito::json::from_slice(&bytes).expect("decode json");
+    let value: norito::json::Value = norito::json::from_slice(&bytes).expect("JSON value");
+    let mut fields = value
+        .as_object()
+        .expect("state finality object")
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    fields.sort_unstable();
+    assert_eq!(
+        fields,
+        [
+            "block_hash",
+            "block_header",
+            "finality_artifact",
+            "height",
+            "state_root",
+        ]
+    );
+    for retired in ["source", "commit_qc"] {
+        let mut hostile = value.clone();
+        hostile
+            .as_object_mut()
+            .expect("state finality object")
+            .insert(retired.to_owned(), norito::json::Value::Null);
+        assert!(
+            norito::json::from_value::<StateFinalityResponse>(hostile).is_err(),
+            "closed first-release response accepted retired field {retired}"
+        );
+    }
+    let payload: StateFinalityResponse =
+        norito::json::from_slice(&bytes).expect("typed state finality JSON");
     assert_eq!(payload.height, 1);
-    assert_eq!(payload.block_hash, block_hash);
-    assert_eq!(payload.state_root, result_root);
-    assert_eq!(payload.source, "result_merkle_root");
+    assert_eq!(payload.block_hash, expected_artifact.block_hash);
+    assert_eq!(payload.block_header.hash(), expected_artifact.block_hash);
+    assert_eq!(payload.state_root, expected_root);
+    assert_eq!(payload.finality_artifact, expected_artifact);
     let mut accept = HeaderMap::new();
     accept.insert(
         axum::http::header::ACCEPT,
         HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
     );
-    let norito_resp = handler_ledger_state_root(State(app), axum::extract::Path(1), accept)
-        .await
-        .expect("ok");
+    let norito_resp = handler_ledger_state_root(
+        State(Arc::clone(&app)),
+        axum::extract::Path(1),
+        accept.clone(),
+    )
+    .await
+    .expect("authenticated state-root Norito response");
     let norito_bytes = torii_body_bytes(norito_resp, "norito body").await;
-    let archived = norito::from_bytes::<StateRootResponse>(&norito_bytes).expect("archive");
-    let decoded: StateRootResponse = norito::core::NoritoDeserialize::deserialize(archived);
-    assert_eq!(decoded.state_root, result_root);
-    assert_eq!(decoded.source, "result_merkle_root");
-}
-#[tokio::test]
-async fn ledger_state_proof_returns_commit_qc() {
-    let app = mk_app_state_for_tests();
-    let (mut block, _) = make_signed_block(1, None);
-    let entry_hashes = [block
-        .payload()
-        .transactions
-        .first()
-        .expect("tx")
-        .hash_as_entrypoint()];
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        )
-        .expect("test block entrypoint hash should match payload");
-    let expected_root = block
-        .header()
-        .result_merkle_root()
-        .map(|hash| iroha_crypto::Hash::prehashed(*hash.as_ref()))
-        .expect("result root");
-    let block_hash = block.hash();
-    store_block(&app, block);
-    let (qc, _) = sample_commit_qc(
-        app.state.network_id_ref(),
-        block_hash,
-        expected_root,
-        1,
-        2,
-        0,
-    );
-    let mut app = app;
-    let app_mut = Arc::get_mut(&mut app).expect("unique app state for test");
-    Arc::get_mut(&mut app_mut.state)
-        .expect("unique core state for test")
-        .insert_commit_qc_for_testing(block_hash, qc.clone());
-    let resp =
-        handler_ledger_state_proof(State(app.clone()), axum::extract::Path(1), HeaderMap::new())
-            .await
-            .expect("ok");
+    let archived =
+        norito::from_bytes::<StateFinalityResponse>(&norito_bytes).expect("state root archive");
+    let decoded: StateFinalityResponse = norito::core::NoritoDeserialize::deserialize(archived);
+    assert_eq!(decoded.state_root, expected_root);
+    assert_eq!(decoded.finality_artifact, expected_artifact);
+    let resp = handler_ledger_state_proof(
+        State(Arc::clone(&app)),
+        axum::extract::Path(1),
+        HeaderMap::new(),
+    )
+    .await
+    .expect("authenticated state-proof JSON response");
     let body = torii_body_bytes(resp, "body").await;
-    let proof: StateProofResponse = norito::json::from_slice(&body).expect("json decode");
+    let proof: StateFinalityResponse = norito::json::from_slice(&body).expect("JSON proof");
     assert_eq!(proof.height, 1);
-    assert_eq!(proof.block_hash, block_hash);
+    assert_eq!(proof.block_hash, expected_artifact.block_hash);
     assert_eq!(proof.state_root, expected_root);
-    assert_eq!(proof.commit_qc.subject_block_hash, block_hash);
-    assert_eq!(proof.commit_qc.post_state_root, expected_root);
-    assert_eq!(
-        proof.commit_qc.aggregate.signers_bitmap,
-        qc.aggregate.signers_bitmap
-    );
-    assert_eq!(
-        proof.commit_qc.aggregate.bls_aggregate_signature,
-        qc.aggregate.bls_aggregate_signature
-    );
-    let mut accept = HeaderMap::new();
-    accept.insert(
-        axum::http::header::ACCEPT,
-        HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE),
-    );
+    assert_eq!(proof.finality_artifact, expected_artifact);
     let norito_resp = handler_ledger_state_proof(State(app), axum::extract::Path(1), accept)
         .await
-        .expect("ok");
+        .expect("authenticated state-proof Norito response");
     let norito_bytes = torii_body_bytes(norito_resp, "bytes").await;
-    let archived = norito::from_bytes::<StateProofResponse>(&norito_bytes).expect("arch");
-    let decoded: StateProofResponse = norito::core::NoritoDeserialize::deserialize(archived);
-    assert_eq!(decoded.commit_qc.post_state_root, expected_root);
+    let archived =
+        norito::from_bytes::<StateFinalityResponse>(&norito_bytes).expect("state proof archive");
+    let decoded: StateFinalityResponse = norito::core::NoritoDeserialize::deserialize(archived);
+    assert_eq!(decoded.state_root, expected_root);
+    assert_eq!(decoded.finality_artifact, expected_artifact);
 }
 #[tokio::test]
 async fn state_proof_http_roundtrip_supports_json_and_norito() {
@@ -2293,42 +2083,11 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
         routing::get,
     };
     use tower::ServiceExt as _;
-    let app = mk_app_state_for_tests();
-    let (mut block, _) = make_signed_block(1, None);
-    let entry_hashes = [block
-        .payload()
-        .transactions
-        .first()
-        .expect("tx")
-        .hash_as_entrypoint()];
-    block
-        .set_transaction_results(
-            Vec::new(),
-            &entry_hashes,
-            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
-        )
-        .expect("test block entrypoint hash should match payload");
-    let expected_root = block
-        .header()
-        .result_merkle_root()
-        .map(|hash| iroha_crypto::Hash::prehashed(*hash.as_ref()))
-        .expect("result root");
-    let block_hash = block.hash();
-    store_block(&app, block);
-    let (qc, _) = sample_commit_qc(
-        app.state.network_id_ref(),
-        block_hash,
-        expected_root,
-        1,
-        2,
-        0,
-    );
-    let mut app = Arc::into_inner(app).unwrap_or_else(|| panic!("unique app state for test"));
-    let mut state =
-        Arc::into_inner(app.state).unwrap_or_else(|| panic!("unique core state for test"));
-    state.insert_commit_qc_for_testing(block_hash, qc.clone());
-    app.state = Arc::new(state);
-    let app: SharedAppState = Arc::new(app);
+    let (app, _, expected_artifact) = app_with_indexed_sccp_message_for_test(true);
+    let expected_root = expected_artifact
+        .commit_qc
+        .execution_commitment
+        .post_state_root;
     let router = Router::new()
         .route(uri::LEDGER_STATE_PROOF, get(handler_ledger_state_proof))
         .with_state(app.clone());
@@ -2339,18 +2098,11 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
     let response = router.clone().oneshot(request).await.expect("response");
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = torii_body_bytes(response, "body").await;
-    let proof: StateProofResponse = norito::json::from_slice(&bytes).expect("json decode");
+    let proof: StateFinalityResponse = norito::json::from_slice(&bytes).expect("JSON proof");
     assert_eq!(proof.height, 1);
-    assert_eq!(proof.block_hash, block_hash);
+    assert_eq!(proof.block_hash, expected_artifact.block_hash);
     assert_eq!(proof.state_root, expected_root);
-    assert_eq!(
-        proof.commit_qc.aggregate.signers_bitmap,
-        qc.aggregate.signers_bitmap
-    );
-    assert_eq!(
-        proof.commit_qc.aggregate.bls_aggregate_signature,
-        qc.aggregate.bls_aggregate_signature
-    );
+    assert_eq!(proof.finality_artifact, expected_artifact);
     let request = Request::builder()
         .uri("/v1/ledger/state-proof/1")
         .header(axum::http::header::ACCEPT, crate::utils::NORITO_MIME_TYPE)
@@ -2359,12 +2111,89 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
     let response = router.oneshot(request).await.expect("response");
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = torii_body_bytes(response, "body").await;
-    let archived = norito::from_bytes::<StateProofResponse>(&bytes).expect("archived state proof");
-    let proof: StateProofResponse = norito::core::NoritoDeserialize::deserialize(archived);
+    let archived =
+        norito::from_bytes::<StateFinalityResponse>(&bytes).expect("archived state proof");
+    let proof: StateFinalityResponse = norito::core::NoritoDeserialize::deserialize(archived);
     assert_eq!(proof.height, 1);
-    assert_eq!(proof.block_hash, block_hash);
+    assert_eq!(proof.block_hash, expected_artifact.block_hash);
     assert_eq!(proof.state_root, expected_root);
-    assert_eq!(proof.commit_qc.post_state_root, expected_root);
+    assert_eq!(proof.finality_artifact, expected_artifact);
+}
+fn assert_ledger_state_handler_status(error: Error, expected: StatusCode) {
+    assert_eq!(error.into_response().status(), expected);
+}
+#[tokio::test]
+async fn ledger_state_endpoints_require_v2_finality() {
+    let (app, _, _) = app_with_indexed_sccp_message_for_test(false);
+    let root_error = handler_ledger_state_root(
+        State(Arc::clone(&app)),
+        axum::extract::Path(1),
+        HeaderMap::new(),
+    )
+    .await
+    .expect_err("a state root without v2 finality must fail closed");
+    assert_ledger_state_handler_status(root_error, StatusCode::NOT_FOUND);
+    let proof_error =
+        handler_ledger_state_proof(State(app), axum::extract::Path(1), HeaderMap::new())
+            .await
+            .expect_err("a state proof without v2 finality must fail closed");
+    assert_ledger_state_handler_status(proof_error, StatusCode::NOT_FOUND);
+}
+#[tokio::test]
+async fn ledger_state_endpoints_reject_wrong_height_finality_record() {
+    let (app, _, artifact) = app_with_indexed_sccp_message_for_test(true);
+    let (block, _) = make_signed_block(2, Some(artifact.block_hash));
+    let block_header = block.header();
+    let block_hash = store_block(&app, block);
+    record_committed_block_hash_for_test(&app, block_header, block_hash);
+    let height_one = app.kura.v2_finality_artifact_path_for_testing(1);
+    let height_two = app.kura.v2_finality_artifact_path_for_testing(2);
+    std::fs::copy(height_one, height_two).expect("install wrong-height finality record");
+    let root_error = handler_ledger_state_root(
+        State(Arc::clone(&app)),
+        axum::extract::Path(2),
+        HeaderMap::new(),
+    )
+    .await
+    .expect_err("wrong-height finality must fail closed");
+    assert_ledger_state_handler_status(root_error, StatusCode::INTERNAL_SERVER_ERROR);
+    let proof_error =
+        handler_ledger_state_proof(State(app), axum::extract::Path(2), HeaderMap::new())
+            .await
+            .expect_err("wrong-height finality proof must fail closed");
+    assert_ledger_state_handler_status(proof_error, StatusCode::INTERNAL_SERVER_ERROR);
+}
+#[tokio::test]
+async fn ledger_state_endpoints_reject_forged_v2_finality_signature() {
+    let (app, _, artifact) = app_with_indexed_sccp_message_for_test(true);
+    let path = app.kura.v2_finality_artifact_path_for_testing(1);
+    let mut bytes = std::fs::read(&path).expect("read finality record");
+    let signature = artifact.commit_qc.aggregate_signature.as_slice();
+    let offsets = bytes
+        .windows(signature.len())
+        .enumerate()
+        .filter_map(|(offset, candidate)| (candidate == signature).then_some(offset))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        offsets.len(),
+        1,
+        "aggregate signature must have one exact encoded location"
+    );
+    bytes[offsets[0]] ^= 0x01;
+    std::fs::write(path, bytes).expect("forge finality aggregate signature");
+    let root_error = handler_ledger_state_root(
+        State(Arc::clone(&app)),
+        axum::extract::Path(1),
+        HeaderMap::new(),
+    )
+    .await
+    .expect_err("forged finality must fail closed");
+    assert_ledger_state_handler_status(root_error, StatusCode::INTERNAL_SERVER_ERROR);
+    let proof_error =
+        handler_ledger_state_proof(State(app), axum::extract::Path(1), HeaderMap::new())
+            .await
+            .expect_err("forged finality proof must fail closed");
+    assert_ledger_state_handler_status(proof_error, StatusCode::INTERNAL_SERVER_ERROR);
 }
 #[tokio::test]
 async fn block_proof_handler_emits_norito() {
@@ -2581,6 +2410,15 @@ fn block_proof_errors_distinguish_absence_from_persisted_corruption() {
         );
     }
     for error in [
+        BlockProofError::BlockHashMismatch {
+            block_height: height,
+            expected: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"expected committed block hash",
+            )),
+            actual: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"mismatched Kura body hash",
+            )),
+        },
         BlockProofError::BlockHeightMismatch {
             requested: height,
             actual: other_height,

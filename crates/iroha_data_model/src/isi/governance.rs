@@ -495,6 +495,10 @@ pub struct RecordCitizenServiceOutcome {
 }
 impl crate::seal::Instruction for RecordCitizenServiceOutcome {}
 /// Bond the configured citizenship amount to join the citizen registry.
+///
+/// Ordinary execution is owner-authorized. The authenticated initial genesis may instead seed an
+/// exact citizen from that citizen's prefunded balance; the exception is unavailable once any
+/// block has been committed.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct RegisterCitizen {
     /// Account receiving citizenship.

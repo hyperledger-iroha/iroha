@@ -481,8 +481,8 @@ mod tests {
         assert_eq!(
             payloads,
             [
-                normalized_meta(parse_quote!(derive(iroha_ffi::FfiType))),
-                normalized_meta(parse_quote!(ffi_type(opaque))),
+                normalized_meta(&parse_quote!(derive(iroha_ffi::FfiType))),
+                normalized_meta(&parse_quote!(ffi_type(opaque))),
             ],
             "a bare marker must configure one opaque export:\n{rendered}"
         );
@@ -502,14 +502,14 @@ mod tests {
                 #[cfg_attr(any(feature = "ffi_import", feature = "ffi_export"), ffi_type(opaque))]
                 pub struct Opaque;
             },
-            parse_quote!(ffi_type(opaque)),
+            &parse_quote!(ffi_type(opaque)),
         );
         assert_ffi_policy(
             parse_quote! {
                 #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(local))]
                 pub struct Local;
             },
-            parse_quote!(ffi_type(local)),
+            &parse_quote!(ffi_type(local)),
         );
         assert_ffi_policy(
             parse_quote! {
@@ -520,7 +520,7 @@ mod tests {
                 #[repr(transparent)]
                 pub struct Robust(u32);
             },
-            parse_quote!(ffi_type(unsafe { robust })),
+            &parse_quote!(ffi_type(unsafe { robust })),
         );
     }
     #[test]
@@ -767,23 +767,23 @@ mod tests {
                 let predicate = nested.next().expect("generated cfg_attr predicate");
                 assert_eq!(
                     normalized_tokens(&predicate),
-                    normalized_meta(parse_quote!(feature = "ffi_export")),
+                    normalized_meta(&parse_quote!(feature = "ffi_export")),
                     "generated FFI attributes must be export-only"
                 );
                 nested.map(|meta| normalized_tokens(&meta))
             })
             .collect()
     }
-    fn normalized_meta(meta: Meta) -> String {
-        normalized_tokens(&meta)
+    fn normalized_meta(meta: &Meta) -> String {
+        normalized_tokens(meta)
     }
-    fn assert_ffi_policy(input: syn::DeriveInput, expected: Meta) {
+    fn assert_ffi_policy(input: syn::DeriveInput, expected: &Meta) {
         let output: File = syn::parse2(process_pub_item(input)).expect("FFI model output");
         let [Item::Struct(item)] = output.items.as_slice() else {
             panic!("an FFI model must emit exactly one struct")
         };
         let rendered = output.to_token_stream().to_string();
-        let expected = normalized_tokens(&expected);
+        let expected = normalized_tokens(expected);
         let payloads = export_cfg_payloads(&item.attrs);
         assert_eq!(
             payloads

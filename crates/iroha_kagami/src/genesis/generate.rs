@@ -28,7 +28,6 @@ use iroha_genesis::{
 };
 use iroha_primitives::json::Json;
 use iroha_test_samples::{ALICE_ID, CARPENTER_ID, gen_account_in};
-use iroha_version::BuildLine;
 use std::{
     io::{BufWriter, Write},
     path::PathBuf,
@@ -66,8 +65,7 @@ pub struct Args {
     #[clap(long, value_name = "U64")]
     ivm_gas_limit_per_block: Option<u64>,
     /// Select the consensus mode snapshot to seed in the genesis parameters
-    /// (public dataspace requires NPoS; other Iroha3 dataspaces may use permissioned or NPoS;
-    /// Iroha2 defaults to permissioned).
+    /// (public dataspace requires NPoS; other dataspaces may use permissioned or NPoS).
     #[clap(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
     /// Override cryptography snapshot fields in the generated manifest.
@@ -469,8 +467,7 @@ pub enum ConsensusPolicy {
     /// Require NPoS (public dataspace rule).
     PublicDataspace,
 }
-pub fn validate_consensus_mode_for_line(
-    build_line: BuildLine,
+pub fn validate_consensus_mode(
     consensus_mode: SumeragiConsensusMode,
     policy: ConsensusPolicy,
 ) -> color_eyre::Result<()> {
@@ -481,7 +478,6 @@ pub fn validate_consensus_mode_for_line(
             "public dataspace requires `--consensus-mode npos` (permissioned is private-only)"
         ));
     }
-    let _ = build_line;
     Ok(())
 }
 impl<T: Write> RunArgs<T> for Args {
@@ -511,22 +507,8 @@ impl<T: Write> RunArgs<T> for Args {
             .map(|hex| parse_vrf_seed_hex(&hex))
             .transpose()
             .wrap_err("invalid --vrf-seed-hex")?;
-        let profile_is_some = profile.is_some();
-        let build_line = if profile_is_some {
-            BuildLine::Iroha3
-        } else {
-            build_line_from_env()
-        };
-        let consensus_mode = consensus_mode.map_or_else(
-            || {
-                if build_line.is_iroha3() {
-                    SumeragiConsensusMode::Npos
-                } else {
-                    SumeragiConsensusMode::Permissioned
-                }
-            },
-            SumeragiConsensusMode::from,
-        );
+        let consensus_mode =
+            consensus_mode.map_or(SumeragiConsensusMode::Npos, SumeragiConsensusMode::from);
         let crypto = crypto.into_manifest_crypto()?;
         let resolved = resolve_profile_settings(
             profile,
@@ -548,7 +530,7 @@ impl<T: Write> RunArgs<T> for Args {
             Some(profile) if profile_requires_npos(profile) => ConsensusPolicy::PublicDataspace,
             _ => ConsensusPolicy::Any,
         };
-        validate_consensus_mode_for_line(build_line, consensus_mode, consensus_policy)?;
+        validate_consensus_mode(consensus_mode, consensus_policy)?;
         let builder = match executor {
             Some(path) => GenesisBuilder::new(chain, path, ivm_dir),
             None => GenesisBuilder::new_without_executor(chain, ivm_dir),
@@ -973,18 +955,4 @@ fn generate_synthetic(
     }
     let manifest = builder.build_raw().with_consensus_mode(consensus_mode);
     Ok(manifest.with_consensus_meta())
-}
-/// Resolve the build line from the binary name or `IROHA_BUILD_LINE` override.
-pub fn build_line_from_env() -> BuildLine {
-    const OVERRIDE_ENV: &str = "IROHA_BUILD_LINE";
-    if let Ok(val) = std::env::var(OVERRIDE_ENV) {
-        match val.to_ascii_lowercase().as_str() {
-            "iroha2" | "i2" | "2" => return BuildLine::Iroha2,
-            "iroha3" | "i3" | "3" => return BuildLine::Iroha3,
-            other => eprintln!(
-                "warning: {OVERRIDE_ENV}={other} is not a valid build line (expected iroha2/iroha3); falling back to binary name"
-            ),
-        }
-    }
-    BuildLine::from_bin_name(env!("CARGO_BIN_NAME"))
 }

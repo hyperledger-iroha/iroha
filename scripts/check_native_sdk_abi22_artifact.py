@@ -81,13 +81,13 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     ),
     "node": (
         "connectNoritoBridgeAbiVersion",
-        "inspectSorafsOrderbookSubmissionV1",
+        "inspectSorafsOrderbookSubmissionForDiscriminantV1",
         "sorafsValidateAppealFinanceCancelAssetLockJson",
         "verifySorafsOrderbookSubmissionReceiptV1",
     ),
     "python": (
         "connect_norito_bridge_abi_version",
-        "inspect_sorafs_orderbook_submission_v1",
+        "inspect_sorafs_orderbook_submission_for_discriminant_v1",
         "sorafs_validate_appeal_finance_cancel_asset_lock_json",
         "verify_sorafs_orderbook_submission_receipt_v1",
     ),

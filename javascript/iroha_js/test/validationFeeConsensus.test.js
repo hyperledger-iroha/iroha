@@ -79,7 +79,7 @@ function completeCurrentPolicy() {
   return {
     activePolicyVersion: "1",
     activePolicyHash: "ab".repeat(32),
-    feeAssetDefinitionId: "sbd#sora",
+    feeAssetDefinitionId: "ds#sora",
     feeScale: 2,
     feeMinorUnits: "10",
     chargingMode: "PER_QUALIFYING_TRANSFER_INSTRUCTION",
@@ -104,12 +104,12 @@ function completeCurrentPolicy() {
       contractAddress: "validation-fee-contract",
       codeHash: "aa".repeat(32),
       entrypoint: "autonomous_validation_fee_tick",
-      sbdAssetDefinitionId: "sbd#sora",
+      dsAssetDefinitionId: "ds#sora",
       xorAssetDefinitionId: "xor#sora",
       treasuryAccountId: "treasury-account",
       vaultAccountId: "vault-account",
-      batchSbdMinorUnits: "1000",
-      sbdScale: 2,
+      batchDsMinorUnits: "1000",
+      dsScale: 2,
       xorOutputMin: "4",
       xorOutputMax: "100",
       recipients: [0, 1, 2, 3].map((index) => ({
@@ -327,6 +327,12 @@ test("verified current policy enforces and freezes the complete nested projectio
     verified.current_policy.payout.recipients[3].share_basis_points,
     2500,
   );
+  assert.equal(
+    verified.current_policy.payout.dsAssetDefinitionId,
+    "ds#sora",
+  );
+  assert.equal(verified.current_policy.payout.batchDsMinorUnits, "1000");
+  assert.equal(verified.current_policy.payout.dsScale, 2);
   assert.equal(Object.isFrozen(verified.current_policy), true);
   assert.equal(Object.isFrozen(verified.current_policy.parliament), true);
   assert.equal(
@@ -360,6 +366,14 @@ test("verified current policy rejects missing, extra, and mistyped nested fields
           .plainElectorateSnapshot.members = [];
       },
       error: /plainElectorateSnapshot must contain exactly/u,
+    },
+    {
+      label: "retired SBD payout field",
+      mutate(projection) {
+        projection.current_policy.payout.sbdAssetDefinitionId =
+          projection.current_policy.payout.dsAssetDefinitionId;
+      },
+      error: /payout must contain exactly/u,
     },
     {
       label: "mistyped payout share",

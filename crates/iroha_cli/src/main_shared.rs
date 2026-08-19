@@ -30,7 +30,6 @@ mod taira;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
 use clap::{ArgAction, CommandFactory, FromArgMatches, error::ErrorKind};
 use iroha_i18n::{Bundle, Localizer, detect_language};
-use iroha_version::BuildLine;
 use std::{
     fmt::Display,
     fs,
@@ -84,9 +83,6 @@ const CLI_JSON_DECODE_LIMITS_V1: norito::DecodeLimits = norito::DecodeLimits::ne
     MAX_CLI_JSON_DECODE_ALLOCATION_BYTES_V1,
     MAX_CLI_JSON_NESTING_DEPTH_V1,
 );
-fn build_line() -> BuildLine {
-    BuildLine::from_bin_name(env!("CARGO_BIN_NAME"))
-}
 fn validate_executable_fee_payment(
     executable: &Executable,
     fee_payment: &FeePaymentIntent,
@@ -1136,14 +1132,14 @@ fn main() {
             .map(|arg| arg.to_string_lossy().into_owned()),
     )
     .unwrap_or(CliOutputFormat::Json);
-    if let Err(report) = run_with_line(build_line()) {
+    if let Err(report) = run() {
         let rendered = render_cli_error(&report, output_format);
         eprint!("{}", rendered.output);
         std::process::exit(rendered.kind.exit_code());
     }
 }
 #[allow(clippy::too_many_lines)]
-fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
+fn run() -> ReportResult<(), MainError> {
     let raw_args: Vec<std::ffi::OsString> = std::env::args_os().collect();
     let language_override = language_override_from_args(
         raw_args
@@ -1178,14 +1174,6 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
     let i18n = Localizer::new(Bundle::Cli, language);
     if !args.machine {
         eprintln!("{}", i18n.t("info.started"));
-        let build_line_value = build_line.to_string();
-        eprintln!(
-            "{}",
-            i18n.t_with(
-                "info.build_line",
-                &[("build_line", build_line_value.as_str())]
-            )
-        );
     }
     if let Command::Tools(tools::Command::MarkdownHelp(_md)) = &args.command {
         clap_markdown::print_help_markdown::<Args>();

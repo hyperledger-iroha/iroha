@@ -1,9 +1,29 @@
+/// Get running Iroha version (block header version).
+#[iroha_futures::telemetry_future]
+pub async fn handle_version(state: Arc<CoreState>) -> Response {
+    use iroha_version::Version;
+    let latest_block = std::num::NonZeroUsize::new(state.committed_height())
+        .and_then(|height| state.block_by_height(height));
+    let mut resp = match latest_block {
+        Some(block) => Response::new(Body::from(block.version().to_string())),
+        None => {
+            let mut resp = Response::new(Body::from("genesis not applied"));
+            *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
+            resp
+        }
+    };
+    resp.headers_mut().insert(
+        header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    resp
+}
 // Version and status visibility helpers and regressions.
 #[cfg(test)]
 mod version_tests {
+    use super::*;
     use http_body_util::BodyExt as _;
     use iroha_core::{kura::Kura, query::store::LiveQueryStore, state::World};
-    use super::*;
     #[tokio::test]
     async fn handle_version_reports_unavailable_without_genesis() {
         let state = Arc::new(CoreState::new_for_testing(
@@ -67,11 +87,11 @@ fn normalize_status_block_visibility(status: &mut Status, authoritative_block_he
 }
 #[cfg(all(test, feature = "telemetry"))]
 mod status_block_visibility_tests {
-    use iroha_telemetry::metrics::SumeragiConsensusStatus;
     use super::{
         Error, Status, ensure_status_metrics_match_authoritative_height,
         normalize_status_block_visibility,
     };
+    use iroha_telemetry::metrics::SumeragiConsensusStatus;
     #[test]
     fn stale_classified_height_is_retriable_instead_of_publishing_a_false_empty_gap() {
         let status = Status {

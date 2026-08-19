@@ -2013,12 +2013,10 @@ fn validate_atomic_destination_absent(path: &Path) -> Result<(), ChunkStoreError
                 "symbolic link"
             } else if metadata.is_dir() {
                 "directory"
+            } else if metadata.nlink() != 1 {
+                "hard-linked file"
             } else {
-                if metadata.nlink() != 1 {
-                    "hard-linked file"
-                } else {
-                    "file"
-                }
+                "file"
             };
             Err(ChunkStoreError::Io(io::Error::new(
                 io::ErrorKind::AlreadyExists,

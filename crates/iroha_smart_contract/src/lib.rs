@@ -79,6 +79,10 @@ impl Iroha {
     /// # Errors
     /// Fails if sending transaction to peer fails or if it response with error
     #[allow(clippy::result_large_err)]
+    #[expect(
+        clippy::unused_self,
+        reason = "retain the instance-method API shared by all Iroha host operations"
+    )]
     pub fn submit_all<'isi, I: BuiltInInstruction + NoritoSerialize + 'isi>(
         &self,
         instructions: impl IntoIterator<Item = &'isi I>,

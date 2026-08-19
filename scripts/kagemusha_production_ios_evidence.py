@@ -9,12 +9,16 @@ of current Apple revocation status and one-time freshness consumption.  The
 promotion path succeeds only with that receipt and an independently pinned
 authority key.
 
-Provisioning and auditing the online authority and its durable replay state is
-an external production responsibility: a signature proves what the authority
-attested, not that its backing state is honest.  Operators must review that
-service and its key lifecycle before installing the trusted authority key.  A
-signed lab statement, a Boolean, or an unverified certificate array never
-satisfies this validator.
+The repository authority in
+``kagemusha_app_attest_freshness_authority.py`` supplies durable challenge,
+counter, Apple receipt-refresh/risk, and crash-recovery state. Provisioning and
+auditing its live deployment and key lifecycle remain operator responsibilities:
+a signature proves what the provisioned authority attested, not that an
+arbitrary signer maintained that state. A signed lab statement, a Boolean, or
+an unverified certificate array never satisfies this validator. The exact v1
+``apple_revocation_*`` labels mean current Apple App Attest receipt acceptance
+plus the static policy's certificate-digest revocation check; Apple's
+``attestationData`` endpoint is not represented as a general CRL/OCSP service.
 """
 
 from __future__ import annotations
@@ -34,6 +38,9 @@ PRODUCTION_SIGNED_EVIDENCE_SCHEMA = (
 )
 PRODUCTION_POLICY_SCHEMA = "iroha.kagemusha.ios.production_device_policy.v1"
 PLATFORM_EVIDENCE_SCHEMA = "iroha.kagemusha.ios.app_attest_evidence.v1"
+CAPTURE_APP_CODE_SIGN_MEASUREMENTS_SCHEMA = (
+    "iroha.kagemusha.ios.app_attest_capture_code_sign_measurements.v1"
+)
 ATTESTATION_CHALLENGE_SCHEMA = (
     "iroha.kagemusha.ios.app_attest_attestation_challenge.v1"
 )
@@ -139,6 +146,20 @@ PLATFORM_EVIDENCE_FIELDS = frozenset(
         "attestation_object_base64",
         "assertion_client_data_base64",
         "assertion_object_base64",
+        "capture_app_code_sign_measurements",
+    }
+)
+CAPTURE_APP_CODE_SIGN_MEASUREMENTS_FIELDS = frozenset(
+    {
+        "schema",
+        "version",
+        "bundle_id",
+        "bundle_version",
+        "team_id",
+        "application_identifier",
+        "app_attest_environment",
+        "executable_sha256",
+        "cdhash",
     }
 )
 ATTESTATION_CHALLENGE_FIELDS = frozenset(
@@ -158,6 +179,7 @@ ATTESTATION_CHALLENGE_FIELDS = frozenset(
         "native_transcript_sha256",
         "proof_launch_receipt_sha256",
         "restart_launch_receipt_sha256",
+        "capture_app_code_sign_measurements_sha256",
         "nonce_base64",
     }
 )
@@ -1099,7 +1121,7 @@ def _validate_attestation_certificate_chain(
     evaluation_time_unix_ms: int,
     expected_public_key: bytes,
     auth_data: bytes,
-    attestation_client_data: bytes,
+    attestation_client_data_hash: bytes,
 ) -> bytes:
     if not 2 <= len(chain_der) <= MAX_X509_CHAIN_CERTIFICATES:
         raise ValueError("App Attest x5c must contain a bounded leaf/intermediate chain")
@@ -1179,7 +1201,7 @@ def _validate_attestation_certificate_chain(
         raise ValueError("App Attest leaf certificate is missing the nonce extension")
     nonce = _extract_app_attest_nonce(nonce_extension.value)
     expected_nonce = hashlib.sha256(
-        auth_data + hashlib.sha256(attestation_client_data).digest()
+        auth_data + attestation_client_data_hash
     ).digest()
     if nonce != expected_nonce:
         raise ValueError("App Attest leaf nonce does not bind the attestation challenge")
@@ -1195,7 +1217,19 @@ def _validate_extensions(
     category_key = "apple_validation_category_01" if attestation else "validationCategory"
     version_key = "apple_bundle_version_01" if attestation else "bundleVersion"
     extensions = _cbor_object(value, {category_key, version_key}, "App Attest extensions")
-    category = extensions[category_key]
+    category_value = extensions[category_key]
+    # Apple's published 2026 attestation object encodes the documented UInt32
+    # validation category as a four-byte little-endian CBOR byte string.  Some
+    # WebAuthn decoders expose the same logical value as a CBOR unsigned integer,
+    # so normalize exactly those two unambiguous representations.
+    if isinstance(category_value, int) and not isinstance(category_value, bool):
+        if not 0 <= category_value <= 0xFFFF_FFFF:
+            raise ValueError("App Attest validation category is not UInt32")
+        category = category_value
+    elif isinstance(category_value, bytes) and len(category_value) == 4:
+        category = int.from_bytes(category_value, "little")
+    else:
+        raise ValueError("App Attest validation category is not UInt32")
     version = extensions[version_key]
     if category not in policy["allowed_validation_categories"]:
         raise ValueError("App Attest validation category is not allowed by production policy")
@@ -1215,8 +1249,13 @@ def _validate_attestation_auth_data(
     if auth_data[:32] != hashlib.sha256(app_id).digest():
         raise ValueError("App Attest attestation RP ID does not match production policy")
     flags = auth_data[32]
-    if flags & 0x40 == 0 or flags & 0x80 == 0 or flags & ~(0x01 | 0x04 | 0x40 | 0x80):
-        raise ValueError("App Attest attestation flags must carry AT and production extensions")
+    # Apple's production attestation vector carries AT (0x40) without ED
+    # (0x80), even though Apple appends its validation-category and bundle-
+    # version CBOR map after the credential public key.  Parse that mandatory
+    # trailing map below instead of treating WebAuthn's ED bit as authoritative
+    # for Apple's App Attest wire format.
+    if flags & 0x40 == 0 or flags & ~(0x01 | 0x04 | 0x40 | 0x80):
+        raise ValueError("App Attest attestation flags must carry AT and no reserved bits")
     if int.from_bytes(auth_data[33:37], "big") != 0:
         raise ValueError("App Attest attestation counter must start at zero")
     if auth_data[37:53] != b"appattest" + b"\0" * 7:
@@ -1271,7 +1310,7 @@ def _parse_attestation_object(
             evaluation_time_unix_ms,
             public_key,
             value["authData"],
-            client_data,
+            hashlib.sha256(client_data).digest(),
         )
         return certificate_chain, attestation_nonce
     except ValueError as error:
@@ -1305,8 +1344,14 @@ def _parse_assertion_object(
         app_id = f"{policy['app_id_prefix']}.{policy['bundle_id']}".encode("ascii")
         if auth_data[:32] != hashlib.sha256(app_id).digest():
             raise ValueError("App Attest assertion RP ID does not match production policy")
-        if auth_data[32] != 0x80:
-            raise ValueError("App Attest assertion must contain only the extension-data flag")
+        assertion_flags = auth_data[32]
+        # App Attest appends its mandatory assertion extension map after the
+        # fixed authenticator-data header.  As with Apple's published
+        # attestation vector, the map's presence is not reliably advertised by
+        # WebAuthn's ED bit.  Reject attested-credential/reserved bits and parse
+        # the trailing map itself below.
+        if assertion_flags & 0x40 or assertion_flags & ~(0x01 | 0x04 | 0x80):
+            raise ValueError("App Attest assertion flags contain AT or reserved bits")
         assertion_counter = int.from_bytes(auth_data[33:37], "big")
         if assertion_counter == 0:
             raise ValueError("App Attest assertion counter must be positive")
@@ -1335,6 +1380,7 @@ def _challenge_bindings(
     policy_id: str,
     policy_sha256: str,
     release_manifest_sha256: str,
+    capture_app_code_sign_measurements_sha256: str,
     evaluated_at_unix_ms: int,
     nonce_base64: str,
 ) -> dict[str, Any]:
@@ -1346,6 +1392,9 @@ def _challenge_bindings(
         "policy_id": policy_id,
         "policy_sha256": policy_sha256,
         "release_manifest_sha256": release_manifest_sha256,
+        "capture_app_code_sign_measurements_sha256": (
+            capture_app_code_sign_measurements_sha256
+        ),
         "nonce_base64": nonce_base64,
     }
     for field, artifact in ARTIFACT_CHALLENGE_BINDINGS.items():
@@ -1362,6 +1411,7 @@ def _validate_challenge(
     policy_id: str,
     policy_sha256: str,
     release_manifest_sha256: str,
+    capture_app_code_sign_measurements_sha256: str,
     evaluated_at_unix_ms: int,
     attestation_object_sha256: Optional[str],
     key_id: Optional[str],
@@ -1384,6 +1434,9 @@ def _validate_challenge(
         policy_id=policy_id,
         policy_sha256=policy_sha256,
         release_manifest_sha256=release_manifest_sha256,
+        capture_app_code_sign_measurements_sha256=(
+            capture_app_code_sign_measurements_sha256
+        ),
         evaluated_at_unix_ms=evaluated_at_unix_ms,
         nonce_base64=value.get("nonce_base64"),
     )
@@ -1398,6 +1451,68 @@ def _validate_challenge(
     if nonce is not None and len(nonce) != 32:
         errors.append(f"{label} nonce_base64 must decode to exactly 32 bytes")
     return value
+
+
+def _validate_capture_app_code_sign_measurements(
+    value: Any,
+    policy: dict[str, Any],
+    candidate_module: Any,
+    errors: list[str],
+) -> Optional[str]:
+    """Validate and digest the exact prepared App Attest capture executable."""
+
+    starting_errors = len(errors)
+    label = "production App Attest capture-app code-sign measurements"
+    if (
+        _exact_fields(
+            value,
+            CAPTURE_APP_CODE_SIGN_MEASUREMENTS_FIELDS,
+            label,
+            errors,
+        )
+        is None
+    ):
+        return None
+    if value.get("schema") != CAPTURE_APP_CODE_SIGN_MEASUREMENTS_SCHEMA:
+        errors.append(
+            f"{label} schema must be {CAPTURE_APP_CODE_SIGN_MEASUREMENTS_SCHEMA}"
+        )
+    if value.get("version") != 1 or isinstance(value.get("version"), bool):
+        errors.append(f"{label} version must be integer 1")
+    expected_app_id = f"{policy.get('app_id_prefix')}.{policy.get('bundle_id')}"
+    expected = {
+        "team_id": policy.get("app_id_prefix"),
+        "bundle_id": policy.get("bundle_id"),
+        "application_identifier": expected_app_id,
+        "app_attest_environment": "production",
+    }
+    for field, expected_value in expected.items():
+        if value.get(field) != expected_value:
+            errors.append(f"{label} {field} does not match production policy")
+    if value.get("bundle_version") not in policy.get("allowed_bundle_versions", []):
+        errors.append(f"{label} bundle_version is not allowed by production policy")
+    executable_sha256 = value.get("executable_sha256")
+    if (
+        not isinstance(executable_sha256, str)
+        or SHA256_RE.fullmatch(executable_sha256) is None
+        or executable_sha256 == "0" * 64
+    ):
+        errors.append(f"{label} executable_sha256 must be a nonzero SHA-256")
+    cdhash = value.get("cdhash")
+    if (
+        not isinstance(cdhash, str)
+        or re.fullmatch(r"[0-9a-f]{40}", cdhash) is None
+        or cdhash == "0" * 40
+    ):
+        errors.append(f"{label} cdhash must be nonzero lowercase 40-character hex")
+    if len(errors) != starting_errors:
+        return None
+    try:
+        canonical = candidate_module.canonical_json_bytes(value)
+    except candidate_module.EvidenceError as error:
+        errors.append(str(error))
+        return None
+    return hashlib.sha256(canonical).hexdigest()
 
 
 def _validate_platform_evidence(
@@ -1417,6 +1532,12 @@ def _validate_platform_evidence(
         errors.append(f"production platform evidence schema must be {PLATFORM_EVIDENCE_SCHEMA}")
     if platform.get("version") != 1 or isinstance(platform.get("version"), bool):
         errors.append("production platform evidence version must be integer 1")
+    capture_app_measurements_sha256 = _validate_capture_app_code_sign_measurements(
+        platform.get("capture_app_code_sign_measurements"),
+        policy,
+        candidate_module,
+        errors,
+    )
     try:
         code_sign = candidate_module.parse_strict_json(
             raw_snapshot.json_payloads["build/code-sign-measurements-v1.json"],
@@ -1500,6 +1621,9 @@ def _validate_platform_evidence(
             policy_id=policy["policy_id"],
             policy_sha256=policy_sha256,
             release_manifest_sha256=release_manifest_sha256,
+            capture_app_code_sign_measurements_sha256=(
+                capture_app_measurements_sha256 or ""
+            ),
             evaluated_at_unix_ms=evaluated_at,
             attestation_object_sha256=None,
             key_id=None,
@@ -1514,6 +1638,9 @@ def _validate_platform_evidence(
             policy_id=policy["policy_id"],
             policy_sha256=policy_sha256,
             release_manifest_sha256=release_manifest_sha256,
+            capture_app_code_sign_measurements_sha256=(
+                capture_app_measurements_sha256 or ""
+            ),
             evaluated_at_unix_ms=evaluated_at,
             attestation_object_sha256=attestation_digest,
             key_id=key_id_text if isinstance(key_id_text, str) else None,
@@ -1625,7 +1752,10 @@ def _validate_online_freshness_receipt(
     The signed claim binds current Apple revocation status and states that the
     authority issued and consumed this receipt exactly once.  Verifying the
     claim does not prove the authority's backing state; production operations
-    must provision and audit that service before trusting its pinned key.
+    must provision and audit that service before trusting its pinned key. In
+    this exact v1 schema, the revocation-labeled status means a current accepted
+    Apple App Attest receipt refresh/risk result plus static policy revocations,
+    not an independent Apple PKI CRL/OCSP response.
     """
 
     receipt_snapshot = None
@@ -2131,3 +2261,147 @@ def validate_production_signed_evidence(
             errors.append(str(error))
 
     return errors
+
+
+def build_production_signed_evidence(
+    artifact_root: Path,
+    platform_evidence_path: Path,
+    production_policy_path: Path,
+    release_manifest_sha256: str,
+    private_key_path: Path,
+    public_key_path: Path,
+    signer_key_id: str,
+    candidate_module: Any,
+) -> dict[str, Any]:
+    """Validate and sign one exact release-bound production envelope.
+
+    The online authority receipt is intentionally not accepted here: it must
+    be issued only after this immutable envelope exists and can be digested by
+    the independently operated freshness/consumption authority.
+    """
+
+    candidate_module._validate_key_id(signer_key_id)
+    if (
+        SHA256_RE.fullmatch(release_manifest_sha256) is None
+        or release_manifest_sha256 == "0" * 64
+    ):
+        raise candidate_module.EvidenceError(
+            "release manifest digest must be nonzero lowercase SHA-256"
+        )
+    try:
+        root_absolute = artifact_root.resolve(strict=True)
+        platform_absolute = platform_evidence_path.resolve(strict=True)
+        policy_absolute = production_policy_path.resolve(strict=True)
+    except OSError as error:
+        raise candidate_module.EvidenceError(
+            "production envelope inputs could not be resolved"
+        ) from error
+    for path, label in (
+        (platform_absolute, "production platform evidence"),
+        (policy_absolute, "production policy"),
+    ):
+        try:
+            path.relative_to(root_absolute)
+        except ValueError:
+            pass
+        else:
+            raise candidate_module.EvidenceError(
+                f"{label} must stay outside artifact root"
+            )
+
+    platform_snapshot = candidate_module._snapshot_private_file(
+        platform_absolute,
+        "production platform evidence",
+        maximum=candidate_module.MAX_JSON_BYTES,
+        retain_payload=True,
+    )
+    policy_snapshot = candidate_module._snapshot_private_file(
+        policy_absolute,
+        "production policy",
+        maximum=MAX_POLICY_BYTES,
+        retain_payload=True,
+    )
+    private_key = candidate_module._snapshot_key_file(
+        private_key_path,
+        "private key",
+        private=True,
+    )
+    public_key = candidate_module._snapshot_key_file(
+        public_key_path,
+        "public key",
+        private=False,
+    )
+    platform = candidate_module.parse_strict_json(
+        platform_snapshot.payload, "production platform evidence"
+    )
+    policy = candidate_module.parse_strict_json(
+        policy_snapshot.payload, "production policy"
+    )
+    private_seed = candidate_module._private_seed_from_payload(private_key.payload)
+    public_der = candidate_module._public_key_der_from_payload(public_key.payload)
+    public_bytes = public_der[len(candidate_module.ED25519_SPKI_PREFIX) :]
+    if candidate_module._ed25519_public_from_seed(private_seed) != public_bytes:
+        raise candidate_module.EvidenceError(
+            "private and public Ed25519 keys do not match"
+        )
+
+    raw_snapshot = candidate_module.snapshot_raw_artifacts(root_absolute)
+    errors = candidate_module.validate_raw_evidence(raw_snapshot)
+    policy_valid = _validate_policy(policy, policy_snapshot.payload, errors)
+    artifact_digests = {
+        relative: {
+            "size_bytes": raw_snapshot.sizes[relative],
+            "sha256": digest,
+        }
+        for relative, digest in raw_snapshot.digests.items()
+    }
+    if policy_valid:
+        _validate_platform_evidence(
+            platform,
+            policy,
+            policy_snapshot.sha256,
+            release_manifest_sha256,
+            artifact_digests,
+            raw_snapshot,
+            candidate_module,
+            errors,
+        )
+    if errors:
+        raise candidate_module.EvidenceError("; ".join(errors))
+
+    evidence: dict[str, Any] = {
+        "schema": PRODUCTION_SIGNED_EVIDENCE_SCHEMA,
+        "version": 1,
+        "release_manifest_sha256": release_manifest_sha256,
+        "production_policy_id": policy["policy_id"],
+        "production_policy_sha256": policy_snapshot.sha256,
+        "platform_evidence": platform,
+        "artifact_digests": artifact_digests,
+        "signer_key_id": signer_key_id,
+        "signer_public_key_sha256": hashlib.sha256(public_der).hexdigest(),
+        "signature_algorithm": "ed25519",
+    }
+    payload = candidate_module.canonical_signature_payload(evidence)
+    signature = candidate_module._sign_ed25519_seed(private_seed, payload)
+    candidate_module._verify_ed25519_bytes(public_bytes, payload, signature)
+    evidence["signature_payload_sha256"] = hashlib.sha256(payload).hexdigest()
+    evidence["signature"] = signature.hex()
+
+    candidate_module._require_raw_snapshot_unchanged(raw_snapshot)
+    candidate_module._require_private_file_snapshot_unchanged(
+        platform_snapshot,
+        "production platform evidence",
+        maximum=candidate_module.MAX_JSON_BYTES,
+    )
+    candidate_module._require_private_file_snapshot_unchanged(
+        policy_snapshot,
+        "production policy",
+        maximum=MAX_POLICY_BYTES,
+    )
+    candidate_module._require_key_snapshot_unchanged(
+        private_key, "private key", private=True
+    )
+    candidate_module._require_key_snapshot_unchanged(
+        public_key, "public key", private=False
+    )
+    return evidence

@@ -20,7 +20,6 @@
         let _guard = DirGuard { prev: previous };
 
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).unwrap(),
@@ -149,7 +148,6 @@
         write_scripts(
             temp.path(),
             1,
-            BuildLine::Iroha3,
             false,
             &client_account_literal,
             &fee_asset_definition_id,
@@ -225,12 +223,6 @@
         );
         assert!(!start_contents.contains("faucet-topup.metadata.json"));
         assert!(!start_contents.contains("gas_asset_id"));
-        assert!(
-            start_contents
-                .lines()
-                .any(|line| line == "export IROHA_BUILD_LINE=\"iroha3\""),
-            "start script should export build line"
-        );
         assert!(
             start_contents.contains("start_new_session=True"),
             "start script should detach peers into a new session when python3 is available"

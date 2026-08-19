@@ -2682,7 +2682,6 @@ fn receipt_settled_queue_admission_rejects_authority_payer() {
     );
     {
         let mut nexus = state.nexus.write();
-        nexus.enabled = true;
         nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
         nexus.fees.fee_asset_id = fee_asset.canonical_address();

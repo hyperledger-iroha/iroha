@@ -81,7 +81,7 @@ fn default_genesis_deserializes() {
     assert!(result.is_ok());
 }
 #[test]
-fn default_genesis_block_roundtrips() -> Result<()> {
+fn default_genesis_proposal_roundtrips() -> Result<()> {
     use iroha_data_model::parameter::system::SumeragiNposParameters;
     init_instruction_registry();
     if norito::debug_trace_enabled() {
@@ -92,10 +92,14 @@ fn default_genesis_block_roundtrips() -> Result<()> {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../defaults/genesis.json");
     let genesis = RawGenesisTransaction::from_path(&genesis_path)?;
     let kp = checked_genesis_fixture_keypair();
-    let block = genesis.build_and_sign(&kp)?;
+    let proposal = genesis.build_and_sign(&kp)?;
+    assert!(
+        proposal.0.is_resultless_proposal(),
+        "raw manifest builders must emit a resultless proposal for runtime execution"
+    );
     let mut saw_handshake_mode = false;
     let mut saw_npos_custom = false;
-    for tx in block.0.external_transactions() {
+    for tx in proposal.0.external_transactions() {
         if let iroha_data_model::transaction::Executable::Instructions(instrs) = tx.instructions() {
             for instr in instrs {
                 if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>() {
@@ -142,13 +146,13 @@ fn default_genesis_block_roundtrips() -> Result<()> {
         saw_npos_custom,
         "Default genesis must emit SetParameter for `sumeragi_npos_parameters`"
     );
-    let encoded = block.0.encode_versioned();
+    let encoded = proposal.0.encode_versioned();
     norito::core::reset_decode_state();
     let decoded = SignedBlock::decode_all_versioned(&encoded)
         .wrap_err("default genesis block should decode via canonical layout")?;
     assert_eq!(
-        decoded, block.0,
-        "Encoded + decoded default genesis block must preserve all fields"
+        decoded, proposal.0,
+        "encoded + decoded default genesis proposal must preserve all fields"
     );
     Ok(())
 }
@@ -166,7 +170,7 @@ fn instruction_registry_decodes_register_domain_box() {
         .expect("entry")
         .expect("decode register-domain instruction");
 }
-fn prepared_bundle_fixture() -> (RawGenesisTransaction, KeyPair, SignedBlock, Vec<u8>) {
+fn prepared_proposal_fixture() -> (RawGenesisTransaction, KeyPair, SignedBlock, Vec<u8>) {
     init_instruction_registry();
     let topology = (0..4)
         .map(|_| {
@@ -182,13 +186,14 @@ fn prepared_bundle_fixture() -> (RawGenesisTransaction, KeyPair, SignedBlock, Ve
             .build_raw()
             .with_consensus_meta();
     let genesis_key = checked_genesis_fixture_keypair();
-    let block = manifest
+    let proposal = manifest
         .clone()
         .build_and_sign(&genesis_key)
         .expect("sign verifier fixture")
         .0;
-    let wire = block.encode_wire().expect("encode verifier fixture");
-    (manifest, genesis_key, block, wire)
+    assert!(proposal.is_resultless_proposal());
+    let wire = proposal.encode_wire().expect("encode verifier fixture");
+    (manifest, genesis_key, proposal, wire)
 }
 fn sign_modified_batches(
     manifest: &RawGenesisTransaction,
@@ -218,7 +223,9 @@ fn sign_modified_batches(
                 .expect("sign modified verifier transaction")
         })
         .collect();
-    SignedBlock::genesis(transactions, key_pair.private_key(), None, None)
+    let proposal = SignedBlock::genesis(transactions, key_pair.private_key(), None, None);
+    assert!(proposal.is_resultless_proposal());
+    proposal
 }
 fn sign_modified_envelopes(
     manifest: &RawGenesisTransaction,
@@ -248,20 +255,23 @@ fn sign_modified_envelopes(
                 .expect("sign modified verifier transaction")
         })
         .collect();
-    SignedBlock::genesis(transactions, key_pair.private_key(), None, None)
+    let proposal = SignedBlock::genesis(transactions, key_pair.private_key(), None, None);
+    assert!(proposal.is_resultless_proposal());
+    proposal
 }
 #[test]
-fn prepared_bundle_verifier_accepts_exact_canonical_bundle() {
-    let (manifest, key_pair, block, wire) = prepared_bundle_fixture();
+fn prepared_bundle_verifier_accepts_exact_canonical_resultless_proposal() {
+    let (manifest, key_pair, block, wire) = prepared_proposal_fixture();
     let validated =
         validate_prepared_genesis_bundle(&wire, &manifest, key_pair.public_key(), block.hash())
             .expect("exact bundle validates");
     assert_eq!(validated.canonical_wire(), wire);
+    assert!(validated.block().is_resultless_proposal());
     assert_eq!(validated.validator_pops().len(), 4);
 }
 #[test]
 fn prepared_bundle_verifier_rejects_noncanonical_wrong_hash_and_key() {
-    let (manifest, key_pair, block, wire) = prepared_bundle_fixture();
+    let (manifest, key_pair, block, wire) = prepared_proposal_fixture();
     let wrong_hash = HashOf::from_untyped_unchecked(Hash::new(b"wrong genesis hash"));
     let error =
         validate_prepared_genesis_bundle(&wire, &manifest, key_pair.public_key(), wrong_hash)
@@ -284,7 +294,7 @@ fn prepared_bundle_verifier_rejects_noncanonical_wrong_hash_and_key() {
 }
 #[test]
 fn prepared_bundle_verifier_rejects_missing_and_duplicate_consensus_metadata() {
-    let (manifest, key_pair, _, _) = prepared_bundle_fixture();
+    let (manifest, key_pair, _, _) = prepared_proposal_fixture();
     let missing = sign_modified_batches(&manifest, &key_pair, |batches| {
         for batch in batches {
             batch.retain(|instruction| {
@@ -344,7 +354,7 @@ fn prepared_bundle_verifier_rejects_missing_and_duplicate_consensus_metadata() {
 }
 #[test]
 fn prepared_bundle_verifier_rejects_noncanonical_transaction_envelopes() {
-    let (manifest, key_pair, _, _) = prepared_bundle_fixture();
+    let (manifest, key_pair, _, _) = prepared_proposal_fixture();
     let with_nonce = sign_modified_envelopes(&manifest, &key_pair, |index, builder| {
         if index == 0 {
             builder.set_nonce(core::num::NonZeroU32::new(1).expect("non-zero nonce"));
@@ -380,7 +390,7 @@ fn prepared_bundle_verifier_rejects_noncanonical_transaction_envelopes() {
 }
 #[test]
 fn prepared_bundle_verifier_rejects_nonconsecutive_transaction_times() {
-    let (manifest, key_pair, _, _) = prepared_bundle_fixture();
+    let (manifest, key_pair, _, _) = prepared_proposal_fixture();
     assert!(
         manifest.clone().parse().expect("expand fixture").len() > 1,
         "timestamp fixture needs multiple transaction batches"
@@ -398,7 +408,7 @@ fn prepared_bundle_verifier_rejects_nonconsecutive_transaction_times() {
 }
 #[test]
 fn prepared_bundle_verifier_rejects_manifest_semantics_and_validator_pops() {
-    let (manifest, key_pair, block, wire) = prepared_bundle_fixture();
+    let (manifest, key_pair, block, wire) = prepared_proposal_fixture();
     let drifted_manifest = manifest
         .clone()
         .into_builder()
@@ -429,17 +439,18 @@ fn prepared_bundle_verifier_rejects_manifest_semantics_and_validator_pops() {
             .set_topology(bad_entries)
             .build_raw()
             .with_consensus_meta();
-    let bad_block = bad_manifest
+    let bad_proposal = bad_manifest
         .clone()
         .build_and_sign(&key_pair)
         .expect("sign bad-PoP fixture")
         .0;
-    let bad_wire = bad_block.encode_wire().expect("encode bad-PoP fixture");
+    assert!(bad_proposal.is_resultless_proposal());
+    let bad_wire = bad_proposal.encode_wire().expect("encode bad-PoP fixture");
     let error = validate_prepared_genesis_bundle(
         &bad_wire,
         &bad_manifest,
         key_pair.public_key(),
-        bad_block.hash(),
+        bad_proposal.hash(),
     )
     .expect_err("bad validator PoP must fail");
     assert!(error.to_string().contains("invalid PoP"));

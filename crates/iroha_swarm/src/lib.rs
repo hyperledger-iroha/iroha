@@ -45,6 +45,10 @@ pub enum Error {
         reason: String,
     },
     /// Prepared validator {index} has an invalid SoraNet transport identity: {reason}.
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc uses this text verbatim; Markdown markup would alter the error"
+    )]
     InvalidPreparedTransportIdentity {
         /// Zero-based validator index.
         index: usize,
@@ -52,6 +56,10 @@ pub enum Error {
         reason: String,
     },
     /// Prepared validator {index} repeats another validator's SoraNet transport identity.
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc uses this text verbatim; Markdown markup would alter the error"
+    )]
     DuplicatePreparedTransportIdentity {
         /// Zero-based validator index.
         index: usize,
@@ -94,6 +102,10 @@ pub enum Error {
         target: String,
     },
     /// Prepared validator {index} must use distinct non-zero P2P/API ports, got {p2p_port}/{api_port}.
+    #[expect(
+        clippy::doc_markdown,
+        reason = "displaydoc uses this text verbatim; Markdown markup would alter the error"
+    )]
     InvalidPreparedPorts {
         /// Zero-based validator index.
         index: usize,
@@ -147,14 +159,12 @@ pub struct PreparedValidator {
     pub api_port: u16,
     /// Validator signing identity.
     pub key_pair: iroha_crypto::KeyPair,
-    /// Dedicated Ed25519 SoraNet transport public identity from the admitted runtime config.
+    /// Dedicated Ed25519 `SoraNet` transport public identity from the admitted runtime config.
     pub soranet_transport_public_key: iroha_crypto::PublicKey,
     /// BLS proof of possession committed by the signed genesis topology.
     pub pop: Vec<u8>,
     /// Launch this validator with the explicit Sora/Nexus profile switch.
     pub requires_sora_profile: bool,
-    /// Build-line policy already used to admit the prepared manifest.
-    pub build_line: PreparedBuildLine,
     /// Container-safe effective TOML preserving the admitted consensus policy.
     ///
     /// The file is mounted as a Compose secret and therefore does not expose
@@ -169,22 +179,6 @@ pub struct PreparedValidator {
     pub runtime_files: Vec<PreparedRuntimeFile>,
     /// File-backed private runtime inputs that must not appear in Compose YAML.
     pub secret_files: Vec<PreparedSecretFile>,
-}
-/// Build-line policy for an admitted prepared deployment.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PreparedBuildLine {
-    /// Iroha 2 self-hosted policy.
-    Iroha2,
-    /// Iroha 3 / Nexus policy.
-    Iroha3,
-}
-impl PreparedBuildLine {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Iroha2 => "iroha2",
-            Self::Iroha3 => "iroha3",
-        }
-    }
 }
 /// One byte-exact runtime file materialized through a Compose config.
 #[derive(Debug)]
@@ -253,7 +247,6 @@ struct PreparedRuntimeConfig {
     compose_name_prefix: String,
     source: path::RelativePath,
     blake3: [u8; 32],
-    build_line: PreparedBuildLine,
     files: Vec<PreparedRuntimeSource>,
     secrets: Vec<PreparedSecretSource>,
     requires_sora_profile: bool,
@@ -400,6 +393,10 @@ impl PeerSettings {
             prepared_runtime: None,
         })
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "prepared-bundle validation is one ordered fail-closed admission transaction"
+    )]
     fn prepared(
         chain: iroha_data_model::ChainId,
         validators: Vec<PreparedValidator>,
@@ -519,7 +516,6 @@ impl PeerSettings {
                 compose_name_prefix,
                 source,
                 blake3: validator.runtime_config_blake3,
-                build_line: validator.build_line,
                 files: runtime_files,
                 secrets: secret_files,
                 requires_sora_profile: validator.requires_sora_profile,
@@ -584,6 +580,10 @@ impl<'a> Swarm<'a> {
     /// [`Self::from_prepared`] so the validator roster and signed artifacts come from one
     /// authoritative prepared bundle.
     #[allow(clippy::missing_errors_doc)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "preserve the established public deterministic-development constructor"
+    )]
     pub fn deterministic_dev(
         count: std::num::NonZeroU16,
         seed: &[u8],
@@ -669,8 +669,8 @@ impl From<path::Error> for Error {
 mod tests {
     #![allow(clippy::too_many_lines, clippy::needless_raw_string_hashes)]
     use crate::{
-        PreparedBuildLine, PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile,
-        PreparedValidator, Swarm, base64_standard,
+        PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile, PreparedValidator,
+        Swarm, base64_standard,
         peer::{self, PeerOverride},
     };
     const IMAGE: &str = "hyperledger/iroha:dev";
@@ -866,7 +866,6 @@ mod tests {
             soranet_transport_public_key: soranet_transport_key_pair.0,
             pop,
             requires_sora_profile: false,
-            build_line: PreparedBuildLine::Iroha3,
             runtime_config_path: std::path::PathBuf::from(format!("peer{index}.runtime.toml")),
             runtime_config_blake3: [u8::try_from(index).expect("test index fits u8"); 32],
             runtime_files: Vec::new(),
@@ -1649,7 +1648,6 @@ mod tests {
         assert_eq!(output.matches("read_only: true").count(), 4);
         assert_eq!(output.matches("--config /config/peer.toml").count(), 4);
         assert_eq!(output.matches("exec env -i").count(), 4);
-        assert_eq!(output.matches("IROHA_BUILD_LINE=iroha3").count(), 4);
         assert_eq!(output.matches("--config-blake3 ").count(), 4);
         assert_eq!(output.matches("target: /config/peer.toml").count(), 4);
         assert_eq!(output.matches("target: /run/secrets/iroha_peer").count(), 4);

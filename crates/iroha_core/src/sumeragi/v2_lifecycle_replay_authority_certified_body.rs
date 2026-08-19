@@ -73,20 +73,6 @@ impl CertifiedFetchReplayEvidenceV1 {
             && certified_sources == &expected_sources
             && verified.verify_quorum_certificate(certificate).is_ok()
     }
-    /// Compare this complete canonical family with the exact installed Fetch.
-    pub(super) fn exactly_matches_fetch(
-        &self,
-        effect: &AdapterEffect,
-        response: &wire::CertifiedBodyResponse,
-        receipt: &DurableCertifiedFetchBodyReceipt,
-    ) -> bool {
-        if receipt.request_hash() != response.request_hash
-            || receipt.response_hash() != HashOf::new(response)
-        {
-            return false;
-        }
-        self.exactly_matches_fetch_body(effect, response, receipt.durable_body())
-    }
     fn exactly_matches_fetch_body(
         &self,
         effect: &AdapterEffect,
@@ -282,27 +268,6 @@ impl DurableCertifiedFetchReplayProjectionV1 {
     /// Exact manifest hash retained independently by the body-store receipt.
     pub(super) const fn expected_manifest_hash(&self) -> HashOf<wire::PayloadManifest> {
         self.expected_manifest_hash
-    }
-    /// Recheck the exact runtime binding and durable body without exposing fields.
-    pub(super) fn exactly_matches_runtime(
-        &self,
-        effect: &AdapterEffect,
-        pending: &PendingRuntimeEffectBinding,
-        receipt: &DurableBodyReceipt,
-    ) -> bool {
-        pending.exactly_binds_adapter_effect(effect)
-            && pending.causal_lifecycle_key() == &self.causal_key
-            && pending.exact_effect_identity() == &self.effect_identity
-            && receipt.manifest_hash() == self.expected_manifest_hash
-            && durable_body_frame_reference(replay_context(receipt.round()), receipt)
-                .map(DurablePayloadReference::BodyFrame)
-                == Some(self.payload)
-            && canonical_replay_authority(
-                replay_context(receipt.round()),
-                self.authority.source.clone(),
-                LifecycleStageKind::FetchBody,
-                ReplayPayloadBindingV1::from_payload(self.payload),
-            ) == Some(self.authority.clone())
     }
     /// Project the exact Ready recovery candidate named by one durable row.
     #[allow(clippy::too_many_arguments)]
@@ -891,6 +856,305 @@ impl InvalidBodyReportReplayEvidenceV1 {
         )
         .ok_or(AdapterEffectAdmissionError::InvalidCarrier)
     }
+    /// Consume the exact report replay envelope into closed concrete work.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_registry_work(
+        self,
+        permit: InvalidBodyReportRegistryWorkProjectionPermit,
+        effect: AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+    ) -> Result<
+        PreparedInvalidBodyReportRegistryWork,
+        (Self, AdapterEffect, PendingRuntimeEffectBinding),
+    > {
+        if !self.report_pending.exactly_matches(&effect, &pending)
+            || !matches!(&effect, AdapterEffect::ReportInvalidCertifiedBody { .. })
+        {
+            return Err((self, effect, pending));
+        }
+        let Self {
+            authority,
+            validate_origin,
+            report_pending,
+        } = self;
+        match PreparedInvalidBodyReportRegistryWork::from_exact(
+            permit,
+            effect,
+            pending,
+            authority.clone(),
+        ) {
+            Ok(work) => Ok(work),
+            Err((_error, effect, pending)) => Err((
+                Self {
+                    authority,
+                    validate_origin,
+                    report_pending,
+                },
+                effect,
+                pending,
+            )),
+        }
+    }
+}
+impl DurableValidateReplayEvidenceV1 {
+    /// Seal one adapter-authenticated Decision WAL Apply under this exact
+    /// durable Validate predecessor.
+    pub(in crate::sumeragi) fn seal_decision_apply(
+        capability: AuthenticatedDecisionValidateApplyCapability,
+        validate_origin: Self,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+        receipt: &ValidatedBodyReceipt,
+        apply_effect: &AdapterEffect,
+        apply_pending: &PendingRuntimeEffectBinding,
+    ) -> Option<DurableValidateApplyReplayEvidenceV1> {
+        if !capability.exactly_matches(apply_effect)
+            || !validate_origin.exactly_matches_validate_pending(
+                validate_effect,
+                receipt.durable(),
+                validate_pending,
+            )
+            || validate_pending
+                .project_validate_apply_successor(validate_effect, apply_effect)
+                .as_ref()
+                != Some(apply_pending)
+        {
+            return None;
+        }
+        let (wal_identity, capability_effect) = capability.into_parts();
+        if capability_effect != *apply_effect {
+            return None;
+        }
+        let authority =
+            exact_durable_validate_apply_authority(wal_identity, apply_effect, receipt)?;
+        let apply_pending_fingerprint =
+            DirectSignedPendingBindingV1::from_exact_effect(apply_effect, apply_pending)?;
+        let evidence = DurableValidateApplyReplayEvidenceV1 {
+            authority,
+            validate_origin,
+            apply_pending: apply_pending_fingerprint,
+            wal_identity,
+        };
+        evidence
+            .exactly_matches(
+                validate_effect,
+                validate_pending,
+                receipt,
+                apply_effect,
+                apply_pending,
+            )
+            .then_some(evidence)
+    }
+}
+impl DurableValidateApplyReplayEvidenceV1 {
+    pub(in crate::sumeragi) fn exactly_matches(
+        &self,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+        receipt: &ValidatedBodyReceipt,
+        apply_effect: &AdapterEffect,
+        apply_pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        self.validate_origin.exactly_matches_validate_pending(
+            validate_effect,
+            receipt.durable(),
+            validate_pending,
+        ) && self
+            .apply_pending
+            .exactly_matches(apply_effect, apply_pending)
+            && validate_pending
+                .project_validate_apply_successor(validate_effect, apply_effect)
+                .as_ref()
+                == Some(apply_pending)
+            && exact_durable_validate_apply_authority(self.wal_identity, apply_effect, receipt)
+                .is_some_and(|expected| expected == self.authority)
+    }
+    /// Revalidate the immutable effect, pending owner, body receipt, and WAL
+    /// authority retained by an installed ordinary Validate-to-Apply carrier.
+    ///
+    /// The logical candidate is deliberately checked by the registry/ledger
+    /// join separately. Keeping this fixed oracle candidate-free lets the
+    /// worker completion path authenticate the same installed material without
+    /// exposing or cloning the candidate.
+    pub(in crate::sumeragi) fn validates_installed_apply(
+        &self,
+        context: LifecycleContext,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        receipt: &ValidatedBodyReceipt,
+    ) -> bool {
+        let AdapterEffect::Apply { certificate, .. } = effect else {
+            return false;
+        };
+        self.apply_pending.exactly_matches(effect, pending)
+            && exact_durable_validate_apply_authority(self.wal_identity, effect, receipt)
+                .is_some_and(|authority| authority == self.authority)
+            && replay_context(certificate.round) == context
+    }
+    /// Revalidate the exact Apply carrier installed by the adjacent lifecycle cut.
+    pub(in crate::sumeragi) fn validates_registry_carrier(
+        &self,
+        context: LifecycleContext,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        receipt: &ValidatedBodyReceipt,
+        candidate: &CandidateAdmission,
+    ) -> bool {
+        let AdapterEffect::Apply {
+            tag: _,
+            subject,
+            certificate,
+        } = effect
+        else {
+            return false;
+        };
+        let expected_key = LifecycleKey::new(
+            context.id(),
+            LifecycleRound::new(certificate.round.height, certificate.round.view),
+            Some(LifecycleRound::new(
+                certificate.proposal_round.height,
+                certificate.proposal_round.view,
+            )),
+            Some(block_subject(*subject)),
+            LifecyclePhase::Apply,
+            Some(execution_commitment(certificate.execution_commitment)),
+        );
+        let expected_payload = durable_body_frame_reference(context, receipt.durable())
+            .map(DurablePayloadReference::BodyFrame);
+        let expected_slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
+        let expected_digest = digest_from_hash(pending.exact_effect_identity());
+        let expected_root = CausalRoot::new(digest_from_hash(pending.causal_lifecycle_key()));
+        let geometry_is_exact =
+            candidate
+                .physical_geometry
+                .normalized()
+                .is_ok_and(|(slots, universe, consumed)| {
+                    slots.len() == 1
+                        && slots.get(&expected_slot) == Some(&expected_digest)
+                        && universe.len() == 1
+                        && universe.contains(&expected_slot)
+                        && consumed == universe
+                });
+        self.validates_installed_apply(context, effect, pending, receipt)
+            && candidate.key == expected_key
+            && candidate.causal_root == expected_root
+            && candidate.work_class == LifecycleWorkClass::Apply
+            && candidate.stage.kind() == LifecycleStageKind::ApplyDecision
+            && candidate.stage.predecessor_scope() == PredecessorScope::Independent
+            && candidate.initial_state == InitialLifecycleState::Ready
+            && candidate.reconstruction_source == expected_root.digest()
+            && Some(candidate.payload) == expected_payload
+            && candidate.replay_authority == self.authority
+            && candidate.producer_turn.is_none()
+            && geometry_is_exact
+    }
+    pub(in crate::sumeragi) fn project_candidate(
+        &self,
+        verified: &VerifiedHeightContext,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+        receipt: &ValidatedBodyReceipt,
+        apply_effect: &AdapterEffect,
+        apply_pending: &PendingRuntimeEffectBinding,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        if !self.exactly_matches(
+            validate_effect,
+            validate_pending,
+            receipt,
+            apply_effect,
+            apply_pending,
+        ) {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        }
+        let active_context = replay_context(receipt.durable().round());
+        let projected = super::projection::authority_free_admission_projection(
+            active_context,
+            verified,
+            apply_effect,
+            apply_pending,
+        )?;
+        let frame = durable_body_frame_reference(active_context, receipt.durable())
+            .ok_or(AdapterEffectAdmissionError::InvalidCarrier)?;
+        candidate_from_authorized_projection(
+            active_context,
+            projected,
+            DurablePayloadReference::BodyFrame(frame),
+            self.authority.clone(),
+        )
+        .ok_or(AdapterEffectAdmissionError::InvalidCarrier)
+    }
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_registry_work(
+        self,
+        permit: ValidateApplyRegistryWorkProjectionPermit,
+        effect: AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+        receipt: ValidatedBodyReceipt,
+        candidate: CandidateAdmission,
+    ) -> Result<
+        PreparedValidateApplyRegistryWork,
+        (
+            Self,
+            AdapterEffect,
+            PendingRuntimeEffectBinding,
+            ValidatedBodyReceipt,
+            CandidateAdmission,
+        ),
+    > {
+        if !self.apply_pending.exactly_matches(&effect, &pending)
+            || !matches!(&effect, AdapterEffect::Apply { .. })
+        {
+            return Err((self, effect, pending, receipt, candidate));
+        }
+        match PreparedValidateApplyRegistryWork::from_exact(
+            permit, effect, pending, receipt, candidate, self,
+        ) {
+            Ok(work) => Ok(work),
+            Err((_error, effect, pending, receipt, candidate, evidence)) => {
+                Err((evidence, effect, pending, receipt, candidate))
+            }
+        }
+    }
+}
+fn exact_durable_validate_apply_authority(
+    wal_identity: RecoveredWalFrameIdentity,
+    effect: &AdapterEffect,
+    receipt: &ValidatedBodyReceipt,
+) -> Option<LifecycleReplayAuthorityV1> {
+    let AdapterEffect::Apply {
+        tag,
+        subject,
+        certificate,
+    } = effect
+    else {
+        return None;
+    };
+    let durable = receipt.durable();
+    let context = replay_context(certificate.round);
+    if !wal_identity.is_exact()
+        || certificate.phase != wire::GlobalPhase::Commit
+        || certificate.subject != *subject
+        || certificate.proposal_round != durable.round()
+        || durable.context_id() != certificate.round.context_id
+        || durable.subject() != *subject
+        || certificate.execution_commitment != receipt.execution_commitment()
+        || tag.height() != certificate.round.height
+        || tag.view() < certificate.round.view
+    {
+        return None;
+    }
+    let frame = durable_body_frame_reference(context, durable)?;
+    canonical_replay_authority(
+        context,
+        LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+            locator: wal_identity.persisted_locator(),
+            role: ReplayWalRoleV1::DECISION,
+            tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+            action: WalReplayActionV1::ApplyDecision(certificate.clone()),
+        }),
+        LifecycleStageKind::ApplyDecision,
+        ReplayPayloadBindingV1::from_payload(DurablePayloadReference::BodyFrame(frame)),
+    )
 }
 fn remote_proposal_validate_matches_durable_body(
     evidence: &RemoteProposalValidateReplayEvidenceV1,

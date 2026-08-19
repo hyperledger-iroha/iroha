@@ -15,11 +15,11 @@ pub enum ProductionRuntimeHandleError {
 pub const PRODUCTION_RUNTIME_HANDLE_MAX_BYTES: usize = 256;
 /// Maximum appeal-finance submitter signers in one V1 runtime configuration.
 pub const SORAFS_APPEAL_FINANCE_MAX_SUBMITTER_SIGNERS_V1: usize = 128;
-/// Maximum UTF-8 byte length of a canonical V1 WebAuthn relying-party ID.
+/// Maximum UTF-8 byte length of a canonical V1 `WebAuthn` relying-party ID.
 pub const WEBAUTHN_RP_ID_MAX_BYTES_V1: usize = 253;
-/// Maximum UTF-8 byte length of a canonical V1 WebAuthn origin.
+/// Maximum UTF-8 byte length of a canonical V1 `WebAuthn` origin.
 pub const WEBAUTHN_ORIGIN_MAX_BYTES_V1: usize = 512;
-/// Reason a WebAuthn relying-party ID is not canonical under the V1 policy.
+/// Reason a `WebAuthn` relying-party ID is not canonical under the V1 policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WebAuthnRpIdV1Error {
     /// The value is empty, oversized, non-ASCII, or not a valid DNS name.
@@ -31,25 +31,25 @@ pub enum WebAuthnRpIdV1Error {
     /// V1 requires a DNS name and does not admit an IP address literal.
     IpAddress,
 }
-/// Reason a WebAuthn origin is not canonical under the V1 policy.
+/// Reason a `WebAuthn` origin is not canonical under the V1 policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WebAuthnOriginV1Error {
     /// The supplied relying-party ID is not canonical under V1.
     InvalidRpId,
     /// The origin is empty, oversized, non-ASCII, malformed, or has no DNS host.
     InvalidSyntax,
-    /// V1 WebAuthn origins must use HTTPS.
+    /// V1 `WebAuthn` origins must use HTTPS.
     InsecureScheme,
     /// URL user information is forbidden, even when it does not contain a password.
     Credentials,
-    /// Paths, queries, and fragments are not part of a V1 WebAuthn origin.
+    /// Paths, queries, and fragments are not part of a V1 `WebAuthn` origin.
     NonOriginComponent,
     /// The value differs from the URL standard's exact origin serialization.
     NonCanonical,
     /// The origin host is neither the RP ID nor one of its subdomains.
     ForeignHost,
 }
-/// Validate one canonical WebAuthn relying-party ID under the public V1 policy.
+/// Validate one canonical `WebAuthn` relying-party ID under the public V1 policy.
 ///
 /// V1 accepts only exact lowercase multi-label ASCII DNS names. IP address literals, single-label
 /// development names, trailing dots, and DNS labels with non-LDH bytes are rejected. This is a hard
@@ -100,11 +100,11 @@ pub fn validate_webauthn_rp_id_v1(value: &str) -> Result<(), WebAuthnRpIdV1Error
         None => Err(WebAuthnRpIdV1Error::InvalidSyntax),
     }
 }
-/// Return whether `value` is a canonical V1 WebAuthn relying-party ID.
+/// Return whether `value` is a canonical V1 `WebAuthn` relying-party ID.
 pub fn is_canonical_webauthn_rp_id_v1(value: &str) -> bool {
     validate_webauthn_rp_id_v1(value).is_ok()
 }
-/// Validate one canonical WebAuthn origin for `rp_id` under the public V1 policy.
+/// Validate one canonical `WebAuthn` origin for `rp_id` under the public V1 policy.
 ///
 /// The exact URL serialization must be HTTPS with no credentials, path, query, fragment, or
 /// explicit default/non-canonical port. A canonical explicit non-default port is allowed. The DNS
@@ -149,7 +149,7 @@ pub fn validate_webauthn_origin_v1(value: &str, rp_id: &str) -> Result<(), WebAu
     }
     Ok(())
 }
-/// Return whether `value` is a canonical V1 WebAuthn origin for `rp_id`.
+/// Return whether `value` is a canonical V1 `WebAuthn` origin for `rp_id`.
 pub fn is_canonical_webauthn_origin_v1(value: &str, rp_id: &str) -> bool {
     validate_webauthn_origin_v1(value, rp_id).is_ok()
 }

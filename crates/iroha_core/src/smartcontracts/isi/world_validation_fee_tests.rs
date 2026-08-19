@@ -210,7 +210,7 @@ fn validation_fee_derived_runtime_permission_rejects_preexisting_direct_and_role
     super::require_absent_validation_fee_runtime_permission(
         &stx,
         &permission,
-        "the wrapper SBD asset transfer effect",
+        "the wrapper DS asset transfer effect",
     )
     .expect("an absent effect permission is eligible for protected derivation");
     stx.world
@@ -219,7 +219,7 @@ fn validation_fee_derived_runtime_permission_rejects_preexisting_direct_and_role
     let direct_error = super::require_absent_validation_fee_runtime_permission(
         &stx,
         &permission,
-        "the wrapper SBD asset transfer effect",
+        "the wrapper DS asset transfer effect",
     )
     .expect_err("a caller-made direct effect grant must fail closed");
     assert!(
@@ -235,7 +235,7 @@ fn validation_fee_derived_runtime_permission_rejects_preexisting_direct_and_role
     let role_error = super::require_absent_validation_fee_runtime_permission(
         &stx,
         &permission,
-        "the wrapper SBD asset transfer effect",
+        "the wrapper DS asset transfer effect",
     )
     .expect_err("a role-owned effect grant must fail closed");
     assert!(
@@ -304,7 +304,7 @@ fn validation_fee_derived_runtime_permissions_roll_back_atomically() {
         (
             effect_permission.clone(),
             BOB_ID.clone(),
-            "the wrapper SBD asset transfer effect",
+            "the wrapper DS asset transfer effect",
         ),
     ];
     let error = super::install_derived_validation_fee_runtime_permissions_with_validation(
@@ -569,7 +569,7 @@ fn execute_verified_fee_sponsor_registration(
     );
     let mut block = state.block(header);
     let mut transaction = block.transaction();
-    transaction.nexus.enabled = true;
+
     instruction.execute(&ALICE_ID, &mut transaction)
 }
 #[test]
@@ -649,6 +649,302 @@ fn verified_fee_sponsor_registration_rejects_wrong_policy_da_and_expiry() {
             .to_string()
             .contains("must equal the allocation lease expiry")
     );
+}
+#[test]
+fn initial_genesis_authority_can_bootstrap_fee_sponsor_lifecycle() {
+    use iroha_data_model::{
+        isi::nexus::{
+            ActivateFeeSponsorProgramRevision, CreateFeeSponsorProgram,
+            EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram,
+            StageFeeSponsorProgramRevision,
+        },
+        nexus::{
+            FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
+            FeeSponsorVaultKey,
+        },
+    };
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(1).expect("nonzero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let custody = stx.nexus.fees.sponsor_vault_custody_account_id.clone();
+    for account in [ALICE_ID.clone(), BOB_ID.clone(), custody.clone()] {
+        if stx.world.account(&account).is_err() {
+            Register::account(Account::new(account))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register genesis fee sponsor fixture account");
+        }
+    }
+    let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+        .parse()
+        .expect("canonical asset definition id");
+    stx.world.asset_definitions.insert(
+        asset_definition_id.clone(),
+        AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "global genesis fee asset".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID),
+    );
+    let sponsor_asset = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
+    Mint::asset_quantity(Quantity::from(10_u32), sponsor_asset.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("prefund genesis sponsor");
+    let program_id = FeeSponsorProgramId::new(
+        ALICE_ID.clone(),
+        "genesis_bootstrap".parse().expect("program name"),
+    );
+
+    CreateFeeSponsorProgram {
+        program: FeeSponsorProgram::new(program_id.clone(), ALICE_ID.clone()),
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect("initial genesis authority creates sponsor-owned program");
+    StageFeeSponsorProgramRevision {
+        revision: fee_sponsor_revision_fixture(
+            program_id.clone(),
+            asset_definition_id.clone(),
+            1,
+        ),
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect("initial genesis authority stages sponsor revision");
+    EnrollFeeSponsorBeneficiary {
+        program_id: program_id.clone(),
+        beneficiary: ALICE_ID.clone(),
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect("initial genesis authority enrolls exact beneficiary");
+    FundFeeSponsorProgram {
+        program_id: program_id.clone(),
+        asset_definition_id: asset_definition_id.clone(),
+        amount: Quantity::from(10_u32),
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect("initial genesis authority funds from the exact sponsor balance");
+    ActivateFeeSponsorProgramRevision {
+        program_id: program_id.clone(),
+        revision: 1,
+        activate_at_height: 1,
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect("initial genesis authority activates ready sponsor revision");
+
+    let program = stx
+        .world
+        .fee_sponsor_programs
+        .get(&program_id)
+        .expect("bootstrapped sponsor program");
+    assert_eq!(program.lifecycle, FeeSponsorProgramLifecycle::Active);
+    assert_eq!(program.active_revision, Some(1));
+    let vault_key = FeeSponsorVaultKey {
+        program_id: program_id.clone(),
+        asset_definition_id: asset_definition_id.clone(),
+    };
+    assert_eq!(
+        stx.world
+            .fee_sponsor_vaults
+            .get(&vault_key)
+            .expect("genesis funding creates the isolated sponsor vault")
+            .balance,
+        Quantity::from(10_u32),
+    );
+    assert_eq!(
+        stx.pending_transfer_transcript_count_for_testing(),
+        1,
+        "genesis sponsor funding must retain one auditable transfer transcript",
+    );
+    assert!(
+        stx.world.assets.get(&sponsor_asset).is_none(),
+        "fully funded sponsor source is removed at zero balance",
+    );
+    let custody_asset = AssetId::new(asset_definition_id, custody);
+    assert_eq!(
+        stx.world
+            .assets
+            .get(&custody_asset)
+            .expect("genesis sponsor funding reaches custody")
+            .as_ref(),
+        &Quantity::from(10_u32),
+    );
+}
+#[test]
+fn post_genesis_authority_cannot_bootstrap_another_sponsors_program() {
+    use iroha_data_model::{
+        isi::nexus::CreateFeeSponsorProgram,
+        nexus::{FeeSponsorProgram, FeeSponsorProgramId},
+    };
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(2).expect("nonzero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let program_id = FeeSponsorProgramId::new(
+        ALICE_ID.clone(),
+        "post_genesis_denied".parse().expect("program name"),
+    );
+    let error = CreateFeeSponsorProgram {
+        program: FeeSponsorProgram::new(program_id, ALICE_ID.clone()),
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect_err("height-two authority must not manage another sponsor's program");
+    assert!(error.to_string().contains("cannot manage fee sponsor program"));
+}
+#[test]
+fn replayed_genesis_header_cannot_regain_fee_sponsor_bootstrap_authority() {
+    use iroha_data_model::{
+        isi::nexus::CreateFeeSponsorProgram,
+        nexus::{FeeSponsorProgram, FeeSponsorProgramId},
+    };
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    {
+        let mut hashes = state.block_hashes.block();
+        hashes.push_for_tests(iroha_crypto::HashOf::<
+            iroha_data_model::block::BlockHeader,
+        >::from_untyped_unchecked(Hash::new(
+            b"fee-sponsor-genesis-replay-guard",
+        )));
+        hashes.commit_for_tests();
+    }
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(1).expect("nonzero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    assert!(stx._curr_block.is_genesis());
+    assert!(!crate::executor::is_initial_genesis_context(&stx));
+    let program_id = FeeSponsorProgramId::new(
+        ALICE_ID.clone(),
+        "replayed_genesis_denied".parse().expect("program name"),
+    );
+    let error = CreateFeeSponsorProgram {
+        program: FeeSponsorProgram::new(program_id.clone(), ALICE_ID.clone()),
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect_err("committed history must disable the height-one owner exception");
+    assert!(error.to_string().contains("cannot manage fee sponsor program"));
+    assert!(stx.world.fee_sponsor_programs.get(&program_id).is_none());
+}
+#[test]
+fn post_genesis_fund_mismatch_preserves_balances_vault_and_transcripts() {
+    use iroha_data_model::{
+        isi::nexus::FundFeeSponsorProgram,
+        nexus::{FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorVaultKey},
+    };
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let header = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(2).expect("nonzero height"),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    let custody = stx.nexus.fees.sponsor_vault_custody_account_id.clone();
+    for account in [ALICE_ID.clone(), BOB_ID.clone(), custody.clone()] {
+        if stx.world.account(&account).is_err() {
+            Register::account(Account::new(account))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("register post-genesis sponsor fixture account");
+        }
+    }
+    let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+        .parse()
+        .expect("canonical asset definition id");
+    stx.world.asset_definitions.insert(
+        asset_definition_id.clone(),
+        AssetDefinition::numeric(
+            asset_definition_id.clone(),
+            "post-genesis fee asset".to_owned(),
+            AssetBalancePolicy::Global,
+            None,
+        )
+        .build(&ALICE_ID),
+    );
+    let sponsor_asset = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
+    Mint::asset_quantity(Quantity::from(10_u32), sponsor_asset.clone())
+        .execute(&ALICE_ID, &mut stx)
+        .expect("prefund post-genesis sponsor");
+    let custody_asset = AssetId::new(asset_definition_id.clone(), custody);
+    let program_id = FeeSponsorProgramId::new(
+        ALICE_ID.clone(),
+        "fund_mismatch".parse().expect("program name"),
+    );
+    stx.world.fee_sponsor_programs.insert(
+        program_id.clone(),
+        FeeSponsorProgram::new(program_id.clone(), ALICE_ID.clone()),
+    );
+    let vault_key = FeeSponsorVaultKey {
+        program_id: program_id.clone(),
+        asset_definition_id: asset_definition_id.clone(),
+    };
+    let sponsor_before = stx
+        .world
+        .assets
+        .get(&sponsor_asset)
+        .expect("prefunded sponsor asset")
+        .as_ref()
+        .clone();
+    let custody_before = stx.world.assets.get(&custody_asset).cloned();
+
+    let error = FundFeeSponsorProgram {
+        program_id,
+        asset_definition_id,
+        amount: Quantity::from(3_u32),
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect_err("height-two non-owner funding must fail before moving assets");
+
+    assert!(error.to_string().contains("cannot manage fee sponsor program"));
+    assert_eq!(
+        stx.world
+            .assets
+            .get(&sponsor_asset)
+            .expect("rejected funding preserves sponsor asset")
+            .as_ref(),
+        &sponsor_before,
+    );
+    assert_eq!(stx.world.assets.get(&custody_asset).cloned(), custody_before);
+    assert!(stx.world.fee_sponsor_vaults.get(&vault_key).is_none());
+    assert_eq!(stx.pending_transfer_transcript_count_for_testing(), 0);
 }
 #[test]
 fn fee_sponsor_program_rejects_unregistered_payout_account() {
@@ -852,7 +1148,7 @@ fn fee_sponsor_vault_allocation_requires_program_management_authority() {
         LiveQueryStore::start_test(),
     );
     let header = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(1).expect("nonzero height"),
+        NonZeroU64::new(2).expect("nonzero height"),
         None,
         None,
         None,
@@ -861,7 +1157,7 @@ fn fee_sponsor_vault_allocation_requires_program_management_authority() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    stx.nexus.enabled = true;
+
     let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
         .parse()
         .expect("canonical asset definition id");
@@ -939,7 +1235,7 @@ fn fee_sponsor_vault_allocation_rejects_future_source_height() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    stx.nexus.enabled = true;
+
     let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
         .parse()
         .expect("canonical asset definition id");
@@ -1033,7 +1329,7 @@ fn fee_sponsor_rejects_restricted_assets_at_every_write_boundary() {
     );
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    stx.nexus.enabled = true;
+
     let authority = ALICE_ID.clone();
     let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
         .parse()

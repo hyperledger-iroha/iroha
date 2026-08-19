@@ -7,13 +7,13 @@ induction leaves and the retained-body tail.  They are moved byte-for-byte
 after every provider they consume, keeping the aggregate theorem/operator
 inventory unchanged while both physical shards remain independently bounded.
 ***************************************************************************)
-THEOREM AsyncServeProducerEpisodeTransitionPreservesTypeInvariant ==
-  /\ AsyncServeProducerEpisodeTypeInvariant
-  /\ AsyncServeProducerEpisodeTransition
-  => AsyncServeProducerEpisodeTypeInvariant'
+THEOREM AsyncServeProducerTurnTransitionPreservesTypeInvariant ==
+  /\ AsyncServeProducerTurnTypeInvariant
+  /\ AsyncServeProducerTurnTransition
+  => AsyncServeProducerTurnTypeInvariant'
 BY Zenon
-   DEF AsyncServeProducerEpisodeTypeInvariant,
-       AsyncServeProducerEpisodeTransition
+   DEF AsyncServeProducerTurnTypeInvariant,
+       AsyncServeProducerTurnTransition
 
 THEOREM AsyncStrongTypeProjectsControlServiceStateType ==
   AsyncStrongTypeInvariant => AsyncControlServiceStateTypeInvariant

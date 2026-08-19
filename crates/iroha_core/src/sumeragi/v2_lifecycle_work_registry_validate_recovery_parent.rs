@@ -711,8 +711,9 @@ impl super::concrete_admission::LifecycleWorkRegistryHolder {
                 .bind_authenticated_remote_proposal_replay_for_test(proposal, &fetch_effect,)
         );
         let fetch_pending = fetch_ownership
-            .pending_adapter_effect_binding(&fetch_effect)
-            .expect("remote-Proposal Fetch retains one pending binding");
+            .current_effect_producer(&fetch_effect)
+            .expect("remote-Proposal Fetch retains one producer")
+            .mint_pending_binding();
         let fetch_replay = fetch_ownership
             .exact_remote_proposal_fetch_replay(&fetch_effect)
             .expect("authenticated Proposal retains exact Fetch replay evidence");

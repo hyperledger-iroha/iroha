@@ -8,9 +8,9 @@ fn invalid(message: impl Into<String>) -> PyErr {
     PyValueError::new_err(message.into())
 }
 #[pyfunction]
-#[pyo3(name = "inspect_sorafs_orderbook_submission_v1")]
+#[pyo3(name = "inspect_sorafs_orderbook_submission_for_discriminant_v1")]
 #[rustfmt::skip]
-pub(crate) fn inspect_sorafs_orderbook_submission_v1_py(
+pub(crate) fn inspect_sorafs_orderbook_submission_for_discriminant_v1_py(
     py: Python<'_>,
     route: &str,
     expected_network_id: &PyNetworkId,

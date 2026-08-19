@@ -608,6 +608,10 @@ fn run_commitment_and_envelope_hash(family: FheProofFamily, id: &str) {
     );
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the adversarial matrix keeps every ordered OpenVerify envelope mutation together"
+)]
 fn run_open_verify_envelope_drift(family: FheProofFamily, id: &str) {
     let profile = family.profile();
     let sample = family.sample();

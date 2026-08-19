@@ -580,9 +580,11 @@
             "bash \"$grouped_parity_harness\" --suite-source-manifest-sha256",
             "symbols[\"_sdk_suite_source_manifest\"](",
             "symbols[\"_NATIVE_AMX_GROUPED_SOURCE_CLOSURE_SUITE\"]",
+            "|| \"$resolver_grouped_suite_source_manifest_sha256\"",
+            "|| \"$receipt_suite_source_manifest_sha256\"",
             "!= \"$grouped_suite_source_manifest_sha256\"",
-            "grouped Native AMX V2 fixture/suite source binding is invalid",
-            "grouped Native AMX V2 suite-source manifest SHA-256"
+            "grouped Native AMX V2 fixture/resolver/receipt source binding is invalid",
+            "must derive SDK suite-source digests at freeze/replay instead of embedding mutable values"
           ]
         }
       ]
@@ -1402,7 +1404,7 @@
         "symbol": "IndexedReservationReplayState::transition_release_batch",
         "required_tokens": [
           "let mut removals = Vec::new();",
-          ".push(self.validate_live_secondary_indexes(key.signed_transaction_hash, *key)?)",
+          "removals.push(self.validate_live_secondary_indexes(key.entrypoint_hash, *key)?)",
           "if apply {",
           "for record in &removals",
           "self.remove_preflighted_live(record);"
@@ -1414,13 +1416,13 @@
         "symbol": "IndexedReservationReplayState::transition_commit",
         "required_tokens": [
           "key.validate().map_err(invalid_data)?;",
-          "let owner = self.ownership.get(&key.signed_transaction_hash).copied();",
+          "let owner = self.ownership.get(&key.entrypoint_hash).copied();",
           "reservation commit conflicts with a different live reservation identity",
           "reservation commit conflicts with an existing commit barrier",
           "reservation commit overlaps an ordered release claim",
           "reservation commit requires an exact live reservation",
           "let live_removal = match owner",
-          "Some(self.validate_live_secondary_indexes(key.signed_transaction_hash, existing)?)",
+          "Some(self.validate_live_secondary_indexes(key.entrypoint_hash, existing)?)",
           "let needs_commit = !matches!(",
           "self.ensure_owner_capacity(0, maximum)?;",
           "self.order_range(if needs_commit { 1 } else { 0 })?;",
@@ -1455,7 +1457,7 @@
         "required_tokens": [
           "fn validate_live_secondary_indexes(",
           ") -> io::Result<LaneQueueReservationRecordV5>",
-          "expected_key.signed_transaction_hash != hash",
+          "expected_key.entrypoint_hash != hash",
           "live reservation index key differs from the exact reservation hash",
           ".live",
           ".get(&hash)",
@@ -1737,7 +1739,7 @@
           "checked_reservation_fsync.into_projection()",
           "journal.put_batch(",
           "restore_popped_hash_locked",
-          "live_by_hash"
+          "live_by_entrypoint\n                .insert(record.key.entrypoint_hash, record.clone())"
         ]
       },
       {
@@ -2986,16 +2988,14 @@
           "positions.insert(hash, position).is_some()",
           "barrier.ordered_keys",
           "let Some(tx) = self.txs.get(&hash) else",
-          "accepted.hash() != hash",
           "accepted.hash_as_entrypoint() != key.entrypoint_hash",
-          "exact_signed_transaction_hash(accepted.entrypoint()) != Some(hash)",
           "let Some(plan) = self.routing_plans.get(&hash) else",
           "plan.digest() != key.routing_plan_digest",
           "plan.coordinator_leg() != key.coordinator_leg",
           "plan.coordinator_route() != expected_route",
           "let Some(claim) = self.durable_plan_claims.get(&hash) else",
           "claim.entrypoint_hash != key.entrypoint_hash",
-          "claim.signed_transaction_hash != Some(hash)",
+          "claim.signed_transaction_hash\n                    != crate::tx::exact_signed_transaction_hash(accepted.entrypoint())",
           "&claim.routing_plan != plan",
           ".validate_for_lane_reservation_commit(key)",
           "positions.get(&hash).copied()",
@@ -3128,8 +3128,8 @@
           "state_block.staged_merge_entry()",
           "staged_merge_queue_reservation_hashes",
           "self.queue.remove_committed_hashes(",
-          ".filter(|transaction_hash|",
-          "!staged_merge_queue_reservation_hashes.contains(transaction_hash)"
+          ".filter(|entrypoint_hash|",
+          "!staged_merge_queue_reservation_hashes.contains(entrypoint_hash)"
         ]
       },
       {
@@ -3301,7 +3301,7 @@
           "authenticated_autonomous_carrier_application_projections(",
           "carrier_groups.len() != applications.len()",
           "for (group, application) in carrier_groups.into_iter().zip(applications)",
-          "state.committed_transaction_height(transaction_hash) != Some(carrier_height)",
+          "state.committed_entrypoint_height(transaction_hash) != Some(carrier_height)",
           "application.reservation_group != reservation_group",
           "state.lane_incarnation_at_height(",
           "consensus_lane_dataspace_at_height(",
@@ -3597,7 +3597,7 @@
         "symbol": "IndexedReservationReplayState::transition_release_batch",
         "tokens": [
           "let mut removals = Vec::new();",
-          ".push(self.validate_live_secondary_indexes(key.signed_transaction_hash, *key)?)",
+          "removals.push(self.validate_live_secondary_indexes(key.entrypoint_hash, *key)?)",
           "if apply {",
           "for record in &removals",
           "self.remove_preflighted_live(record);"
@@ -3609,10 +3609,10 @@
         "symbol": "IndexedReservationReplayState::transition_commit",
         "tokens": [
           "key.validate().map_err(invalid_data)?;",
-          "let owner = self.ownership.get(&key.signed_transaction_hash).copied();",
+          "let owner = self.ownership.get(&key.entrypoint_hash).copied();",
           "reservation commit requires an exact live reservation",
           "let live_removal = match owner",
-          "Some(self.validate_live_secondary_indexes(key.signed_transaction_hash, existing)?)",
+          "Some(self.validate_live_secondary_indexes(key.entrypoint_hash, existing)?)",
           "let needs_commit = !matches!(",
           "self.ensure_owner_capacity(0, maximum)?;",
           "self.order_range(if needs_commit { 1 } else { 0 })?;",
@@ -3646,7 +3646,7 @@
         "kind": "method",
         "symbol": "IndexedReservationReplayState::validate_live_secondary_indexes",
         "tokens": [
-          "expected_key.signed_transaction_hash != hash",
+          "expected_key.entrypoint_hash != hash",
           ".live",
           ".get(&hash)",
           "record.value.key != expected_key",
@@ -3727,7 +3727,7 @@
           "durable_claim.global_admission_binding()",
           "QueuePlanAdmissionRegistryMatch::Exact",
           "journal.put_batch(",
-          "live_by_hash"
+          "live_by_entrypoint\n                .insert(record.key.entrypoint_hash, record.clone())"
         ]
       },
       {
@@ -4399,7 +4399,7 @@
           "carrier_groups.len() != applications.len()",
           "for (group, application) in carrier_groups.into_iter().zip(applications)",
           ".map(|(transaction_hash, key)| {",
-          "state.committed_transaction_height(transaction_hash) != Some(carrier_height)",
+          "state.committed_entrypoint_height(transaction_hash) != Some(carrier_height)",
           "lane_queue_reservation_group_binding_from_ordered_keys(ordered_keys.iter())",
           "application.reservation_group != reservation_group",
           "exact_committed_carrier_height_for_group(&exact_group, &indexed_heights)?",
@@ -5095,10 +5095,10 @@
         "kind": "fn",
         "symbol": "admit_kura_replica_advert_ingress",
         "required_tokens": [
-          "let authenticated_via = inbound.via().cloned()",
+          "let authenticated_via = inbound.via().clone()",
           "matches_semantic_origin(inbound.sender())",
-          "sender.as_ref() != Some(&advertised_keeper)",
-          "authenticated_via.as_ref() != Some(&advertised_keeper)",
+          "sender != advertised_keeper",
+          "authenticated_via != advertised_keeper",
           "advert.keeper != advertised_keeper",
           "kura.admit_kura_replica_advert(&advert)"
         ]
@@ -5511,8 +5511,9 @@
         "kind": "fn",
         "symbol": "run_lifecycle_active_height",
         "required_tokens": [
-          "try_begin_certified_serve_producer_episode()",
-          ".service_kura_replica_advert_refresh_turn(Instant::now())"
+          ".service_kura_replica_advert_refresh_turn(Instant::now())",
+          "claim_producer_turn_for_local_proposal(&mut active_runner)",
+          "settle_producer_turn_after_local_proposal(&mut active_runner, attempted)"
         ]
       },
       {
@@ -5520,8 +5521,9 @@
         "kind": "fn",
         "symbol": "run_pending_active_height",
         "required_tokens": [
-          "try_begin_certified_serve_producer_episode()",
-          ".service_kura_replica_advert_refresh_turn(Instant::now())"
+          "claim_producer_turn_for_no_clock_recovery(&mut active_runner)",
+          ".service_kura_replica_advert_refresh_turn(Instant::now())",
+          "settle_producer_turn_after_no_clock_recovery(&mut active_runner, attempted)"
         ]
       },
       {
@@ -6301,17 +6303,20 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/block.rs",
+          "path": "crates/iroha_core/src/block/native_amx_certified_coordinator_authority.rs",
           "kind": "fn",
           "symbol": "validate_historical_native_amx_certified_coordinator_authority",
           "required_tokens": [
-            "authority.route_active_at_height",
-            "authority.lane_incarnation_at_height",
-            "let mut authoritative_validators = authority",
-            ".authoritative_lane_peer_ids_at_height",
+            "let mut authoritative_validators = authenticated_committee.to_vec()",
+            "authoritative_validators.sort()",
+            "authoritative_validators.dedup()",
+            "authoritative_validators.retain",
+            "iroha_crypto::Algorithm::BlsNormal",
+            "authoritative_validators.is_empty()",
             "descriptor.validator_set != authoritative_validators",
             "payload_availability_qc",
-            "authority.consensus_pop_matches_authority",
+            ".zip(&availability.validator_set_pops)",
+            "key_authority.consensus_pop_matches_authority",
             "bundle.certified.signer_pops"
           ]
         },
@@ -7193,7 +7198,7 @@
           ]
         },
         {
-          "path": "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
+          "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
           "kind": "fn",
           "symbol": "canonical_executed_block_recovery_batches",
           "required_tokens": [
@@ -8511,7 +8516,7 @@
             "apply_without_execution_with_verified_v2_finality",
             "let staged_merge_queue_reservation_hashes = certified_merge_queue_reservation_hashes(",
             "state_block.staged_merge_entry(),",
-            "!staged_merge_queue_reservation_hashes.contains(transaction_hash)",
+            "!staged_merge_queue_reservation_hashes.contains(entrypoint_hash)",
             "pending_autoscale_retirement_binding",
             "Box<dyn StateBlockCommitAuthorization>",
             "Box::new(checked_carrier_applications)",
@@ -9495,11 +9500,10 @@
             "positions.insert",
             "barrier.ordered_keys",
             "let Some(tx) = self.txs.get(&hash) else",
-            "accepted.hash() != hash",
             "accepted.hash_as_entrypoint() != key.entrypoint_hash",
-            "exact_signed_transaction_hash(accepted.entrypoint()) != Some(hash)",
             "let Some(plan) = self.routing_plans.get(&hash) else",
             "let Some(claim) = self.durable_plan_claims.get(&hash) else",
+            "claim.signed_transaction_hash\n                    != crate::tx::exact_signed_transaction_hash(accepted.entrypoint())",
             "positions.get",
             "previous >= position",
             "previous_fifo_ordinal",
@@ -9522,8 +9526,8 @@
           "kind": "fn",
           "symbol": "release_lane_reservations_in_order_inner",
           "required_tokens": [
-            "signed_hashes.insert",
-            "authorized_hashes != signed_hashes",
+            "entrypoint_hashes.insert",
+            "authorized_hashes != entrypoint_hashes",
             "self.lane_reservation_transition_lock.lock()",
             "store.ensure_no_conflict(key)?",
             "records[0].1.fifo_order.ordinal >= records[1].1.fifo_order.ordinal",
@@ -9532,7 +9536,7 @@
             "self.apply_lane_reservation_journal(move |journal|",
             "journal.release_batch(release_keys)",
             "let restored_fifo = self.fifo_with_released_reservations_locked(&released_records)?;",
-            "store.live_by_hash.remove",
+            "store.live_by_entrypoint.remove",
             "replace_fifo_locked"
           ]
         },
@@ -10215,7 +10219,7 @@
           "required_tokens": [
             "decode_autonomous_lane_merge_bundle",
             "validate_lane_block_execution_input_with_routing_context",
-            "stage_direct_committed_transactions",
+            "stage_direct_committed_entrypoints",
             "drain_merge_lane_settlement_commitment",
             "seen_entrypoints",
             "seen_reservations"
@@ -10375,7 +10379,7 @@
         {
           "path": "crates/iroha_core/src/state.rs",
           "kind": "fn",
-          "symbol": "apply_without_execution_with_commit_qc_inner",
+          "symbol": "apply_without_execution_inner",
           "required_tokens": [
             "validate_merge_execution_external_event_publication_surface",
             "status: BlockStatus::Applied",
@@ -10486,7 +10490,7 @@
             "self.lane_reservation_transition_lock.lock()",
             "self.push_remove_lock.lock()",
             "let store = self.lane_reservations.lock()",
-            "store.live_by_hash.values()",
+            "store.live_by_entrypoint.values()",
             "store.commit_barriers.clone()",
             "store.release_barriers.clone()",
             "store.completed_releases.clone()",
@@ -10513,7 +10517,7 @@
             "if snapshot.is_empty()",
             "let release_barriers = snapshot.release_barriers()",
             "let commit_barriers = snapshot.commit_barriers.as_slice()",
-            "has_committed_transaction",
+            "has_committed_entrypoint",
             "unique_recovered",
             "get_merge_entry_by_carrier_height",
             "authenticated_autonomous_carrier_application_projections",
@@ -10864,7 +10868,7 @@
             "LaneQueueReservationGroupIdentityV1::from_key",
             "key.validate()",
             "MAX_LANE_EXECUTABLE_ENTRYPOINTS",
-            "signed_hashes.insert",
+            "entrypoint_hashes.insert",
             "key_digests.insert",
             "LANE_QUEUE_RESERVATION_GROUP_HASH_STEP_V1",
             "position",
@@ -10891,7 +10895,7 @@
             "MAX_MERGE_EXECUTION_ENTRYPOINTS",
             "transaction_selection_durability_faulted",
             "lane_reservation_journal.lock().is_none()",
-            "live_by_hash",
+            "live_by_entrypoint",
             "commit_barriers",
             "release_barriers",
             "completed_releases"
@@ -10949,7 +10953,7 @@
           "required_tokens": [
             "native_amx_participant_applications_diagnostics",
             "durable_lane_diagnostics",
-            "durable_queue.as_ref()",
+            "Option::as_ref(&durable_queue)",
             "autonomous_lane_execution_diagnostics",
             "autonomous_lane_execution_diagnostics_with_queue",
             "validate_autonomous_lane_executions"
@@ -11524,7 +11528,7 @@
           "kind": "fn",
           "symbol": "queue_plan_binding_application_state",
           "required_tokens": [
-            "state.has_transaction",
+            "state.has_entrypoint",
             "queue_plan_pending_obligation_matches_active_lifecycle",
             "queue_plan_binding_application_state_in_storage",
             "expected",
@@ -11819,7 +11823,6 @@
             "self.materialized_retained_bytes() == 0",
             "self.tx_hashes.is_empty()",
             "self.queued_count.load(Ordering::Acquire) == 0",
-            "self.routing_decisions.is_empty()",
             "self.routing_plans.is_empty()",
             "self.durable_plan_claims.is_empty()",
             "self.tx_encoded_len.is_empty()",
@@ -11849,7 +11852,7 @@
             "expected_missing_payload_hashes != store.missing_payload_hashes",
             "missing_reservation_payload_count",
             "store.missing_payload_hashes.len()",
-            "store.live_by_hash.values().chain(",
+            "store.live_by_entrypoint.values().chain(",
             "completed_releases",
             "record.validate()",
             ".insert(hash, record.fifo_order)",
@@ -11870,7 +11873,7 @@
             ".missing_payload_hashes",
             ".difference(&journal_hashes)",
             "commit_barrier_hashes.contains(hash)",
-            "state_view.transactions.get(hash).is_none()",
+            "state_view.transactions.get(&*hash).is_none()",
             "let replay_observed_at = self.time_source.get_unix_time();",
             "AcceptedTransaction::accept_entrypoint_at_time",
             "accepted.hash_as_entrypoint() != entrypoint_hash",
@@ -11915,7 +11918,7 @@
             "self.fifo_order_by_hash.insert(hash, fifo_order);",
             "self.txs.insert(hash, Arc::clone(&tx_arc));",
             "self.track_active_transaction();",
-            "self.routing_decisions.insert(hash, routing_decision);",
+            "let lane_id = routing_decision.lane_id;",
             "self.routing_plans.insert(hash, routing_plan.clone());",
             "self.durable_plan_claims.insert(hash, claim.clone());",
             "self.track_expiry_hash(hash);",
@@ -11979,7 +11982,7 @@
             "self.lane_reservation_transition_lock.lock()",
             "self.push_remove_lock.lock()",
             "let store = self.lane_reservations.lock()",
-            "store.live_by_hash.values()",
+            "store.live_by_entrypoint.values()",
             "store.commit_barriers.clone()",
             "store.release_barriers.clone()",
             "store.completed_releases.clone()",
@@ -12006,7 +12009,7 @@
             "if snapshot.is_empty()",
             "let release_barriers = snapshot.release_barriers()",
             "let commit_barriers = snapshot.commit_barriers.as_slice()",
-            "has_committed_transaction",
+            "has_committed_entrypoint",
             "unique_recovered",
             "get_merge_entry_by_carrier_height",
             "authenticated_autonomous_carrier_application_projections",
@@ -12079,7 +12082,7 @@
             "global_admission_binding",
             "validate_for_transaction_and_plan",
             "txs",
-            "routing_decisions",
+            "routing != routing_plan.coordinator_route()",
             "routing_plans",
             "restore_popped_hash_locked"
           ]

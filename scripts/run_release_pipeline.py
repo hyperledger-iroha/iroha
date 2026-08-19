@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Orchestrate the dual-track Iroha release pipeline.
+Orchestrate the canonical Iroha 3 release pipeline.
 
-This helper generates release notes via git-cliff, invokes the existing bundle
-and image builders for the iroha2/iroha3 profiles, aggregates checksums,
+This helper generates release notes via git-cliff, invokes the bundle and image
+builders for the canonical Iroha 3 profile, aggregates checksums,
 produces the canonical manifest, and optionally stages publication commands
 for release targets (SoraFS/SoraNet gateways or other URIs).
 
@@ -17,7 +17,6 @@ Example:
         --trusted-signing-fingerprint <reviewed-lowercase-sha256> \\
         --release-manifest-verifier /opt/iroha/bin/sorafs-validate \\
         --trusted-release-manifest-verifier-sha256 <reviewed-lowercase-sha256> \\
-        --publish-target iroha2=sorafs://releases/iroha2/v<release-version> \\
         --publish-target iroha3=sorafs://releases/iroha3/v<release-version>
 """
 from __future__ import annotations
@@ -60,7 +59,9 @@ from release_manifest_signing import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_PROFILES = ("iroha2=single", "iroha3=nexus")
+RELEASE_PROFILE = "iroha3"
+RELEASE_CONFIG = "nexus"
+RELEASE_PROFILES = ((RELEASE_PROFILE, RELEASE_CONFIG),)
 RELEASE_TARGETS = {
     "x86_64-unknown-linux-gnu": ("linux", "x86_64"),
     "aarch64-unknown-linux-gnu": ("linux", "aarch64"),
@@ -134,66 +135,32 @@ def repo_version() -> str:
     raise PipelineError("Unable to read version from Cargo.toml")
 
 
-def parse_profiles(specs: Iterable[str]) -> List[Tuple[str, str]]:
-    pairs: List[Tuple[str, str]] = []
-    seen: set[str] = set()
-    for spec in specs:
-        if "=" not in spec:
-            raise PipelineError(f"Invalid profile spec '{spec}'. Expected format <name>=<config>.")
-        name, config = spec.split("=", 1)
-        name = name.strip()
-        config = config.strip()
-        if not name or not config:
-            raise PipelineError(f"Invalid profile spec '{spec}'.")
-        if name not in {"iroha2", "iroha3"}:
-            raise PipelineError(f"Unsupported release profile '{name}'.")
-        if config not in {"single", "nexus"}:
-            raise PipelineError(f"Unsupported release config '{config}'.")
-        if name in seen:
-            raise PipelineError(f"Duplicate release profile '{name}'.")
-        seen.add(name)
-        pairs.append((name, config))
-    return pairs
-
-
 def _parse_prebuilt_matrix(
     specs: Iterable[str] | None,
     *,
     option: str,
     dimensions: set[str],
-) -> Dict[tuple[str, str], str]:
-    result: Dict[tuple[str, str], str] = {}
+) -> Dict[str, str]:
+    result: Dict[str, str] = {}
     for spec in specs or ():
         if "=" not in spec:
             raise PipelineError(
-                f"Invalid {option} value; expected profile:dimension=path"
+                f"Invalid {option} value; expected dimension=path"
             )
-        identity, path = spec.split("=", 1)
-        if ":" not in identity:
-            raise PipelineError(
-                f"Invalid {option} value; expected profile:dimension=path"
-            )
-        profile, dimension = identity.split(":", 1)
-        if (
-            profile not in {"iroha2", "iroha3"}
-            or dimension not in dimensions
-            or not path
-        ):
-            raise PipelineError(
-                f"Invalid {option} profile or release dimension"
-            )
-        key = (profile, dimension)
-        if key in result:
-            raise PipelineError(f"Duplicate {option} identity '{identity}'")
+        dimension, path = spec.split("=", 1)
+        if dimension not in dimensions or not path:
+            raise PipelineError(f"Invalid {option} release dimension")
+        if dimension in result:
+            raise PipelineError(f"Duplicate {option} identity '{dimension}'")
         if any(ord(character) < 0x20 or ord(character) == 0x7F for character in path):
             raise PipelineError(f"{option} paths must not contain controls")
-        result[key] = path
+        result[dimension] = path
     return result
 
 
 def parse_bundle_prebuilt_dirs(
     specs: Iterable[str] | None,
-) -> Dict[tuple[str, str], str]:
+) -> Dict[str, str]:
     return _parse_prebuilt_matrix(
         specs,
         option="--bundle-prebuilt-bin-dir",
@@ -203,7 +170,7 @@ def parse_bundle_prebuilt_dirs(
 
 def parse_image_prebuilt_dirs(
     specs: Iterable[str] | None,
-) -> Dict[tuple[str, str], str]:
+) -> Dict[str, str]:
     return _parse_prebuilt_matrix(
         specs,
         option="--image-prebuilt-bin-dir",
@@ -510,12 +477,6 @@ def main() -> int:
         help="Reviewed lowercase SHA256 of the exact git-cliff executable.",
     )
     parser.add_argument(
-        "--profile",
-        action="append",
-        dest="profiles",
-        help="Profile spec in the form name=config (default: iroha2=single, iroha3=nexus). Can be repeated.",
-    )
-    parser.add_argument(
         "--external-signer",
         help=(
             "Reviewed adapter for the authenticated external software Ed25519 "
@@ -545,8 +506,8 @@ def main() -> int:
         "--bundle-prebuilt-bin-dir",
         action="append",
         help=(
-            "Reviewed bundle binary directory as profile:target=path; required "
-            "exactly once for each profile and mandatory Linux/macOS/Windows target."
+            "Reviewed bundle binary directory as target=path; required exactly "
+            "once for each mandatory Linux/macOS/Windows target."
         ),
     )
     parser.add_argument(
@@ -610,8 +571,8 @@ def main() -> int:
         "--image-prebuilt-bin-dir",
         action="append",
         help=(
-            "Reviewed image binary directory as profile:platform=path; required "
-            "once for every profile and required Linux image platform."
+            "Reviewed image binary directory as platform=path; required once "
+            "for every required Linux image platform."
         ),
     )
     parser.add_argument(
@@ -634,7 +595,7 @@ def main() -> int:
         action="append",
         help=(
             "Publish target URI for publication plan (optional). "
-            "Repeat as profile=uri to target specific tracks; a single URI is used for both profiles."
+            "Use iroha3=uri or shared=uri for exact artifact classes; a single URI applies to both."
         ),
     )
     parser.add_argument(
@@ -729,7 +690,7 @@ def main() -> int:
     )
 
     args = parser.parse_args()
-    profiles = parse_profiles(args.profiles or DEFAULT_PROFILES)
+    profiles = RELEASE_PROFILES
     signing_cli_args = release_signing_cli_args(
         args.external_signer,
         args.signing_public_key,
@@ -810,20 +771,16 @@ def main() -> int:
             "bundle/evidence lanes require absolute --zstd and "
             "--trusted-zstd-sha256 as 64 lowercase hex"
         )
-    bundle_prebuilt_dirs: Dict[tuple[str, str], str] = {}
+    bundle_prebuilt_dirs: Dict[str, str] = {}
     if not args.skip_bundles:
         bundle_prebuilt_dirs = parse_bundle_prebuilt_dirs(
             args.bundle_prebuilt_bin_dir
         )
-        expected_bundle_inputs = {
-            (profile, target)
-            for profile, _config in profiles
-            for target in RELEASE_TARGETS
-        }
+        expected_bundle_inputs = set(RELEASE_TARGETS)
         if set(bundle_prebuilt_dirs) != expected_bundle_inputs:
             raise PipelineError(
                 "--bundle-prebuilt-bin-dir identities must be exactly the "
-                "profile × mandatory Linux/macOS/Windows target matrix"
+                "mandatory Linux/macOS/Windows target matrix"
             )
     elif args.bundle_prebuilt_bin_dir:
         raise PipelineError(
@@ -833,7 +790,7 @@ def main() -> int:
         raise PipelineError(
             "at least one bundle or image release lane must be enabled"
         )
-    image_prebuilt_dirs: Dict[tuple[str, str], str] = {}
+    image_prebuilt_dirs: Dict[str, str] = {}
     image_platforms = tuple(args.image_platforms or ())
     if not args.skip_images:
         image_required = {
@@ -921,15 +878,11 @@ def main() -> int:
         image_prebuilt_dirs = parse_image_prebuilt_dirs(
             args.image_prebuilt_bin_dir
         )
-        expected_prebuilt_profiles = {
-            (profile, platform_name)
-            for profile, _config in profiles
-            for platform_name in REQUIRED_IMAGE_PLATFORMS
-        }
+        expected_prebuilt_profiles = set(REQUIRED_IMAGE_PLATFORMS)
         if set(image_prebuilt_dirs) != expected_prebuilt_profiles:
             raise PipelineError(
                 "--image-prebuilt-bin-dir identities must be exactly the "
-                "profile × required Linux image-platform matrix"
+                "required Linux image-platform matrix"
             )
     elif args.image_platforms or args.image_prebuilt_bin_dir:
         raise PipelineError(
@@ -1100,10 +1053,6 @@ def main() -> int:
             for target_triple, (os_tag, target_arch) in RELEASE_TARGETS.items():
                 bundle_cmd = [
                     str(REPO_ROOT / "scripts" / "build_release_bundle.sh"),
-                    "--profile",
-                    profile,
-                    "--config",
-                    config,
                     "--artifacts-dir",
                     str(artifact_dir),
                     "--target",
@@ -1117,7 +1066,7 @@ def main() -> int:
                     "--zstd",
                     str(args.zstd),
                     "--prebuilt-bin-dir",
-                    bundle_prebuilt_dirs[(profile, target_triple)],
+                    bundle_prebuilt_dirs[target_triple],
                 ]
                 if args.dry_run:
                     print(
@@ -1176,10 +1125,6 @@ def main() -> int:
                 )
                 image_cmd = [
                     str(REPO_ROOT / "scripts" / "build_release_image.sh"),
-                    "--profile",
-                    profile,
-                    "--config",
-                    config,
                     "--source-commit",
                     commit,
                     "--source-date-epoch",
@@ -1207,7 +1152,7 @@ def main() -> int:
                     "--artifacts-dir",
                     str(artifact_dir),
                     "--prebuilt-bin-dir",
-                    image_prebuilt_dirs[(profile, image_platform)],
+                    image_prebuilt_dirs[image_platform],
                 ]
                 if args.dry_run:
                     print(
@@ -1251,10 +1196,10 @@ def main() -> int:
 
     if not args.skip_bundles:
         for target_triple, (os_tag, target_arch) in RELEASE_TARGETS.items():
-            matrix_name = f"dual_profile_matrix-{os_tag}-{target_arch}.json"
+            matrix_name = f"release_bundle_inventory-{os_tag}-{target_arch}.json"
             matrix_output = artifact_dir / matrix_name
             matrix_cmd = [
-                str(REPO_ROOT / "ci" / "dual_profile_matrix.sh"),
+                str(REPO_ROOT / "ci" / "release_bundle_inventory.sh"),
                 "--output",
                 str(matrix_output),
                 "--expect-version",
@@ -1274,7 +1219,7 @@ def main() -> int:
                 artifact_spec(
                     "shared",
                     target_triple,
-                    "profile-matrix",
+                    "bundle-inventory",
                     "json",
                     matrix_name,
                 )

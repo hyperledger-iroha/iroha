@@ -288,7 +288,7 @@ fn vector_padding_and_split_clear_replaced_allocations() {
     );
     assert_eq!(response_fold.matches("*tau_x.expose_mut() +=").count(), 3);
     assert_eq!(response_fold.matches("*u.expose_mut() +=").count(), 3);
-    assert_eq!(response_fold.matches("opening.mask").count(), 1);
+    assert_eq!(response_fold.matches("opening.mask").count(), 2);
     for (borrowed, copied) in [
         ("alpha.expose_ref()", "alpha.expose_copy()"),
         ("beta.expose_ref()", "beta.expose_copy()"),

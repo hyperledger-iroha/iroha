@@ -1722,8 +1722,7 @@ Root {
             0,
         ),
         blocks_in_memory: 1024,
-        block_sync_roster_retention: 7200,
-        roster_sidecar_retention: 512,
+        lane_history_retention: 512,
         replica_advert: KuraReplicaAdvertPolicy {
             eviction_required_replicas: 3,
             evictable_window: 4096,
@@ -1745,7 +1744,7 @@ Root {
         queues: SumeragiQueues {
             commands: 1024,
             authenticated_non_validator_sources: 2,
-            bodies: 163,
+            bodies: 161,
             body_bytes: 242221056,
             body_source_bytes: 34603008,
             chunks: 2048,
@@ -1837,7 +1836,6 @@ Root {
         plan_journal_max_bytes: 67108864,
     },
     nexus: Nexus {
-        enabled: true,
         storage: NexusStorage {
             local_budget_bytes: None,
             effective_local_budget_bytes: None,
@@ -1905,7 +1903,7 @@ Root {
             ),
             sponsor_vault_custody_account_id: sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT,
             settlement_mode: Direct,
-            successful_claim_fee_exempt_authorities: [],
+            successful_claim_fee_exempt_authorities: {},
         },
         relay_worker: NexusRelayWorker {
             enabled: false,
@@ -1930,7 +1928,7 @@ Root {
             max_session_image_budget: 8,
         },
         endorsement: NexusEndorsement {
-            committee_keys: [],
+            committee_keys: {},
             quorum: 0,
         },
         axt: NexusAxt {

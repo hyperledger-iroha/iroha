@@ -1,18 +1,8 @@
-use std::{
-    borrow::Cow,
-    fs::File,
-    num::{NonZeroU64, NonZeroUsize},
-    path::Path,
-    sync::{Arc, Barrier},
-};
 use super::*;
 use crate::{
     block::BlockBuilder,
     query::store::LiveQueryStore,
-    state::{
-        AssetDefinitionAliasBindingRecord, ContractAliasBindingRecord, derive_validator_key_id,
-    },
-    sumeragi::consensus::{PERMISSIONED_TAG, Phase, Vote, default_chain_order_hash, vote_preimage},
+    state::{AssetDefinitionAliasBindingRecord, ContractAliasBindingRecord},
     tx::AcceptedTransaction,
 };
 use iroha_config::{
@@ -21,8 +11,8 @@ use iroha_config::{
     parameters::{
         actual::{Kura as KuraConfig, LaneConfig},
         defaults::kura::{
-            BLOCK_SYNC_ROSTER_RETENTION, FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES,
-            MERGE_LEDGER_CACHE_CAPACITY, REPLICA_ADVERT_POLICY, ROSTER_SIDECAR_RETENTION,
+            FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
+            REPLICA_ADVERT_POLICY,
         },
     },
 };
@@ -35,7 +25,6 @@ use iroha_data_model::{
     },
     asset::{AssetDefinition, AssetDefinitionAlias, AssetDefinitionId},
     block::{BlockHeader, SignedBlock},
-    consensus::{ConsensusKeyStatus, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
     domain::DomainId,
     isi::{Log, space_directory::PublishSpaceDirectoryManifest},
     metadata::Metadata,
@@ -49,6 +38,13 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
+use std::{
+    borrow::Cow,
+    fs::File,
+    num::{NonZeroU64, NonZeroUsize},
+    path::Path,
+    sync::{Arc, Barrier},
+};
 use tempfile::tempdir;
 const TEST_CHUNK_SIZE: NonZeroUsize = nonzero!(1024_usize);
 fn dummy_block_hash(marker: u8) -> HashOf<BlockHeader> {
@@ -835,12 +831,11 @@ fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsiz
         store_dir: WithOrigin::inline(store_dir.to_path_buf()),
         max_disk_usage_bytes: MAX_DISK_USAGE_BYTES,
         blocks_in_memory,
+        lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
-        block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
-        roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
         replica_advert: REPLICA_ADVERT_POLICY,
     }
 }
@@ -1001,60 +996,6 @@ async fn staged_snapshot_wsv_hash_injects_committed_event_buffer() {
 }
 
 #[tokio::test]
-async fn canonical_wsv_hash_ignores_commit_qc_sidecars() {
-    let mut state = state_factory();
-    let before = canonical_state_snapshot_bytes_for_tests(&state);
-    let key_pair = checked_random_snapshot_bls_keypair();
-    let peer = PeerId::new(key_pair.public_key().clone());
-    let roster = vec![peer];
-    let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC7; Hash::LENGTH]));
-    let zero_root = Hash::prehashed([0_u8; Hash::LENGTH]);
-    let qc = Qc {
-        phase: crate::sumeragi::consensus::Phase::Commit,
-        subject_block_hash: block_hash,
-        parent_state_root: zero_root,
-        post_state_root: zero_root,
-        height: 2,
-        view: 0,
-        epoch: 0,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_owned(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&roster),
-        validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: roster,
-        aggregate: crate::sumeragi::consensus::QcAggregate {
-            signers_bitmap: vec![0b0000_0001],
-            bls_aggregate_signature: vec![0xAA; 96],
-        },
-    };
-    state.insert_commit_qc_for_testing(block_hash, qc);
-    let mut restart_snapshot = String::new();
-    serialize_state_snapshot(&state, &mut restart_snapshot, true);
-    assert!(
-        restart_snapshot.contains("\"commit_qcs\""),
-        "restart snapshots must retain the historical commit-QC archive"
-    );
-    let after = canonical_state_snapshot_bytes_for_tests(&state);
-    assert_eq!(
-        before, after,
-        "commit-QC recovery evidence must not affect replay WSV checkpoints"
-    );
-    assert_eq!(
-        canonical_snapshot_wsv_hash(restart_snapshot.as_bytes())
-            .expect("borrowed WSV hashing must redact commit-QC sidecars"),
-        Hash::new(&after),
-    );
-    let canonical_json =
-        String::from_utf8(after).expect("canonical state snapshot should be utf8 json");
-    assert!(
-        !canonical_json.contains("\"commit_qcs\""),
-        "canonical WSV checkpoint surface should omit commit-QC sidecars"
-    );
-}
-#[tokio::test]
 async fn canonical_wsv_hash_uses_current_mv_cell_values() {
     let state = state_factory();
     let before = canonical_state_snapshot_bytes_for_tests(&state);
@@ -1202,29 +1143,6 @@ async fn canonical_state_snapshot_ignores_consensus_evidence_caches() {
     let expected = canonical_state_snapshot_bytes_for_tests(&state);
     let keypair = checked_random_snapshot_bls_keypair();
     let peer = PeerId::new(keypair.public_key().clone());
-    let roster = vec![peer.clone()];
-    let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
-    let commit_qc = crate::sumeragi::consensus::Qc {
-        phase: crate::sumeragi::consensus::Phase::Commit,
-        subject_block_hash: block_hash,
-        parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
-        post_state_root: Hash::prehashed([1u8; Hash::LENGTH]),
-        height: 2,
-        view: 1,
-        epoch: 0,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&roster),
-        validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: roster,
-        aggregate: crate::sumeragi::consensus::QcAggregate {
-            signers_bitmap: vec![0b0000_0001],
-            bls_aggregate_signature: Vec::new(),
-        },
-    };
     let vrf_epoch = iroha_data_model::consensus::VrfEpochRecord {
         epoch: 0,
         seed: [0x42; 32],
@@ -1244,9 +1162,6 @@ async fn canonical_state_snapshot_ignores_consensus_evidence_caches() {
     };
     {
         let mut world = state.world.block();
-        world
-            .commit_qcs_mut_for_testing()
-            .insert(block_hash, commit_qc);
         world
             .vrf_epochs_mut_for_testing()
             .insert(vrf_epoch.epoch, vrf_epoch);
@@ -1392,102 +1307,4 @@ fn write_snapshot_bundle_from_bytes(store_dir: &std::path::Path, bytes: &[u8], k
 fn store_block_and_mark_state_height(state: &mut State, kura: &Arc<Kura>, block: Arc<SignedBlock>) {
     kura.store_block(Arc::clone(&block)).expect("store block");
     state.push_block_hash_for_testing(block.hash());
-}
-fn signed_commit_qc_for_snapshot(
-    network_id: &NetworkId,
-    block_hash: HashOf<BlockHeader>,
-    height: u64,
-    validator: &KeyPair,
-) -> Qc {
-    let validator_set = vec![PeerId::new(validator.public_key().clone())];
-    let zero_root = Hash::prehashed([0; Hash::LENGTH]);
-    let vote = Vote {
-        phase: Phase::Commit,
-        block_hash,
-        parent_state_root: zero_root,
-        post_state_root: zero_root,
-        height,
-        view: 0,
-        epoch: 0,
-        chain_order_hash: default_chain_order_hash(),
-        rechain_seq: 0,
-        highest_qc: None,
-        signer: 0,
-        bls_sig: Vec::new(),
-    };
-    let preimage = vote_preimage(network_id, PERMISSIONED_TAG, &vote);
-    let signature = Signature::try_new(validator.private_key(), &preimage)
-        .expect("snapshot commit vote signature");
-    let aggregate = iroha_crypto::bls_normal_aggregate_signatures(&[signature.payload()])
-        .expect("snapshot aggregate commit signature");
-    Qc {
-        phase: Phase::Commit,
-        subject_block_hash: block_hash,
-        parent_state_root: zero_root,
-        post_state_root: zero_root,
-        height,
-        view: 0,
-        epoch: 0,
-        chain_order_hash: default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_owned(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&validator_set),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set,
-        aggregate: QcAggregate {
-            signers_bitmap: vec![1],
-            bls_aggregate_signature: aggregate,
-        },
-    }
-}
-fn model_rotated_disabled_removed_validator(
-    state: &mut State,
-    historical_validator: &KeyPair,
-) -> Vec<u8> {
-    let historical_pop = iroha_crypto::bls_normal_pop_prove(historical_validator.private_key())
-        .expect("historical validator PoP");
-    state.world.register_validator_pop_for_testing(
-        historical_validator.public_key().clone(),
-        historical_pop.clone(),
-    );
-    let replacement = checked_random_snapshot_bls_keypair();
-    let replacement_pop = iroha_crypto::bls_normal_pop_prove(replacement.private_key())
-        .expect("replacement validator PoP");
-    state
-        .world
-        .register_validator_pop_for_testing(replacement.public_key().clone(), replacement_pop);
-    let historical_id = derive_validator_key_id(historical_validator.public_key());
-    let replacement_id = derive_validator_key_id(replacement.public_key());
-    let mut world = state.world.block();
-    let mut historical_record = world
-        .consensus_keys
-        .get(&historical_id)
-        .cloned()
-        .expect("historical consensus record");
-    historical_record.status = ConsensusKeyStatus::Disabled;
-    historical_record.expiry_height = Some(2);
-    world
-        .consensus_keys
-        .insert(historical_id.clone(), historical_record);
-    let mut replacement_record = world
-        .consensus_keys
-        .get(&replacement_id)
-        .cloned()
-        .expect("replacement consensus record");
-    replacement_record.replaces = Some(historical_id);
-    world
-        .consensus_keys
-        .insert(replacement_id, replacement_record);
-    world.commit();
-    assert!(
-        state
-            .world
-            .peers
-            .view()
-            .iter()
-            .all(|peer| peer.public_key() != historical_validator.public_key()),
-        "historical validator must be absent from the live peer roster"
-    );
-    historical_pop
 }

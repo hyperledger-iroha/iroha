@@ -1200,7 +1200,6 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         .with_npos_consensus()
         .with_config_layer(|layer| {
             layer
-                .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 1i64)
                 // Contract views share the public contract-route limiter with
                 // deployments. This gate deliberately walks every typed page
@@ -1643,9 +1642,7 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
         .with_block_cadence(Duration::from_secs(4))
         .with_npos_consensus()
         .with_config_layer(|layer| {
-            layer
-                .write(["nexus", "enabled"], true)
-                .write(["nexus", "lane_count"], 1i64);
+            layer.write(["nexus", "lane_count"], 1i64);
         })
         .with_genesis_instruction(Grant::account_permission(
             register_permission,

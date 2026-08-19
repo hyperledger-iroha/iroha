@@ -1504,12 +1504,12 @@ fn configured_primary_preflight_rejects_core_block_file_symlinks_before_external
 }
 #[cfg(unix)]
 #[test]
-fn configured_primary_preflight_rejects_root_sidecar_temp_symlink() {
+fn configured_primary_preflight_rejects_retired_root_artifact_symlink() {
     use std::os::unix::fs::symlink;
     let temp = TempDir::new().expect("temporary directory");
     let root = temp.path().join("kura");
-    let outside = temp.path().join("outside-roster-temp");
-    fs::write(&outside, b"operator-owned-roster-temp").expect("outside sentinel");
+    let outside = temp.path().join("outside-retired-artifact");
+    fs::write(&outside, b"operator-owned-retired-artifact").expect("outside sentinel");
     let configured = configured_primary_catalog("root-sidecar-link");
     let lane_config = RuntimeLaneConfig::from_catalog(&configured);
     let baseline = LaneLifecycleParameterV1::catalog_hash(&configured);
@@ -1524,13 +1524,13 @@ fn configured_primary_preflight_rejects_root_sidecar_temp_symlink() {
     .expect("bind configured primary");
     drop(kura);
     let sidecar_temp = root.join("commit-rosters.norito.tmp");
-    symlink(&outside, &sidecar_temp).expect("inject roster temp symlink");
+    symlink(&outside, &sidecar_temp).expect("inject retired-artifact symlink");
     Kura::new_with_configured_lane_catalog(&kura_config(&root), &lane_config, &configured)
-        .expect_err("root sidecar temp symlink must fail before CommitRosterJournal opens");
+        .expect_err("retired root artifact must fail before configured-lane reconciliation");
     assert!(sidecar_temp.is_symlink());
     assert_eq!(
         fs::read(&outside).expect("outside sentinel retained"),
-        b"operator-owned-roster-temp"
+        b"operator-owned-retired-artifact"
     );
 }
 #[test]

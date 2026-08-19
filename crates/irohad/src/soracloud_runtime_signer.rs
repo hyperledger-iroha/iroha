@@ -6,7 +6,6 @@
 //! material never cross this boundary. A qualified signer is re-probed
 //! immediately before and after every operation, and every returned signature
 //! is verified against the exact requested transaction or provenance payload.
-use std::sync::Arc;
 use iroha_config::parameters::validate_production_runtime_handle;
 use iroha_crypto::{Algorithm, PublicKey, Signature};
 pub use iroha_data_model::soracloud::SoracloudRuntimeProvenancePurposeV1;
@@ -15,6 +14,7 @@ use iroha_data_model::{
     soracloud::validate_soracloud_runtime_provenance_preimage_v1,
     transaction::{SignedTransaction, TransactionPayload},
 };
+use std::sync::Arc;
 const MAX_SORACLOUD_RUNTIME_PROVENANCE_PREIMAGE_BYTES_V1: usize = 16 * 1024 * 1024;
 /// Public liveness and policy identity reported by the runtime signer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,17 +232,33 @@ pub trait SoracloudRuntimeMutationSignerV1: Send + Sync {
     /// Return the transaction authority controlled by this provider.
     fn authority(&self) -> AccountId;
     /// Probe the exact public key controlled by this provider.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted probe failure when the provider key is unavailable.
     fn public_key(&self) -> Result<PublicKey, SoracloudRuntimeSignerProbeErrorV1>;
     /// Probe the active revision, policy digest, and non-test posture.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted probe failure when qualification cannot be read.
     fn qualification(
         &self,
     ) -> Result<SoracloudRuntimeSignerQualificationV1, SoracloudRuntimeSignerProbeErrorV1>;
     /// Sign one exact fee-quoted Soracloud transaction payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted signing failure when the exact payload cannot be signed.
     fn sign_transaction(
         &self,
         payload: TransactionPayload,
     ) -> Result<SignedTransaction, SoracloudRuntimeSigningErrorV1>;
     /// Sign one exact canonical, purpose-bound provenance preimage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a redacted signing failure when the exact preimage cannot be signed.
     fn sign_provenance(
         &self,
         purpose: SoracloudRuntimeProvenancePurposeV1,
@@ -471,7 +487,7 @@ pub fn qualify_soracloud_runtime_mutation_signer_v1(
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
+    use super::*;
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
         NetworkId,
@@ -481,7 +497,7 @@ mod tests {
         transaction::signed::{MultisigSignature, MultisigSignatures},
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
-    use super::*;
+    use std::sync::Mutex;
     const QUALIFICATION: SoracloudRuntimeSignerQualificationV1 =
         SoracloudRuntimeSignerQualificationV1::new(9, [0xA9; 32], true, false);
     #[derive(Clone, Copy)]

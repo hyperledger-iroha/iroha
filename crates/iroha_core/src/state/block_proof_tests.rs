@@ -1,3 +1,5 @@
+use super::*;
+use crate::kura::Kura;
 use iroha_crypto::{MerkleTree as CanonMerkleTree, SignatureOf};
 use iroha_data_model::{
     account::AccountId,
@@ -12,9 +14,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::const_vec::ConstVec;
 use nonzero_ext::nonzero;
-use norito::codec::{DecodeAll as _, Encode as _};
-use super::*;
-use crate::kura::Kura;
+use norito::codec::DecodeAll as _;
 #[derive(norito::codec::Decode, norito::codec::Encode)]
 struct MutableSignedBlockWire {
     signatures: BTreeSet<BlockSignature>,
@@ -80,8 +80,9 @@ fn proof_error(
     entry_hash: HashOf<TransactionEntrypoint>,
 ) -> BlockProofError {
     let kura = Kura::blank_kura_for_testing();
+    let expected_hash = block.hash();
     kura.append_pending_block_for_bench(Arc::new(block));
-    block_proofs_for_entry_from_kura(kura.as_ref(), requested_height, entry_hash)
+    block_proofs_for_entry_from_kura(kura.as_ref(), requested_height, expected_hash, entry_hash)
         .expect_err("adversarial stored block must not produce a proof")
 }
 fn assert_entry_geometry_error(
@@ -161,6 +162,39 @@ fn block_proofs_for_external_entry_use_full_executed_tree() {
     assert_eq!(result_commitment.leaf_count().get(), 2);
     let result_proof = proofs.result_proof;
     assert!(result_proof.verify(&result_commitment));
+}
+#[test]
+fn block_proofs_reject_kura_body_not_committed_by_wsv() {
+    let kura = Kura::blank_kura_for_testing();
+    let query = crate::query::store::LiveQueryStore::start_test();
+    let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+    let (block, entry_hash, _) = block_proof_fixture();
+    let actual = block.hash();
+    kura.store_block(Arc::new(block)).expect("store Kura body");
+    let expected = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"different committed WSV header hash",
+    ));
+    assert_ne!(actual, expected);
+    {
+        let mut hashes = state.block_hashes.block();
+        hashes.push(expected);
+        hashes.commit();
+    }
+    match state
+        .block_proofs_for_entry(nonzero!(1_u64), entry_hash)
+        .expect_err("uncommitted Kura body must not produce a proof")
+    {
+        BlockProofError::BlockHashMismatch {
+            block_height,
+            expected: observed_expected,
+            actual: observed_actual,
+        } => {
+            assert_eq!(block_height, nonzero!(1_u64));
+            assert_eq!(observed_expected, expected);
+            assert_eq!(observed_actual, actual);
+        }
+        other => panic!("expected WSV/Kura hash mismatch, got {other:?}"),
+    }
 }
 #[test]
 fn block_proofs_reject_stored_full_entry_root_drift() {

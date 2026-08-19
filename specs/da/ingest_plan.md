@@ -520,9 +520,18 @@ All previously blocked ingest TODOs have been implemented and verified:
   sharing a storage shard retain independent lane-scoped sequence cursors. It fails fast on
   commitments for unmapped lanes instead of defaulting to the lane id, making cursor advancement
   and replay errors explicit, and block validation rejects per-lane shard-cursor regressions with
-  a dedicated `DaShardCursorViolation` reason + telemetry labels for operators. Startup/catch-up
-  now halts DA index hydration if Kura contains an unknown lane or regressing cursor and records
-  the offending block height so operators can remediate before serving DA state.【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/shard_cursor.rs】【crates/iroha_core/src/sumeragi/main_loop.rs】【crates/iroha_core/src/state.rs】【crates/iroha_core/src/block.rs】【specs/nexus_lanes.md:47】
+  a dedicated `DaShardCursorViolation` reason + telemetry labels for operators. The first-release
+  journal layout requires both each cursor's `last_block_height` and the complete
+  `canonical_reset_heights` map; truncated pre-release layouts are rejected rather than defaulted.
+  Startup and rewind are serialized by one hydration fence, capture one fixed committed WSV hash
+  prefix, and build commitments, confidential receipts, receipt cursors, shard cursors, and pin
+  intents in a private aggregate. A missing non-hash-only Kura body, WSV/body hash mismatch,
+  cursor regression, or receipt gap aborts the rebuild without changing any published index; all
+  five indexes publish only after the complete replay succeeds. Historical commitments for lanes
+  no longer in the catalog remain identity-only and do not become active query/cursor rows. Block
+  proof and block/transaction query consumers likewise accept a Kura body only when its hash and
+  declared height match the immutable WSV slot being queried.
+  【crates/iroha_config/src/parameters/actual.rs】【crates/iroha_core/src/da/shard_cursor.rs】【crates/iroha_core/src/sumeragi/main_loop.rs】【crates/iroha_core/src/state.rs】【crates/iroha_core/src/block.rs】【specs/nexus_lanes.md:47】
 - **Shard cursor lag telemetry** — the `da_shard_cursor_lag_blocks{lane,shard}` gauge reports how
   far a shard trails the height being validated. Missing/stale/unknown lanes set the lag to the
   required height (or delta), and successful advances reset it to zero so steady-state stays flat.

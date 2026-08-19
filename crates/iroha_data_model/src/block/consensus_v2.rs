@@ -118,8 +118,8 @@ pub const MERGE_CARRIER_COMMITMENT_VERSION_V1: u16 = 1;
 /// Keeping the bytes here lets configuration-independent genesis builders emit
 /// a valid signed template without introducing a data-model/config cycle.
 pub const RECOMMENDED_NEXUS_AMX_CONTEXT_HASH: [u8; 32] = [
-    48, 72, 121, 217, 199, 209, 245, 192, 246, 39, 8, 210, 192, 151, 163, 93, 234, 252, 236, 4, 49,
-    78, 136, 209, 109, 194, 211, 166, 26, 112, 186, 67,
+    227, 185, 109, 139, 5, 226, 144, 128, 127, 248, 158, 128, 128, 197, 220, 195, 180, 113, 16,
+    141, 61, 94, 144, 205, 65, 235, 216, 159, 48, 162, 211, 1,
 ];
 /// Canonical V1 boot execution-policy identity emitted by the recommended genesis template.
 ///
@@ -253,7 +253,7 @@ impl DualQuorum {
         signers: &[ValidatorIndex],
         roster: &[ValidatorPower],
     ) -> Result<(), ValidationError> {
-        let signed_count = self.validate_signer_set(signers, roster)?;
+        let signed_count = Self::validate_signer_set(signers, roster)?;
         if signed_count < self.min_signers {
             return Err(ValidationError::InsufficientSignerCount);
         }
@@ -264,7 +264,7 @@ impl DualQuorum {
         signers: &[ValidatorIndex],
         roster: &[ValidatorPower],
     ) -> Result<(), ValidationError> {
-        let signed_count = self.validate_signer_set(signers, roster)?;
+        let signed_count = Self::validate_signer_set(signers, roster)?;
         if signed_count != self.min_signers {
             return Err(ValidationError::SignerCountMismatch {
                 expected: self.min_signers,
@@ -274,7 +274,6 @@ impl DualQuorum {
         Ok(())
     }
     fn validate_signer_set(
-        &self,
         signers: &[ValidatorIndex],
         roster: &[ValidatorPower],
     ) -> Result<u32, ValidationError> {

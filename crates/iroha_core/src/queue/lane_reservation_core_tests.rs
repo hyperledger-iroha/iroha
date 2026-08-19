@@ -18,12 +18,7 @@ fn lane_reservation_test_state() -> Arc<State> {
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    install_single_validator_topology_for_queue_test(&state, 0xD5);
-    let mut nexus = state.nexus_snapshot();
-    nexus.enabled = false;
-    state
-        .set_nexus(nexus)
-        .expect("use the authoritative canonical single-lane fixture");
+    install_single_validator_topology_for_queue_test(&mut state, 0xD5);
     Arc::new(state)
 }
 fn lane_reservation_scope(
@@ -45,7 +40,7 @@ fn lane_reservation_scope(
     }
 }
 #[test]
-fn lane_reservation_scope_accepts_only_canonical_single_lane_when_nexus_is_disabled() {
+fn lane_reservation_scope_accepts_only_the_canonical_single_lane() {
     let state = lane_reservation_test_state();
     let scope = lane_reservation_scope(&state, b"single-lane-owner", b"single-lane-proposal");
     assert!(Queue::validate_reservation_scope_against_view(&state.view(), scope).is_ok());
@@ -306,9 +301,7 @@ fn persist_unreconciled_commit_barrier(
         .commit(key)
         .expect("persist commit before simulated startup-boundary crash");
     let mut reservations = queue.lane_reservations.lock();
-    reservations
-        .live_by_entrypoint
-        .remove(&key.entrypoint_hash);
+    reservations.live_by_entrypoint.remove(&key.entrypoint_hash);
     reservations.commit_barriers.push(key);
     key
 }

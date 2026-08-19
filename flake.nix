@@ -179,35 +179,19 @@
       in rec {
         inherit mkIroha;
 
-      packages.iroha2 = mkIroha {
-        name = "iroha2";
-      };
-
       packages.iroha3 = mkIroha {
         name = "iroha3";
         features = [];
       };
 
-      packages.default = packages.iroha2;
+      packages.default = packages.iroha3;
 
-      packages.appimage_iroha2 = nix-appimage.mkappimage.${system} {
-        drv = packages.iroha2;
-        name = "iroha2";
-      };
-
-      packages.appimage_iroha3 = nix-appimage.mkappimage.${system} {
+      packages.appimage = nix-appimage.mkappimage.${system} {
         drv = packages.iroha3;
         name = "iroha3";
       };
 
-      packages.appimage = packages.appimage_iroha2;
-
       packages.targets = mkTargets {
-        features = [];
-        suffix = "2";
-      };
-
-      packages.targets_iroha3 = mkTargets {
         features = [];
         suffix = "3";
       };

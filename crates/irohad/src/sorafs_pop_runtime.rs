@@ -2,13 +2,13 @@
 //!
 //! The daemon owns only the public configuration-to-registry binding. Private
 //! provider material remains behind the deployment-supplied registry.
-use std::{fmt, sync::Arc};
 use iroha_config::parameters::actual::SorafsPopCredentialService;
 use iroha_torii::sorafs::pop_api::{
     PopCredentialRuntimeConfigV1, PopCredentialRuntimeProviderRegistryV1,
     PopCredentialToriiRuntimeV1,
 };
 use sorafs_node::pop_credentials::PopCredentialServiceError;
+use std::{fmt, sync::Arc};
 /// Fail-closed `PoP` runtime startup failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PopRuntimeStartupError {
@@ -72,14 +72,7 @@ pub fn build(
 }
 #[cfg(test)]
 mod tests {
-    use std::{
-        path::Path,
-        sync::{
-            Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
-        time::Duration,
-    };
+    use super::*;
     use iroha_config::parameters::actual::SorafsPopApprovalSigner;
     use iroha_crypto::{Algorithm, HybridKeyPair, KeyPair};
     use iroha_torii::sorafs::pop_api::{
@@ -100,7 +93,14 @@ mod tests {
         PopRegistryOperationV1, PopRegistrySubmitter, PopRequestAuthorityV1, PopWalletKeyWrapper,
         PopWalletRecipientV1, pop_enrollment_recipient_public_key_digest_v1,
     };
-    use super::*;
+    use std::{
+        path::Path,
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
     #[derive(Debug)]
     struct FixedIssuerSigner {
         key_id: String,
@@ -156,7 +156,8 @@ mod tests {
             formatter
                 .debug_struct("FixedRecipient")
                 .field("key_id", &self.key_id)
-                .field("private_key", &"[REDACTED]")
+                .field("secret", &"[REDACTED]")
+                .field("public_key_digest", &self.public_key_digest)
                 .finish()
         }
     }

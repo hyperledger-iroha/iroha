@@ -127,7 +127,6 @@ pub async fn handler_list_pin_intents(
 ) -> Result<JsonBody<DaPinIntentListResponse>, Error> {
     let snapshot = list_snapshot_for_state(app.state.as_ref());
     let nexus = app.state.nexus_snapshot();
-    crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_PIN_INTENTS)?;
     let page = {
         let store = app.state.da_pin_intents();
         list_active_from_store(&store, &request, &nexus, snapshot).map_err(pin_cursor_error)?
@@ -150,7 +149,6 @@ pub async fn handler_prove_pin_intent(
 ) -> Result<JsonBody<Option<DaPinIntentProof>>, Error> {
     validate_pin_intent_query_request(&request)?;
     let nexus = app.state.nexus_snapshot();
-    crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_PIN_INTENTS_PROVE)?;
     let proof = build_active_proof_from_state(&request, &nexus, app.state.as_ref());
     Ok(JsonBody(proof))
 }
@@ -159,8 +157,6 @@ pub async fn handler_verify_pin_intent(
     State(app): State<SharedAppState>,
     NoritoJson(proof): NoritoJson<DaPinIntentProof>,
 ) -> Result<JsonBody<DaPinIntentVerifyResponse>, Error> {
-    let nexus = app.state.nexus_snapshot();
-    crate::ensure_nexus_lanes_enabled(nexus.enabled, ENDPOINT_DA_PIN_INTENTS_VERIFY)?;
     let response = verify_against_kura_block(&proof, app.state.as_ref());
     Ok(JsonBody(response))
 }
@@ -544,28 +540,23 @@ mod tests {
     fn nexus_with_lane_ids(lane_ids: &[u32]) -> Nexus {
         let lane_catalog = lane_catalog_with_lane_ids(lane_ids);
         Nexus {
-            enabled: true,
             lane_config: iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog),
             lane_catalog,
             ..Nexus::default()
         }
     }
-    fn enable_nexus_with_lane_ids(app: &mut crate::SharedAppState, lane_ids: &[u32]) {
+    fn install_nexus_lane_catalog(app: &mut crate::SharedAppState, lane_ids: &[u32]) {
         let app = std::sync::Arc::get_mut(app).expect("unique app state");
         let state = std::sync::Arc::get_mut(&mut app.state).expect("unique core state");
         let nexus_cfg = nexus_with_lane_ids(lane_ids);
         state
             .set_nexus(nexus_cfg)
-            .expect("enable Nexus lane catalog for tests");
-    }
-    fn enable_nexus(app: &mut crate::SharedAppState) {
-        enable_nexus_with_lane_ids(app, &[0]);
+            .expect("install Nexus lane catalog for tests");
     }
     fn install_stale_runtime_lane_geometry(app: &crate::SharedAppState, stale_lane: LaneId) {
         let authoritative_catalog = lane_catalog_with_lane_ids(&[0]);
         let stale_geometry_catalog = lane_catalog_with_lane_ids(&[0, stale_lane.as_u32()]);
         let mut nexus = app.state.nexus.write();
-        nexus.enabled = true;
         nexus.lane_catalog = authoritative_catalog;
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&stale_geometry_catalog);
@@ -598,7 +589,6 @@ mod tests {
         )
         .expect("future-created autoscale lane catalog");
         let mut nexus = app.state.nexus.write();
-        nexus.enabled = true;
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min lanes");
         nexus.autoscale.max_lanes = NonZeroU32::new(3).expect("nonzero max lanes");
@@ -619,7 +609,7 @@ mod tests {
             .chain(core::iter::once(0))
             .collect::<Vec<_>>();
         let mut app = crate::mk_app_state_for_tests();
-        enable_nexus_with_lane_ids(&mut app, &lane_ids);
+        install_nexus_lane_catalog(&mut app, &lane_ids);
         let bundle = DaPinIntentBundle::new(intents);
         let bundle_for_store = bundle.clone();
         let keypair = KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
@@ -861,29 +851,8 @@ mod tests {
         ));
     }
     #[tokio::test]
-    async fn handlers_reject_when_nexus_disabled() {
+    async fn handler_succeeds_with_current_lane_catalog() {
         let app = crate::mk_app_state_for_tests();
-        let err = super::handler_list_pin_intents(
-            State(app),
-            NoritoJson(DaPinIntentListRequest::default()),
-        )
-        .await
-        .expect_err("DA endpoints should reject when Nexus is disabled");
-        match err {
-            Error::AppQueryValidation { code, message } => {
-                assert_eq!(code, "nexus_disabled");
-                assert!(
-                    message.contains("nexus.enabled=true"),
-                    "message should explain required flag: {message}"
-                );
-            }
-            other => panic!("unexpected error variant: {other:?}"),
-        }
-    }
-    #[tokio::test]
-    async fn handler_succeeds_when_nexus_enabled() {
-        let mut app = crate::mk_app_state_for_tests();
-        enable_nexus(&mut app);
         let JsonBody(page) = super::handler_list_pin_intents(
             State(app),
             NoritoJson(DaPinIntentListRequest::default()),
@@ -1025,7 +994,7 @@ mod tests {
     #[tokio::test]
     async fn handler_list_and_prove_ignore_stale_runtime_lane_geometry() {
         let mut app = crate::mk_app_state_for_tests();
-        enable_nexus_with_lane_ids(&mut app, &[0, 1]);
+        install_nexus_lane_catalog(&mut app, &[0, 1]);
         let stale = DaPinIntentWithLocation {
             intent: sample_intent(1, 4, 8),
             location: DaCommitmentLocation {

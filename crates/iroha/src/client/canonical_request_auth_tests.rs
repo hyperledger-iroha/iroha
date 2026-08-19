@@ -18,10 +18,10 @@ fn canonical_query_string_matches_v1_lossy_form_safe_set() {
 #[test]
 fn canonical_request_target_v1_limits_accept_exact_and_reject_plus_one() {
     let network_id = client_with_base_url(base_url()).network_id;
-    let exact_method = HttpMethod::from_bytes(&vec![b'A'; CANONICAL_REQUEST_MAX_METHOD_BYTES_V1])
+    let exact_method = HttpMethod::from_bytes(&[b'A'; CANONICAL_REQUEST_MAX_METHOD_BYTES_V1])
         .expect("exact method token");
     let excessive_method =
-        HttpMethod::from_bytes(&vec![b'A'; CANONICAL_REQUEST_MAX_METHOD_BYTES_V1 + 1])
+        HttpMethod::from_bytes(&[b'A'; CANONICAL_REQUEST_MAX_METHOD_BYTES_V1 + 1])
             .expect("plus-one method token");
     let base_url = Url::parse("http://127.0.0.1/").expect("base URL");
     canonical_network_request_message(&network_id, &exact_method, &base_url, &[])

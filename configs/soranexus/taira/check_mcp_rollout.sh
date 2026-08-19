@@ -1114,11 +1114,9 @@ operator_protected_url() {
   path="${target%%\?*}"
   case "$path" in
     /v1/sumeragi/status|/v1/sumeragi/diagnostics|/v1/sumeragi/leader|\
-    /v1/sumeragi/bls-keys|/v1/sumeragi/qc|/v1/sumeragi/checkpoints|\
-    /v1/sumeragi/commit-certificates|/v1/sumeragi/validator-sets|\
-    /v1/sumeragi/validator-sets/*|/v1/sumeragi/consensus-keys|\
-    /v1/sumeragi/key-lifecycle|/v1/sumeragi/params|\
-    /v1/sumeragi/commit-qcs/*|/v1/sumeragi/evidence|/v1/sumeragi/evidence/count|\
+    /v1/sumeragi/bls-keys|/v1/sumeragi/qc|\
+    /v1/sumeragi/consensus-keys|/v1/sumeragi/key-lifecycle|\
+    /v1/sumeragi/params|/v1/sumeragi/evidence|/v1/sumeragi/evidence/count|\
     /v1/sumeragi/vrf/penalties/*|/v1/sumeragi/vrf/epoch/*|/v1/peers|\
     /v1/time/status|/v1/pipeline/preflight|/v1/pipeline/policy|\
     /v1/pipeline/proof-retention|/v1/pipeline/recovery/*|\
@@ -2269,8 +2267,16 @@ def fail(message):
 
 if not isinstance(payload, dict) or payload.get("version") != 1:
     fail("unsupported lifecycle payload")
-if payload.get("nexus_enabled") is not True:
-    fail("Nexus routing is not enabled")
+expected_fields = {
+    "version",
+    "lane_count",
+    "lanes",
+    "catalog_hash",
+    "incarnations",
+    "incarnation_root",
+}
+if set(payload) != expected_fields:
+    fail("lifecycle payload fields do not match the current V1 layout")
 lane_count = payload.get("lane_count")
 if isinstance(lane_count, bool) or lane_count != expected_lane_count:
     fail(f"lane_count must be exactly {expected_lane_count}, observed {lane_count!r}")
@@ -3136,8 +3142,8 @@ check_route_parity() {
     "SCCP typed registry discovery route"
   check_route_status "$label" GET "${root_url}/v1/zk/proofs/count" "200" \
     "ZK proof count route"
-  check_route_status "$label" GET "${root_url}/v1/sumeragi/validator-sets" "200" \
-    "validator-set snapshot route"
+  check_route_status "$label" GET "${root_url}/v1/sumeragi/validator-sets" "404" \
+    "retired legacy validator-set route must remain unmounted" "" "route_not_found"
   check_route_status "$label" GET "${root_url}/v1/nexus/public-lanes/${lane_id}/validators" "200" \
     "public-lane validator snapshot route"
   check_route_status "$label" GET "${root_url}/v1/nexus/public-lanes/${lane_id}/stake" "200" \

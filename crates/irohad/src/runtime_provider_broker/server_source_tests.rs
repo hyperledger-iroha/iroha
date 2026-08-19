@@ -660,7 +660,9 @@ fn broker_server_never_signals_ready_for_endpoint_substituted_during_requalifica
         fn qualification(
             &self,
         ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String> {
-            if self.qualification_calls.fetch_add(1, Ordering::SeqCst) == 1 {
+            // Preparing the server observation probes the signer twice before
+            // the endpoint is bound; block the subsequent readiness probe.
+            if self.qualification_calls.fetch_add(1, Ordering::SeqCst) == 2 {
                 self.second_probe_entered.wait();
                 self.release_second_probe.wait();
             }
@@ -997,7 +999,7 @@ fn stock_registry_projects_exact_streamed_provider_source_limits() {
 #[test]
 fn musubi_source_fetch_v2_reconstructs_exact_private_binding() {
     let payload = vec![0xD7; 4 * 1024 + 19];
-    let (generic_authorization, manifest, plan) = test_source_material(payload.clone());
+    let (generic_authorization, manifest, plan) = test_source_material(&payload);
     let (authorization, musubi) = test_source_musubi_fetch_binding(
         &generic_authorization,
         &manifest,
@@ -1061,7 +1063,7 @@ fn musubi_source_fetch_v2_reconstructs_exact_private_binding() {
 #[test]
 fn stalled_source_stream_releases_unary_session_capacity() {
     let payload = vec![0xA7; 8 * 1024 * 1024];
-    let (authorization, manifest, plan) = test_source_material(payload.clone());
+    let (authorization, manifest, plan) = test_source_material(&payload);
     let source_backend = ServerTestProviderSource {
         payload,
         manifest,
@@ -1126,7 +1128,7 @@ fn stalled_source_stream_releases_unary_session_capacity() {
 #[test]
 fn source_stream_post_qualification_runs_after_exact_backend_eof() {
     let payload = vec![0xB8; 512 * 1024 + 7];
-    let (authorization, manifest, plan) = test_source_material(payload.clone());
+    let (authorization, manifest, plan) = test_source_material(&payload);
     let revision = Arc::new(AtomicU64::new(5));
     let source_backend = ServerTestProviderSource {
         payload,
@@ -1176,7 +1178,7 @@ fn source_stream_post_qualification_runs_after_exact_backend_eof() {
 #[test]
 fn source_fetch_future_obeys_configured_absolute_timeout() {
     let payload = vec![0xC9; 17];
-    let (authorization, manifest, plan) = test_source_material(payload.clone());
+    let (authorization, manifest, plan) = test_source_material(&payload);
     let source_backend = ServerTestProviderSource {
         payload,
         manifest,
@@ -1456,8 +1458,15 @@ fn send_handshake(stream: &mut UnixStream, response: &HandshakeResponseV1) {
         .expect("write fake broker handshake response");
 }
 fn read_operation(stream: &mut UnixStream) -> OperationRequestV1 {
-    let (announced_slot, announced_operation, frame) =
-        read_operation_request_frame(stream).expect("read fake broker operation");
+    // The fake broker represents a separate process, so its decode admission
+    // must not compete with the in-process client for one process-local pool.
+    let decode_pool = Arc::new(DecodeResourcePoolV1::new(
+        MAX_BROKER_SHARED_DECODE_BYTES_V1,
+    ));
+    let (announced_slot, announced_operation, frame, admission) =
+        read_operation_request_frame_inner(stream, None, Some(decode_pool))
+            .expect("read fake broker operation");
+    let _scope = admission.enter();
     let request = decode_operation_frame::<OperationRequestV1>(
         &frame,
         FRAME_KIND_OPERATION_REQUEST_V1,
@@ -1763,7 +1772,7 @@ fn source_reader_drop_closes_unverified_connection() {
 #[test]
 fn source_fetch_v2_accepts_generic_and_rejects_musubi_substitution() {
     let payload = vec![0xD1; 4096];
-    let (authorization, manifest, plan) = test_source_material(payload);
+    let (authorization, manifest, plan) = test_source_material(&payload);
     let bindings = source_test_catalog(Duration::from_secs(5), 64 * 1024, 1);
     let binding =
         ProviderBindingWireV1::try_from_binding(bindings.iter().next().expect("source binding"))
@@ -2241,7 +2250,7 @@ fn macos_socket_device_identity_preserves_signed_dev_t_bits() {
     );
     assert_eq!(
         socket_device_identity_from_raw(i32::MIN),
-        i32::MIN as u64,
+        u64::MAX - u64::try_from(i32::MAX).expect("i32::MAX fits u64"),
         "valid high-bit macOS device identities must not be rejected"
     );
 }

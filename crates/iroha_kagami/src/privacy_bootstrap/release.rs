@@ -107,7 +107,7 @@ struct ReleaseArtifactsV1 {
     broker_public: Vec<u8>,
 }
 pub(super) fn render_taira_release_v1<T: Write>(
-    args: RenderTairaReleaseV1Args,
+    args: &RenderTairaReleaseV1Args,
     writer: &mut std::io::BufWriter<T>,
 ) -> color_eyre::Result<()> {
     let activation_instructions = read_bounded(
@@ -249,6 +249,10 @@ fn activation_material_v1(
     }
     Ok((hashes, encoded, boxes))
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "broker export admission keeps canonical-byte, identity, digest, policy, and instruction checks in one ordered verification pass"
+)]
 fn parse_broker_public_export_v1(bytes: &[u8]) -> color_eyre::Result<BrokerPublicMaterialV1> {
     let export: JsonValue = norito::json::from_slice(bytes)
         .wrap_err("Taira Bootle/Lantern broker public export is not strict JSON")?;
@@ -510,6 +514,10 @@ fn render_release_plan_v1(
     }
     json_pretty_bytes_v1(&plan, "Taira privacy release plan")
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "the fixed release-plan schema is validated field-by-field in one auditable first-release contract"
+)]
 fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
     let root = object_v1(plan, "privacy plan")?;
     expect_exact_keys_v1(
@@ -1005,6 +1013,10 @@ fn expect_toml_string_v1(
     }
     Ok(())
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "genesis rendering preserves ordered native and JSON-level admission before its deterministic append"
+)]
 fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
     iroha_genesis::init_instruction_registry();
     validate_genesis_manifest_json(bytes)
@@ -1019,7 +1031,7 @@ fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
     for instruction in decoded_template
         .transactions()
         .iter()
-        .flat_map(|transaction| transaction.instructions())
+        .flat_map(iroha_genesis::RawGenesisTx::instructions)
     {
         if instruction
             .as_any()
@@ -1058,7 +1070,7 @@ fn render_release_genesis_v1(bytes: &[u8]) -> color_eyre::Result<Vec<u8>> {
     let mut authority_registration_index = None;
     let mut governance_grant_index = None;
     let mut global_index = 0_usize;
-    for transaction in transactions.iter() {
+    for transaction in transactions {
         let instructions = transaction
             .get("instructions")
             .and_then(JsonValue::as_array)
@@ -1383,6 +1395,10 @@ mod tests {
             .expect("derive valid governed issuer-policy fixture");
         RegisterPrivacyBootleLanternIssuerPolicyV1::new(policy)
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the fixture spells out every field of the exact canonical public broker export"
+    )]
     fn broker_export_fixture_v1() -> Vec<u8> {
         let registration = policy_registration_fixture_v1();
         let instruction = InstructionBox::from(registration.clone());

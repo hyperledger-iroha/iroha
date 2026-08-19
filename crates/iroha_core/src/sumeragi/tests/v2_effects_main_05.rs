@@ -33,15 +33,13 @@ fn certified_response_priority_probe_reads_exact_or_conflicting_family_claim() {
     assert_eq!(
         executor
             .outstanding_requests
-            .claim_authenticated_response(&authenticated)
-            .expect("install setup claim"),
+            .prepare_authenticated_response_claim(&authenticated)
+            .expect("prepare setup claim")
+            .commit(),
         CertifiedBodyResponseClaimDisposition::Acquired
     );
     let ownership_before = executor.body_ownership_projection();
     let claims_before = executor.outstanding_requests.response_claim_count();
-    let claim_hash_before = executor
-        .outstanding_requests
-        .response_claim_hash(claimed.request_hash);
     let exact = executor
         .probe_certified_response_priority(&claimed, &claimed_responder)
         .expect("exact retransmission remains a preflight candidate");
@@ -60,8 +58,8 @@ fn certified_response_priority_probe_reads_exact_or_conflicting_family_claim() {
     assert_eq!(
         executor
             .outstanding_requests
-            .response_claim_hash(claimed.request_hash),
-        claim_hash_before
+            .preflight_authenticated_response_claim(&authenticated),
+        Ok(CertifiedBodyResponseClaimPreflight::ExactRetransmission)
     );
     let competing = signed_certified_response(
         &fixture,
@@ -93,10 +91,9 @@ fn certified_response_priority_probe_reads_exact_or_conflicting_family_claim() {
     assert_eq!(
         executor
             .outstanding_requests
-            .response_claim_hash(claimed.request_hash),
-        claim_hash_before
+            .preflight_authenticated_response_claim(&authenticated),
+        Ok(CertifiedBodyResponseClaimPreflight::ExactRetransmission)
     );
-    assert!(services.completed_certified_fetches.is_empty());
     assert!(executor.runtime.completions.is_empty());
     assert!(!executor.status().fail_closed);
     assert!(
@@ -118,286 +115,6 @@ fn certified_response_priority_probe_reads_exact_or_conflicting_family_claim() {
             V2TransportError::InconsistentRequestIndex(request_hash)
         )) if request_hash == claimed.request_hash
     ));
-}
-#[test]
-fn certified_request_presence_rejects_retained_response_with_different_family_claim() {
-    let fixture = Fixture::new();
-    assert!(fixture.body.len() > 1);
-    let mut executor = fixture.executor(EffectQueueConfig::new(8, 1, 1, 4));
-    let mut services = fixture.services();
-    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: certified_sources(&fixture, &prepare),
-                certificate: Some(prepare),
-            }],
-            &mut services,
-        )
-        .expect("hybrid fetch");
-    let task = services.fetch_tasks[0].clone();
-    let retained = signed_certified_response(
-        &fixture,
-        &task,
-        fixture.manifest.clone(),
-        fixture.body.clone(),
-        0,
-    );
-    let retained_responder = fixture.context.roster[0].validator.clone();
-    let (_directory, _ingress, _gate, ingress_ownership) =
-        certified_response_runtime_ingress_ownership(
-            &fixture,
-            &retained,
-            retained_responder.clone(),
-        );
-    assert!(matches!(
-        executor.accept_certified_body_response_with_ingress_ownership(
-            retained.clone(),
-            &retained_responder,
-            &ingress_ownership,
-            &mut services,
-        ),
-        Err(EffectTransportError::Backpressure)
-    ));
-    assert!(executor.has_retained_certified_body_response());
-    assert_eq!(executor.outstanding_requests.response_claim_count(), 0);
-    assert_eq!(executor.validated_certified_request_presence(), Ok(true));
-    let competing = signed_certified_response(
-        &fixture,
-        &task,
-        fixture.manifest.clone(),
-        fixture.body.clone(),
-        1,
-    );
-    let competing_responder = fixture.context.roster[1].validator.clone();
-    assert_ne!(HashOf::new(&retained), HashOf::new(&competing));
-    let authenticated = executor
-        .outstanding_requests
-        .authenticate_response(&fixture.context, competing, &competing_responder)
-        .expect("authenticate a deliberately different response occurrence");
-    assert_eq!(
-        executor
-            .outstanding_requests
-            .claim_authenticated_response(&authenticated)
-            .expect("install the conflicting family claim"),
-        CertifiedBodyResponseClaimDisposition::Acquired
-    );
-    assert!(matches!(
-        executor.validated_certified_request_presence(),
-        Err(EffectTransportError::Authentication(
-            V2TransportError::InconsistentRequestIndex(request_hash)
-        )) if request_hash == retained.request_hash
-    ));
-}
-#[test]
-fn retryable_certified_fetch_transfer_retains_claim_token_and_exact_service_owner() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: certified_sources(&fixture, &prepare),
-                certificate: Some(prepare),
-            }],
-            &mut services,
-        )
-        .expect("hybrid fetch");
-    let task = services.fetch_tasks[0].clone();
-    let exact_response = signed_certified_response(
-        &fixture,
-        &task,
-        fixture.manifest.clone(),
-        fixture.body.clone(),
-        0,
-    );
-    let exact_responder = fixture.context.roster[0].validator.clone();
-    let service_owners_before = services.fetch_tasks.clone();
-    let ownership_before = executor.body_ownership_projection();
-    services.retry_certified_fetch_once = true;
-    assert_eq!(
-        executor.accept_certified_body_response(
-            exact_response.clone(),
-            &exact_responder,
-            &mut services,
-        ),
-        Err(EffectTransportError::Backpressure),
-        "only the typed retryable service disposition reopens the handoff",
-    );
-    assert_eq!(executor.outstanding_requests.response_claim_count(), 1);
-    assert_eq!(executor.outstanding_requests.len(), 1);
-    assert_eq!(executor.pending_fetches.len(), 1);
-    assert_eq!(services.fetch_tasks, service_owners_before);
-    assert!(services.completed_certified_fetches.is_empty());
-    assert!(services.closed.is_empty());
-    assert!(!executor.status().fail_closed);
-    let ownership_after_retryable = executor.body_ownership_projection();
-    let retained = ownership_after_retryable
-        .runtime_body_reservation
-        .as_ref()
-        .expect("retryable service handoff retains the exact runtime token");
-    assert_eq!(retained.tag(), tag(0));
-    assert_eq!(retained.manifest(), &fixture.manifest);
-    let mut without_token = ownership_after_retryable.clone();
-    without_token.runtime_body_reservation = None;
-    assert_eq!(
-        without_token, ownership_before,
-        "the typed retryable boundary changes only the explicit unpublished token",
-    );
-    let competing_response = signed_certified_response(
-        &fixture,
-        &task,
-        fixture.manifest.clone(),
-        fixture.body.clone(),
-        1,
-    );
-    let competing_responder = fixture.context.roster[1].validator.clone();
-    assert!(matches!(
-        executor.accept_certified_body_response(
-            competing_response,
-            &competing_responder,
-            &mut services,
-        ),
-        Err(EffectTransportError::Authentication(
-            V2TransportError::ConflictingCertifiedBodyResponseClaim { .. }
-        ))
-    ));
-    assert_eq!(
-        executor.body_ownership_projection(),
-        ownership_after_retryable,
-        "a losing authenticated occurrence cannot transfer any exact owner",
-    );
-    assert_eq!(executor.outstanding_requests.response_claim_count(), 1);
-    assert_eq!(services.fetch_tasks, service_owners_before);
-    assert!(services.completed_certified_fetches.is_empty());
-    assert!(!executor.status().fail_closed);
-    assert_eq!(
-        executor
-            .accept_certified_body_response(
-                exact_response.clone(),
-                &exact_responder,
-                &mut services,
-            )
-            .expect("the identical claimed response resumes the same handoff"),
-        CompletionDisposition::Accepted,
-    );
-    assert_eq!(services.completed_certified_fetches, vec![task.id()]);
-    assert!(executor.pending_fetches.is_empty());
-    assert!(executor.certified_work.is_empty());
-    assert!(executor.outstanding_requests.is_empty());
-    assert_eq!(executor.outstanding_requests.response_claim_count(), 0);
-    assert!(
-        executor
-            .body_ownership_projection()
-            .runtime_body_reservation
-            .is_none()
-    );
-    let later_duplicate = wire::ConsensusMessageV2::new(
-        wire::ConsensusMessageV2Payload::CertifiedBodyResponse(exact_response.clone()),
-    );
-    assert!(
-        executor.retained_dispatch_allows_network_ingress(&later_duplicate.payload),
-        "a later physical duplicate remains ordinarily drainable after owner retirement",
-    );
-    assert!(matches!(
-        executor
-            .probe_certified_response_priority(&exact_response, &exact_responder)
-            .expect("a retired response family has a closed non-priority classification"),
-        CertifiedResponsePriorityProbe::DefinitelyNonPriority(
-            CertifiedResponsePriorityNonPriority::Unsolicited { request_hash }
-        ) if request_hash == exact_response.request_hash
-    ));
-    assert!(!executor.status().fail_closed);
-}
-#[test]
-fn retained_response_certificate_escape_is_charged_only_once() {
-    let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
-    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
-    executor
-        .consume_effects(
-            vec![AdapterEffect::FetchBody {
-                tag: tag(0),
-                round: fixture.manifest.round,
-                subject: fixture.manifest.subject,
-                manifest: Some(fixture.manifest.clone()),
-                certified_sources: certified_sources(&fixture, &prepare),
-                certificate: Some(prepare),
-            }],
-            &mut services,
-        )
-        .expect("hybrid fetch");
-    let task = services.fetch_tasks[0].clone();
-    let response = signed_certified_response(
-        &fixture,
-        &task,
-        fixture.manifest.clone(),
-        fixture.body.clone(),
-        0,
-    );
-    let responder = fixture.context.roster[0].validator.clone();
-    let (_directory, _ingress, _gate, ingress_ownership) =
-        certified_response_runtime_ingress_ownership(&fixture, &response, responder.clone());
-    services.retry_certified_fetch_once = true;
-    assert_eq!(
-        executor.accept_certified_body_response_with_ingress_ownership(
-            response,
-            &responder,
-            &ingress_ownership,
-            &mut services,
-        ),
-        Err(EffectTransportError::Backpressure)
-    );
-    assert!(executor.retained_response_may_admit_certified_fence_escape());
-    executor.runtime.certified_fence_escape_credit = true;
-    executor.reconcile_retained_response_certified_fence_escape_phase();
-    assert_eq!(
-        executor
-            .retained_certified_body_response
-            .as_ref()
-            .map(|carrier| carrier.certified_fence_escape_phase),
-        Some(RetainedCertifiedFenceEscapePhase::Charged)
-    );
-    assert!(!executor.retained_response_may_admit_certified_fence_escape());
-    while executor.runtime.remaining_completion_capacity() > 0 {
-        executor
-            .runtime
-            .completions
-            .push(RuntimeCompletion::Signature(tag(0), vec![0xA5]));
-    }
-    executor.runtime.certified_fence_escape_credit = false;
-    executor.reconcile_retained_response_certified_fence_escape_phase();
-    assert_eq!(
-        executor
-            .retained_certified_body_response
-            .as_ref()
-            .map(|carrier| carrier.certified_fence_escape_phase),
-        Some(RetainedCertifiedFenceEscapePhase::Spent)
-    );
-    executor.runtime.certified_fence_escape_credit = true;
-    executor.reconcile_retained_response_certified_fence_escape_phase();
-    assert!(
-        !executor.retained_response_may_admit_certified_fence_escape(),
-        "a later visible certificate cannot replenish this response's spent ingress escape"
-    );
-    assert_eq!(
-        executor
-            .retained_certified_body_response
-            .as_ref()
-            .map(|carrier| carrier.certified_fence_escape_phase),
-        Some(RetainedCertifiedFenceEscapePhase::Spent)
-    );
-    assert!(!executor.status().fail_closed);
 }
 #[test]
 fn different_subject_decision_supersedes_protected_lock_and_frees_losing_capacity() {
@@ -471,8 +188,7 @@ fn different_subject_decision_supersedes_protected_lock_and_frees_losing_capacit
     assert_eq!(services.cancelled_fetches, vec![losing_id]);
     assert_eq!(services.retired_all_outbound, 1);
     assert_eq!(services.retired_candidate_work, 1);
-    assert_eq!(services.durable_serve_decision, Some(commit.subject));
-    assert!(!services.decision_serve_reconciliation_pending);
+    assert_eq!(services.durable_runtime_decision, Some(commit.subject));
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
@@ -510,8 +226,7 @@ fn decision_installed_by_same_runtime_step_retires_stale_terminal_effects() {
     assert!(services.sign_tasks.is_empty());
     assert_eq!(services.retired_all_outbound, 1);
     assert_eq!(services.retired_candidate_work, 1);
-    assert_eq!(services.durable_serve_decision, Some(commit.subject));
-    assert!(!services.decision_serve_reconciliation_pending);
+    assert_eq!(services.durable_runtime_decision, Some(commit.subject));
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
@@ -1738,7 +1453,9 @@ fn reproposal_commit_qc_applies_the_exact_unchanged_body() {
     assert_eq!(task.validated_receipt().durable().round(), commit.round);
     assert!(!executor.status().fail_closed);
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(apply_worker_request_has_no_runtime_ownership_sidecar);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    apply_worker_request_has_no_runtime_ownership_sidecar
+);
 #[test]
 fn apply_accepts_decided_old_view_but_rejects_wrong_height_tag() {
     let fixture = Fixture::new();
@@ -1970,28 +1687,18 @@ fn recovered_next_vote_body_catalog_join_is_exact_and_store_bound() {
 include!("v2_effects_kura_tip_replay.rs");
 include!("v2_effects_01_view_churn_and_runtime_steps.rs");
 #[test]
-fn decision_serve_fence_rejects_durable_decision_loss_without_reopening() {
+fn runtime_step_reconciliation_rejects_durable_decision_loss() {
     let fixture = Fixture::new();
     let mut services = fixture.services();
     let subject = fixture.manifest.subject;
     services
-        .begin_decision_serve_reconciliation()
-        .expect("raise the initial Decision/Serve fence");
-    services
-        .finish_decision_serve_reconciliation(Some(subject))
-        .expect("publish the durable Serve Decision");
-    services
-        .begin_decision_serve_reconciliation()
-        .expect("raise the next runtime-step fence");
+        .finish_runtime_step_reconciliation(Some(subject))
+        .expect("publish the durable Decision");
     let error = services
-        .finish_decision_serve_reconciliation(None)
+        .finish_runtime_step_reconciliation(None)
         .expect_err("a durable Decision cannot disappear on a later runtime step");
     assert!(error.contains("lost its durable Decision"));
-    assert_eq!(services.durable_serve_decision, Some(subject));
-    assert!(
-        services.decision_serve_reconciliation_pending,
-        "failed reconciliation keeps exact Serve admission fenced"
-    );
+    assert_eq!(services.durable_runtime_decision, Some(subject));
 }
 #[test]
 fn live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks() {
@@ -2012,7 +1719,7 @@ fn live_runtime_step_rejects_missing_scheduler_ownership_before_callbacks() {
     ));
     assert!(services.broadcasts.is_empty());
     assert!(services.statuses.is_empty());
-    assert!(services.decision_serve_reconciliation_pending);
+    assert!(services.durable_runtime_decision.is_none());
     assert!(executor.output_guard.restart_required());
 }
 #[test]
@@ -2028,7 +1735,7 @@ fn recovery_runtime_step_rejects_invalid_scheduler_ownership_before_callbacks() 
             if reason.contains("scheduler owner was invalid")
     ));
     assert!(services.statuses.is_empty());
-    assert!(services.decision_serve_reconciliation_pending);
+    assert!(services.durable_runtime_decision.is_none());
     assert!(executor.output_guard.restart_required());
 }
 include!("v2_effects_02_admission_handoffs.rs");

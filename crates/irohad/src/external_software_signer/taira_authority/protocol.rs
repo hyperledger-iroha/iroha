@@ -151,6 +151,14 @@ pub struct TairaAuthorityPublicBindingV1 {
 
 impl TairaAuthorityPublicBindingV1 {
     /// Validate the complete role/key/identity binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(())` when any V1 binding field is invalid or inconsistent.
+    #[expect(
+        clippy::result_unit_err,
+        reason = "the public V1 codec boundary intentionally exposes only valid or invalid"
+    )]
     pub fn validate(&self) -> Result<(), ()> {
         let SoftwareSignerPurposeBindingV1::TairaAuthority { role } = &self.signer.purpose_binding
         else {
@@ -169,6 +177,14 @@ impl TairaAuthorityPublicBindingV1 {
     }
 
     /// SHA-256 of the canonical installed binding.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(())` when the binding is invalid or cannot be canonically encoded.
+    #[expect(
+        clippy::result_unit_err,
+        reason = "the public V1 codec boundary intentionally exposes only valid or invalid"
+    )]
     pub fn sha256(&self) -> Result<[u8; 32], ()> {
         self.validate()?;
         let encoded = norito::encode_canonical(self).map_err(|_| ())?;
@@ -178,6 +194,15 @@ impl TairaAuthorityPublicBindingV1 {
 
 /// Validate the complete installed eight-role registry and reject any reused
 /// role, key, handle, identity, or UID.
+///
+/// # Errors
+///
+/// Returns `Err(())` when the registry is incomplete or contains an invalid or
+/// reused role identity.
+#[expect(
+    clippy::result_unit_err,
+    reason = "the public V1 codec boundary intentionally exposes only valid or invalid"
+)]
 pub fn validate_taira_authority_registry_v1(
     bindings: &[TairaAuthorityPublicBindingV1],
 ) -> Result<(), ()> {
@@ -229,6 +254,15 @@ pub struct TairaAuthorityInstallationV1 {
 
 /// Validate all eight installations and reject every cross-role path or
 /// public-identity alias, including observation-signer/replay-broker reuse.
+///
+/// # Errors
+///
+/// Returns `Err(())` when a binding is invalid or installation paths overlap
+/// or are not absolute normalized paths.
+#[expect(
+    clippy::result_unit_err,
+    reason = "the public V1 codec boundary intentionally exposes only valid or invalid"
+)]
 pub fn validate_taira_authority_installations_v1(
     installations: &[TairaAuthorityInstallationV1],
 ) -> Result<(), ()> {
@@ -265,7 +299,7 @@ fn absolute_normal_path(path: &std::path::Path) -> bool {
         })
 }
 
-/// One path-free artifact identity paired with one ordered SCM_RIGHTS descriptor.
+/// One path-free artifact identity paired with one ordered `SCM_RIGHTS` descriptor.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct TairaAuthorityArtifactManifestEntryV1 {
     /// Contiguous zero-based descriptor ordinal.

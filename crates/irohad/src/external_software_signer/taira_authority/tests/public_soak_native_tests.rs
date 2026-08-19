@@ -277,6 +277,10 @@ fn mutate_scalar_preserving_shape(value: &mut Value, path: &[&str]) {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "complete public-soak recovery timeline"
+)]
 fn public_soak_fresh_admission_retry_history_and_recovery_are_non_mutating() {
     let parent = temporary_parent();
     let observation_state = parent.path().join("public-soak-observation-state");
@@ -526,6 +530,10 @@ fn public_soak_fresh_admission_retry_history_and_recovery_are_non_mutating() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "complete temporal substitution matrix"
+)]
 fn public_soak_rejects_temporal_binding_key_and_policy_substitution_before_consuming() {
     let parent = temporary_parent();
     let observation_state = parent.path().join("observation-state");
@@ -754,6 +762,10 @@ fn public_soak_rejects_temporal_binding_key_and_policy_substitution_before_consu
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "all signed-field mutations remain explicit"
+)]
 fn public_soak_rejects_every_individually_mutated_signed_field() {
     let parent = temporary_parent();
     let observation_state = parent.path().join("observation-state");

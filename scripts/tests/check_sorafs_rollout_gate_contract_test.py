@@ -21670,7 +21670,7 @@ def test_orderbook_docs_distinguish_shipped_native_ledger_from_remaining_service
         "javascript/iroha_js/src/toriiClient.js": ("responseStatusWithoutUserGetter(response) !== 202", "_readBoundedResponseBytes(", "x-iroha-signed-transaction-hash"),
         "python/iroha_torii_client/orderbook_submission.py": ("SorafsOrderbookSubmissionAmbiguousError", "_HTTP_ADAPTER_SEND(", "stream=True", "require_orderbook_https_base_url", "Transfer-Encoding"),
         "python/iroha_torii_client/tests/orderbook_submission_test.py": ("test_redirect_body_is_never_consumed_by_the_one_shot_adapter_path", "test_noncanonical_or_insecure_base_url_fails_before_http"),
-        "scripts/check_native_sdk_abi22_artifact.py": ("inspectSorafsOrderbookSubmissionV1", "verify_sorafs_orderbook_submission_receipt_v1"),
+        "scripts/check_native_sdk_abi22_artifact.py": ("inspectSorafsOrderbookSubmissionForDiscriminantV1", "verify_sorafs_orderbook_submission_receipt_v1"),
     }
     assert all(marker in read(REPO_ROOT / path) for path, markers in sdk_contract.items() for marker in markers)
     status = read(REPO_ROOT / "status.md"); assert status.index("SoraFS orderbook signed-submit SDK hard cut") < status.index("SoraFS orderbook submit SDK helpers")

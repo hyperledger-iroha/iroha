@@ -1182,6 +1182,10 @@ mod tests {
         assert_eq!(visitor.calls, ["register", "rotate", "revoke"]);
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive X.509 governance inventory verifies every register, rotate, and revoke visitor hook"
+    )]
     fn visit_all_x509_governance_instructions_dispatches_from_boxes() {
         struct X509Visitor {
             calls: Vec<&'static str>,

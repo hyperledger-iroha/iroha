@@ -4,10 +4,11 @@ use eyre::{Context, Result, bail};
 use iroha::{
     client::Client,
     config::{self, AnonymityPolicy, Config},
-    crypto::{ExposedPrivateKey, KeyPair},
+    crypto::{ExposedPrivateKey, HashOf, KeyPair},
     data_model::{
         ChainId, NetworkId,
         account::{AccountAddress, AccountId},
+        block::BlockHeader,
         isi::{
             InstructionBox,
             nexus::{
@@ -75,13 +76,26 @@ fn string_at<'a>(table: &'a toml::value::Table, key: &str) -> Result<&'a str> {
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| eyre::eyre!("missing `{key}`"))
 }
+fn network_id_from_inline_expected_hash(value: &str) -> Result<NetworkId> {
+    let genesis_hash = norito::json::from_value::<HashOf<BlockHeader>>(
+        norito::json::Value::String(value.to_owned()),
+    )
+    .wrap_err("parse canonical genesis.expected_hash literal")?;
+    let canonical = norito::json::to_value(&genesis_hash)
+        .wrap_err("serialize canonical genesis.expected_hash literal")?;
+    if canonical.as_str() != Some(value) {
+        bail!("genesis.expected_hash does not use its canonical literal spelling");
+    }
+    Ok(NetworkId::from_genesis_hash(genesis_hash))
+}
 fn taira_profile_signer(path: &Path) -> Result<(String, String, NetworkId)> {
     let raw = std::fs::read_to_string(path)
         .wrap_err_with(|| format!("read Taira profile {}", path.display()))?;
     let value = toml::from_str::<Value>(&raw).wrap_err("parse Taira profile TOML")?;
-    let network_id = string_at(table(&value, "genesis")?, "expected_hash")?
-        .parse::<NetworkId>()
-        .wrap_err("parse genesis.expected_hash as exact network id")?;
+    let network_id = network_id_from_inline_expected_hash(string_at(
+        table(&value, "genesis")?,
+        "expected_hash",
+    )?)?;
     let torii = table(&value, "torii")?;
     let onboarding_value = torii.get("account_onboarding").ok_or_else(|| {
         eyre::eyre!("missing structurally enabled [torii.account_onboarding] table")
@@ -300,6 +314,10 @@ mod tests {
         },
     };
     use std::{fs, num::NonZeroU64, str::FromStr};
+    const CANONICAL_NETWORK_ID_LITERAL: &str =
+        "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
+    const RAW_GENESIS_HASH: &str =
+        "32c903e5b3497e34c2b844ebfe8a39c19e6cf8f95d44c1ffb8ba9dcb42f91149";
     fn sample_revision() -> FeeSponsorProgramRevision {
         let sponsor = AccountId::new(
             KeyPair::try_from_seed(vec![7; 32], Algorithm::Ed25519)
@@ -411,11 +429,30 @@ expected_hash = "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42
             (
                 "canonical-account".to_owned(),
                 "private-key-literal".to_owned(),
-                "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
-                    .parse()
-                    .expect("network id")
+                RAW_GENESIS_HASH.parse().expect("network id")
             )
         );
+    }
+    #[test]
+    fn canonical_inline_expected_hash_derives_the_exact_network_id() {
+        assert_eq!(
+            network_id_from_inline_expected_hash(CANONICAL_NETWORK_ID_LITERAL)
+                .expect("canonical inline expected hash"),
+            RAW_GENESIS_HASH.parse().expect("network id")
+        );
+    }
+    #[test]
+    fn inline_expected_hash_rejects_raw_and_malformed_spellings() {
+        let malformed =
+            "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#0000";
+        for value in [RAW_GENESIS_HASH, malformed] {
+            let error = network_id_from_inline_expected_hash(value)
+                .expect_err("noncanonical inline expected hash must fail");
+            assert!(
+                format!("{error:#}").contains("canonical genesis.expected_hash literal"),
+                "unexpected error for {value}: {error:#}"
+            );
+        }
     }
     #[test]
     fn profile_signer_rejects_legacy_inline_private_key() {

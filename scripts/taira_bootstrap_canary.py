@@ -449,7 +449,6 @@ def canonical_account_id_from_public_key(
                     for line in proc.stderr.splitlines()
                     if line.strip()
                     and not line.startswith("CLI started")
-                    and not line.startswith("Build line:")
                     and not line.startswith("warning:")
                 ]
                 rendered = stderr_lines[-1] if stderr_lines else ""

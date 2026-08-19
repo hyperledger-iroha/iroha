@@ -9,7 +9,7 @@ struct CanonicalPruneIntentArtifact {
     metadata: std::fs::Metadata,
     file: std::fs::File,
     bytes: Vec<u8>,
-    intent: KuraPruneIntentV2,
+    intent: KuraPruneIntentV3,
     links: u64,
 }
 /// Exact allowlisted canonical-prune publication inventory.
@@ -51,7 +51,7 @@ impl Kura {
     fn prune_intent_path_for(store_root: &Path) -> PathBuf {
         store_root.join(PRUNE_INTENT_FILE_NAME)
     }
-    fn decode_prune_intent(path: &Path, bytes: &[u8]) -> Result<KuraPruneIntentV2> {
+    fn decode_prune_intent(path: &Path, bytes: &[u8]) -> Result<KuraPruneIntentV3> {
         if bytes.is_empty() || bytes.len() > PRUNE_INTENT_MAX_BYTES {
             return Err(Error::PruneIntentConflict(format!(
                 "intent {} has invalid byte length {}",
@@ -59,13 +59,13 @@ impl Kura {
                 bytes.len()
             )));
         }
-        let intent = norito::decode_canonical::<KuraPruneIntentV2>(bytes).map_err(|err| {
+        let intent = norito::decode_canonical::<KuraPruneIntentV3>(bytes).map_err(|err| {
             Error::PruneIntentConflict(format!(
                 "intent {} failed exact Norito decode: {err}",
                 path.display()
             ))
         })?;
-        if intent.version != 2
+        if intent.version != 3
             || intent.target_height > intent.source_height
             || (intent.source_height == 0) != intent.source_tip_hash.is_none()
             || (intent.target_height == 0) != intent.target_tip_hash.is_none()
@@ -83,10 +83,10 @@ impl Kura {
         }
         Ok(intent)
     }
-    fn read_prune_intent(store_root: &Path) -> Result<Option<KuraPruneIntentV2>> {
+    fn read_prune_intent(store_root: &Path) -> Result<Option<KuraPruneIntentV3>> {
         Self::recover_canonical_prune_intent_artifacts(store_root)
     }
-    fn persist_prune_intent(&self, intent: &KuraPruneIntentV2) -> Result<()> {
+    fn persist_prune_intent(&self, intent: &KuraPruneIntentV3) -> Result<()> {
         let bytes = norito::encode_canonical(intent).map_err(Error::NoritoFrame)?;
         if bytes.is_empty() || bytes.len() > PRUNE_INTENT_MAX_BYTES {
             return Err(Error::PruneIntentConflict(
@@ -97,7 +97,7 @@ impl Kura {
             != *intent
         {
             return Err(Error::PruneIntentConflict(
-                "encoded prune intent failed exact V2 roundtrip validation".to_owned(),
+                "encoded prune intent failed exact V3 roundtrip validation".to_owned(),
             ));
         }
         // The prune caller preflights the maintenance reserve before it takes
@@ -176,7 +176,7 @@ impl Kura {
     }
     fn apply_prune_intent_to_block_store(
         block_store: &mut BlockStore,
-        intent: &KuraPruneIntentV2,
+        intent: &KuraPruneIntentV3,
     ) -> Result<()> {
         let current = block_store.read_durable_index_count()?;
         if current != intent.source_height && current != intent.target_height {
@@ -568,7 +568,7 @@ impl Kura {
     }
     fn recover_canonical_prune_intent_artifacts(
         store_root: &Path,
-    ) -> Result<Option<KuraPruneIntentV2>> {
+    ) -> Result<Option<KuraPruneIntentV3>> {
         let inventory = Self::canonical_prune_intent_artifact_inventory(store_root)?;
         match (&inventory.stable, &inventory.temporary) {
             (None, None) => Ok(None),
@@ -615,7 +615,7 @@ impl Kura {
     }
     fn publish_canonical_prune_intent_exact(
         &self,
-        intent: &KuraPruneIntentV2,
+        intent: &KuraPruneIntentV3,
         bytes: &[u8],
     ) -> Result<()> {
         self.durable_mutation_authorized()?;
@@ -729,7 +729,7 @@ impl Kura {
         index_path: &Path,
         target_height: u64,
         kind: &'static str,
-    ) -> Result<KuraPruneSidecarPairProjectionV2> {
+    ) -> Result<KuraPruneSidecarPairProjectionV3> {
         let Some(layout) = Self::validate_indexed_sidecar_pair(
             data_path,
             index_path,
@@ -739,7 +739,7 @@ impl Kura {
             true,
         )?
         else {
-            return Ok(KuraPruneSidecarPairProjectionV2::default());
+            return Ok(KuraPruneSidecarPairProjectionV3::default());
         };
         let retained_entries = target_height
             .checked_sub(layout.base_height)
@@ -776,7 +776,7 @@ impl Kura {
             || !retained_is_compact
             || retained_data_bytes != data_bytes;
         if !requires_rewrite {
-            return Ok(KuraPruneSidecarPairProjectionV2::default());
+            return Ok(KuraPruneSidecarPairProjectionV3::default());
         }
         let retained_index_bytes = retained_entries
             .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
@@ -792,51 +792,32 @@ impl Kura {
                 "{kind} retained rewrite projection would grow its canonical pair"
             )));
         }
-        Ok(KuraPruneSidecarPairProjectionV2 {
+        Ok(KuraPruneSidecarPairProjectionV3 {
             required: true,
             retained_data_bytes,
             retained_index_bytes,
         })
     }
     /// Reconcile at most one sequential rewrite crash residue and project the
-    /// exact remaining retained data/index pairs. The caller holds
-    /// `sidecar_lock`; both namespaces are preflighted before the first rename
-    /// or removal so an impossible two-pair residue cannot partially recover.
+    /// exact remaining retained data/index pair. The caller holds
+    /// `sidecar_lock` throughout reconciliation and projection.
     fn reconcile_and_project_prune_sidecar_rewrites_locked(
         &self,
         target_height: u64,
-    ) -> Result<KuraPruneSidecarRewriteProjectionV2> {
+    ) -> Result<KuraPruneSidecarRewriteProjectionV3> {
         let directory = self.active_blocks_dir.lock().join(PIPELINE_DIR_NAME);
         let pipeline_data = directory.join(PIPELINE_SIDECARS_DATA_FILE);
         let pipeline_index = directory.join(PIPELINE_SIDECARS_INDEX_FILE);
-        let roster_data = directory.join(ROSTER_SIDECARS_DATA_FILE);
-        let roster_index = directory.join(ROSTER_SIDECARS_INDEX_FILE);
-        let pipeline_residue = Self::prune_indexed_sidecar_has_exact_temp_residue(
+        Self::prune_indexed_sidecar_has_exact_temp_residue(
             &pipeline_data,
             &pipeline_index,
             "pipeline recovery sidecar",
         )?;
-        let roster_residue = Self::prune_indexed_sidecar_has_exact_temp_residue(
-            &roster_data,
-            &roster_index,
-            "roster metadata sidecar",
-        )?;
-        if pipeline_residue && roster_residue {
-            return Err(Error::PruneIntentConflict(
-                "both sequential canonical sidecar pairs retain rewrite crash residues".to_owned(),
-            ));
-        }
         self.reconcile_prune_indexed_sidecar_temps(
             &pipeline_data,
             &pipeline_index,
             target_height,
             "pipeline recovery sidecar",
-        )?;
-        self.reconcile_prune_indexed_sidecar_temps(
-            &roster_data,
-            &roster_index,
-            target_height,
-            "roster metadata sidecar",
         )?;
         let pipeline = Self::project_prune_indexed_sidecar_pair(
             &pipeline_data,
@@ -844,23 +825,13 @@ impl Kura {
             target_height,
             "pipeline recovery sidecar",
         )?;
-        let roster = Self::project_prune_indexed_sidecar_pair(
-            &roster_data,
-            &roster_index,
-            target_height,
-            "roster metadata sidecar",
-        )?;
-        let sequential_peak_bytes = pipeline
-            .temp_pair_bytes()
-            .and_then(|pipeline| roster.temp_pair_bytes().map(|roster| pipeline.max(roster)))
-            .ok_or_else(|| {
-                Error::PruneIntentConflict(
-                    "canonical sidecar rewrite peak projection overflowed".to_owned(),
-                )
-            })?;
-        let projection = KuraPruneSidecarRewriteProjectionV2 {
+        let sequential_peak_bytes = pipeline.temp_pair_bytes().ok_or_else(|| {
+            Error::PruneIntentConflict(
+                "canonical sidecar rewrite peak projection overflowed".to_owned(),
+            )
+        })?;
+        let projection = KuraPruneSidecarRewriteProjectionV3 {
             pipeline,
-            roster,
             sequential_peak_bytes,
         };
         if !projection.is_canonical() {
@@ -875,13 +846,12 @@ impl Kura {
         pending_blocks: u64,
         marker_temporary_bytes: u64,
         marker_stable_growth_bytes: u64,
-        roster: CommitRosterJournalPruneProjectionV2,
-    ) -> Result<KuraPruneCapacityAdmissionV2> {
+    ) -> Result<KuraPruneCapacityAdmissionV3> {
         let used = self.kura_disk_usage_bytes()?;
         let post_wsv = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
         let certified_bundles = self.certified_bundle_capacity_reserved_bytes()?;
         let autonomous_terminals = self.autonomous_global_terminal_outcome_reserved_bytes()?;
-        Ok(KuraPruneCapacityAdmissionV2 {
+        Ok(KuraPruneCapacityAdmissionV3 {
             source_physical_bytes: used,
             pending_canonical_bytes: pending_blocks,
             post_wsv_reserved_bytes: post_wsv,
@@ -890,7 +860,6 @@ impl Kura {
             intent_bytes: 0,
             marker_temporary_bytes,
             marker_stable_growth_bytes,
-            roster,
             admitted_peak_bytes: 0,
         })
     }
@@ -945,14 +914,14 @@ impl Kura {
     }
     fn seal_and_validate_canonical_prune_capacity_admission(
         &self,
-        mut intent: KuraPruneIntentV2,
-    ) -> Result<KuraPruneIntentV2> {
+        mut intent: KuraPruneIntentV3,
+    ) -> Result<KuraPruneIntentV3> {
         let provisional = norito::encode_canonical(&intent).map_err(Error::NoritoFrame)?;
         let intent_bytes = u64::try_from(provisional.len())?;
         if intent_bytes == 0 || intent_bytes > PRUNE_INTENT_MAX_BYTES as u64 {
             return Err(Self::invalid_canonical_prune_intent_artifact(
                 &self.store_root,
-                "encoded V2 admission exceeds the prune-intent hard bound",
+                "encoded V3 admission exceeds the prune-intent hard bound",
             ));
         }
         intent.capacity.intent_bytes = intent_bytes;
@@ -989,9 +958,8 @@ impl Kura {
     /// capacity envelopes that were outstanding when the intent was admitted.
     fn validate_recovered_prune_capacity(
         &self,
-        intent: &KuraPruneIntentV2,
-        remaining_roster: CommitRosterJournalPruneProjectionV2,
-        remaining_sidecar: KuraPruneSidecarRewriteProjectionV2,
+        intent: &KuraPruneIntentV3,
+        remaining_sidecar: KuraPruneSidecarRewriteProjectionV3,
     ) -> Result<()> {
         if self.max_disk_usage_bytes == 0 || self.store_root.as_os_str().is_empty() {
             return Ok(());
@@ -999,7 +967,7 @@ impl Kura {
         let used = self.kura_disk_usage_bytes()?;
         let required = intent
             .capacity
-            .remaining_required_bytes(used, remaining_roster, remaining_sidecar)
+            .remaining_required_bytes(used, remaining_sidecar)
             .ok_or_else(|| {
                 Self::invalid_canonical_prune_intent_artifact(
                     &self.store_root,

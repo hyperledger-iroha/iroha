@@ -48,7 +48,7 @@ and socket. Adjust group mappings as needed for your environment.
 The first-release workspace emits the canonical `iroha` client, `irohad`
 validator daemon, and standalone `sorafs_governance_dag` service. Run
 `make build`, or set a deployment profile explicitly with
-`BUILD_PROFILE=deploy bash scripts/build_line.sh`. Deterministic release bundles
+`BUILD_PROFILE=deploy bash scripts/build_canonical_binaries.sh`. Deterministic release bundles
 and generic runtime images include all three; the Governance service still
 requires its exact deployment-owned runtime-provider broker and public config.
 

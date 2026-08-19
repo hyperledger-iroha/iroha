@@ -23,7 +23,6 @@ use crate::{
     data_model::{
         ChainId,
         block::SignedBlock,
-        consensus::Qc,
         events::pipeline::{
             BlockEventFilter, BlockStatus, PipelineEventBox, PipelineEventFilterBox,
             TransactionEventFilter, TransactionStatus,
@@ -213,7 +212,7 @@ enum SorafsEndpointAuth {
     Account,
 }
 
-/// Exact transport contract for one SoraFS HTTP endpoint.
+/// Exact transport contract for one `SoraFS` HTTP endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SorafsEndpoint<'a> {
     path: &'a str,
@@ -283,7 +282,7 @@ impl<'a> SorafsEndpoint<'a> {
 macro_rules! sorafs_transaction_methods {
     ($submitter:ident; $($name:ident => $route:expr),+ $(,)?) => {
         $(
-            #[doc = concat!("Submit the exact `", stringify!($route), "` SoraFS transaction.")]
+            #[doc = concat!("Submit the exact `", stringify!($route), "` `SoraFS` transaction.")]
             /// # Errors
             /// Returns errors from route validation, compatibility admission, or transport.
             pub fn $name(
@@ -344,7 +343,7 @@ macro_rules! sorafs_signed_json_methods {
 macro_rules! sorafs_filtered_get_methods {
     ($($name:ident($filter:ident: $filter_type:ty) => $endpoint:expr),+ $(,)?) => {
         $(
-            #[doc = concat!("Fetch the filtered SoraFS projection for `", stringify!($name), "`.")]
+            #[doc = concat!("Fetch the filtered `SoraFS` projection for `", stringify!($name), "`.")]
             /// # Errors
             /// Returns an error if request construction or transport fails.
             pub fn $name(&self, $filter: $filter_type) -> Result<Response<Vec<u8>>> {
@@ -361,7 +360,7 @@ macro_rules! sorafs_filtered_get_methods {
 macro_rules! sorafs_static_get_methods {
     ($($name:ident => $endpoint:expr),+ $(,)?) => {
         $(
-            #[doc = concat!("Fetch the static SoraFS projection for `", stringify!($name), "`.")]
+            #[doc = concat!("Fetch the static `SoraFS` projection for `", stringify!($name), "`.")]
             /// # Errors
             /// Returns an error if request construction, signing, or transport fails.
             pub fn $name(&self) -> Result<Response<Vec<u8>>> {
@@ -407,7 +406,7 @@ macro_rules! sorafs_quarantine_post_methods {
                 let quarantine_id_hex =
                     normalize_hex_lower::<16>(quarantine_id_hex, "quarantine_id_hex")?;
                 let path = format!(
-                    concat!("v1/sorafs/moderation/quarantine/{quarantine_id_hex}/", $suffix)
+                    concat!("v1/sorafs/moderation/quarantine/{}/", $suffix), quarantine_id_hex,
                 );
                 let body = $encode($request)?;
                 self.send_sorafs_endpoint(SorafsEndpoint::account_json_post(&path), body, |_| {})
@@ -1963,10 +1962,6 @@ pub struct MultisigSpecResponse {
 )]
 #[norito(deny_unknown_fields)]
 /// Fixed SCCP V1 route-registry capacity limits.
-#[expect(
-    clippy::struct_field_names,
-    reason = "the public wire fields retain their stable max_ names"
-)]
 pub struct SccpRegistryLimits {
     /// Maximum governed lanes retained by the registry.
     #[norito(rename = "max_governed_lanes")]
@@ -1997,10 +1992,6 @@ pub struct SccpRegistryLimits {
 )]
 #[norito(deny_unknown_fields)]
 /// Consensus-critical SCCP proof and verifier-work limits.
-#[expect(
-    clippy::struct_field_names,
-    reason = "the public wire fields retain their stable max_ names"
-)]
 pub struct SccpResourceLimits {
     /// Maximum successful outbound SCCP messages committed by one block.
     #[norito(rename = "max_outbound_messages_per_block")]
@@ -4725,10 +4716,6 @@ fn expected_zk_vk_status(
         )),
     }
 }
-#[expect(
-    clippy::too_many_lines,
-    reason = "the verifier-key draft reconstruction keeps its ordered fail-closed validation in one audit surface"
-)]
 fn expected_zk_vk_record_from_request(
     request: &norito::json::Value,
 ) -> Result<iroha_data_model::proof::VerifyingKeyRecord> {
@@ -6970,57 +6957,6 @@ fn bytes_to_hex(bytes: &[u8]) -> String {
     }
     out
 }
-fn commit_qc_json_payload(hash_hex: &str, qc_opt: Option<Qc>) -> norito::json::Value {
-    use norito::json::{Map, Value};
-    let mut map = Map::new();
-    map.insert(
-        "subject_block_hash".into(),
-        Value::from(hash_hex.to_string()),
-    );
-    if let Some(qc) = qc_opt {
-        let validator_set = Value::Array(
-            qc.validator_set
-                .iter()
-                .map(|peer| Value::from(peer.to_string()))
-                .collect(),
-        );
-        let mut qc_map = Map::new();
-        qc_map.insert("phase".into(), Value::from(format!("{:?}", qc.phase)));
-        qc_map.insert(
-            "parent_state_root".into(),
-            Value::from(format!("{}", qc.parent_state_root)),
-        );
-        qc_map.insert(
-            "post_state_root".into(),
-            Value::from(format!("{}", qc.post_state_root)),
-        );
-        qc_map.insert("height".into(), Value::from(qc.height));
-        qc_map.insert("view".into(), Value::from(qc.view));
-        qc_map.insert("epoch".into(), Value::from(qc.epoch));
-        qc_map.insert("mode_tag".into(), Value::from(qc.mode_tag));
-        qc_map.insert(
-            "validator_set_hash".into(),
-            Value::from(format!("{}", qc.validator_set_hash)),
-        );
-        qc_map.insert(
-            "validator_set_hash_version".into(),
-            Value::from(qc.validator_set_hash_version),
-        );
-        qc_map.insert("validator_set".into(), validator_set);
-        qc_map.insert(
-            "signers_bitmap".into(),
-            Value::from(bytes_to_hex(&qc.aggregate.signers_bitmap)),
-        );
-        qc_map.insert(
-            "bls_aggregate_signature".into(),
-            Value::from(bytes_to_hex(&qc.aggregate.bls_aggregate_signature)),
-        );
-        map.insert("commit_qc".into(), Value::Object(qc_map));
-    } else {
-        map.insert("commit_qc".into(), Value::Null);
-    }
-    Value::Object(map)
-}
 fn sumeragi_qc_json_payload(response: &SumeragiV2QcResponse) -> Result<norito::json::Value> {
     norito::json::to_value(response)
         .map_err(|error| eyre!("Failed to render Sumeragi v2 QC response as JSON: {error}"))
@@ -7530,9 +7466,8 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         let status = if Self::is_norito_content_type(content_type) {
-            let status = decode_from_bytes::<SumeragiV2Status>(resp.body())
-                .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"))?;
-            status
+            decode_from_bytes::<SumeragiV2Status>(resp.body())
+                .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"))?
         } else if Self::is_exact_json_content_type(content_type) {
             norito::json::from_slice::<SumeragiV2Status>(resp.body())
                 .map_err(|err| eyre!("Failed to decode sumeragi status JSON payload: {err}"))?
@@ -7736,38 +7671,6 @@ impl Client {
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
-        }
-        norito::json::from_slice(resp.body()).map_err(Into::into)
-    }
-    /// GET `/v1/sumeragi/commit-qcs/{block_hash}` — full commit QC record for a parent block hash.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_commit_qc_json(&self, hash_hex: &str) -> Result<norito::json::Value> {
-        let url = join_torii_url(
-            &self.torii_url,
-            &format!("v1/sumeragi/commit-qcs/{hash_hex}"),
-        );
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_NORITO),
-        )?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get sumeragi commit_qc: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        let content_type = resp
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        if content_type.starts_with(APPLICATION_NORITO) {
-            let qc_opt = decode_from_bytes::<Option<Qc>>(resp.body())
-                .map_err(|err| eyre!("Failed to decode commit_qc Norito payload: {err}"))?;
-            return Ok(commit_qc_json_payload(hash_hex, qc_opt));
         }
         norito::json::from_slice(resp.body()).map_err(Into::into)
     }
@@ -8224,13 +8127,13 @@ mod offline_client_tests {
     }
 }
 #[cfg(test)]
-fn lifecycle_status(enabled: bool) -> LaneLifecycleStatusV1 {
+fn lifecycle_status() -> LaneLifecycleStatusV1 {
     let catalog = LaneCatalog::default();
     let incarnations = std::collections::BTreeMap::from([(
         LaneId::SINGLE,
         Hash::new(b"client-lifecycle-status-incarnation"),
     )]);
-    LaneLifecycleStatusV1::new(enabled, &catalog, &incarnations).expect("valid lifecycle status")
+    LaneLifecycleStatusV1::new(&catalog, &incarnations).expect("valid lifecycle status")
 }
 #[cfg(test)]
 mod status_tests {
@@ -8401,7 +8304,7 @@ mod status_tests {
     }
     #[test]
     fn lane_lifecycle_status_decodes_json_and_norito() {
-        let status = lifecycle_status(true);
+        let status = lifecycle_status();
         let json = norito::json::to_vec(&status).expect("encode lifecycle status JSON");
         let response = mk_response(StatusCode::OK, json, Some(APPLICATION_JSON));
         assert_eq!(
@@ -8419,7 +8322,7 @@ mod status_tests {
     }
     #[test]
     fn lane_lifecycle_status_rejects_forged_commitment_and_malformed_payload() {
-        let mut status = lifecycle_status(true);
+        let mut status = lifecycle_status();
         status.catalog_hash = Hash::prehashed([0x71; Hash::LENGTH]);
         let body = norito::json::to_vec(&status).expect("encode forged lifecycle status");
         let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
@@ -8434,7 +8337,9 @@ mod status_tests {
             br#"{"version":1,"nexus_enabled":true}"#.to_vec(),
             Some(APPLICATION_JSON),
         );
-        assert!(Client::decode_lane_lifecycle_status_for_test(&response).is_err());
+        let error = Client::decode_lane_lifecycle_status_for_test(&response)
+            .expect_err("the removed lifecycle field must fail as unknown");
+        assert!(error.to_string().contains("nexus_enabled"));
     }
 }
 #[cfg(test)]
@@ -11733,6 +11638,9 @@ fn format_error_envelope(envelope: &ErrorEnvelope) -> String {
     if let Some(chain_discriminant) = details.chain_discriminant {
         let _ = write!(message, "; chain_discriminant={chain_discriminant}");
     }
+    if let Some(entrypoint_hash) = details.entrypoint_hash.as_deref() {
+        let _ = write!(message, "; entrypoint_hash={entrypoint_hash}");
+    }
     if let Some(tx_hash) = details.tx_hash.as_deref() {
         let _ = write!(message, "; tx_hash={tx_hash}");
     }
@@ -14181,19 +14089,14 @@ impl Client {
     /// caller review.
     ///
     /// # Errors
-    /// Returns an error when Nexus is disabled, status validation fails, the
-    /// signed transaction is rejected (including stale catalog or incarnation
+    /// Returns an error when status validation fails, the signed transaction
+    /// is rejected (including stale catalog or incarnation
     /// commitments), or finality cannot be observed.
     pub fn submit_lane_lifecycle_blocking(
         &self,
         plan: LaneLifecyclePlan,
     ) -> Result<HashOf<SignedTransaction>> {
         let status = self.get_lane_lifecycle_status()?;
-        if !status.nexus_enabled {
-            return Err(eyre!(
-                "Nexus lane lifecycle is disabled on the serving node"
-            ));
-        }
         let catalog = status
             .validate()
             .wrap_err("invalid Nexus lane lifecycle status")?;
@@ -20900,7 +20803,6 @@ mod tx_confirmation_stream_tests {
                 da_proof_policies_hash: None,
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
-                prev_roster_evidence_hash: None,
                 npos_effects_hash: None,
                 sccp_commitment_root: None,
                 execution_context_hash: None,
@@ -20919,7 +20821,6 @@ mod tx_confirmation_stream_tests {
                 da_proof_policies_hash: None,
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
-                prev_roster_evidence_hash: None,
                 npos_effects_hash: None,
                 sccp_commitment_root: None,
                 execution_context_hash: None,
@@ -21008,7 +20909,6 @@ mod tx_confirmation_stream_tests {
                     da_proof_policies_hash: None,
                     da_commitments_hash: None,
                     da_pin_intents_hash: None,
-                    prev_roster_evidence_hash: None,
                     npos_effects_hash: None,
                     sccp_commitment_root: None,
                     execution_context_hash: None,
@@ -21038,7 +20938,6 @@ mod tx_confirmation_stream_tests {
                 da_proof_policies_hash: None,
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
-                prev_roster_evidence_hash: None,
                 npos_effects_hash: None,
                 sccp_commitment_root: None,
                 execution_context_hash: None,
@@ -21088,7 +20987,6 @@ mod tx_confirmation_stream_tests {
                 da_proof_policies_hash: None,
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
-                prev_roster_evidence_hash: None,
                 npos_effects_hash: None,
                 sccp_commitment_root: None,
                 execution_context_hash: None,
@@ -21147,44 +21045,8 @@ mod tx_confirmation_stream_tests {
         .expect_err("queued timeout should error");
         assert!(err.to_string().contains("transaction queued for too long"));
     }
-    #[tokio::test]
-    async fn polling_rejects_even_with_busy_stream() {
-        let hash: HashOf<SignedTransaction> =
-            HashOf::from_untyped_unchecked(Hash::prehashed([12_u8; Hash::LENGTH]));
-        let queued_event = EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
-            hash,
-            block_height: None,
-            lane_id: LaneId::SINGLE,
-            dataspace_id: DataSpaceId::UNIVERSAL,
-            status: TransactionStatus::Queued,
-        }));
-        let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
-        let mut events = UnboundedReceiverStream::new(rx);
-        for _ in 0..128 {
-            let _ = tx.send(Ok(queued_event.clone()));
-        }
-        let mut checks = 0u8;
-        let rejection = TransactionRejectionReason::Validation(ValidationFail::InternalError(
-            "rejected".to_string(),
-        ));
-        let err = listen_for_tx_confirmation_stream_with_status_check(
-            &mut events,
-            hash,
-            Duration::from_secs(1),
-            Duration::from_millis(1),
-            None,
-            || {
-                checks = checks.saturating_add(1);
-                Ok(Some(super::TxConfirmationStatus::Rejected(Some(
-                    rejection.clone(),
-                ))))
-            },
-        )
-        .await
-        .expect_err("expected rejection from status polling");
-        assert!(err.to_string().contains("Transaction rejected"));
-        assert!(checks > 0);
-    }
+    // Direct fragment preserves the polling rejection test path and source order.
+    include!("client/polling_rejects_even_with_busy_stream_test.rs");
     #[tokio::test]
     async fn submit_failure_short_circuits_confirmation_wait() {
         let hash: HashOf<SignedTransaction> =
@@ -22684,14 +22546,13 @@ mod tests {
             valid_until_ms: u64::MAX,
         })
     }
-    fn lifecycle_status_fixture(enabled: bool) -> LaneLifecycleStatusV1 {
+    fn lifecycle_status_fixture() -> LaneLifecycleStatusV1 {
         let catalog = LaneCatalog::default();
         let incarnations = std::collections::BTreeMap::from([(
             LaneId::SINGLE,
             Hash::new(b"client-http-lifecycle-incarnation"),
         )]);
-        LaneLifecycleStatusV1::new(enabled, &catalog, &incarnations)
-            .expect("valid lifecycle status")
+        LaneLifecycleStatusV1::new(&catalog, &incarnations).expect("valid lifecycle status")
     }
     struct FailingClientRng;
     #[derive(Debug)]
@@ -24562,7 +24423,10 @@ mod tests {
         use crate::{
             crypto::{PrivateKey, PublicKey},
             data_model::{
-                block::{SignedBlock, stream::BlockMessage, stream::BlockSubscriptionRequest},
+                block::{
+                    SignedBlock, builder::BlockBuilder as DataModelBlockBuilder,
+                    stream::BlockMessage, stream::BlockSubscriptionRequest,
+                },
                 prelude::{AccountId, TransactionBuilder},
             },
         };
@@ -24588,14 +24452,47 @@ mod tests {
             "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
                 .parse()
                 .expect("private key");
-        let authority = AccountId::new(public_key);
+        let authority = AccountId::new(public_key.clone());
         let tx = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .try_sign(&private_key)
         .expect("block stream fixture transaction should sign");
-        let block = SignedBlock::genesis(vec![tx], &private_key, None, None);
+        let proposal = SignedBlock::genesis(vec![tx.clone()], &private_key, None, None);
+        assert!(proposal.is_resultless_proposal());
+        let mut builder = DataModelBlockBuilder::new(proposal.header());
+        builder.set_da_proof_policies(proposal.da_proof_policies().cloned());
+        builder.push_transaction(tx);
+        builder.push_result(Ok(
+            iroha_data_model::transaction::DataTriggerSequence::default(),
+        ));
+        let block = builder
+            .try_build_with_signature(0, &private_key)
+            .expect("sign canonical result-bearing block-stream fixture");
+        block
+            .validate_entrypoint_merkle_cache()
+            .expect("block-stream entrypoint Merkle cache must be canonical");
+        block
+            .validate_result_merkle_cache()
+            .expect("block-stream result Merkle cache must be canonical");
+        assert_eq!(block.committed_fragment_count(), Some(1));
+        assert_eq!(
+            block.header().result_merkle_root(),
+            block
+                .result_merkle_commitment()
+                .map(|commitment| *commitment.root())
+        );
+        let mut final_signatures = block.signatures();
+        let final_signature = final_signatures
+            .next()
+            .expect("result-bearing block-stream signature");
+        assert_eq!(final_signature.index(), 0);
+        assert!(final_signatures.next().is_none());
+        final_signature
+            .signature()
+            .verify_hash(&public_key, block.hash())
+            .expect("verify result-bearing block-stream signature");
         let bytes = norito::to_bytes(&BlockMessage(block.clone())).expect("encode block message");
         let decoded_block = blocks_api::flow::Events
             .message(bytes)
@@ -25983,7 +25880,7 @@ mod tests {
     fn get_lane_lifecycle_status_requests_typed_negotiated_snapshot() {
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
-        let expected = lifecycle_status_fixture(true);
+        let expected = lifecycle_status_fixture();
         let body = norito::json::to_string(&expected).expect("lifecycle status JSON");
         let response = json_response(StatusCode::OK, &body);
         let snapshot_store = Arc::clone(&snapshots);
@@ -26003,21 +25900,6 @@ mod tests {
             name.eq_ignore_ascii_case("accept")
                 && value == client.wire_format_preference.accept_header()
         }));
-    }
-    #[test]
-    fn submit_lane_lifecycle_rejects_disabled_status_without_posting_transaction() {
-        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let client = client_with_base_url(base_url());
-        let status = lifecycle_status_fixture(false);
-        let body = norito::json::to_string(&status).expect("lifecycle status JSON");
-        let response = json_response(StatusCode::OK, &body);
-        let snapshot_store = Arc::clone(&snapshots);
-        let error = with_mock_http(respond_with(&snapshot_store, response), || {
-            client.submit_lane_lifecycle_blocking(LaneLifecyclePlan::default())
-        })
-        .expect_err("disabled Nexus must fail before transaction submission");
-        assert!(error.to_string().contains("disabled"));
-        assert_eq!(snapshots.lock().expect("snapshot lock").len(), 1);
     }
     #[test]
     fn get_public_lane_stake_filters_validator() {
@@ -27007,6 +26889,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the operator-authentication audit checks every signed header and network binding in one fixture"
+    )]
     fn sumeragi_operator_endpoints_include_signature_headers_when_key_configured() {
         type SumeragiEndpointCase = (&'static str, fn(&Client) -> Result<norito::json::Value>);
         let cases: [SumeragiEndpointCase; 1] = [(
@@ -28452,6 +28338,10 @@ mod tests {
         }
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the hedging and billing audit keeps all endpoint-specific signed-request bindings together"
+    )]
     fn sorafs_hedging_billing_methods_send_exact_signed_requests() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -28622,6 +28512,8 @@ mod tests {
     );
     #[test]
     fn sorafs_list_readbacks_target_exact_endpoints() {
+        const CYCLE_PATH: &str = "/v1/sorafs/transparency/cycles/abababababababababababababababab";
+        const ENTRY_PATH: &str = "/v1/sorafs/transparency/cycles/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/entries/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
@@ -28670,8 +28562,6 @@ mod tests {
                 response.expect("SoraFS list readback request");
             }
         });
-        const CYCLE_PATH: &str = "/v1/sorafs/transparency/cycles/abababababababababababababababab";
-        const ENTRY_PATH: &str = "/v1/sorafs/transparency/cycles/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/entries/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let expected = [
             ("/v1/sorafs/moderation/quarantine", Some("limit=7")),
             ("/v1/sorafs/moderation/model-registry", Some("limit=11")),
@@ -28758,7 +28648,7 @@ mod tests {
         snapshot
     }
 
-    fn assert_error_contains<T>(result: Result<T>, expected: &str) {
+    fn assert_error_contains<T, E: fmt::Display>(result: Result<T, E>, expected: &str) {
         let Err(error) = result else {
             panic!("request unexpectedly succeeded")
         };
@@ -31929,6 +31819,8 @@ mod response_report {
                     saturated: true,
                 }),
                 retry_after_seconds: Some(1),
+                entrypoint_hash: Some("11".repeat(32)),
+                tx_hash: Some("22".repeat(32)),
                 ..Default::default()
             });
         let body = to_bytes(&envelope).expect("encode queue error envelope");
@@ -31946,6 +31838,8 @@ mod response_report {
         assert!(text.contains("queue_full"));
         assert!(text.contains("queued=24/24"));
         assert!(text.contains("retry_after_seconds=1"));
+        assert!(text.contains(&format!("entrypoint_hash={}", "11".repeat(32))));
+        assert!(text.contains(&format!("tx_hash={}", "22".repeat(32))));
         assert!(text.contains("transaction queue is at capacity"));
     }
     #[test]

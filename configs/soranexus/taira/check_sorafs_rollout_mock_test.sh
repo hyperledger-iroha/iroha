@@ -761,6 +761,8 @@ run_expected_numeric_failure_case() {
     "$@" \
     "${root}/configs/soranexus/taira/check_sorafs_rollout.sh" \
       --public-root https://taira.sora.org \
+      --operator-network-id hash:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa#0000 \
+      --operator-private-key-file "${root}/state/operator-private-key" \
       --iroha-bin "${root}/mockbin/iroha" \
       --sorafs-manifest-builder-bin "${root}/mockbin/sorafs_manifest_builder" \
       --sorafs-tx-stdin-builder-bin "${root}/mockbin/sorafs_tx_stdin_builder" \

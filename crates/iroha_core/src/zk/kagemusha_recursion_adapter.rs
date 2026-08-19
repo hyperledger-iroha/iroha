@@ -1039,145 +1039,7 @@ fn kagemusha_process_physical_footprint_bytes_v4() -> Result<u64, String> {
         "VmRSS",
     )
 }
-#[cfg(any(target_os = "macos", test))]
-const KAGEMUSHA_MACOS_SYSCTL_V4: &str = "/usr/sbin/sysctl";
-#[cfg(any(target_os = "macos", test))]
-const KAGEMUSHA_MACOS_FOOTPRINT_V4: &str = "/usr/bin/footprint";
-#[cfg(target_os = "macos")]
-const KAGEMUSHA_MACOS_RESOURCE_PROBE_MAX_OUTPUT_V4: usize = 4 * 1024;
-#[cfg(target_os = "macos")]
-const KAGEMUSHA_MACOS_RESOURCE_PROBE_TIMEOUT_V4: std::time::Duration =
-    std::time::Duration::from_secs(2);
-// Use reauthenticated absolute macOS probes with cleared env, bounded I/O/time, and strict parsing.
-#[cfg(target_os = "macos")]
-fn run_kagemusha_macos_resource_probe_v4(
-    program: &str,
-    arguments: &[&str],
-    label: &str,
-) -> Result<Vec<u8>, String> {
-    use std::{
-        io::Read as _,
-        os::unix::fs::MetadataExt as _,
-        process::{Command, Stdio},
-    };
-    let path = std::path::Path::new(program);
-    if !path.is_absolute() {
-        return Err(format!("macOS {label} probe path is not absolute"));
-    }
-    let metadata = std::fs::symlink_metadata(path)
-        .map_err(|error| format!("failed to inspect macOS {label} probe: {error}"))?;
-    if !metadata.file_type().is_file()
-        || metadata.file_type().is_symlink()
-        || metadata.uid() != 0
-        || metadata.mode() & 0o022 != 0
-    {
-        return Err(format!(
-            "macOS {label} probe is not a root-owned, non-writable regular file"
-        ));
-    }
-    let mut child = Command::new(path)
-        .args(arguments)
-        .env_clear()
-        .env("LC_ALL", "C")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("failed to start macOS {label} probe: {error}"))?;
-    let started = std::time::Instant::now();
-    let status = loop {
-        match child
-            .try_wait()
-            .map_err(|error| format!("failed to poll macOS {label} probe: {error}"))?
-        {
-            Some(status) => break status,
-            None if started.elapsed() >= KAGEMUSHA_MACOS_RESOURCE_PROBE_TIMEOUT_V4 => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("macOS {label} probe timed out"));
-            }
-            None => std::thread::sleep(std::time::Duration::from_millis(5)),
-        }
-    };
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| format!("macOS {label} probe stdout was not captured"))?;
-    let output_limit = u64::try_from(KAGEMUSHA_MACOS_RESOURCE_PROBE_MAX_OUTPUT_V4)
-        .map_err(|_| "macOS resource-probe output bound does not fit u64".to_owned())?;
-    let mut output = Vec::new();
-    stdout
-        .by_ref()
-        .take(output_limit.saturating_add(1))
-        .read_to_end(&mut output)
-        .map_err(|error| format!("failed to read macOS {label} probe: {error}"))?;
-    if !status.success() {
-        return Err(format!("macOS {label} probe failed"));
-    }
-    if output.len() > KAGEMUSHA_MACOS_RESOURCE_PROBE_MAX_OUTPUT_V4 {
-        return Err(format!("macOS {label} probe output exceeded its bound"));
-    }
-    Ok(output)
-}
-#[cfg(any(target_os = "macos", test))]
-fn parse_kagemusha_macos_physical_memory_bytes_v4(output: &[u8]) -> Result<u64, String> {
-    let text = std::str::from_utf8(output)
-        .map_err(|_| "macOS physical-memory probe returned non-UTF-8 output".to_owned())?;
-    let value = text
-        .trim()
-        .parse::<u64>()
-        .map_err(|_| "macOS physical-memory probe returned a malformed byte count".to_owned())?;
-    if value == 0 {
-        return Err("macOS physical-memory probe returned zero".to_owned());
-    }
-    Ok(value)
-}
-#[cfg(any(target_os = "macos", test))]
-fn parse_kagemusha_macos_physical_footprint_bytes_v4(output: &[u8]) -> Result<u64, String> {
-    let text = std::str::from_utf8(output)
-        .map_err(|_| "macOS physical-footprint probe returned non-UTF-8 output".to_owned())?;
-    let mut footprint = None;
-    for line in text.lines().map(str::trim) {
-        let Some(value) = line.strip_prefix("phys_footprint:") else {
-            continue;
-        };
-        if footprint.is_some() {
-            return Err("macOS physical-footprint probe returned duplicate samples".to_owned());
-        }
-        let mut fields = value.split_whitespace();
-        let bytes = fields
-            .next()
-            .ok_or_else(|| "macOS physical-footprint probe omitted its byte count".to_owned())?
-            .parse::<u64>()
-            .map_err(|_| {
-                "macOS physical-footprint probe returned a malformed byte count".to_owned()
-            })?;
-        if fields.next() != Some("B") || fields.next().is_some() || bytes == 0 {
-            return Err("macOS physical-footprint probe returned a malformed sample".to_owned());
-        }
-        footprint = Some(bytes);
-    }
-    footprint.ok_or_else(|| "macOS physical-footprint probe returned no sample".to_owned())
-}
-#[cfg(target_os = "macos")]
-fn kagemusha_physical_memory_bytes_v4() -> Result<u64, String> {
-    let output = run_kagemusha_macos_resource_probe_v4(
-        KAGEMUSHA_MACOS_SYSCTL_V4,
-        &["-n", "hw.memsize"],
-        "physical-memory",
-    )?;
-    parse_kagemusha_macos_physical_memory_bytes_v4(&output)
-}
-#[cfg(target_os = "macos")]
-fn kagemusha_process_physical_footprint_bytes_v4() -> Result<u64, String> {
-    let process_id = std::process::id().to_string();
-    let output = run_kagemusha_macos_resource_probe_v4(
-        KAGEMUSHA_MACOS_FOOTPRINT_V4,
-        &["-p", &process_id, "-f", "bytes", "--noCategories"],
-        "physical-footprint",
-    )?;
-    parse_kagemusha_macos_physical_footprint_bytes_v4(&output)
-}
+include!("kagemusha_recursion_adapter/macos_resource_probe.rs");
 #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
 fn kagemusha_physical_memory_bytes_v4() -> Result<u64, String> {
     Err("Kagemusha V4 physical-memory introspection is unsupported on this platform".to_owned())
@@ -8957,7 +8819,6 @@ mod scalar_lineage_v1 {
             }
         }
     }
-    /// Complete selected lineage for one parent slot.
     pub(super) struct ParentScalarLineageV4<'chip, C>
     where
         C: CurveAffineExt,
@@ -8965,9 +8826,17 @@ mod scalar_lineage_v1 {
         C::ScalarExt: BigPrimeField,
     {
         pub(super) accumulator: DeferredAccumulator<'chip, C>,
+        #[cfg(feature = "kagemusha-generation-memory-lab")]
+        pub(super) parent_count: AssignedValue<C::ScalarExt>,
+        /// Exact cells loaded into the verified parent proof's sole instance column.
+        #[cfg(feature = "kagemusha-generation-memory-lab")]
+        pub(super) verified_instance_cells: Vec<AssignedValue<C::ScalarExt>>,
+        /// Exact parsed phase-zero witness commitment selected by the V7 profile.
+        #[cfg(feature = "kagemusha-generation-memory-lab")]
+        pub(super) serialized_advice_commitment:
+            Option<super::super::kagemusha_cycle_loader::DeferredScalarPoint<C>>,
         pub(super) stages: Vec<AssignedDeferredEquationStageV4<C::ScalarExt>>,
     }
-    /// Unconditionally-computed two-parent branch candidate and its fixed deferred-equation stages.
     pub(super) struct ExposedParentLineageV4<C>
     where
         C: CurveAffineExt,
@@ -8976,8 +8845,6 @@ mod scalar_lineage_v1 {
     {
         pub(super) stages: Vec<AssignedDeferredEquationStageV4<C::ScalarExt>>,
     }
-    /// Require full post-branch V4 stage order: both slots bind the same audit and presence gates only
-    /// exposure, ensuring a one-parent slot-zero join covers its later `BranchSelect` equation.
     pub(super) fn validate_stage_shapes_v4(
         stages: &[DeferredEquationStageShapeV4],
         equation_count: usize,
@@ -9398,91 +9265,9 @@ mod scalar_lineage_v1 {
         });
         Ok(())
     }
-    fn verify_ordinary_parent<'chip, C>(
-        loader: &DeferredLoader<'chip, C>,
-        succinct_vk: &IpaSuccinctVerifyingKey<C>,
-        protocol: &PlonkProtocol<C, DeferredLoader<'chip, C>>,
-        instances: &[Vec<DeferredLoadedScalar<'chip, C>>],
-        proof_bytes: &[u8],
-        max_proof_bytes: usize,
-    ) -> Result<DeferredAccumulator<'chip, C>, Error>
-    where
-        C: CurveAffineExt,
-        C::Base: BigPrimeField,
-        C::ScalarExt: BigPrimeField,
-    {
-        if max_proof_bytes == 0 || proof_bytes.is_empty() || proof_bytes.len() > max_proof_bytes {
-            return Err(transcript_error(
-                "Kagemusha parent proof violates the fixed proof slot",
-            ));
-        }
-        let (reader, position) = ExactReader::new(proof_bytes);
-        let mut transcript =
-            DeferredTranscript::new::<KAGEMUSHA_POSEIDON_SECURE_MDS>(loader, reader);
-        let parsed = PlonkSuccinctVerifier::<IpaAs<C, Bgh19>>::read_proof(
-            succinct_vk,
-            protocol,
-            instances,
-            &mut transcript,
-        )?;
-        let mut accumulators = PlonkSuccinctVerifier::<IpaAs<C, Bgh19>>::verify(
-            succinct_vk,
-            protocol,
-            instances,
-            &parsed,
-        )?;
-        if position.get() != proof_bytes.len() {
-            return Err(transcript_error(
-                "Kagemusha parent proof has trailing bytes",
-            ));
-        }
-        if accumulators.len() != 1 {
-            return Err(Error::AssertionFailure(
-                "Kagemusha fixed parent verifier did not emit one IPA accumulator".to_owned(),
-            ));
-        }
-        Ok(accumulators.remove(0))
-    }
-    fn verify_fold<'chip, C>(
-        loader: &DeferredLoader<'chip, C>,
-        succinct_vk: &IpaSuccinctVerifyingKey<C>,
-        inputs: &[DeferredAccumulator<'chip, C>],
-        proof_bytes: &[u8],
-        expected_proof_bytes: usize,
-    ) -> Result<DeferredAccumulator<'chip, C>, Error>
-    where
-        C: CurveAffineExt,
-        C::Base: BigPrimeField,
-        C::ScalarExt: BigPrimeField,
-    {
-        if inputs.len() < 2
-            || expected_proof_bytes == 0
-            || proof_bytes.len() != expected_proof_bytes
-        {
-            return Err(transcript_error(
-                "Kagemusha BGH19 fold has the wrong input or byte count",
-            ));
-        }
-        let (reader, position) = ExactReader::new(proof_bytes);
-        let mut transcript =
-            DeferredTranscript::new::<KAGEMUSHA_POSEIDON_SECURE_MDS>(loader, reader);
-        let parsed =
-            <IpaAs<C, Bgh19> as AccumulationScheme<C, DeferredLoader<'chip, C>>>::read_proof(
-                succinct_vk,
-                inputs,
-                &mut transcript,
-            )?;
-        let accumulated =
-            <IpaAs<C, Bgh19> as AccumulationScheme<C, DeferredLoader<'chip, C>>>::verify(
-                succinct_vk,
-                inputs,
-                &parsed,
-            )?;
-        if position.get() != proof_bytes.len() {
-            return Err(transcript_error("Kagemusha BGH19 fold has trailing bytes"));
-        }
-        Ok(accumulated)
-    }
+    include!("kagemusha_recursion_adapter/scalar_lineage_parent_verifier_v4.rs");
+    #[cfg(feature = "kagemusha-generation-memory-lab")]
+    include!("kagemusha_recursion_adapter/scalar_lineage_parent_verifier_v7.rs");
     /// Verify all degree-derived stages for one V4 parent slot; selector-zero bootstrap material remains fully parseable.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn constrain_parent_scalar_lineage_v4<'chip, C>(
@@ -9490,6 +9275,9 @@ mod scalar_lineage_v1 {
         succinct_vk: &IpaSuccinctVerifyingKey<C>,
         protocol: &LoadedParentProtocolV1<'chip, C>,
         parent_slot: usize,
+        #[cfg(feature = "kagemusha-generation-memory-lab")] serialized_phase_zero_rank: Option<
+            usize,
+        >,
         slot_enabled: AssignedValue<C::ScalarExt>,
         authenticated_round_count: u32,
         max_parent_proof_bytes: usize,
@@ -9533,12 +9321,25 @@ mod scalar_lineage_v1 {
             .first()
             .and_then(|column| column.last())
             .ok_or(Error::InvalidInstances)?;
+        #[cfg(feature = "kagemusha-generation-memory-lab")]
+        if serialized_phase_zero_rank.is_none() {
+            // V4 encodes slot presence in the verified parent's live bit.  V7
+            // instead derives child-slot presence from the current child's
+            // authenticated parent count: a bootstrap proof (live = 0) can be
+            // a present parent, while an absent V7 slot uses a canonical null
+            // tuple and gates the parsed dummy proof independently.
+            loader
+                .ctx_mut()
+                .main()
+                .constrain_equal(&parent_live_selector.assigned(), &slot_enabled);
+        }
+        #[cfg(not(feature = "kagemusha-generation-memory-lab"))]
         loader
             .ctx_mut()
             .main()
             .constrain_equal(&parent_live_selector.assigned(), &slot_enabled);
-        let (_parent_count, has_carried_lineage) =
-            derive_parent_count_and_presence(loader, &loaded_instances)?;
+        let parent_presence = derive_parent_count_and_presence(loader, &loaded_instances)?;
+        let has_carried_lineage = parent_presence.1;
         let carried_column = loaded_instances
             .get(witness.carried_lineage_instance_column)
             .ok_or(Error::InvalidInstances)?;
@@ -9598,6 +9399,17 @@ mod scalar_lineage_v1 {
         }
         let mut stages = Vec::with_capacity(3);
         let current_start = loader.ecc_chip().equation_count();
+        #[cfg(feature = "kagemusha-generation-memory-lab")]
+        let (current, serialized_advice_commitment) = verify_ordinary_parent(
+            loader,
+            succinct_vk,
+            &protocol.protocol,
+            &loaded_instances,
+            witness.proof_bytes,
+            max_parent_proof_bytes,
+            serialized_phase_zero_rank,
+        )?;
+        #[cfg(not(feature = "kagemusha-generation-memory-lab"))]
         let current = verify_ordinary_parent(
             loader,
             succinct_vk,
@@ -9653,6 +9465,15 @@ mod scalar_lineage_v1 {
         )?;
         Ok(ParentScalarLineageV4 {
             accumulator,
+            #[cfg(feature = "kagemusha-generation-memory-lab")]
+            parent_count: parent_presence.0,
+            #[cfg(feature = "kagemusha-generation-memory-lab")]
+            verified_instance_cells: loaded_instances[0]
+                .iter()
+                .map(|scalar| *scalar.assigned())
+                .collect(),
+            #[cfg(feature = "kagemusha-generation-memory-lab")]
+            serialized_advice_commitment,
             stages,
         })
     }
@@ -9864,6 +9685,7 @@ pub(crate) struct KagemushaStepWitnessV4<'a> {
     /// Authenticated canonical Ep bootstrap payload; absence is an error.
     pub(crate) step_ep_bootstrap: Option<&'a KagemushaStepBootstrapV4>,
 }
+#[derive(Clone)]
 struct KagemushaScalarAuditOutputV4<C>
 where
     C: halo2_base::utils::CurveAffineExt,
@@ -10261,6 +10083,8 @@ where
             &recursion.succinct_vk,
             &loaded_protocol,
             slot,
+            #[cfg(feature = "kagemusha-generation-memory-lab")]
+            None,
             slot_present[slot],
             params.k,
             max_parent_proof_bytes,
@@ -12141,6 +11965,10 @@ where
     Ok((proof, verifying_key))
 }
 include!("kagemusha_recursion_adapter/generated_artifacts.rs");
+#[cfg(feature = "kagemusha-generation-memory-lab")]
+include!("kagemusha_recursion_adapter/serialized_audit_vector_v7.rs");
+#[cfg(feature = "kagemusha-generation-memory-lab")]
+include!("kagemusha_recursion_adapter/serialized_audit_bridge_v7.rs");
 include!("kagemusha_recursion_adapter/k17_probe.rs");
 fn kagemusha_eq_recursion_from_bootstrap_v4(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<

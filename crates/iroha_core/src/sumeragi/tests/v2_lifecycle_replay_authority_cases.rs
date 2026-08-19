@@ -1,6 +1,3 @@
-use crate::sumeragi::v2_lifecycle_coordinator::{
-    reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
-};
 #[test]
 fn every_stage_has_one_canonical_round_trip_and_exact_record_mapping() {
     let fixture = Fixture::new();
@@ -1081,8 +1078,9 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
     .pop()
     .expect("one local Store owner");
     let store_pending = store_ownership
-        .pending_adapter_effect_binding(&store_effect)
-        .expect("local Store owner projects one pending seal");
+        .current_effect_producer(&store_effect)
+        .expect("local Store owner retains one producer")
+        .mint_pending_binding();
     let validate_effect = AdapterEffect::ValidateBody {
         tag,
         round: manifest.round,
@@ -1162,11 +1160,13 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
         .rebind_as_inherited_adapter_effect(&validate_effect)
         .expect("local Store root rebinds to its exact Validate effect");
     let second_store_pending = store_ownership
-        .pending_adapter_effect_binding(&store_effect)
-        .expect("local Store root retains its exact pending projection");
+        .current_effect_producer(&store_effect)
+        .expect("local Store root retains its exact producer")
+        .mint_pending_binding();
     let second_validate_pending = validate_ownership
-        .pending_adapter_effect_binding(&validate_effect)
-        .expect("local Validate root retains its exact pending projection");
+        .current_effect_producer(&validate_effect)
+        .expect("local Validate root retains its exact producer")
+        .mint_pending_binding();
     let exact_validate =
         LocalBodyPreIntentReplaySealV1::for_test(&store_effect, second_store_pending, &manifest)
             .expect("remint an independent test-only local seal")
@@ -1226,12 +1226,16 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
     ));
     drop(intent);
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(local_body_replay_authority_is_linear_nondecode_and_closed_to_fixed_joins);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    local_body_replay_authority_is_linear_nondecode_and_closed_to_fixed_joins
+);
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     #[allow(clippy::too_many_lines)]
     certified_serve_replay_pair_is_opaque_exact_and_fixed_admission_only
 );
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(certified_pipeline_replay_evidence_is_normalized_inert_and_stage_fixed);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    certified_pipeline_replay_evidence_is_normalized_inert_and_stage_fixed
+);
 #[test]
 fn direct_signed_broadcast_evidence_covers_all_seven_fixed_stages() {
     let fixture = Fixture::new();
@@ -1361,13 +1365,502 @@ fn direct_signed_equivocation_evidence_rejects_pair_order_signature_and_pending_
     let foreign_pending = pending_binding(&forward, foreign_tag, 34);
     assert!(!evidence.exactly_matches_effect(&forward, &foreign_pending));
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(direct_signed_replay_wrappers_are_opaque_nondecodable_and_fixed_class);
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint);
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(invalid_body_runtime_evidence_is_nondecodable_exact_and_fixed_join_only);
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
-    #[allow(clippy::too_many_lines)]
-    live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_mints
-);
+#[test]
+fn direct_signed_replay_wrappers_are_opaque_nondecodable_and_fixed_class() {
+    let source = replay_authority_source_for_test();
+    let production = source
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("replay authority has one production prefix");
+    let direct = production
+        .split("pub(super) struct SignedBroadcastReplayEvidenceV1")
+        .nth(1)
+        .expect("signed Broadcast wrapper has one declaration")
+        .split("/// Selector-authenticated origin awaiting one exact durable body-frame binding.")
+        .next()
+        .expect("certified body replay follows direct signed evidence");
+    for required in [
+        "pub(super) struct SignedEquivocationReplayEvidenceV1",
+        "pending: DirectSignedPendingBindingV1",
+        "causal_lifecycle_key: [u8; 32]",
+        "effect_identity: [u8; 32]",
+        "pub(super) fn from_exact_effect(\n        effect: &AdapterEffect,\n        pending: &PendingRuntimeEffectBinding",
+        "pub(super) fn exactly_matches_effect(",
+        "pending.exactly_binds_adapter_effect(effect)",
+        "exact_signed_broadcast_authority(effect)",
+        "exact_signed_equivocation_authority(effect)",
+        "LifecycleReplaySourceV1::ConsensusBroadcast(message.clone())",
+        "LifecycleReplaySourceV1::Equivocation(evidence)",
+        "canonical_replay_authority(",
+    ] {
+        assert!(
+            direct.contains(required),
+            "direct signed replay wrapper omitted {required}"
+        );
+    }
+    for runtime_seal in [
+        "SignedBroadcastReplayEvidenceV1",
+        "SignedEquivocationReplayEvidenceV1",
+        "DirectSignedPendingBindingV1",
+    ] {
+        let derive = production
+            .split(runtime_seal)
+            .next()
+            .expect("direct signed seal has a declaration prefix")
+            .rsplit("#[derive(")
+            .next()
+            .expect("direct signed seal derive is inspectable")
+            .split(")]")
+            .next()
+            .expect("direct signed seal derive is bounded");
+        assert!(
+            !derive.contains("Decode") && !derive.contains("Encode"),
+            "runtime seal {runtime_seal} became codec-constructible"
+        );
+    }
+    for forbidden in [
+        "pub(crate) struct SignedBroadcastReplayEvidenceV1",
+        "pub(crate) struct SignedEquivocationReplayEvidenceV1",
+        "pub(super) fn source(",
+        "pub(super) fn message(",
+        "pub(super) fn evidence(",
+        "pub(super) fn encoded(",
+        "pub(super) fn into_parts(",
+        "pub(super) fn pending(",
+        "pub(super) fn effect_identity(",
+        "!= [0; 32]",
+        "== [0; 32]",
+        "is_zero()",
+    ] {
+        assert!(
+            !direct.contains(forbidden),
+            "direct signed replay wrapper exposed or reserved {forbidden}"
+        );
+    }
+    for caller in [
+        include_str!("../v2_lifecycle_coordinator.rs"),
+        reviewed_lifecycle_ledger_source_for_test(),
+        include_str!("../v2_effects.rs"),
+        include_str!("../v2_worker.rs"),
+        include_str!("../v2_runner.rs"),
+    ] {
+        assert!(!caller.contains("SignedBroadcastReplayEvidenceV1"));
+        assert!(!caller.contains("SignedEquivocationReplayEvidenceV1"));
+    }
+}
+#[test]
+fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() {
+    let source = replay_authority_source_for_test();
+    let production = source
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("replay authority has one production prefix");
+    let remote = production
+        .split("pub(in crate::sumeragi) struct RemoteProposalFetchReplayEvidenceV1")
+        .nth(1)
+        .expect("remote Proposal Fetch wrapper has one declaration")
+        .split("/// Move-only pre-intent replay seal for one exact local")
+        .next()
+        .expect("local body replay follows remote Proposal replay");
+    for required in [
+        "RemoteProposalStoreReplayEvidenceV1",
+        "RemoteProposalStoredReplayEvidenceV1",
+        "RemoteProposalValidateReplayEvidenceV1",
+        "from_exact_authenticated_proposal(",
+        "RemoteProposalReplayMintPermit",
+        "ingress.exactly_matches_authenticated(authenticated)",
+        "certificate: None",
+        "certified_sources.is_empty()",
+        "pending.exactly_binds_adapter_effect(effect)",
+        "project_proposal_fetch_store_successor",
+        "project_store_validate_successor",
+        "bind_durable_body(",
+        "durable_body_frame_reference",
+        "ReplayPayloadBindingV1::BodyFrame",
+        "LifecycleStageKind::FetchBody",
+        "LifecycleStageKind::StoreBody",
+        "LifecycleStageKind::ValidateBody",
+        "canonical_replay_authority(",
+    ] {
+        assert!(
+            remote.contains(required),
+            "remote Proposal replay wrapper omitted {required}"
+        );
+    }
+    for wrapper in [
+        "RemoteProposalFetchReplayEvidenceV1",
+        "RemoteProposalStoreReplayEvidenceV1",
+        "RemoteProposalStoredReplayEvidenceV1",
+        "RemoteProposalValidateReplayEvidenceV1",
+    ] {
+        let derive = production
+            .split(wrapper)
+            .next()
+            .expect("remote Proposal wrapper has a declaration prefix")
+            .rsplit("#[derive(")
+            .next()
+            .expect("remote Proposal wrapper derive is inspectable")
+            .split(")]")
+            .next()
+            .expect("remote Proposal wrapper derive is bounded");
+        assert!(
+            !derive.contains("Decode") && !derive.contains("Encode"),
+            "runtime replay wrapper {wrapper} became codec-constructible"
+        );
+    }
+    for forbidden in [
+        "pub(crate) struct RemoteProposal",
+        "pub(in crate::sumeragi) fn authenticated(",
+        "pub(in crate::sumeragi) fn ingress(",
+        "pub(in crate::sumeragi) fn source(",
+        "pub(in crate::sumeragi) fn proposal(",
+        "pub(in crate::sumeragi) fn pending(",
+        "pub(in crate::sumeragi) fn receipt(",
+        "pub(in crate::sumeragi) fn into_parts(",
+        "!= [0; 32]",
+        "== [0; 32]",
+        "is_zero()",
+    ] {
+        assert!(
+            !remote.contains(forbidden),
+            "remote Proposal replay wrapper exposed or reserved {forbidden}"
+        );
+    }
+    let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test()
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("runtime has one production prefix");
+    assert_eq!(
+        runtime
+            .matches("RemoteProposalFetchReplayEvidenceV1::from_exact_authenticated_proposal(")
+            .count(),
+        1,
+        "only authenticated runtime dispatch mints remote Proposal evidence"
+    );
+    for required in [
+        "remote_proposal_replay: Option<AuthenticatedRemoteProposalDispatchOrigin>",
+        "deferred_remote_proposal_replay",
+        "DeferredEventKind::ProposalReceived",
+        "bind_remote_proposal_fetch_replay(",
+        "certificate: None",
+        "exact_remote_proposal_fetch_replay(",
+    ] {
+        assert!(
+            runtime.contains(required),
+            "runtime remote Proposal transport omitted {required}"
+        );
+    }
+    for outside in [
+        reviewed_lifecycle_ledger_source_for_test(),
+        include_str!("../v2_worker.rs"),
+        include_str!("../v2_runner.rs"),
+    ] {
+        let outside = outside
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("outside production prefix is bounded");
+        assert!(!outside.contains("RemoteProposalFetchReplayEvidenceV1"));
+        assert!(!outside.contains("PreparedRemoteProposalFetchReplayPreAdmission"));
+    }
+}
+#[test]
+fn invalid_body_runtime_evidence_is_nondecodable_exact_and_fixed_join_only() {
+    let source = replay_authority_source_for_test();
+    let production = source
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("replay authority has one production prefix");
+    let invalid = production
+        .split("pub(in crate::sumeragi) enum DurableValidateReplayEvidenceV1")
+        .nth(1)
+        .expect("durable Validate replay enum has one declaration")
+        .split("fn exact_certified_fetch_coordinates(")
+        .next()
+        .expect("certified Fetch projection follows invalid-body evidence");
+    for required in [
+        "Certified(CertifiedValidateReplayEvidenceV1)",
+        "RemoteProposal(RemoteProposalValidateReplayEvidenceV1)",
+        "pub(in crate::sumeragi) struct InvalidBodyReportReplayEvidenceV1",
+        "authority: LifecycleReplayAuthorityV1",
+        "validate_origin: DurableValidateReplayEvidenceV1",
+        "report_pending: DirectSignedPendingBindingV1",
+        "pub(in crate::sumeragi) fn seal_invalid_body_report(",
+        "capability: RegisteredPrepareInvalidBodyReportCapability",
+        "capability.exactly_matches_report(report_effect)",
+        "validate_origin.exactly_matches_validate_pending(",
+        "validate_pending: &PendingRuntimeEffectBinding",
+        ".project_validate_report_invalid_certified_body_successor(",
+        ".project_validate_report_invalid_certified_body_with_registered_prepare(",
+        "DirectSignedPendingBindingV1::from_exact_effect(report_effect, report_pending)",
+        "const CANONICAL_REJECTION_CODE: u8 = 0",
+        "LifecycleReplaySourceV1::InvalidCertifiedBody",
+        "body_frame_hash: *receipt.frame_hash().as_ref()",
+        "LifecycleStageKind::ReportInvalidBody",
+        "ReplayPayloadBindingV1::None",
+        "project_sealed_invalid_body_report_candidate(",
+        "_permit: &SealedInvalidBodyReportProjectionPermit",
+        "authority_free_admission_projection(",
+        "self.authority.clone()",
+    ] {
+        assert!(
+            invalid.contains(required),
+            "invalid-body runtime evidence omitted {required}"
+        );
+    }
+    let persisted_invalid = production
+        .split("struct InvalidBodyReplaySourceV1 {")
+        .nth(1)
+        .expect("persisted invalid-body source has one declaration")
+        .split("struct CertifiedServeStorageSourceV1 {")
+        .next()
+        .expect("Certified Serve source follows invalid-body source");
+    for required in [
+        "validation_origin: BodyPipelineReplaySourceV1",
+        "self.validation_origin.project(",
+        "LifecycleStageKind::ValidateBody",
+        "self.certificate.round != self.certificate.proposal_round",
+        "BodyPipelineOriginV1::Proposal(proposal)",
+        "certificate == &self.certificate && manifest == &self.outcome.manifest",
+        "BodyPipelineOriginV1::LocalBody(_)",
+        "origin_shape.key.context() != context.id()",
+    ] {
+        assert!(
+            persisted_invalid.contains(required),
+            "persisted invalid-body source omitted {required}"
+        );
+    }
+    for runtime_seal in [
+        "DurableValidateReplayEvidenceV1",
+        "InvalidBodyReportReplayEvidenceV1",
+    ] {
+        let derive = production
+            .split(runtime_seal)
+            .next()
+            .expect("runtime seal has a declaration prefix")
+            .rsplit("#[derive(")
+            .next()
+            .expect("runtime seal derive is inspectable")
+            .split(")]")
+            .next()
+            .expect("runtime seal derive is bounded");
+        assert!(
+            !derive.contains("Decode") && !derive.contains("Encode"),
+            "runtime seal {runtime_seal} became codec-constructible"
+        );
+    }
+    for forbidden in [
+        "fn from_parts(",
+        "fn into_parts(",
+        "fn certificate(",
+        "fn manifest(",
+        "fn receipt(",
+        "fn pending(",
+        "fn source(",
+        "fn encoded(",
+        "fn candidate(",
+        "!= [0; 32]",
+        "== [0; 32]",
+        "is_zero()",
+    ] {
+        assert!(
+            !invalid.contains(forbidden),
+            "invalid-body evidence exposed or reserved {forbidden}"
+        );
+    }
+    let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test()
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("adapter production prefix is bounded");
+    assert_eq!(
+        adapter
+            .matches("DurableValidateReplayEvidenceV1::seal_invalid_body_report(")
+            .count(),
+        1,
+        "only the fixed adapter preview mints invalid-body evidence"
+    );
+    for required in [
+        "struct RegisteredPrepareInvalidBodyReportCapability",
+        "report_effect: AdapterEffect",
+        "fn registered_prepare_report_capability(",
+        ".project_validate_report_invalid_certified_body_with_registered_prepare(",
+        "PreparedInvalidBodyReportAdapterReplay",
+        "projected.as_ref() == Some(&self.child_pending)",
+        "project_invalid_body_report_candidate(",
+        "permit: &SealedInvalidBodyReportProjectionPermit",
+        ".project_sealed_invalid_body_report_candidate(",
+    ] {
+        assert!(
+            adapter.contains(required),
+            "adapter invalid-body seal omitted {required}"
+        );
+    }
+    let capability = adapter
+        .split("pub(in crate::sumeragi) struct RegisteredPrepareInvalidBodyReportCapability")
+        .nth(1)
+        .expect("registered Prepare capability has one declaration")
+        .split("/// Closed classification of one direct deterministic validation rejection.")
+        .next()
+        .expect("direct rejection classification follows its capability");
+    for forbidden in [
+        "derive(Clone",
+        "fn into_parts(",
+        "fn certificate(",
+        "fn statement(",
+        "RegisteredPrepareInvalidBodyReportLinearity",
+        "impl Drop for RegisteredPrepareInvalidBodyReportCapability",
+    ] {
+        assert!(
+            !capability.contains(forbidden),
+            "registered Prepare capability exposed {forbidden}"
+        );
+    }
+}
+#[test]
+#[allow(clippy::too_many_lines)]
+fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_mints() {
+    let source = replay_authority_source_for_test();
+    let production = source
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("replay authority has one production prefix");
+    let live = production
+        .split("struct LiveWalPersistedReplaySealV1")
+        .nth(1)
+        .expect("live WAL replay seal has one declaration")
+        .split("/// Canonical inert replay evidence for one exact signed broadcast effect.")
+        .next()
+        .expect("direct signed evidence follows live WAL seal");
+    for required in [
+        "LiveWalPersistedReplayStateV1::ApplyPending",
+        "LiveWalPersistedPendingV1::PayloadFree",
+        "LiveWalPersistedPendingV1::ValidateSignBound",
+        "LiveWalPersistedPendingV1::ApplyPending",
+        "LiveWalPersistedPendingV1::ApplyBound",
+        "from_exact_live_append(\n        cause: ExactLiveWalPersistedContinuationCause",
+        "bind_exact_validate_sign_pending(",
+        "exactly_binds_validate_sign_pending(&self)",
+        "project_validate_apply_successor(predecessor_effect, &self.effect)",
+        "exactly_matches_apply_effect(&self.effect, receipt)",
+        "ReplayWalRoleV1::PROPOSAL_INTENT",
+        "ReplayWalRoleV1::PREPARE_INTENT",
+        "ReplayWalRoleV1::LOCK_AND_COMMIT",
+        "ReplayWalRoleV1::TIMEOUT_INTENT",
+        "ReplayWalRoleV1::DECISION",
+        "ReplayWalRoleV1::INSTALL_TIMEOUT",
+    ] {
+        assert!(live.contains(required), "live WAL seal omitted {required}");
+    }
+    for forbidden in [
+        "#[derive(Clone",
+        "#[derive(Copy",
+        "Decode",
+        "pub(super) fn locator(",
+        "pub(super) fn action(",
+        "pub(super) fn source(",
+        "pub(super) fn effect(",
+        "pub(super) fn pending(",
+        "exactly_binds_payload_free_pending",
+        "into_parts",
+        "RecoveredWalFrameIdentity",
+        "!= [0; 32]",
+        "== [0; 32]",
+        "is_zero()",
+    ] {
+        assert!(
+            !live.contains(forbidden),
+            "live WAL seal exposed or reserved forbidden surface {forbidden}"
+        );
+    }
+    let adapter = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test()
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("adapter has one production prefix");
+    let runtime = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_runtime_source_for_test()
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("runtime has one production prefix");
+    let work_registry = reviewed_lifecycle_work_registry_source_for_test()
+        .split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .expect("work registry has one production prefix");
+    assert_eq!(
+        adapter
+            .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
+            .count(),
+        2,
+        "only the generic persisted cut and sealed Ready-Sign cut mint live replay authority"
+    );
+    assert_eq!(
+        adapter
+            .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
+            .count(),
+        2,
+        "the same two closed post-fsync cuts derive frame-bound placeholder owners"
+    );
+    let ready_sign = adapter
+        .split("// READY_DURABLE_VALIDATE_LIVE_SIGN_BEGIN")
+        .nth(1)
+        .expect("sealed Ready-Sign segment exists")
+        .split("// READY_DURABLE_VALIDATE_LIVE_SIGN_END")
+        .next()
+        .expect("sealed Ready-Sign segment is bounded");
+    assert_eq!(
+        ready_sign
+            .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        ready_sign
+            .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
+            .count(),
+        1
+    );
+    assert!(ready_sign.contains("LiveWalFrameIdentity::from_append_receipt("));
+    assert!(ready_sign.contains("bind_exact_validate_sign_pending(child_pending)"));
+    let generic = adapter
+        .split("fn drive_exact_persisted_continuation(")
+        .nth(1)
+        .expect("generic exact persisted cut exists")
+        .split("fn live_wal_record_exactly_owns_effect(")
+        .next()
+        .expect("generic exact persisted cut is bounded");
+    assert_eq!(
+        generic
+            .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        generic
+            .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
+            .count(),
+        1
+    );
+    assert_eq!(
+        adapter
+            .matches("drive_exact_persisted_continuation(")
+            .count(),
+        1,
+        "the inert live cut has no production caller yet"
+    );
+    assert_eq!(runtime.matches("fn from_exact_live_wal_append(").count(), 1);
+    assert_eq!(
+        work_registry.matches(".complete_exact_apply(").count(),
+        1,
+        "only the retained Validate completion supplies an Apply receipt"
+    );
+    assert!(!adapter.contains("RecoveredWalFrameIdentity::for_test"));
+    for outside in [
+        reviewed_lifecycle_ledger_source_for_test(),
+        include_str!("../v2_effects.rs"),
+        include_str!("../v2_worker.rs"),
+        include_str!("../v2_runner.rs"),
+    ] {
+        assert!(!outside.contains("SealedLiveWalPersistedEffectV1"));
+        assert!(!outside.contains("drive_exact_persisted_continuation"));
+    }
+}
 #[test]
 fn record_matching_rejects_substitution_of_every_external_coordinate() {
     let fixture = Fixture::new();

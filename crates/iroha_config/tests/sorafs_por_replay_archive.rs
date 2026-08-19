@@ -3,7 +3,10 @@ use iroha_config::parameters::{actual::Root as ActualConfig, defaults, user::Roo
 use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::account::AccountId;
-use std::path::{Path, PathBuf};
+use std::{
+    fmt::Write as _,
+    path::{Path, PathBuf},
+};
 fn base_reader() -> ConfigReader {
     let base_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/base.toml");
     ConfigReader::new()
@@ -58,7 +61,7 @@ fn native_signer_bindings() -> String {
         ("orderbook", "orderbook", 0x87),
     ]
     .into_iter()
-    .map(|(role, handle_role, seed)| {
+    .fold(String::new(), |mut bindings, (role, handle_role, seed)| {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("test Ed25519 keypair");
         let public_key_hex = hex::encode(key_pair.public_key().to_bytes().1);
@@ -66,7 +69,8 @@ fn native_signer_bindings() -> String {
             .to_i105_for_discriminant(defaults::common::CHAIN_DISCRIMINANT)
             .expect("test authority must encode as I105");
         let policy_digest_hex = hex::encode([seed; 32]);
-        format!(
+        write!(
+            bindings,
             r#"
 [sorafs.storage.native_transaction_signers.{role}]
 handle = "software://sorafs/{handle_role}/por-replay-primary"
@@ -74,12 +78,12 @@ authority = "{authority}"
 algorithm = "ed25519"
 public_key_hex = "{public_key_hex}"
 revision = 1
-policy_digest_hex = "{policy_digest_hex}"
-"#
+policy_digest_hex = "{policy_digest_hex}""#
         )
+        .expect("writing to a String cannot fail");
+        bindings.push('\n');
+        bindings
     })
-    .collect::<Vec<_>>()
-    .join("")
 }
 fn enabled_overlay(
     handle: &str,
@@ -171,6 +175,10 @@ fn enabled_archive_projects_one_exact_non_secret_binding() {
     assert_eq!(archive.max_successor_proof_bytes, 1_048_576);
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the rejection matrix keeps every archive identity and worker-bound diagnostic together"
+)]
 fn enabled_archive_rejects_substituted_zero_noncanonical_and_unbounded_claims() {
     let key = ed25519_public_key_hex(0x83);
     let weak_key = format!("01{}", "00".repeat(31));
@@ -340,10 +348,10 @@ handle = "object-lock://sorafs/por-replay-archive/primary"
             "identity fields must be absent when disabled",
         ),
         (
-            r#"
+            r"
 [sorafs.storage.por_replay_archive]
 poll_interval_ms = 900
-"#,
+",
             "worker policy must remain at defaults when disabled",
         ),
     ] {

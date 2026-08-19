@@ -919,7 +919,7 @@ mod tests {
             manifest_view_root: vec![2; 32],
             expiry_slot: 1,
             max_clock_skew_ms: None,
-            issuer_context: Default::default(),
+            issuer_context: iroha_data_model::nexus::AxtHandleIssuerContextV1::default(),
             issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
         };
         let canonical_handle = encoded_value(&valid_handle);

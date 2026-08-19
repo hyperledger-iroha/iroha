@@ -1,4 +1,4 @@
-use super::{commit_qc, evidence, status, telemetry, vrf};
+use super::{evidence, status, telemetry, vrf};
 use crate::{Run, RunContext};
 use clap::ValueEnum;
 use eyre::Result;
@@ -23,14 +23,6 @@ pub enum Command {
     VrfPenalties(VrfPenaltiesArgs),
     /// Show persisted VRF epoch snapshot (seed, participants, penalties)
     VrfEpoch(VrfEpochArgs),
-    /// Fetch commit QC (if present) for a block hash
-    #[command(subcommand)]
-    CommitQc(CommitQcCommand),
-}
-#[derive(clap::Subcommand, Debug)]
-pub enum CommitQcCommand {
-    /// Fetch commit QC (if present) for a block hash
-    Get(CommitQcGetArgs),
 }
 #[derive(clap::Subcommand, Debug)]
 pub enum EvidenceCommand {
@@ -89,12 +81,6 @@ pub struct VrfEpochArgs {
     #[arg(long, value_name = "EPOCH")]
     pub epoch: String,
 }
-#[derive(clap::Args, Debug)]
-pub struct CommitQcGetArgs {
-    /// Block hash for which the commit QC should be fetched
-    #[arg(long)]
-    pub hash: String,
-}
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -107,14 +93,6 @@ impl Run for Command {
             Command::Evidence(cmd) => cmd.run(context),
             Command::VrfPenalties(args) => vrf::penalties(context, args),
             Command::VrfEpoch(args) => vrf::epoch(context, args),
-            Command::CommitQc(cmd) => cmd.run(context),
-        }
-    }
-}
-impl Run for CommitQcCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            CommitQcCommand::Get(args) => commit_qc::get(context, args),
         }
     }
 }

@@ -37,6 +37,11 @@ pub enum SorafsOrderbookSubmissionRouteV1 {
 }
 impl SorafsOrderbookSubmissionRouteV1 {
     /// Parse the stable SDK route label.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SorafsOrderbookSubmissionValidationError::UnsupportedRoute`] if `label` is not
+    /// one of the three V1 route labels.
     #[rustfmt::skip]
     pub fn parse_sdk_label(label: &str) -> Result<Self, SorafsOrderbookSubmissionValidationError> {
         match label { "order" => Ok(Self::SubmitOrder), "cancel" => Ok(Self::CancelOrder), "receipt" => Ok(Self::RecordReceipt), _ => Err(SorafsOrderbookSubmissionValidationError::UnsupportedRoute) }
@@ -100,6 +105,11 @@ pub fn parse_sorafs_orderbook_cancel_reason_v1(
     match label { "expired" => Some(OrderCancelReasonV1::Expired), "governance" => Some(OrderCancelReasonV1::Governance), "replaced" => Some(OrderCancelReasonV1::Replaced), _ => None }
 }
 /// Parse bounded unsigned decimal text for native SDK bindings.
+///
+/// # Errors
+///
+/// Returns an error if `value` is not canonically spelled unsigned decimal text or does not fit in
+/// a `u64`.
 #[rustfmt::skip]
 pub fn parse_sorafs_orderbook_decimal_u64_v1(value: &str, context: &str) -> Result<u64, String> {
     if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) || (value.len() > 1 && value.starts_with('0')) {
@@ -108,6 +118,11 @@ pub fn parse_sorafs_orderbook_decimal_u64_v1(value: &str, context: &str) -> Resu
     value.parse().map_err(|error| format!("{context} must be an unsigned 64-bit decimal integer: {error}"))
 }
 /// Parse exact bounded XOR quantity text for native SDK bindings.
+///
+/// # Errors
+///
+/// Returns an error if `value` exceeds the text bound, cannot be parsed as a non-negative XOR
+/// quantity, or is not canonically spelled.
 #[rustfmt::skip]
 pub fn parse_sorafs_orderbook_xor_quantity_v1(
     value: &str,
@@ -123,11 +138,20 @@ pub fn parse_sorafs_orderbook_xor_quantity_v1(
     Ok(quantity)
 }
 /// Narrow one SDK integer to canonical fee basis points.
+///
+/// # Errors
+///
+/// Returns an error if `value` does not fit in a `u16`.
 #[rustfmt::skip]
 pub fn parse_sorafs_orderbook_fee_bps_v1(value: u32, context: &str) -> Result<u16, String> {
     value.try_into().map_err(|_| format!("{context} must fit in u16 basis points"))
 }
 /// Enforce the shared SDK owner byte bound before derivation or signing.
+///
+/// # Errors
+///
+/// Returns an error if `owner_account` is empty or exceeds
+/// [`ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1`].
 pub fn validate_sorafs_orderbook_owner_account_v1(owner_account: &[u8]) -> Result<(), String> {
     if owner_account.is_empty() {
         return Err("owner_account must not be empty".to_owned());
@@ -217,15 +241,13 @@ pub enum SorafsOrderbookSubmissionValidationError {
     /// The receipt's signed-transaction hash differs from the submitted transaction.
     #[error("transaction submission receipt signed_transaction_hash does not match the submitted transaction")] ReceiptSignedTransactionHashMismatch,
 }
-/// Decode and validate one exact caller-signed orderbook transaction before HTTP.
-#[deprecated(note = "use inspect_sorafs_orderbook_submission_for_discriminant_v1")]
-#[rustfmt::skip]
-pub fn inspect_sorafs_orderbook_submission_v1(
-    bytes: &[u8], route: SorafsOrderbookSubmissionRouteV1, expected_network: &NetworkId,
-) -> Result<SorafsOrderbookSubmissionIdentityV1, SorafsOrderbookSubmissionValidationError> {
-    Ok(inspect_sorafs_orderbook_submission_for_discriminant_v1(bytes, route, expected_network, crate::account::address::chain_discriminant())?.identity)
-}
 /// Decode and validate using the deployment's explicit I105 discriminant.
+///
+/// # Errors
+///
+/// Returns [`SorafsOrderbookSubmissionValidationError`] if the transaction bytes or the decoded
+/// transaction violate a V1 size, encoding, canonicality, network, signature, route, payload, or
+/// authority constraint.
 pub fn inspect_sorafs_orderbook_submission_for_discriminant_v1(
     bytes: &[u8],
     route: SorafsOrderbookSubmissionRouteV1,
@@ -255,6 +277,12 @@ pub fn inspect_sorafs_orderbook_submission_for_discriminant_v1(
     )
 }
 /// Validate one decoded transaction without narrowing Torii's JSON ingress.
+///
+/// # Errors
+///
+/// Returns [`SorafsOrderbookSubmissionValidationError`] if the transaction violates a V1 network,
+/// size, encoding, signature, instruction-shape, route, embedded-payload, or owner-authority
+/// constraint.
 pub fn validate_sorafs_orderbook_submission_transaction_v1(
     transaction: &SignedTransaction,
     route: SorafsOrderbookSubmissionRouteV1,
@@ -291,7 +319,7 @@ pub fn validate_sorafs_orderbook_submission_transaction_v1(
             verify_order_request_signature_v1(&order)
                 .map_err(|_| SorafsOrderbookSubmissionValidationError::InvalidEmbeddedPayload)?;
             require_owner_authority(
-                &transaction,
+                transaction,
                 &order.owner_account,
                 &order.signature,
                 expected_chain_discriminant,
@@ -311,7 +339,7 @@ pub fn validate_sorafs_orderbook_submission_transaction_v1(
             verify_order_cancel_signature_v1(&payload)
                 .map_err(|_| SorafsOrderbookSubmissionValidationError::InvalidEmbeddedPayload)?;
             require_owner_authority(
-                &transaction,
+                transaction,
                 &payload.owner_account,
                 &payload.signature,
                 expected_chain_discriminant,
@@ -383,6 +411,11 @@ fn require_owner_authority(
     Ok(())
 }
 /// Decode, authenticate, trust-anchor, and identity-bind one exact receipt body.
+///
+/// # Errors
+///
+/// Returns [`SorafsOrderbookSubmissionValidationError`] if the receipt violates a V1 size,
+/// encoding, canonicality, signature, signer, or submitted-transaction identity constraint.
 pub fn decode_and_verify_sorafs_orderbook_submission_receipt_v1(
     bytes: &[u8],
     expected_identity: &SorafsOrderbookSubmissionIdentityV1,

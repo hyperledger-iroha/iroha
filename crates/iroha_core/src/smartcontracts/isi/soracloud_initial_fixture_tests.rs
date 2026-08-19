@@ -1,0 +1,1661 @@
+fn checked_signature(
+    private_key: &iroha_crypto::PrivateKey,
+    payload: &[u8],
+) -> iroha_crypto::Signature {
+    iroha_crypto::Signature::try_new(private_key, payload)
+        .expect("test fixture signing should succeed")
+}
+const SMALL_ORDER_ED25519_R: [u8; 32] = [
+    1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+const NONCANONICAL_ED25519_R: [u8; 32] = [
+    0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f,
+];
+fn signature_with_malformed_ed25519_r(
+    signature: &iroha_crypto::Signature,
+    replacement_r: &[u8; 32],
+) -> iroha_crypto::Signature {
+    let mut payload = signature.payload().to_vec();
+    payload[..replacement_r.len()].copy_from_slice(replacement_r);
+    iroha_crypto::Signature::from_bytes(&payload)
+}
+#[test]
+fn soracloud_provenance_signature_admission_rejects_malformed_ed25519_signature_r() {
+    let key_pair = KeyPair::try_from_seed(vec![0x61; 32], iroha_crypto::Algorithm::Ed25519)
+        .expect("derive checked Soracloud Ed25519 provenance keypair");
+    let payload = b"soracloud-provenance-ed25519-admission";
+    let signature = checked_signature(key_pair.private_key(), payload);
+    for (label, replacement_r) in [
+        ("small-order", SMALL_ORDER_ED25519_R),
+        ("noncanonical", NONCANONICAL_ED25519_R),
+    ] {
+        let malformed_signature = signature_with_malformed_ed25519_r(&signature, &replacement_r);
+        assert!(
+            verify_signature_for_signer(&malformed_signature, key_pair.public_key(), payload)
+                .is_err(),
+            "{label} Soracloud provenance Ed25519 admission must reject malformed R before backend verification"
+        );
+    }
+}
+#[test]
+fn soracloud_provenance_signature_admission_rejects_malformed_mldsa_signature_lengths() {
+    let key_pair = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::MlDsa)
+        .expect("generate checked Soracloud ML-DSA provenance keypair");
+    let payload = b"soracloud-provenance-mldsa-admission";
+    let signature = checked_signature(key_pair.private_key(), payload);
+    verify_signature_for_signer(&signature, key_pair.public_key(), payload)
+        .expect("valid Soracloud ML-DSA provenance signature verifies");
+    let valid_signature = signature.payload().to_vec();
+    for (label, replacement_signature) in [
+        (
+            "short",
+            valid_signature[..valid_signature.len() - 1].to_vec(),
+        ),
+        ("overlong", {
+            let mut payload = valid_signature.clone();
+            payload.push(0x64);
+            payload
+        }),
+    ] {
+        let malformed_signature = iroha_crypto::Signature::from_bytes(&replacement_signature);
+        assert_eq!(
+            verify_signature_for_signer(&malformed_signature, key_pair.public_key(), payload)
+                .expect_err("malformed Soracloud ML-DSA signature length must fail admission"),
+            iroha_crypto::Error::BadSignature,
+            "{label} Soracloud ML-DSA signature length was not rejected"
+        );
+    }
+}
+#[track_caller]
+fn checked_keypair() -> KeyPair {
+    let caller = std::panic::Location::caller();
+    let mut seed = Sha256::new();
+    seed.update(b"iroha-core-soracloud-test-keypair-v1");
+    seed.update(caller.file().as_bytes());
+    seed.update(caller.line().to_le_bytes());
+    seed.update(caller.column().to_le_bytes());
+    KeyPair::try_from_seed(seed.finalize().to_vec(), iroha_crypto::Algorithm::default())
+        .expect("derive Soracloud fixture key from call site")
+}
+#[test]
+fn checked_keypair_helper_preserves_default_algorithm() {
+    assert_eq!(
+        checked_keypair().algorithm(),
+        iroha_crypto::Algorithm::default()
+    );
+}
+#[test]
+fn checked_keypair_helper_is_deterministic_per_call_site() {
+    let fixture = || checked_keypair();
+    let first = fixture();
+    let second = fixture();
+    assert_eq!(first.public_key(), second.public_key());
+    let other_call_site = checked_keypair();
+    assert_ne!(first.public_key(), other_call_site.public_key());
+}
+#[test]
+fn soracloud_provenance_rejects_multisig_authority_without_panicking() {
+    let member_key = checked_keypair();
+    let member = iroha_data_model::account::MultisigMember::new(member_key.public_key().clone(), 1)
+        .expect("multisig member");
+    let policy =
+        iroha_data_model::account::MultisigPolicy::new(1, vec![member]).expect("multisig policy");
+    let authority = AccountId::new_multisig(policy);
+    let error = single_signatory_authority(&authority)
+        .expect_err("multisig authority must fail provenance admission");
+    assert!(
+        matches!(
+            &error,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("single-signatory transaction authority")
+        ),
+        "unexpected multisig provenance rejection: {error:?}"
+    );
+}
+fn seed_test_call_hash(state_transaction: &mut StateTransaction<'_, '_>, byte: u8) {
+    state_transaction.tx_call_hash = Some(Hash::prehashed([byte; Hash::LENGTH]));
+}
+fn seed_domain_name_lease_tx(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    owner: &AccountId,
+    domain_id: &DomainId,
+) {
+    let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
+    let address =
+        iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
+    let record = iroha_data_model::sns::NameRecordV1::new(
+        selector.clone(),
+        owner.clone(),
+        vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+        0,
+        0,
+        u64::MAX,
+        u64::MAX,
+        u64::MAX,
+        Metadata::default(),
+    );
+    state_transaction.world.smart_contract_state.insert(
+        crate::sns::record_storage_key(&selector),
+        norito::codec::Encode::encode(&record),
+    );
+}
+fn state_with_soracloud_permission(kura: &Arc<Kura>) -> Result<State, eyre::Report> {
+    state_with_soracloud_permission_on_chain(
+        kura,
+        iroha_data_model::ChainId::from("00000000-0000-0000-0000-000000000000"),
+    )
+}
+fn state_with_soracloud_permission_on_chain(
+    kura: &Arc<Kura>,
+    chain_id: iroha_data_model::ChainId,
+) -> Result<State, eyre::Report> {
+    let world = World::with([], [], []);
+    let query_handle = LiveQueryStore::start_test();
+    let state = State::new_with_chain(world, kura.clone(), query_handle, chain_id);
+    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+        .as_ref()
+        .header();
+    let mut state_block = state.block(block_header);
+    let mut state_transaction = state_block.transaction();
+    let wonderland: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal")?;
+    seed_domain_name_lease_tx(
+        &mut state_transaction,
+        &SAMPLE_GENESIS_ACCOUNT_ID,
+        &wonderland,
+    );
+    Register::domain(Domain::new(wonderland.clone()))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+    Register::account(Account::new(ALICE_ID.clone()))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+    Grant::account_permission(
+        Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new(())),
+        ALICE_ID.clone(),
+    )
+    .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+    state_transaction.world.public_lane_validators.insert(
+        (LaneId::SINGLE, ALICE_ID.clone()),
+        PublicLaneValidatorRecord {
+            lane_id: LaneId::SINGLE,
+            validator: ALICE_ID.clone(),
+            peer_id: PeerId::from(ALICE_ID.expect_single_signatory().clone()),
+            stake_account: ALICE_ID.clone(),
+            total_stake: Quantity::from(1_000_u64),
+            self_stake: Quantity::from(1_000_u64),
+            metadata: Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        },
+    );
+    state_transaction.apply();
+    state_block.commit()?;
+    Ok(state)
+}
+#[test]
+fn soracloud_permission_allows_granted_authority() -> Result<(), eyre::Report> {
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_with_soracloud_permission(&kura)?;
+    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+        .as_ref()
+        .header();
+    let mut state_block = state.block(block_header);
+    let state_transaction = state_block.transaction();
+    require_soracloud_permission(&ALICE_ID, &state_transaction)?;
+    Ok(())
+}
+#[test]
+fn soracloud_permission_rejects_ungranted_taira_testnet_authority() -> Result<(), eyre::Report> {
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_with_soracloud_permission_on_chain(
+        &kura,
+        iroha_data_model::ChainId::from(TAIRA_TESTNET_CHAIN_ID),
+    )?;
+    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+        .as_ref()
+        .header();
+    let mut state_block = state.block(block_header);
+    let mut state_transaction = state_block.transaction();
+    Register::account(Account::new(BOB_ID.clone()))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+    let err = require_soracloud_permission(&BOB_ID, &state_transaction)
+        .expect_err("Taira must enforce the same Soracloud permission as every other chain");
+    assert!(matches!(
+        err,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.as_ref() == "not permitted: CanManageSoracloud"
+    ));
+    Ok(())
+}
+#[test]
+fn soracloud_permission_rejects_ungranted_authority() -> Result<(), eyre::Report> {
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_with_soracloud_permission(&kura)?;
+    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+        .as_ref()
+        .header();
+    let mut state_block = state.block(block_header);
+    let mut state_transaction = state_block.transaction();
+    Register::account(Account::new(BOB_ID.clone()))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+    let err = require_soracloud_permission(&BOB_ID, &state_transaction)
+        .expect_err("authority without Soracloud permission must be rejected");
+    assert!(matches!(
+        err,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.as_ref() == "not permitted: CanManageSoracloud"
+    ));
+    Ok(())
+}
+#[test]
+fn soracloud_permission_accepts_exact_assigned_role() -> Result<(), eyre::Report> {
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_with_soracloud_permission(&kura)?;
+    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+        .as_ref()
+        .header();
+    let mut state_block = state.block(block_header);
+    let mut state_transaction = state_block.transaction();
+    Register::account(Account::new(BOB_ID.clone()))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+    let role_id: RoleId = "soracloud_operator".parse().expect("valid role id");
+    let role = Role::new(role_id.clone(), BOB_ID.clone())
+        .add_permission(Permission::new(
+            CAN_MANAGE_SORACLOUD_PERMISSION.into(),
+            Json::new(()),
+        ))
+        .build(&BOB_ID);
+    state_transaction.world.roles.insert(role_id.clone(), role);
+    state_transaction.world.account_roles.insert(
+        crate::role::RoleIdWithOwner::new(BOB_ID.clone(), role_id),
+        (),
+    );
+    require_soracloud_permission(&BOB_ID, &state_transaction)?;
+    Ok(())
+}
+#[test]
+fn soracloud_permission_rejects_same_name_wrong_payload_direct_and_role() -> Result<(), eyre::Report>
+{
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_with_soracloud_permission(&kura)?;
+    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+        .as_ref()
+        .header();
+    let mut state_block = state.block(block_header);
+    let mut state_transaction = state_block.transaction();
+    Register::account(Account::new(BOB_ID.clone()))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+    state_transaction.world.add_account_permission(
+        &BOB_ID,
+        Permission::new(CAN_MANAGE_SORACLOUD_PERMISSION.into(), Json::new("all")),
+    );
+    let role_id: RoleId = "malformed_soracloud_operator"
+        .parse()
+        .expect("valid role id");
+    let role = Role::new(role_id.clone(), BOB_ID.clone())
+        .add_permission(Permission::new(
+            CAN_MANAGE_SORACLOUD_PERMISSION.into(),
+            Json::new(true),
+        ))
+        .build(&BOB_ID);
+    state_transaction.world.roles.insert(role_id.clone(), role);
+    state_transaction.world.account_roles.insert(
+        crate::role::RoleIdWithOwner::new(BOB_ID.clone(), role_id),
+        (),
+    );
+    let error = require_soracloud_permission(&BOB_ID, &state_transaction)
+        .expect_err("same-name permissions with non-unit payloads must not authorize");
+    assert!(matches!(
+        error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.as_ref() == "not permitted: CanManageSoracloud"
+    ));
+    Ok(())
+}
+#[test]
+fn soracloud_active_validator_authority_rejects_mismatched_public_lane_validator_rows()
+-> Result<(), eyre::Report> {
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_with_soracloud_permission(&kura)?;
+    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+        .as_ref()
+        .header();
+    let mut state_block = state.block(block_header);
+    let mut state_transaction = state_block.transaction();
+    Register::account(Account::new(BOB_ID.clone()))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+    state_transaction.world.public_lane_validators.insert(
+        (LaneId::SINGLE, BOB_ID.clone()),
+        PublicLaneValidatorRecord {
+            lane_id: LaneId::new(8),
+            validator: BOB_ID.clone(),
+            peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
+            stake_account: BOB_ID.clone(),
+            total_stake: Quantity::from(9_000_u64),
+            self_stake: Quantity::from(9_000_u64),
+            metadata: Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        },
+    );
+    assert!(
+        require_active_public_lane_validator(&BOB_ID, &state_transaction).is_err(),
+        "a row whose storage-key lane disagrees with the embedded record lane must not grant Soracloud runtime authority"
+    );
+    state_transaction.world.public_lane_validators.insert(
+        (LaneId::SINGLE, BOB_ID.clone()),
+        PublicLaneValidatorRecord {
+            lane_id: LaneId::SINGLE,
+            validator: ALICE_ID.clone(),
+            peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
+            stake_account: BOB_ID.clone(),
+            total_stake: Quantity::from(8_000_u64),
+            self_stake: Quantity::from(8_000_u64),
+            metadata: Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        },
+    );
+    assert!(
+        require_active_public_lane_validator(&BOB_ID, &state_transaction).is_err(),
+        "a row whose storage-key validator disagrees with the embedded record validator must not grant Soracloud runtime authority"
+    );
+    Ok(())
+}
+fn insert_active_public_lane_validator(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    validator: AccountId,
+    total_stake: u64,
+) {
+    let bonded = Quantity::from(total_stake);
+    state_transaction.world.public_lane_validators.insert(
+        (LaneId::SINGLE, validator.clone()),
+        PublicLaneValidatorRecord {
+            lane_id: LaneId::SINGLE,
+            validator: validator.clone(),
+            peer_id: PeerId::from(validator.expect_single_signatory().clone()),
+            stake_account: validator.clone(),
+            total_stake: bonded.clone(),
+            self_stake: bonded.clone(),
+            metadata: Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        },
+    );
+    state_transaction.world.public_lane_stake_shares.insert(
+        (LaneId::SINGLE, validator.clone(), validator.clone()),
+        PublicLaneStakeShare {
+            lane_id: LaneId::SINGLE,
+            validator: validator.clone(),
+            staker: validator,
+            bonded,
+            pending_unbonds: BTreeMap::new(),
+            metadata: Metadata::default(),
+        },
+    );
+}
+fn install_future_created_autoscale_lane(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    lane_id: LaneId,
+    created_height: u64,
+) {
+    let mut lane = LaneConfig {
+        id: lane_id,
+        alias: format!("elastic-lane-{}", lane_id.as_u32()),
+        dataspace_id: DataSpaceId::UNIVERSAL,
+        visibility: LaneVisibility::Public,
+        ..LaneConfig::default()
+    };
+    lane.metadata
+        .insert(AUTOSCALE_META_MANAGED.to_owned(), "true".to_owned());
+    lane.metadata.insert(
+        AUTOSCALE_META_CREATED_HEIGHT.to_owned(),
+        created_height.to_string(),
+    );
+    crate::state::attach_synthetic_autoscale_committee_for_test(&mut lane);
+    let lane_count = NonZeroU32::new(lane_id.as_u32().saturating_add(1))
+        .expect("future-created lane count must be nonzero");
+
+    state_transaction.nexus.autoscale.enabled = true;
+    state_transaction.nexus.autoscale.min_lanes = NonZeroU32::new(1).expect("nonzero min");
+    state_transaction.nexus.autoscale.max_lanes = lane_count;
+    state_transaction.nexus.lane_catalog =
+        LaneCatalog::new(lane_count, vec![LaneConfig::default(), lane])
+            .expect("future-created autoscale lane catalog");
+    state_transaction.nexus.lane_config =
+        iroha_config::parameters::actual::LaneConfig::from_catalog(
+            &state_transaction.nexus.lane_catalog,
+        );
+}
+fn insert_active_public_lane_validator_on_lane(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    lane_id: LaneId,
+    validator: AccountId,
+    total_stake: u64,
+) {
+    let bonded = Quantity::from(total_stake);
+    state_transaction.world.public_lane_validators.insert(
+        (lane_id, validator.clone()),
+        PublicLaneValidatorRecord {
+            lane_id,
+            validator: validator.clone(),
+            peer_id: PeerId::from(validator.expect_single_signatory().clone()),
+            stake_account: validator.clone(),
+            total_stake: bonded.clone(),
+            self_stake: bonded.clone(),
+            metadata: Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        },
+    );
+    state_transaction.world.public_lane_stake_shares.insert(
+        (lane_id, validator.clone(), validator.clone()),
+        PublicLaneStakeShare {
+            lane_id,
+            validator: validator.clone(),
+            staker: validator,
+            bonded,
+            pending_unbonds: BTreeMap::new(),
+            metadata: Metadata::default(),
+        },
+    );
+}
+#[test]
+fn soracloud_active_validator_authority_rejects_future_created_autoscale_lane_record()
+-> Result<(), eyre::Report> {
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_with_soracloud_permission(&kura)?;
+    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+        .as_ref()
+        .header();
+    let mut state_block = state.block(block_header);
+    let mut state_transaction = state_block.transaction();
+    Register::account(Account::new(BOB_ID.clone()))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+    let future_lane = LaneId::new(1);
+    install_future_created_autoscale_lane(&mut state_transaction, future_lane, 7);
+    insert_active_public_lane_validator_on_lane(
+        &mut state_transaction,
+        future_lane,
+        BOB_ID.clone(),
+        9_000,
+    );
+    assert!(
+        require_active_public_lane_validator(&BOB_ID, &state_transaction).is_err(),
+        "active validator rows on future-created autoscale lanes must not grant Soracloud runtime authority before activation"
+    );
+    let stakes = hf_active_validator_stakes(&state_transaction)?;
+    assert!(
+        !stakes.contains_key(&BOB_ID),
+        "future-created autoscale lane validator rows must not contribute HF placement stake"
+    );
+    Ok(())
+}
+#[test]
+fn hf_active_validator_stakes_ignore_mismatched_public_lane_validator_rows()
+-> Result<(), eyre::Report> {
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_with_soracloud_permission(&kura)?;
+    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+        .as_ref()
+        .header();
+    let mut state_block = state.block(block_header);
+    let mut state_transaction = state_block.transaction();
+    Register::account(Account::new(BOB_ID.clone()))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
+    insert_active_public_lane_validator(&mut state_transaction, BOB_ID.clone(), 700);
+    let future_lane = LaneId::new(1);
+    install_future_created_autoscale_lane(&mut state_transaction, future_lane, 7);
+    insert_active_public_lane_validator_on_lane(
+        &mut state_transaction,
+        future_lane,
+        BOB_ID.clone(),
+        9_000,
+    );
+    state_transaction.world.public_lane_validators.insert(
+        (LaneId::new(2), BOB_ID.clone()),
+        PublicLaneValidatorRecord {
+            lane_id: LaneId::new(3),
+            validator: BOB_ID.clone(),
+            peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
+            stake_account: BOB_ID.clone(),
+            total_stake: Quantity::from(9_000_u64),
+            self_stake: Quantity::from(9_000_u64),
+            metadata: Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        },
+    );
+    state_transaction.world.public_lane_validators.insert(
+        (LaneId::new(4), BOB_ID.clone()),
+        PublicLaneValidatorRecord {
+            lane_id: LaneId::new(4),
+            validator: ALICE_ID.clone(),
+            peer_id: PeerId::from(BOB_ID.expect_single_signatory().clone()),
+            stake_account: BOB_ID.clone(),
+            total_stake: Quantity::from(8_000_u64),
+            self_stake: Quantity::from(8_000_u64),
+            metadata: Metadata::default(),
+            status: PublicLaneValidatorStatus::Active,
+            activation_epoch: None,
+            activation_height: None,
+            last_reward_epoch: None,
+        },
+    );
+    let stakes = hf_active_validator_stakes(&state_transaction)?;
+    assert_eq!(stakes.get(&ALICE_ID), Some(&1_000_u128));
+    assert_eq!(
+        stakes.get(&BOB_ID),
+        Some(&700_u128),
+        "mismatched key/record validator rows must not inflate HF active stake"
+    );
+    Ok(())
+}
+fn configure_staking_assets_for_validator_slash_test(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    validator: &AccountId,
+    escrow_balance: u64,
+) -> Result<AssetDefinitionId, eyre::Report> {
+    Register::account(Account::new(validator.clone()))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal").expect("domain"),
+        "stake".parse().expect("stake"),
+    );
+    Register::asset_definition(AssetDefinition::numeric(
+        asset_definition_id.clone(),
+        "stake".to_owned(),
+        iroha_data_model::asset::AssetBalancePolicy::Global,
+        None,
+    ))
+    .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
+    Mint::asset_quantity(
+        escrow_balance,
+        AssetId::new(asset_definition_id.clone(), ALICE_ID.clone()),
+    )
+    .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
+    state_transaction.nexus.staking.stake_asset_id = asset_definition_id.to_string();
+    state_transaction.nexus.staking.stake_escrow_account_id = ALICE_ID.to_string();
+    state_transaction.nexus.staking.slash_sink_account_id = ALICE_ID.to_string();
+    Ok(asset_definition_id)
+}
+fn sample_hf_shared_lease_pool_record(
+    pool_id: Hash,
+    source_id: Hash,
+    window_started_at_ms: u64,
+) -> SoraHfSharedLeasePoolV1 {
+    SoraHfSharedLeasePoolV1 {
+        schema_version: SORA_HF_SHARED_LEASE_POOL_VERSION_V1,
+        pool_id,
+        source_id,
+        storage_class: StorageClass::Warm,
+        lease_asset_definition_id: AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal").expect("domain"),
+            "xor".parse().expect("asset"),
+        ),
+        base_fee: "0.00001".parse().expect("base fee"),
+        lease_term_ms: 60_000,
+        window_started_at_ms,
+        window_expires_at_ms: window_started_at_ms + 60_000,
+        active_member_count: 1,
+        status: SoraHfSharedLeaseStatusV1::Active,
+        queued_next_window: None,
+    }
+}
+fn sample_bundle(
+    service_name: &str,
+    service_version: &str,
+    canary_percent: u8,
+) -> SoraDeploymentBundleV1 {
+    let container = SoraContainerManifestV1 {
+        schema_version: iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
+        runtime: SoraContainerRuntimeV1::Ivm,
+        bundle_hash: Hash::new(format!("bundle:{service_name}:{service_version}").as_bytes()),
+        bundle_path: "/bundles/service.ivm".to_string(),
+        entrypoint: "main".to_string(),
+        args: Vec::new(),
+        env: std::collections::BTreeMap::new(),
+        inrou: None,
+        required_config_names: Vec::new(),
+        required_secret_names: Vec::new(),
+        config_exports: Vec::new(),
+        capabilities: SoraCapabilityPolicyV1 {
+            network: SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
+                "api.example.test",
+                [443],
+            )]),
+            allow_wallet_signing: false,
+            allow_state_writes: false,
+            allow_model_inference: false,
+            allow_model_training: false,
+        },
+        resources: SoraResourceLimitsV1 {
+            cpu_millis: NonZeroU32::new(500).expect("nonzero"),
+            memory_bytes: NonZeroU64::new(64 * 1024 * 1024).expect("nonzero"),
+            ephemeral_storage_bytes: NonZeroU64::new(64 * 1024 * 1024).expect("nonzero"),
+            max_open_files: NonZeroU32::new(1024).expect("nonzero"),
+            max_tasks: NonZeroU16::new(32).expect("nonzero"),
+        },
+        lifecycle: SoraLifecycleHooksV1 {
+            start_grace_secs: NonZeroU32::new(10).expect("nonzero"),
+            stop_grace_secs: NonZeroU32::new(10).expect("nonzero"),
+            healthcheck_path: Some("/health".to_string()),
+        },
+    };
+    let container_manifest_hash = Hash::new(Encode::encode(&container));
+    SoraDeploymentBundleV1 {
+        schema_version: iroha_data_model::soracloud::SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        container,
+        service: SoraServiceManifestV1 {
+            schema_version: iroha_data_model::soracloud::SORA_SERVICE_MANIFEST_VERSION_V1,
+            service_name: service_name.parse().expect("valid name"),
+            service_version: service_version.to_string(),
+            execution_plane:
+                iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService,
+            container: SoraContainerManifestRefV1 {
+                manifest_hash: container_manifest_hash,
+                expected_schema_version:
+                    iroha_data_model::soracloud::SORA_CONTAINER_MANIFEST_VERSION_V1,
+            },
+            replicas: NonZeroU16::new(2).expect("nonzero"),
+            route: Some(SoraRouteTargetV1 {
+                host: format!("{service_name}.example.test"),
+                path_prefix: "/".to_string(),
+                service_port: NonZeroU16::new(8080).expect("nonzero"),
+                visibility: SoraRouteVisibilityV1::Public,
+                tls_mode: SoraTlsModeV1::Required,
+            }),
+            rollout: SoraRolloutPolicyV1 {
+                canary_percent,
+                max_unavailable_replicas: 0,
+                health_window_secs: NonZeroU32::new(30).expect("nonzero"),
+                automatic_rollback_failures: NonZeroU32::new(2).expect("nonzero"),
+            },
+            economics: Default::default(),
+            state_bindings: vec![SoraStateBindingV1 {
+                schema_version: iroha_data_model::soracloud::SORA_STATE_BINDING_VERSION_V1,
+                binding_name: "session".parse().expect("valid name"),
+                key_prefix: "/state/session".to_string(),
+                scope: SoraStateScopeV1::ServiceState,
+                encryption: SoraStateEncryptionV1::Plaintext,
+                mutability: SoraStateMutabilityV1::ReadOnly,
+                max_item_bytes: NonZeroU64::new(1024).expect("nonzero"),
+                max_total_bytes: NonZeroU64::new(2048).expect("nonzero"),
+            }],
+            lease_volumes: Vec::new(),
+            handlers: vec![SoraServiceHandlerV1 {
+                handler_name: "query".parse().expect("valid name"),
+                class: SoraServiceHandlerClassV1::Query,
+                entrypoint: "serve_query".to_string(),
+                route_path: Some("/query".to_string()),
+                certified_response: SoraCertifiedResponsePolicyV1::AuditReceipt,
+                mailbox: None,
+            }],
+            artifacts: vec![SoraArtifactRefV1 {
+                kind: SoraArtifactKindV1::StaticAsset,
+                artifact_hash: Hash::new(
+                    format!("asset:{service_name}:{service_version}").as_bytes(),
+                ),
+                artifact_path: "/public/index.html".to_string(),
+                handler_name: Some("query".parse().expect("valid name")),
+            }],
+        },
+    }
+}
+fn sample_inrou_manifest() -> SoraInrouManifestV1 {
+    SoraInrouManifestV1 {
+        schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
+        guest_os: SoraInrouGuestOsV1::DebianSlim,
+        guest_images: std::collections::BTreeMap::from([
+            (
+                iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
+                iroha_data_model::soracloud::SoraInrouGuestImageV1 {
+                    kernel_image_path: "/inrou/x86_64/vmlinux".to_string(),
+                    rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_string(),
+                    initrd_image_path: None,
+                    distribution: Default::default(),
+                    published_artifact: None,
+                },
+            ),
+            (
+                iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64,
+                iroha_data_model::soracloud::SoraInrouGuestImageV1 {
+                    kernel_image_path: "/inrou/aarch64/vmlinux".to_string(),
+                    rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_string(),
+                    initrd_image_path: None,
+                    distribution: Default::default(),
+                    published_artifact: None,
+                },
+            ),
+        ]),
+        bootstrap_user_data_path: None,
+        ssh_authorized_keys: vec!["ssh-ed25519 test-key soracloud-tests".to_string()],
+    }
+}
+fn sample_inrou_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
+    vec![
+        SoraLeaseVolumeBindingV1 {
+            volume_name: "root_disk".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/".to_string(),
+            max_total_bytes: NonZeroU64::new(8 * 1024 * 1024 * 1024).expect("nonzero"),
+        },
+        SoraLeaseVolumeBindingV1 {
+            volume_name: "service_state".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/var/lib/sora".to_string(),
+            max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
+        },
+    ]
+}
+fn sample_inrou_replica_runtime_state_for(
+    service_name: iroha_data_model::name::Name,
+    service_version: &str,
+    replica_slot: u16,
+    validator_account_id: AccountId,
+) -> SoraInrouReplicaRuntimeStateV1 {
+    SoraInrouReplicaRuntimeStateV1 {
+        schema_version: SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
+        service_name,
+        service_version: service_version.to_string(),
+        replica_slot,
+        validator_account_id,
+        peer_id: "12D3KooWInrouRuntimePeer".to_string(),
+        selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
+        selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
+        health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+        load_factor_bps: 250,
+        materialized_bundle_hash: Hash::new(b"inrou-runtime-state-test-bundle"),
+        accounted_egress_bytes: 0,
+        pending_mailbox_message_count: 0,
+        last_receipt_id: None,
+        updated_at_ms: 1_000,
+        last_error: None,
+    }
+}
+fn sample_inrou_service_placement_record_for(
+    service_name: iroha_data_model::name::Name,
+    service_version: &str,
+    runtime_state: &SoraInrouReplicaRuntimeStateV1,
+) -> SoraInrouServicePlacementRecordV1 {
+    SoraInrouServicePlacementRecordV1 {
+        schema_version: SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
+        service_name,
+        service_version: service_version.to_string(),
+        desired_replica_count: runtime_state.replica_slot,
+        eligible_validator_count: 1,
+        placements: vec![SoraInrouReplicaPlacementV1 {
+            replica_slot: runtime_state.replica_slot,
+            validator_account_id: runtime_state.validator_account_id.clone(),
+            peer_id: runtime_state.peer_id.clone(),
+            selected_backend: runtime_state.selected_backend,
+            selected_guest_isa: runtime_state.selected_guest_isa,
+            selected_geography_tag: None,
+            selection_latency_ms: None,
+        }],
+        reconciled_at_ms: 1_000,
+        last_error: None,
+    }
+}
+#[test]
+fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), eyre::Report> {
+    let kura = Kura::blank_kura_for_testing();
+    let state = state_with_soracloud_permission(&kura)?;
+    let block_header = ValidBlock::new_dummy(&checked_keypair().into_parts().1)
+        .as_ref()
+        .header();
+    let mut state_block = state.block(block_header);
+    let mut stx = state_block.transaction();
+    Register::account(Account::new(BOB_ID.clone()))
+        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
+    insert_active_public_lane_validator(&mut stx, BOB_ID.clone(), 500);
+    let bundle = sample_bundle("victim_runtime", "1.0.0", 0);
+    isi::DeploySoracloudService {
+        bundle: bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        provenance: bundle_provenance(&bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let victim_name = bundle.service.service_name.clone();
+    let victim_version = bundle.service.service_version.as_str();
+    let other_bundle = sample_bundle("assigned_elsewhere", "2.0.0", 0);
+    isi::DeploySoracloudService {
+        bundle: other_bundle.clone(),
+        initial_service_configs: BTreeMap::new(),
+        initial_service_secrets: BTreeMap::new(),
+        provenance: bundle_provenance(&other_bundle),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let other_name = other_bundle.service.service_name.clone();
+    let other_version = other_bundle.service.service_version.as_str();
+    let alice_runtime = sample_inrou_replica_runtime_state_for(
+        victim_name.clone(),
+        victim_version,
+        1,
+        ALICE_ID.clone(),
+    );
+    let alice_placement = sample_inrou_service_placement_record_for(
+        victim_name.clone(),
+        victim_version,
+        &alice_runtime,
+    );
+    stx.world.soracloud_inrou_service_placements.insert(
+        (
+            alice_placement.service_name.as_ref().to_owned(),
+            alice_placement.service_version.clone(),
+        ),
+        alice_placement,
+    );
+    let bob_other_runtime = sample_inrou_replica_runtime_state_for(
+        other_name.clone(),
+        other_version,
+        1,
+        BOB_ID.clone(),
+    );
+    let bob_other_placement = sample_inrou_service_placement_record_for(
+        other_name.clone(),
+        other_version,
+        &bob_other_runtime,
+    );
+    stx.world.soracloud_inrou_service_placements.insert(
+        (
+            bob_other_placement.service_name.as_ref().to_owned(),
+            bob_other_placement.service_version.clone(),
+        ),
+        bob_other_placement,
+    );
+    assert_eq!(
+        require_soracloud_service_runtime_authority(&ALICE_ID, &victim_name, victim_version, &stx,)?,
+        SoracloudServiceRuntimeAuthority::Manager
+    );
+    assert_eq!(
+        require_soracloud_service_runtime_authority(&BOB_ID, &other_name, other_version, &stx,)?,
+        SoracloudServiceRuntimeAuthority::AssignedValidator
+    );
+    let cross_service_error =
+        require_soracloud_service_runtime_authority(&BOB_ID, &victim_name, victim_version, &stx)
+            .expect_err("a placement for another service must not grant runtime authority");
+    assert!(matches!(
+        cross_service_error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.contains("is not assigned to service")
+    ));
+    let stale_runtime =
+        sample_inrou_replica_runtime_state_for(victim_name.clone(), "0.9.0", 1, BOB_ID.clone());
+    let stale_placement =
+        sample_inrou_service_placement_record_for(victim_name.clone(), "0.9.0", &stale_runtime);
+    stx.world.soracloud_inrou_service_placements.insert(
+        (
+            stale_placement.service_name.as_ref().to_owned(),
+            stale_placement.service_version.clone(),
+        ),
+        stale_placement,
+    );
+    let stale_placement_error =
+        require_soracloud_service_runtime_authority(&BOB_ID, &victim_name, "0.9.0", &stx)
+            .expect_err("a stale placement must not grant runtime authority");
+    assert!(matches!(
+        stale_placement_error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.contains("is not an active deployment revision")
+    ));
+    let runtime_state = SoraServiceRuntimeStateV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
+        service_name: victim_name.clone(),
+        active_service_version: victim_version.to_owned(),
+        health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+        load_factor_bps: 125,
+        materialized_bundle_hash: bundle.container.bundle_hash,
+        rollout_handle: None,
+        pending_mailbox_message_count: 0,
+        last_receipt_id: None,
+    };
+    let runtime_state_error = isi::SetSoracloudRuntimeState {
+        state: runtime_state.clone(),
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect_err("a validator assigned elsewhere must not replace runtime state");
+    assert!(matches!(
+        runtime_state_error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.contains("is not assigned to service")
+    ));
+    assert!(
+        stx.world
+            .soracloud_service_runtime
+            .get(&victim_name)
+            .is_none()
+    );
+    let deployment_before_usage = stx
+        .world
+        .soracloud_service_deployments
+        .get(&victim_name)
+        .cloned()
+        .expect("victim deployment");
+    let lease_error = isi::ReportSoracloudServiceLeaseUsage {
+        service_name: victim_name.clone(),
+        active_service_version: victim_version.to_owned(),
+        accounted_egress_bytes: u64::MAX,
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect_err("a validator assigned elsewhere must not inflate lease usage");
+    assert!(matches!(
+        lease_error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.contains("is not assigned to service")
+    ));
+    assert_eq!(
+        stx.world.soracloud_service_deployments.get(&victim_name),
+        Some(&deployment_before_usage)
+    );
+    let mailbox_message = SoraServiceMailboxMessageV1 {
+        schema_version: iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+        message_id: Hash::new(b"cross-service-mailbox-message"),
+        from_service: victim_name.clone(),
+        from_handler: "query".parse().expect("valid handler"),
+        to_service: victim_name.clone(),
+        to_handler: "query".parse().expect("valid handler"),
+        payload_bytes: b"payload".to_vec(),
+        payload_commitment: Hash::new(b"payload"),
+        enqueue_sequence: 1,
+        available_after_sequence: 1,
+        expires_at_sequence: None,
+    };
+    let mailbox_error = isi::RecordSoracloudMailboxMessage {
+        message: mailbox_message.clone(),
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect_err("a validator assigned elsewhere must not forge source-service messages");
+    assert!(matches!(
+        mailbox_error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.contains("is not assigned to service")
+    ));
+    assert!(
+        stx.world
+            .soracloud_mailbox_messages
+            .get(&mailbox_message.message_id)
+            .is_none()
+    );
+    let mut undeployed_source_message = mailbox_message.clone();
+    undeployed_source_message.message_id = Hash::new(b"undeployed-source-mailbox-message");
+    undeployed_source_message.from_service =
+        "undeployed_source".parse().expect("valid service name");
+    let undeployed_source_error = isi::RecordSoracloudMailboxMessage {
+        message: undeployed_source_message.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("even a manager must not forge messages from an undeployed service");
+    assert!(matches!(
+        undeployed_source_error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.contains("source service")
+    ));
+    assert!(
+        stx.world
+            .soracloud_mailbox_messages
+            .get(&undeployed_source_message.message_id)
+            .is_none()
+    );
+    isi::RecordSoracloudMailboxMessage {
+        message: mailbox_message.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let mut colliding_mailbox_message = mailbox_message.clone();
+    colliding_mailbox_message.from_service = other_name.clone();
+    colliding_mailbox_message.payload_bytes = b"replacement".to_vec();
+    colliding_mailbox_message.payload_commitment = Hash::new(b"replacement");
+    let mailbox_collision_error = isi::RecordSoracloudMailboxMessage {
+        message: colliding_mailbox_message,
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect_err("an assigned validator must not replace a recorded mailbox message");
+    assert!(matches!(
+        mailbox_collision_error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.contains("has already been recorded")
+    ));
+    assert_eq!(
+        stx.world
+            .soracloud_mailbox_messages
+            .get(&mailbox_message.message_id),
+        Some(&mailbox_message)
+    );
+    let runtime_receipt = SoraRuntimeReceiptV1 {
+        schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
+        receipt_id: Hash::new(b"cross-service-runtime-receipt"),
+        service_name: victim_name.clone(),
+        service_version: victim_version.to_owned(),
+        handler_name: "query".parse().expect("valid handler"),
+        handler_class: SoraServiceHandlerClassV1::Query,
+        request_commitment: Hash::new(b"request"),
+        result_commitment: Hash::new(b"result"),
+        certified_by: SoraCertifiedResponsePolicyV1::AuditReceipt,
+        emitted_sequence: 1,
+        placement_id: Some(Hash::new(b"placement")),
+        selected_validator_account_id: Some(BOB_ID.clone()),
+        selected_peer_id: Some("12D3KooWRuntimeReceiptPeer".to_string()),
+        mailbox_message_id: None,
+        journal_artifact_hash: None,
+        checkpoint_artifact_hash: None,
+    };
+    let receipt_error = isi::RecordSoracloudRuntimeReceipt {
+        receipt: runtime_receipt.clone(),
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect_err("a validator assigned elsewhere must not forge runtime receipts");
+    assert!(matches!(
+        receipt_error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.contains("is not assigned to service")
+    ));
+    assert!(
+        stx.world
+            .soracloud_runtime_receipts
+            .get(&runtime_receipt.receipt_id)
+            .is_none()
+    );
+    isi::RecordSoracloudRuntimeReceipt {
+        receipt: runtime_receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    let mut colliding_runtime_receipt = runtime_receipt.clone();
+    colliding_runtime_receipt.service_name = other_name;
+    colliding_runtime_receipt.service_version = other_version.to_owned();
+    colliding_runtime_receipt.result_commitment = Hash::new(b"replacement-result");
+    let receipt_collision_error = isi::RecordSoracloudRuntimeReceipt {
+        receipt: colliding_runtime_receipt,
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect_err("an assigned validator must not replace a recorded runtime receipt");
+    assert!(matches!(
+        receipt_collision_error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.contains("has already been recorded")
+    ));
+    assert_eq!(
+        stx.world
+            .soracloud_runtime_receipts
+            .get(&runtime_receipt.receipt_id),
+        Some(&runtime_receipt)
+    );
+    let mut private_bundle =
+        sample_uploaded_model_bundle("victim_runtime", ManifestDigest::new([0xD1; 32]));
+    private_bundle.runtime_format =
+        iroha_data_model::soracloud::SoraUploadedModelRuntimeFormatV1::DeterministicQuantizedCpuV1;
+    stx.world.soracloud_uploaded_model_bundles.insert(
+        (
+            private_bundle.service_name.as_ref().to_owned(),
+            private_bundle.model_id.clone(),
+            private_bundle.weight_version.clone(),
+        ),
+        private_bundle.clone(),
+    );
+    let private_artifact = |role: &str, byte: u8| SoraPrivateModelArtifactRefV1 {
+        schema_version: iroha_data_model::soracloud::SORA_PRIVATE_MODEL_ARTIFACT_REF_VERSION_V1,
+        sorafs_manifest_digest: ManifestDigest::new([byte; 32]),
+        artifact_hash: Hash::new([byte; 32]),
+        ciphertext_bytes: 64,
+        artifact_role: role.to_string(),
+    };
+    let private_receipt = SoraPrivateUploadedModelExecutionReceiptV1 {
+        schema_version:
+            iroha_data_model::soracloud::SORA_PRIVATE_UPLOADED_MODEL_EXECUTION_RECEIPT_VERSION_V1,
+        receipt_id: Hash::new(b"validator-private-runtime-receipt"),
+        service_name: private_bundle.service_name.clone(),
+        model_id: private_bundle.model_id.clone(),
+        weight_version: private_bundle.weight_version.clone(),
+        runtime_version: crate::soracloud_runtime::SORACLOUD_PRIVATE_MODEL_RUNTIME_VERSION_V1
+            .to_string(),
+        model_manifest_digest: private_bundle.sorafs_manifest_digest,
+        model_bundle_root: private_bundle.bundle_root,
+        policy_id: private_bundle.decryption_policy_ref.clone(),
+        input_artifact: private_artifact("input", 0xD2),
+        output_artifact: private_artifact("output", 0xD3),
+        input_commitment: Hash::new(b"input-commitment"),
+        output_commitment: Hash::new(b"output-commitment"),
+        request_commitment: Hash::new(b"private-request-commitment"),
+        result_commitment: Hash::new(b"private-result-commitment"),
+        emitted_sequence: 1,
+    };
+    let private_receipt_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        receipt: private_receipt.clone(),
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect_err("private uploaded-model receipts must remain manager-only");
+    assert!(matches!(
+        private_receipt_error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.as_ref() == "not permitted: CanManageSoracloud"
+    ));
+    assert!(
+        stx.world
+            .soracloud_private_uploaded_model_execution_receipts
+            .get(&private_receipt.receipt_id)
+            .is_none()
+    );
+    isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        receipt: private_receipt.clone(),
+    }
+    .execute(&ALICE_ID, &mut stx)?;
+    assert_eq!(
+        stx.world
+            .soracloud_private_uploaded_model_execution_receipts
+            .get(&private_receipt.receipt_id),
+        Some(&private_receipt)
+    );
+    let mut colliding_private_receipt = private_receipt.clone();
+    colliding_private_receipt.result_commitment =
+        Hash::new(b"replacement-private-result-commitment");
+    let private_collision_error = isi::RecordSoracloudPrivateUploadedModelExecutionReceipt {
+        receipt: colliding_private_receipt,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("a private uploaded-model receipt identifier must be immutable");
+    assert!(matches!(
+        private_collision_error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.contains("has already been recorded")
+    ));
+    assert_eq!(
+        stx.world
+            .soracloud_private_uploaded_model_execution_receipts
+            .get(&private_receipt.receipt_id),
+        Some(&private_receipt)
+    );
+    let bob_victim_runtime = sample_inrou_replica_runtime_state_for(
+        victim_name.clone(),
+        victim_version,
+        1,
+        BOB_ID.clone(),
+    );
+    let bob_victim_placement = sample_inrou_service_placement_record_for(
+        victim_name.clone(),
+        victim_version,
+        &bob_victim_runtime,
+    );
+    stx.world.soracloud_inrou_service_placements.insert(
+        (
+            bob_victim_placement.service_name.as_ref().to_owned(),
+            bob_victim_placement.service_version.clone(),
+        ),
+        bob_victim_placement,
+    );
+    assert_eq!(
+        require_soracloud_service_runtime_authority(&BOB_ID, &victim_name, victim_version, &stx,)?,
+        SoracloudServiceRuntimeAuthority::AssignedValidator
+    );
+    let mut falsely_attributed_receipt = runtime_receipt;
+    falsely_attributed_receipt.receipt_id = Hash::new(b"falsely-attributed-runtime-receipt");
+    falsely_attributed_receipt.selected_validator_account_id = Some(ALICE_ID.clone());
+    let attribution_error = isi::RecordSoracloudRuntimeReceipt {
+        receipt: falsely_attributed_receipt.clone(),
+    }
+    .execute(&BOB_ID, &mut stx)
+    .expect_err("an assigned validator must identify itself in its runtime receipt");
+    assert!(matches!(
+        attribution_error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.contains("must identify submitting validator")
+    ));
+    assert!(
+        stx.world
+            .soracloud_runtime_receipts
+            .get(&falsely_attributed_receipt.receipt_id)
+            .is_none()
+    );
+    isi::SetSoracloudRuntimeState {
+        state: runtime_state.clone(),
+    }
+    .execute(&BOB_ID, &mut stx)?;
+    assert_eq!(
+        stx.world.soracloud_service_runtime.get(&victim_name),
+        Some(&runtime_state)
+    );
+    Ok(())
+}
+fn bundle_provenance(bundle: &SoraDeploymentBundleV1) -> ManifestProvenance {
+    let payload = iroha_data_model::soracloud::encode_bundle_with_materials_provenance_payload(
+        bundle,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .expect("bundle payload");
+    ManifestProvenance {
+        signer: ALICE_KEYPAIR.public_key().clone(),
+        signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
+    }
+}
+fn rollback_provenance(
+    service_name: &iroha_data_model::name::Name,
+    target_version: Option<&str>,
+) -> ManifestProvenance {
+    let payload = encode_rollback_provenance_payload(service_name.as_ref(), target_version)
+        .expect("rollback payload");
+    ManifestProvenance {
+        signer: ALICE_KEYPAIR.public_key().clone(),
+        signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
+    }
+}
+fn rollout_provenance(
+    service_name: &iroha_data_model::name::Name,
+    rollout_handle: &str,
+    healthy: bool,
+    promote_to_percent: Option<u8>,
+    governance_tx_hash: Hash,
+) -> ManifestProvenance {
+    let payload = encode_rollout_provenance_payload(
+        service_name.as_ref(),
+        rollout_handle,
+        healthy,
+        promote_to_percent,
+        governance_tx_hash,
+    )
+    .expect("rollout payload");
+    ManifestProvenance {
+        signer: ALICE_KEYPAIR.public_key().clone(),
+        signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
+    }
+}
+fn sample_bundle_with_state_binding(
+    service_name: &str,
+    service_version: &str,
+    canary_percent: u8,
+    binding_name: &str,
+    key_prefix: &str,
+    encryption: SoraStateEncryptionV1,
+    mutability: SoraStateMutabilityV1,
+    max_item_bytes: u64,
+    max_total_bytes: u64,
+) -> SoraDeploymentBundleV1 {
+    let mut bundle = sample_bundle(service_name, service_version, canary_percent);
+    bundle.container.capabilities.allow_state_writes = true;
+    bundle.service.state_bindings = vec![SoraStateBindingV1 {
+        schema_version: iroha_data_model::soracloud::SORA_STATE_BINDING_VERSION_V1,
+        binding_name: binding_name.parse().expect("valid name"),
+        key_prefix: key_prefix.to_string(),
+        scope: SoraStateScopeV1::ServiceState,
+        encryption,
+        mutability,
+        max_item_bytes: NonZeroU64::new(max_item_bytes).expect("nonzero"),
+        max_total_bytes: NonZeroU64::new(max_total_bytes).expect("nonzero"),
+    }];
+    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+    bundle
+}
+fn state_mutation_provenance(
+    service_name: &iroha_data_model::name::Name,
+    binding_name: &iroha_data_model::name::Name,
+    state_key: &str,
+    operation: SoraStateMutationOperationV1,
+    value_size_bytes: Option<u64>,
+    payload_commitment: Option<Hash>,
+    encryption: SoraStateEncryptionV1,
+    governance_tx_hash: Hash,
+    fhe_input_admission_proof: Option<SoracloudFheInputAdmissionProofV1>,
+) -> ManifestProvenance {
+    let operation_label = match operation {
+        SoraStateMutationOperationV1::Upsert => "upsert",
+        SoraStateMutationOperationV1::Delete => "delete",
+    };
+    let payload = encode_state_mutation_provenance_payload(
+        service_name.as_ref(),
+        binding_name.as_ref(),
+        state_key,
+        operation_label,
+        value_size_bytes,
+        payload_commitment,
+        encryption,
+        governance_tx_hash,
+        fhe_input_admission_proof,
+    )
+    .expect("state mutation payload");
+    ManifestProvenance {
+        signer: ALICE_KEYPAIR.public_key().clone(),
+        signature: checked_signature(ALICE_KEYPAIR.private_key(), &payload),
+    }
+}
+fn sample_fhe_param_set() -> FheParamSetV1 {
+    let registered_params = ram_lfe_bfv_parameters_v1();
+    let parameter_digest = registered_bfv_parameter_digest(&registered_params)
+        .expect("registered BFV parameter digest");
+    let rns_modulus_chain_digest = registered_bfv_rns_modulus_chain_digest(&registered_params)
+        .expect("registered BFV RNS modulus-chain digest");
+    let key_switch_decomposition_chain_digest =
+        registered_bfv_key_switch_decomposition_chain_digest(&registered_params)
+            .expect("registered BFV key-switch decomposition-chain digest");
+    FheParamSetV1 {
+        schema_version: iroha_data_model::soracloud::FHE_PARAM_SET_VERSION_V1,
+        param_set: "bfv-default".parse().expect("valid name"),
+        version: NonZeroU32::new(1).expect("nonzero"),
+        backend: "fhe/bfv-rns/v1".to_string(),
+        scheme: FheSchemeV1::Bfv,
+        ciphertext_modulus_bits: vec![
+            NonZeroU16::new(53).expect("nonzero"),
+            NonZeroU16::new(52).expect("nonzero"),
+        ],
+        plaintext_modulus_bits: NonZeroU16::new(9).expect("nonzero"),
+        polynomial_modulus_degree: NonZeroU32::new(u32::from(registered_params.polynomial_degree))
+            .expect("nonzero"),
+        slot_count: NonZeroU32::new(u32::from(registered_params.polynomial_degree))
+            .expect("nonzero"),
+        security_level_bits: NonZeroU16::new(128).expect("nonzero"),
+        max_multiplicative_depth: NonZeroU16::new(1).expect("nonzero"),
+        lifecycle: FheParamLifecycleV1::Active,
+        activation_height: Some(1),
+        deprecation_height: None,
+        withdraw_height: None,
+        parameter_digest,
+        rns_modulus_chain_digest,
+        key_switch_decomposition_chain_digest,
+    }
+}
+fn sample_bfv_evaluation_key_bundle() -> BfvEvaluationKeyBundle {
+    let params = ram_lfe_bfv_parameters_v1();
+    let (secret_key, public_key, relinearization_key) =
+        keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("keygen");
+    let packed_half_rotation = u32::from(params.polynomial_degree) / 2;
+    let packed_half_rotation_power =
+        packed_left_rotation_galois_automorphism_power(&params, packed_half_rotation)
+            .expect("registered packed half-rotation must be one Galois automorphism");
+    BfvEvaluationKeyBundle {
+        relinearization_key,
+        rotation_keys: vec![
+            rotation_key_from_seed(&params, &public_key, 1, b"soracloud-fhe-rotation-key")
+                .expect("rotation key"),
+        ],
+        galois_keys: vec![
+            galois_key_from_seed(&params, &secret_key, 3, b"soracloud-fhe-galois-key")
+                .expect("Galois key"),
+            galois_key_from_seed(
+                &params,
+                &secret_key,
+                packed_half_rotation_power,
+                b"soracloud-fhe-packed-rotate-galois-key",
+            )
+            .expect("packed rotation Galois key"),
+        ],
+        bootstrap_key: Some(
+            bootstrap_key_with_max_refresh_rounds_from_seed(
+                &params,
+                &public_key,
+                "bootstrap-test-key",
+                2,
+                b"soracloud-fhe-bootstrap-key",
+            )
+            .expect("bootstrap key"),
+        ),
+    }
+}
+fn install_full_bootstrap_material(
+    evaluation_keys: &mut BfvEvaluationKeyBundle,
+    params: &BfvParameters,
+    public_key: &BfvPublicKey,
+    material: BfvFullBootstrapCircuitMaterialV1,
+) {
+    let key_id = evaluation_keys
+        .bootstrap_key
+        .as_ref()
+        .expect("sample bundle carries a bootstrap key")
+        .key_id
+        .clone();
+    evaluation_keys.bootstrap_key = Some(
+        full_bootstrap_key_from_material_v1(params, public_key, key_id, material)
+            .expect("construct sample full-bootstrap key"),
+    );
+}
+fn sample_full_bootstrap_material(params: &BfvParameters) -> BfvFullBootstrapCircuitMaterialV1 {
+    sample_full_bootstrap_material_and_artifacts(params).0
+}
+fn sample_full_bootstrap_linear_transform_artifact_payload(
+    params: &BfvParameters,
+    role: BfvFullBootstrapCircuitArtifactRoleV1,
+) -> Vec<u8> {
+    let transform = BfvFullBootstrapLinearTransformV1 {
+        input_slot_count: params.polynomial_degree,
+        output_slot_count: params.polynomial_degree,
+        diagonals: vec![BfvFullBootstrapLinearTransformDiagonalV1 {
+            rotation_steps: 0,
+            plaintext: encode_packed_plaintext_slots(
+                params,
+                &vec![1; usize::from(params.polynomial_degree)],
+            )
+            .expect("encode identity packed-slot mask"),
+        }],
+    };
+    encode_bfv_full_bootstrap_linear_transform_artifact_v1(params, 1, role, &transform)
+        .expect("encode sample full-bootstrap linear transform artifact")
+}
+fn sample_full_bootstrap_accumulator_artifact_payload(params: &BfvParameters) -> Vec<u8> {
+    let accumulator = BfvFullBootstrapAccumulatorV1 {
+        slot_count: params.polynomial_degree,
+        test_vector: encode_packed_plaintext_slots(
+            params,
+            &vec![1; usize::from(params.polynomial_degree)],
+        )
+        .expect("encode sample full-bootstrap accumulator test vector"),
+    };
+    encode_bfv_full_bootstrap_accumulator_artifact_v1(params, 1, &accumulator)
+        .expect("encode sample full-bootstrap accumulator artifact")
+}
+fn sample_full_bootstrap_sample_extraction_switch_key_artifact_payload(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+) -> Vec<u8> {
+    let sample_extraction = BfvFullBootstrapSampleExtractionV1 {
+        source_slot_count: params.polynomial_degree,
+        source_ciphertext_component_count: 2,
+        extracted_coefficient_index: 0,
+        output_ciphertext_component_count: 2,
+    };
+    let switch_key = bfv_full_bootstrap_sample_extraction_switch_key_from_seed_v1(
+        params,
+        secret_key,
+        sample_extraction,
+        b"soracloud-full-bootstrap-sample-switch-artifact",
+    )
+    .expect("build sample full-bootstrap sample switch key");
+    encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(params, 1, &switch_key)
+        .expect("encode sample full-bootstrap sample switch-key artifact")
+}
+fn sample_full_bootstrap_bounded_noise_sample_extraction_switch_key_artifact_payload(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+) -> Vec<u8> {
+    let sample_extraction = BfvFullBootstrapSampleExtractionV1 {
+        source_slot_count: params.polynomial_degree,
+        source_ciphertext_component_count: 2,
+        extracted_coefficient_index: 0,
+        output_ciphertext_component_count: 2,
+    };
+    let switch_key = bfv_full_bootstrap_sample_extraction_bounded_noise_switch_key_from_seed_v1(
+        params,
+        secret_key,
+        sample_extraction,
+        b"soracloud-full-bootstrap-bounded-sample-switch-artifact",
+    )
+    .expect("build sample bounded full-bootstrap sample switch key");
+    encode_bfv_full_bootstrap_sample_extraction_switch_key_artifact_v1(params, 1, &switch_key)
+        .expect("encode sample bounded full-bootstrap sample switch-key artifact")
+}
+fn sample_full_bootstrap_blind_rotation_artifact_payload(
+    params: &BfvParameters,
+    accumulator_digest: Hash,
+) -> Vec<u8> {
+    let blind_rotation_key = bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1(
+        params,
+        accumulator_digest,
+        1,
+    )
+    .expect("build sample full-bootstrap blind-rotation key");
+    encode_bfv_full_bootstrap_blind_rotation_artifact_v1(params, 1, &blind_rotation_key)
+        .expect("encode sample full-bootstrap blind-rotation artifact")
+}
+fn sample_full_bootstrap_proof_public_input_schema_artifact_payload(
+    params: &BfvParameters,
+) -> Vec<u8> {
+    encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1(
+        params,
+        1,
+        &bfv_full_bootstrap_proof_public_input_schema_v1(),
+    )
+    .expect("encode sample full-bootstrap proof public-input schema artifact")
+}
+fn sample_full_bootstrap_proof_key_artifact_payloads(
+    params: &BfvParameters,
+    public_input_schema_digest: Hash,
+    evaluator_artifact_set_digest: Hash,
+    prover_key_material: &[u8],
+    verifier_key_material: &[u8],
+) -> (Vec<u8>, Vec<u8>) {
+    let (prover_key, verifier_key) = bfv_full_bootstrap_proof_key_pair_from_key_material_v1(
+        params,
+        1,
+        public_input_schema_digest,
+        evaluator_artifact_set_digest,
+        prover_key_material,
+        verifier_key_material,
+    )
+    .expect("build sample full-bootstrap proof-key pair");
+    let prover_key = encode_bfv_full_bootstrap_proof_key_artifact_v1(
+        params,
+        1,
+        BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+        &prover_key,
+    )
+    .expect("encode sample full-bootstrap prover-key artifact");
+    let verifier_key = encode_bfv_full_bootstrap_proof_key_artifact_v1(
+        params,
+        1,
+        BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+        &verifier_key,
+    )
+    .expect("encode sample full-bootstrap verifier-key artifact");
+    (prover_key, verifier_key)
+}
+fn sample_full_bootstrap_circuit_artifacts(
+    params: &BfvParameters,
+) -> BfvFullBootstrapCircuitArtifactBundleV1 {
+    let (secret_key, _public_key, _relinearization_key) =
+        keygen_from_seed(params, b"soracloud-fhe-test-keygen")
+            .expect("sample full-bootstrap artifact keygen");
+    sample_full_bootstrap_circuit_artifacts_for_secret(params, &secret_key)
+}
+fn sample_full_bootstrap_circuit_artifacts_for_secret(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+) -> BfvFullBootstrapCircuitArtifactBundleV1 {
+    #[cfg(feature = "zk-stark")]
+    {
+        let verifier_key = sample_fhe_full_bootstrap_execution_vk_box();
+        let prover_key_material =
+            encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1(
+                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+            )
+            .expect("sample native full-bootstrap prover-key material");
+        let verifier_key_material =
+            sample_full_bootstrap_native_verifier_material_for_core_vk(&verifier_key);
+        sample_full_bootstrap_circuit_artifacts_for_secret_and_proof_keys(
+            params,
+            secret_key,
+            &prover_key_material,
+            &verifier_key_material,
+        )
+    }
+    #[cfg(not(feature = "zk-stark"))]
+    {
+        let prover_key_material =
+            encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1(
+                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+            )
+            .expect("sample native full-bootstrap prover-key material");
+        let verifier_key_material =
+            iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_v1(
+                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+            )
+            .expect("sample native full-bootstrap verifier-key material");
+        sample_full_bootstrap_circuit_artifacts_for_secret_and_proof_keys(
+            params,
+            secret_key,
+            &prover_key_material,
+            &verifier_key_material,
+        )
+    }
+}
+fn sample_full_bootstrap_circuit_artifacts_for_secret_and_proof_keys(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    prover_key_material: &[u8],
+    verifier_key_material: &[u8],
+) -> BfvFullBootstrapCircuitArtifactBundleV1 {
+    let accumulator = sample_full_bootstrap_accumulator_artifact_payload(params);
+    let accumulator_digest = Hash::new(&accumulator);
+    let proof_public_input_schema =
+        sample_full_bootstrap_proof_public_input_schema_artifact_payload(params);
+    let proof_public_input_schema_digest = Hash::new(&proof_public_input_schema);
+    let arithmetic_air_constraint_system =
+        encode_bfv_full_bootstrap_arithmetic_air_constraint_system_artifact_v1(
+            params,
+            1,
+            &bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1(),
+        )
+        .expect("encode sample full-bootstrap arithmetic AIR constraint-system artifact");
+    let coefficient_to_slot_key = sample_full_bootstrap_linear_transform_artifact_payload(
+        params,
+        BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
+    );
+    let slot_to_coefficient_key = sample_full_bootstrap_linear_transform_artifact_payload(
+        params,
+        BfvFullBootstrapCircuitArtifactRoleV1::SlotToCoefficientKey,
+    );
+    let blind_rotation_key =
+        sample_full_bootstrap_blind_rotation_artifact_payload(params, accumulator_digest);
+    let sample_extraction_key =
+        sample_full_bootstrap_sample_extraction_switch_key_artifact_payload(params, secret_key);
+    let evaluator_artifact_set_digest = bfv_full_bootstrap_evaluator_artifact_set_digest_v1(
+        params,
+        1,
+        &coefficient_to_slot_key,
+        &slot_to_coefficient_key,
+        &blind_rotation_key,
+        &sample_extraction_key,
+        &accumulator,
+        &proof_public_input_schema,
+        &arithmetic_air_constraint_system,
+    )
+    .expect("sample full-bootstrap evaluator artifact-set digest");
+    let (prover_key, verifier_key) = sample_full_bootstrap_proof_key_artifact_payloads(
+        params,
+        proof_public_input_schema_digest,
+        evaluator_artifact_set_digest,
+        prover_key_material,
+        verifier_key_material,
+    );
+    BfvFullBootstrapCircuitArtifactBundleV1 {
+        coefficient_to_slot_key,
+        slot_to_coefficient_key,
+        blind_rotation_key,
+        sample_extraction_key,
+        accumulator,
+        proof_public_input_schema,
+        arithmetic_air_constraint_system,
+        prover_key,
+        verifier_key,
+    }
+}

@@ -11,21 +11,18 @@ need a single-page summary of the Sora Nexus (Iroha 3) architecture before
 diving into the detailed specifications (`specs/nexus.md`,
 `specs/nexus_lanes.md`, `specs/nexus_transition_notes.md`).
 
-## 1. Release Lines & Shared Tooling
+## 1. Release Product & Tooling
 
-- **Iroha 2** remains the self-hosted track for consortium deployments.
-- **Iroha 3 / Sora Nexus** introduces multi-lane execution, data spaces, and
-  shared governance. The same repository, toolchain, and CI pipelines build both
-  release lines, so fixes to the Iroha Virtual Machine (IVM), Kotodama compiler,
-  or SDKs automatically apply to Nexus.
-- **Artifacts:** `iroha3-<version>-<os>.tar.zst` bundles and OCI images contain
-  binaries, sample configs, and the Nexus profile metadata. Operators reference
+- **Iroha 3 / Sora Nexus** is the sole release product. It supports one-lane
+  and multi-lane deployments through the same mandatory Nexus runtime.
+- **Artifacts:** `iroha3-<version>-<os>-<arch>.tar.zst` bundles and OCI images contain
+  binaries, sample configs, and canonical product metadata. Operators reference
   `specs/sora_nexus_operator_onboarding.md` for the end-to-end artefact
   validation workflow.
-- **Shared SDK surface:** Rust, Python, JS/TS, Swift, and Android SDKs consume
+- **SDK surface:** Rust, Python, JS/TS, Swift, and Android SDKs consume
   the same Norito schemas and address fixtures (`fixtures/account/address_vectors.json`)
-  so wallets and automation can switch between Iroha 2 and Nexus networks without
-  format forks.
+  so wallets and automation use one wire-format implementation across Iroha 3
+  deployments.
 
 ## 2. Architectural Building Blocks
 

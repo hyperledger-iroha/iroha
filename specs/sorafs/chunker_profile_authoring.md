@@ -103,7 +103,7 @@ so reviewers can reproduce them verbatim.
    cross-language diff harness (`crates/sorafs_chunker/tests/vectors.rs`) must be
    green with the new fixtures in place.
 3. **Replay deterministic back-pressure fixtures** – run
-   `cargo test --locked -p sorafs_chunker --test backpressure` against
+   `cargo test --locked -p sorafs_chunker --test vectors backpressure` against
    `fuzz/sorafs_chunker/sf1_profile_v1_{input.bin,backpressure.json}`. These
    are generated deterministic fixtures, not a libFuzzer corpus. Any future
    chunker fuzz target must be separately workspace/lockfile-wired, executed,

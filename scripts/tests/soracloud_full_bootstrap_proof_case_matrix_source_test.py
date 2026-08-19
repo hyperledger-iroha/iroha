@@ -20,7 +20,7 @@ REGIONS = {
         """    #[cfg(feature = "zk-stark")]
     #[test]
     fn soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_empty_input_slots""",
-        "5c05b157e263e885324ba9d1b97c2601630da91817a00045cd957e72efb0a7d5",
+        "1b6ff53bf71b2c1da2bea97f774deb30f42565143edce8ad58172bcbe49256e7",
     ),
     "release_verifier": (
         """    #[cfg(feature = "zk-stark")]
@@ -42,15 +42,16 @@ REGIONS = {
     ),
     "proof_quota": (
         """    #[cfg(feature = "zk-stark")]
-    fn enable_full_bootstrap_proof_quotas<'""",
+    fn enable_full_bootstrap_proof_quotas<P>(""",
         "    fn sample_fhe_input_admission_proof(\n",
-        "c072fc54e9e1b9a922c61102329ce399261fede7c21ea318c5517a2e68ebb2a1",
+        "8b92df900659acde31121bc880561db9facd826bed909341eec9170a7144c167",
     ),
 }
 
 VERIFIER_CASES = {
     "soracloud_fhe_full_bootstrap_execution_proof_requires_governed_verifier_record": "MissingRecord",
     "soracloud_fhe_full_bootstrap_execution_proof_rejects_inactive_governed_verifier_record": "InactiveRecord",
+    "soracloud_fhe_full_bootstrap_execution_proof_rejects_out_of_window_governed_verifier_record": "OutsideHeightWindow",
     "soracloud_fhe_full_bootstrap_execution_proof_rejects_unverified_fake_proof": "FakeProof",
 }
 
@@ -143,6 +144,8 @@ METADATA_CASES = (
 REQUIRED_TOKENS = {
     "verifier_record": (
         "status = ConfidentialStatus::Withdrawn",
+        ".activation_height = Some(activation_height)",
+        '"out-of-window full-bootstrap execution verifier must fail closed"',
         "verifying_keys_by_circuit.remove",
         'record.namespace = "other".to_string()',
         "record.backend = BackendTag::Halo2IpaPasta",
@@ -202,8 +205,10 @@ REQUIRED_TOKENS = {
         "assert_invalid_parameter_contains(err, expected_error)",
     ),
     "proof_quota": (
-        "impl Iterator<Item = &'a SoracloudFheFullBootstrapExecutionProofV1>",
-        ".map(|proof| proof.proof.proof.bytes.len())",
+        "impl IntoIterator<Item = P>",
+        "P: std::borrow::Borrow<SoracloudFheFullBootstrapExecutionProofV1>",
+        ".into_iter()",
+        ".map(|proof| proof.borrow().proof.proof.bytes.len())",
         "enable_stark_sample_proof_quotas(state_transaction, &lengths)",
     ),
 }
@@ -385,12 +390,12 @@ class SoracloudFullBootstrapProofCaseMatrixSourceTests(unittest.TestCase):
         self.assert_rejected(mutated)
 
     def test_quota_helper_mutation_is_rejected(self) -> None:
-        old = ".map(|proof| proof.proof.proof.bytes.len())"
+        old = ".map(|proof| proof.borrow().proof.proof.bytes.len())"
         mutated = _replace_in_region(
             self.source,
             "proof_quota",
             old,
-            ".map(|proof| proof.proof.proof.bytes.len().saturating_sub(1))",
+            ".map(|proof| proof.borrow().proof.proof.bytes.len().saturating_sub(1))",
         )
         self.assert_rejected(mutated)
 
@@ -405,7 +410,8 @@ class SoracloudFullBootstrapProofCaseMatrixSourceTests(unittest.TestCase):
         self.assert_rejected(mutated)
 
     def test_source_budget_growth_is_rejected(self) -> None:
-        self.assert_rejected(self.source + "// synthetic growth\n" * 10)
+        growth = MAX_SOURCE_LINES - len(self.source.splitlines()) + 1
+        self.assert_rejected(self.source + "// synthetic growth\n" * growth)
 
 
 if __name__ == "__main__":

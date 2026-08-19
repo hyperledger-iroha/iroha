@@ -32,6 +32,10 @@ from scripts.tests.deploy_taira_v21_reset_test_support import (
     MODULE,
 )
 
+GENESIS_EXPECTED_HASH_LITERAL = MODULE.validator_renderer._format_literal(
+    "hash", GENESIS_EXPECTED_HASH.upper()
+)
+
 
 def _receipt_keypair(index: int) -> tuple[str, str, str]:
     return _support_receipt_keypair(index)
@@ -44,17 +48,14 @@ def _receipt_signer_map() -> dict[str, dict[str, object]]:
 def _projection_config_text() -> str:
     return _support_projection_config_text()
 
-
 def _write(path: Path, body: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.write_bytes(body)
     path.chmod(0o600)
 
-
 def _mkdir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
     path.chmod(0o700)
-
 
 def test_acl_gate_is_a_stable_noop_off_macos(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -73,7 +74,6 @@ def test_acl_gate_is_a_stable_noop_off_macos(
 
     assert MODULE.metadata_identity(actual) == MODULE.metadata_identity(expected)
 
-
 def test_acl_gate_fails_closed_when_the_pinned_inspector_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -90,7 +90,6 @@ def test_acl_gate_fails_closed_when_the_pinned_inspector_fails(
 
     with pytest.raises(MODULE.DeploymentError, match="extended ACL"):
         MODULE.require_acl_free_path(path, "test trusted path")
-
 
 def test_acl_failure_removes_owned_unpublished_plist_staging_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -117,7 +116,6 @@ def test_acl_failure_removes_owned_unpublished_plist_staging_file(
 
     assert not path.exists()
     assert not temporary.exists()
-
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS ACL semantics")
 def test_acl_gate_rejects_everyone_write_and_clears_only_owned_temporary(
@@ -148,12 +146,15 @@ def test_acl_gate_rejects_everyone_write_and_clears_only_owned_temporary(
             stderr=subprocess.DEVNULL,
         )
 
-
 def _build_bundle(tmp_path: Path, binary_sha: str, source_commit: str) -> Path:
     bundle = tmp_path / "bundle"
     _mkdir(bundle)
     for name, body in (
         ("base-config.toml", b"base\n"),
+        (
+            "genesis.identity.toml",
+            MODULE.canonical_genesis_identity(GENESIS_EXPECTED_HASH),
+        ),
         ("genesis.json", b'{"chain":"taira"}\n'),
         ("genesis.signed.nrt", b"signed-genesis"),
         ("validator-roster.toml", b"roster\n"),
@@ -194,7 +195,7 @@ soravpn_spool_bps = 250
 [genesis]
 file = "{bundle / "genesis.signed.nrt"}"
 public_key = "{GENESIS_PUBLIC_KEY}"
-expected_hash = "{GENESIS_EXPECTED_HASH}"
+expected_hash = "{GENESIS_EXPECTED_HASH_LITERAL}"
 """
         _write(workdir / "config.toml", config.encode())
         config_hashes[slug] = hashlib.sha256(config.encode()).hexdigest()
@@ -212,6 +213,9 @@ expected_hash = "{GENESIS_EXPECTED_HASH}"
         "irohad_sha256": binary_sha,
         "genesis_public_key": GENESIS_PUBLIC_KEY,
         "genesis_expected_hash": GENESIS_EXPECTED_HASH,
+        "genesis_identity_sha256": hashlib.sha256(
+            (bundle / "genesis.identity.toml").read_bytes()
+        ).hexdigest(),
         "signed_genesis_sha256": hashlib.sha256(
             (bundle / "genesis.signed.nrt").read_bytes()
         ).hexdigest(),
@@ -362,11 +366,10 @@ def test_projection_parser_extracts_all_required_fields() -> None:
     assert config["chain"] == MODULE.CHAIN_ID
     assert config["chain_discriminant"] == MODULE.CHAIN_DISCRIMINANT
     assert config["genesis"]["public_key"] == GENESIS_PUBLIC_KEY
-    assert config["genesis"]["expected_hash"] == GENESIS_EXPECTED_HASH
+    assert config["genesis"]["expected_hash"] == GENESIS_EXPECTED_HASH_LITERAL
     assert (
         config["nexus"]["storage"]["disk_budget_weights"] == MODULE.NODE_STORAGE_WEIGHTS
     )
-
 
 def test_projection_parser_rejects_malformed_required_field() -> None:
     malformed = _projection_config_text().replace(
@@ -376,7 +379,6 @@ def test_projection_parser_rejects_malformed_required_field() -> None:
 
     with pytest.raises(MODULE.DeploymentError, match="malformed integer"):
         MODULE.parse_config_projection_text(malformed, "validator config")
-
 
 def test_projection_parser_rejects_duplicate_required_field() -> None:
     duplicate = _projection_config_text().replace(
@@ -389,7 +391,6 @@ def test_projection_parser_rejects_duplicate_required_field() -> None:
 
     with pytest.raises(MODULE.DeploymentError, match="duplicates required field"):
         MODULE.parse_config_projection_text(duplicate, "validator config")
-
 
 def test_projection_parser_keeps_hash_inside_quoted_address() -> None:
     config = MODULE.parse_config_projection_text(
@@ -462,6 +463,27 @@ def test_bundle_preflight_authenticates_exact_four_peer_reset(tmp_path: Path) ->
     assert [peer.torii_port for peer in plan.peers] == list(MODULE.TORII_PORTS)
     assert [peer.p2p_port for peer in plan.peers] == list(MODULE.P2P_PORTS)
     assert all(not any(peer.storage.iterdir()) for peer in plan.peers)
+    assert plan.genesis_identity_file_identity == MODULE.metadata_identity(
+        (bundle / "genesis.identity.toml").lstat()
+    )
+
+
+def test_bundle_preflight_rejects_rebound_genesis_identity(tmp_path: Path) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    identity_path = bundle / "genesis.identity.toml"
+    rebound_hash = "02" * 31 + "03"
+    _write(identity_path, MODULE.canonical_genesis_identity(rebound_hash))
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["genesis_identity_sha256"] = hashlib.sha256(
+        identity_path.read_bytes()
+    ).hexdigest()
+    _write_reset_manifest(bundle, manifest)
+
+    with pytest.raises(MODULE.DeploymentError, match="canonical paired"):
+        _validate(bundle, binary_sha, source_commit)
 
 
 def test_bundle_preflight_binds_kagemusha_projection_and_bounded_external_bytes(
@@ -790,9 +812,35 @@ def test_bundle_preflight_rejects_a_config_with_an_alternate_genesis_hash(
     slug = MODULE.SLUGS[0]
     config_path = bundle / "rendered" / slug / "config.toml"
     alternate_hash = "02" * 31 + "03"
+    alternate_hash_literal = MODULE.validator_renderer._format_literal(
+        "hash", alternate_hash.upper()
+    )
     config = config_path.read_text().replace(
+        f'expected_hash = "{GENESIS_EXPECTED_HASH_LITERAL}"',
+        f'expected_hash = "{alternate_hash_literal}"',
+    )
+    _write(config_path, config.encode())
+    manifest_path = bundle / "reset-manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["configs"][slug] = hashlib.sha256(config.encode()).hexdigest()
+    _write(
+        manifest_path,
+        (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode(),
+    )
+
+    with pytest.raises(MODULE.DeploymentError, match="exact expected hash"):
+        _validate(bundle, binary_sha, source_commit)
+
+
+def test_bundle_preflight_rejects_a_raw_unwrapped_genesis_hash(tmp_path: Path) -> None:
+    binary_sha = "a" * 64
+    source_commit = "b" * 40
+    bundle = _build_bundle(tmp_path, binary_sha, source_commit)
+    slug = MODULE.SLUGS[0]
+    config_path = bundle / "rendered" / slug / "config.toml"
+    config = config_path.read_text().replace(
+        f'expected_hash = "{GENESIS_EXPECTED_HASH_LITERAL}"',
         f'expected_hash = "{GENESIS_EXPECTED_HASH}"',
-        f'expected_hash = "{alternate_hash}"',
     )
     _write(config_path, config.encode())
     manifest_path = bundle / "reset-manifest.json"
@@ -825,7 +873,6 @@ def test_bundle_preflight_requires_receipt_bound_reset_manifest_digest(
             maximum_fsync_latency_ms=10_000,
         )
 
-
 def test_bundle_preflight_rejects_dpn_only_identity_mismatch(tmp_path: Path) -> None:
     binary_sha = "8" * 64
     source_commit = "9" * 40
@@ -843,7 +890,6 @@ def test_bundle_preflight_rejects_dpn_only_identity_mismatch(tmp_path: Path) -> 
             minimum_free_bytes=0,
             maximum_fsync_latency_ms=10_000,
         )
-
 
 def test_binary_config_gate_checks_every_peer_with_bounded_redacted_command(
     tmp_path: Path,
@@ -889,7 +935,6 @@ def test_binary_config_gate_checks_every_peer_with_bounded_redacted_command(
         and callable(kwargs["preexec_fn"])
         for _command, kwargs in calls
     )
-
 
 def test_binary_config_gate_stops_on_first_rejected_peer(tmp_path: Path) -> None:
     peers = tuple(
@@ -1128,7 +1173,6 @@ def test_binary_config_gate_privilege_drop_clears_groups_before_uid(
         ("umask", 0o077),
     ]
 
-
 @pytest.mark.parametrize(("uid", "gid"), ((0, 502), (501, 0), (-1, 502)))
 def test_binary_config_gate_rejects_root_or_invalid_runtime_identity(
     uid: int,
@@ -1136,7 +1180,6 @@ def test_binary_config_gate_rejects_root_or_invalid_runtime_identity(
 ) -> None:
     with pytest.raises(MODULE.DeploymentError, match="non-root runtime identity"):
         MODULE._drop_config_check_privileges(uid, gid)
-
 
 @pytest.mark.parametrize(
     "mutation",
@@ -1169,7 +1212,6 @@ def test_bundle_preflight_rejects_identity_and_freshness_drift(
     with pytest.raises(MODULE.DeploymentError):
         _validate(bundle, binary_sha, source_commit)
 
-
 def _fake_plan(
     tmp_path: Path,
 ) -> tuple[MODULE.BundlePlan, MODULE.SourcePlan, os.stat_result]:
@@ -1191,7 +1233,6 @@ def _fake_plan(
         python_identity=(0,) * 9,
     )
     return bundle, sources, binary.lstat()
-
 
 def test_fresh_plist_has_all_five_binary_stat_seals_and_known_paths(
     tmp_path: Path,
@@ -1248,7 +1289,6 @@ def test_fresh_plist_has_all_five_binary_stat_seals_and_known_paths(
     assert arguments[arguments.index("--terminal-unhealthy-file") + 1] == str(expected_terminal)
     assert payload["EnvironmentVariables"]["GENESIS"] == str(bundle.root / "genesis.signed.nrt")
 
-
 def test_validate_sources_uses_validated_runtime_not_controller_python(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1289,7 +1329,6 @@ def test_validate_sources_uses_validated_runtime_not_controller_python(
     assert sources.python_identity == (7,) * 9
     assert str(sources.python) != MODULE.sys.executable
 
-
 @pytest.mark.parametrize(
     ("returncode", "stdout"),
     [
@@ -1317,7 +1356,6 @@ def test_supervisor_python_probe_fails_closed(
 
     with pytest.raises(MODULE.DeploymentError):
         MODULE.validate_supervisor_python(MODULE.DEFAULT_SUPERVISOR_PYTHON)
-
 
 def test_supervisor_python_accepts_root_controlled_python_39(
     monkeypatch: pytest.MonkeyPatch,
@@ -1360,7 +1398,6 @@ def test_supervisor_python_accepts_root_controlled_python_39(
         runtime,
         MODULE.metadata_identity(identity),
     )
-
 
 def test_supervisor_python_rejects_runtime_identity_drift(
     monkeypatch: pytest.MonkeyPatch,
@@ -1405,7 +1442,6 @@ def test_supervisor_python_rejects_runtime_identity_drift(
     with pytest.raises(MODULE.DeploymentError, match="identity changed"):
         MODULE.validate_supervisor_python(MODULE.DEFAULT_SUPERVISOR_PYTHON)
 
-
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS deployment invariant")
 def test_supervisor_python_live_probe_resolves_direct_clt_runtime() -> None:
     runtime, identity = MODULE.validate_supervisor_python(
@@ -1421,7 +1457,6 @@ def test_supervisor_python_live_probe_resolves_direct_clt_runtime() -> None:
         == identity
     )
 
-
 def test_supervisor_python_rejects_homebrew_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1434,7 +1469,6 @@ def test_supervisor_python_rejects_homebrew_path(
     with pytest.raises(MODULE.DeploymentError, match="exactly /usr/bin/python3"):
         MODULE.validate_supervisor_python(homebrew)
 
-
 def _health_getter(
     bundle: MODULE.BundlePlan, source_commit: str, *, bad_blocks: bool = False
 ):
@@ -1446,7 +1480,6 @@ def _health_getter(
         if url.endswith("/v1/nexus/lifecycle"):
             return {
                 "version": 1,
-                "nexus_enabled": True,
                 "lane_count": MODULE.TAIRA_LANE_COUNT,
                 "lanes": [
                     {
@@ -1459,6 +1492,11 @@ def _health_getter(
                     )
                 ],
                 "catalog_hash": "hash:" + "c" * 64,
+                "incarnations": [
+                    {"lane_id": lane_id, "incarnation": "hash:" + f"{lane_id + 1:x}" * 64}
+                    for lane_id in range(MODULE.TAIRA_LANE_COUNT)
+                ],
+                "incarnation_root": "hash:" + "d" * 64,
             }
         if "/v1/sumeragi/status" in url:
             subject = {"block_hash": f"hash:{block_hash.upper()}#A1b2"}
@@ -1501,7 +1539,6 @@ def _health_getter(
         raise AssertionError(f"unexpected JSON health route: {url}")
 
     return get
-
 
 def test_operator_http_getter_signs_each_exact_target_without_fallback(
     tmp_path: Path,
@@ -1574,7 +1611,6 @@ def test_operator_http_getter_signs_each_exact_target_without_fallback(
         assert "x-iroha-operator-signature" in names
     assert MODULE._RejectRedirects().redirect_request(None, None, 302, "", {}, url) is None
 
-
 @pytest.mark.parametrize(
     "value",
     [
@@ -1587,7 +1623,6 @@ def test_operator_http_getter_signs_each_exact_target_without_fallback(
 )
 def test_block_hash_normalization_accepts_exact_canonical_forms(value: str) -> None:
     assert MODULE.normalized_block_hash(value, "test block") == "ab" * 32
-
 
 @pytest.mark.parametrize(
     "value",
@@ -1603,7 +1638,6 @@ def test_block_hash_normalization_accepts_exact_canonical_forms(value: str) -> N
 def test_block_hash_normalization_rejects_noncanonical_suffixes(value: str) -> None:
     with pytest.raises(MODULE.DeploymentError, match="canonical block hash"):
         MODULE.normalized_block_hash(value, "test block")
-
 
 def test_four_peer_health_requires_exact_common_status_and_dataspaces(
     tmp_path: Path,
@@ -1664,7 +1698,6 @@ def test_four_peer_health_requires_exact_common_status_and_dataspaces(
             health_getter=lambda _url, _timeout: None,
         )
 
-
 def test_four_peer_health_fails_closed_when_health_is_not_200(tmp_path: Path) -> None:
     source_commit = "4" * 40
     bundle = _build_bundle(tmp_path, "5" * 64, source_commit)
@@ -1681,7 +1714,6 @@ def test_four_peer_health_fails_closed_when_health_is_not_200(tmp_path: Path) ->
             getter=_health_getter(plan, source_commit),
             health_getter=unhealthy,
         )
-
 
 def test_four_peer_health_rejects_dpn_only_runtime_mismatch(tmp_path: Path) -> None:
     source_commit = "4" * 40
@@ -1703,7 +1735,6 @@ def test_four_peer_health_rejects_dpn_only_runtime_mismatch(tmp_path: Path) -> N
             getter=wrong_dpn,
             health_getter=lambda _url, _timeout: None,
         )
-
 
 def test_four_peer_health_requires_exact_seven_lane_five_dataspace_topology(
     tmp_path: Path,
@@ -1730,7 +1761,6 @@ def test_four_peer_health_requires_exact_seven_lane_five_dataspace_topology(
             getter=wrong_dataspace,
             health_getter=lambda _url, _timeout: None,
         )
-
 
 @pytest.mark.parametrize(
     ("mutation", "message"),
@@ -1814,7 +1844,6 @@ def test_four_peer_health_rejects_noncanonical_lane_bindings(
             health_getter=lambda _url, _timeout: None,
         )
 
-
 @pytest.mark.parametrize(
     ("path", "value"),
     [
@@ -1850,7 +1879,6 @@ def test_four_peer_health_rejects_underquorum_or_noncommit_qc(
             getter=getter,
             health_getter=lambda _url, _timeout: None,
         )
-
 
 def test_controller_terminal_marker_is_private_bounded_and_redaction_safe(
     tmp_path: Path,
@@ -1895,7 +1923,6 @@ def test_controller_terminal_marker_is_private_bounded_and_redaction_safe(
     assert stat.S_IMODE(marker.stat().st_mode) == 0o600
     assert marker.stat().st_size <= MODULE.MAX_TERMINAL_UNHEALTHY_BYTES
 
-
 def test_new_binding_ignores_stale_marker_but_rejects_misbinding(
     tmp_path: Path,
 ) -> None:
@@ -1937,7 +1964,6 @@ def test_new_binding_ignores_stale_marker_but_rejects_misbinding(
     ):
         MODULE.require_no_terminal_unhealthy(plan, runtime_root, bindings)
 
-
 def test_controller_fails_before_initial_health_when_terminal_latched() -> None:
     calls: list[str] = []
 
@@ -1957,7 +1983,6 @@ def test_controller_fails_before_initial_health_when_terminal_latched() -> None:
         )
 
     assert calls == ["terminal"]
-
 
 def test_controller_fails_before_advancement_when_terminal_latched() -> None:
     calls: list[str] = []
@@ -1980,7 +2005,6 @@ def test_controller_fails_before_advancement_when_terminal_latched() -> None:
 
     assert calls == ["terminal"]
 
-
 def test_restart_log_gate_accepts_snapshot_restore_and_ignores_stale_prefix(
     tmp_path: Path,
 ) -> None:
@@ -1998,7 +2022,6 @@ def test_restart_log_gate_accepts_snapshot_restore_and_ignores_stale_prefix(
         stream.write(MODULE.SNAPSHOT_LOAD_SUCCESS_MARKER + b"\n")
 
     MODULE.require_snapshot_backed_restart(cursor)
-
 
 @pytest.mark.parametrize(
     ("suffix", "message"),
@@ -2026,7 +2049,6 @@ def test_restart_log_gate_rejects_missing_or_forbidden_marker(
     with pytest.raises(MODULE.DeploymentError, match=message):
         MODULE.require_snapshot_backed_restart(cursor)
 
-
 @pytest.mark.parametrize("mutation", ["truncate", "replace"])
 def test_restart_log_gate_rejects_truncated_or_replaced_inode(
     tmp_path: Path, mutation: str
@@ -2044,7 +2066,6 @@ def test_restart_log_gate_rejects_truncated_or_replaced_inode(
 
     with pytest.raises(MODULE.DeploymentError, match="truncated|replaced|changed"):
         MODULE.require_snapshot_backed_restart(cursor)
-
 
 def test_restart_log_cursor_rejects_symlink_wrong_mode_owner_and_link_count(
     tmp_path: Path,
@@ -2076,7 +2097,6 @@ def test_restart_log_cursor_rejects_symlink_wrong_mode_owner_and_link_count(
         MODULE._require_safe_restart_log_owner_mode(
             wrong_owner, os.getuid(), os.getgid()
         )
-
 
 def test_restart_proof_reverifies_same_child_and_reports_ceil_duration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -2127,7 +2147,6 @@ def test_restart_proof_reverifies_same_child_and_reports_ceil_duration(
     assert actual.duration_ms == 2
     assert events == [(11, 22), ("terminate", 22), (11, 33), "advanced", (11, 33)]
 
-
 @pytest.mark.parametrize("final_identity", [(11, 44), (12, 33)])
 def test_restart_proof_rejects_child_or_supervisor_drift_after_advancement(
     tmp_path: Path,
@@ -2168,7 +2187,6 @@ def test_restart_proof_rejects_child_or_supervisor_drift_after_advancement(
             ops,
         )
 
-
 def test_restart_proof_rejects_measured_duration_beyond_bound(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2208,7 +2226,6 @@ def test_restart_proof_rejects_measured_duration_beyond_bound(
             ops,
         )
 
-
 def test_controller_fails_before_restart_proof_when_terminal_latched() -> None:
     calls: list[str] = []
 
@@ -2231,7 +2248,6 @@ def test_controller_fails_before_restart_proof_when_terminal_latched() -> None:
 
     assert calls == ["terminal"]
 
-
 def _darwin_procargs_payload(
     executable: str,
     argv: tuple[str, ...],
@@ -2246,7 +2262,6 @@ def _darwin_procargs_payload(
     encoded_argv = b"".join(os.fsencode(argument) + b"\0" for argument in argv)
     return argc + os.fsencode(executable) + b"\0\0\0" + encoded_argv + trailing
 
-
 def test_darwin_procargs2_parser_preserves_exact_nul_delimited_arguments() -> None:
     argv = (
         "/System Path/Python.app/Contents/MacOS/Python",
@@ -2259,7 +2274,6 @@ def test_darwin_procargs2_parser_preserves_exact_nul_delimited_arguments() -> No
     )
 
     assert MODULE.parse_darwin_procargs2(payload) == argv
-
 
 @pytest.mark.parametrize(
     ("payload", "message"),
@@ -2298,13 +2312,11 @@ def test_darwin_procargs2_parser_rejects_malformed_payloads(
     with pytest.raises(MODULE.DeploymentError, match=message):
         MODULE.parse_darwin_procargs2(payload)
 
-
 def test_darwin_procargs2_parser_rejects_payload_above_allocation_bound() -> None:
     payload = b"\0" * (MODULE.MAX_PROCESS_ARGUMENT_BYTES + 1)
 
     with pytest.raises(MODULE.DeploymentError, match="invalid size"):
         MODULE.parse_darwin_procargs2(payload)
-
 
 def test_process_inspection_rejects_native_argv_drift(
     monkeypatch: pytest.MonkeyPatch,
@@ -2320,7 +2332,6 @@ def test_process_inspection_rejects_native_argv_drift(
 
     with pytest.raises(MODULE.DeploymentError, match="changed during capture"):
         ops.inspect_process(77)
-
 
 def test_process_inspection_preserves_stable_native_argv(
     monkeypatch: pytest.MonkeyPatch,
@@ -2340,7 +2351,6 @@ def test_process_inspection_preserves_stable_native_argv(
         uid=501,
         argv=argv,
     )
-
 
 class _OldCaptureOps:
     def __init__(
@@ -2372,7 +2382,6 @@ class _OldCaptureOps:
     def child_pids(self, parent_pid: int) -> tuple[int, ...]:
         assert parent_pid == self.supervisor_pid
         return self._child_pids
-
 
 def _old_capture_payload(pid_file: Path) -> tuple[dict[str, object], tuple[str, ...]]:
     supervisor_argv = (
@@ -2431,7 +2440,6 @@ def test_absent_old_child_requires_explicit_reset_authorization(
     )
     assert managed.child_was_present is False
 
-
 def test_absent_old_pid_rejects_any_untracked_supervisor_child(
     tmp_path: Path,
 ) -> None:
@@ -2447,7 +2455,6 @@ def test_absent_old_pid_rejects_any_untracked_supervisor_child(
             ops,
             allow_absent_child=True,
         )
-
 
 def test_absent_old_pid_rejects_child_emerging_between_samples(
     tmp_path: Path,
@@ -2466,7 +2473,6 @@ def test_absent_old_pid_rejects_child_emerging_between_samples(
             ops,
             allow_absent_child=True,
         )
-
 
 def test_existing_old_pid_rejects_a_mismatched_child_even_when_relaxed(
     tmp_path: Path,
@@ -2495,7 +2501,6 @@ def test_existing_old_pid_rejects_a_mismatched_child_even_when_relaxed(
             ops,
             allow_absent_child=True,
         )
-
 
 def test_degraded_rollback_accepts_absence_or_exact_recovery_only(
     tmp_path: Path,

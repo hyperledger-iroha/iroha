@@ -5,19 +5,19 @@ macro_rules! jni_sdk_android_pairs {
             sdk: $(#[$sdk_attribute:meta])*
             pub unsafe extern "system" fn $sdk_name:ident(
                 $($argument:tt)*
-            ) -> $return_type:ty $body:block
+            ) $(-> $return_type:ty)? $body:block
         )*
     ) => {
         $(
             $(#[$sdk_attribute])*
             pub unsafe extern "system" fn $sdk_name(
                 $($argument)*
-            ) -> $return_type $body
+            ) $(-> $return_type)? $body
             $(#[$android_attribute])*
             #[unsafe(no_mangle)]
             pub unsafe extern "system" fn $android_name(
                 $($argument)*
-            ) -> $return_type $body
+            ) $(-> $return_type)? $body
         )*
     };
 }

@@ -298,8 +298,7 @@ fn signer_worst_case_json_bytes(signer: &SigningAuthority) -> Result<usize, Sign
     total = total
         .checked_add(permission_count.saturating_mul(64))
         .ok_or_else(|| signer_vault_limit("signer permission byte accounting overflow"))?;
-    let mut role_count = 0usize;
-    for role in signer.roles() {
+    for (role_count, role) in signer.roles().enumerate() {
         if role_count == SIGNER_VAULT_MAX_ROLES_PER_SIGNER_V1 {
             return Err(signer_vault_limit(format!(
                 "signer contains more than {SIGNER_VAULT_MAX_ROLES_PER_SIGNER_V1} roles"
@@ -312,7 +311,6 @@ fn signer_worst_case_json_bytes(signer: &SigningAuthority) -> Result<usize, Sign
             "signer role",
             SIGNER_VAULT_MAX_ROLE_BYTES_V1,
         )?;
-        role_count += 1;
     }
     Ok(total)
 }

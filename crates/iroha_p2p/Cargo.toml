@@ -1,5 +1,6 @@
 [package]
 name = "iroha_p2p"
+autotests = false
 
 edition.workspace = true
 version.workspace = true
@@ -82,3 +83,7 @@ p2p_ws = ["dep:tokio-tungstenite"]
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "time", "macros"] }
 tempfile = { workspace = true }
+
+[[test]]
+name = "mod"
+path = "tests/mod.rs"

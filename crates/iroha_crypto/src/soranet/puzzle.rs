@@ -669,6 +669,7 @@ mod tests {
     }
     impl TryCryptoRng for FixedTryRng {}
     #[test]
+    #[expect(clippy::too_many_lines, reason = "cohesive parameter rejection matrix")]
     fn parameters_try_new_rejects_invalid_runtime_bounds() {
         let memory = NonZeroU32::new(8 * 1024).expect("non-zero memory");
         let time = NonZeroU32::new(2).expect("non-zero time");

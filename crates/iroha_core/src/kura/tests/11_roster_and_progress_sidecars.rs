@@ -1,75 +1,3 @@
-#[test]
-fn roster_sidecar_roundtrip_with_stake_snapshot() {
-    use iroha_config::base::WithOrigin;
-    let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
-    let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let peer = PeerId::new(kp.public_key().clone());
-    let roster = vec![peer];
-    let block_hash = store_dummy_blocks(&kura, 1)[0];
-    let signers_bitmap = vec![0b0000_0001];
-    let bls_aggregate_signature = vec![0xAC; 96];
-    let cert = Qc {
-        phase: Phase::Commit,
-        subject_block_hash: block_hash,
-        parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-        post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-        height: 1,
-        view: 0,
-        epoch: 0,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&roster),
-        validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: roster.clone(),
-        aggregate: QcAggregate {
-            signers_bitmap: signers_bitmap.clone(),
-            bls_aggregate_signature: bls_aggregate_signature.clone(),
-        },
-    };
-    let stake_snapshot = crate::sumeragi::stake_snapshot::CommitStakeSnapshot {
-        validator_set_hash: HashOf::new(&roster),
-        entries: vec![crate::sumeragi::stake_snapshot::CommitStakeSnapshotEntry {
-            peer_id: roster[0].clone(),
-            stake: iroha_primitives::numeric::Quantity::from(10_u32),
-        }],
-    };
-    let sidecar = RosterSidecar::new(
-        1,
-        block_hash,
-        Some(cert.clone()),
-        None,
-        Some(stake_snapshot.clone()),
-    );
-    kura.write_roster_metadata(&sidecar);
-    let got = kura.read_roster_metadata(1).expect("sidecar exists");
-    assert_eq!(got.height, 1);
-    assert_eq!(got.block_hash, block_hash);
-    assert_eq!(got.format_label(), "roster.snapshot");
-    assert_eq!(got.stake_snapshot, Some(stake_snapshot));
-    assert_eq!(got.roster_snapshot(), Some(roster));
-}
 #[derive(Debug, Encode, Decode, PartialEq, Eq)]
 struct DummySidecar {
     height: u64,
@@ -125,8 +53,8 @@ fn strict_indexed_sidecar_failure_modes() -> [(&'static str, fn()); 3] {
 fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
     for (label, inject_failure) in strict_indexed_sidecar_failure_modes() {
         let temp_dir = TempDir::new().unwrap();
-        let data_path = temp_dir.path().join(ROSTER_SIDECARS_DATA_FILE);
-        let index_path = temp_dir.path().join(ROSTER_SIDECARS_INDEX_FILE);
+        let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
         let payload = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode dummy sidecar");
         inject_failure();
         assert!(
@@ -135,7 +63,7 @@ fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
                 &index_path,
                 1,
                 &payload,
-                "roster sidecar",
+                "indexed sidecar",
                 FsyncMode::Always,
                 None,
             ),
@@ -146,7 +74,7 @@ fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
             &data_path,
             &index_path,
             norito::decode_from_bytes::<DummySidecar>,
-            "roster sidecar",
+            "indexed sidecar",
         )
         .expect("failed barrier leaves an exact page-cache payload readable");
         assert_eq!(readable.height, 1);
@@ -158,7 +86,7 @@ fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
                 &index_path,
                 1,
                 &payload,
-                "roster sidecar",
+                "indexed sidecar",
                 FsyncMode::Always,
                 None,
             ),
@@ -170,7 +98,7 @@ fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
                 &index_path,
                 1,
                 &payload,
-                "roster sidecar",
+                "indexed sidecar",
                 FsyncMode::Always,
                 None,
             ),
@@ -186,8 +114,8 @@ fn strict_sidecar_retry_reissues_barriers_for_exact_existing_payload() {
 fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
     for overwrite_placeholder in [false, true] {
         let temp_dir = TempDir::new().expect("create temp dir");
-        let data_path = temp_dir.path().join(ROSTER_SIDECARS_DATA_FILE);
-        let index_path = temp_dir.path().join(ROSTER_SIDECARS_INDEX_FILE);
+        let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
         let payload =
             norito::to_bytes(&DummySidecar { height: 1 }).expect("encode height-one dummy sidecar");
         let baseline_len = if overwrite_placeholder {
@@ -275,8 +203,8 @@ fn initial_preindex_data_sync_failure_rolls_back_payload_before_retry() {
 }
 fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
     let temp_dir = TempDir::new().expect("create temp dir");
-    let data_path = temp_dir.path().join(ROSTER_SIDECARS_DATA_FILE);
-    let index_path = temp_dir.path().join(ROSTER_SIDECARS_INDEX_FILE);
+    let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+    let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let first = norito::to_bytes(&DummySidecar { height: 1 }).expect("encode first payload");
     let replacement =
         norito::to_bytes(&DummySidecar { height: 11 }).expect("encode replacement payload");
@@ -370,8 +298,7 @@ fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
 fn progress_sidecar_mutation_rejects_symlinks_without_external_writes() {
     use std::os::unix::fs::symlink;
     for substitution in ["data", "index", "directory"] {
-        let temp_dir = TempDir::new().expect("create temp dir");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
         let root = kura.store_root();
         let sidecar_dir = root.join(format!("progress-{substitution}"));
@@ -428,8 +355,7 @@ fn progress_sidecar_mutation_rejects_symlinks_without_external_writes() {
 #[cfg(unix)]
 fn bound_progress_directory_binding_allows_child_mutation_but_rejects_replacement() {
     use std::os::unix::fs::symlink;
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
     let sidecar_dir = kura.store_root().join("progress-directory-binding");
     fs::create_dir_all(&sidecar_dir).expect("create progress namespace");
@@ -475,8 +401,7 @@ fn bound_progress_directory_binding_allows_child_mutation_but_rejects_replacemen
 }
 fn absent_progress_namespace_requires_every_directory_barrier() {
     for (label, failure) in strict_progress_sidecar_failure_modes().into_iter().skip(2) {
-        let temp_dir = TempDir::new().expect("create temp dir");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
         let sidecar_dir = kura
             .store_root()
@@ -498,8 +423,7 @@ fn absent_progress_namespace_requires_every_directory_barrier() {
             "absent namespace must fail closed at the {label} barrier"
         );
     }
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init Kura");
     let sidecar_dir = kura
         .store_root()
@@ -524,8 +448,7 @@ fn absent_progress_namespace_requires_every_directory_barrier() {
 #[cfg(unix)]
 fn progress_prepend_directory_failure_retries_without_corruption() {
     for (label, failure) in strict_progress_sidecar_failure_modes().into_iter().skip(2) {
-        let temp_dir = TempDir::new().expect("create temp dir");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
         let (kura, _) = Kura::new(&config, &lane_config).expect("init Kura");
         let sidecar_dir = kura
@@ -643,8 +566,7 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         BoundProgressRecoveryFailure::InvalidData,
     );
     let fixture = || {
-        let temp_dir = TempDir::new().expect("create temp dir");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
         let (kura, _) =
             Kura::new(&config, &RuntimeLaneConfig::default()).expect("init bound recovery Kura");
         let sidecar_dir = kura
@@ -2189,8 +2111,7 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
 }
 fn direct_receipt_snapshot_preserves_sparse_and_mixed_format_entries() {
     for include_current_receipt in [false, true] {
-        let temp_dir = TempDir::new().expect("create temp dir");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let (temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
         let lane_config = two_lane_runtime_config();
         let lane_id = LaneId::from(1);
         let lane_entry = lane_config.entry(lane_id).expect("lane entry");
@@ -2437,36 +2358,6 @@ mod progress_witness_durability {
     #[test]
     fn unindexed_crash_suffix_is_repaired_before_retry_or_append() {
         super::unindexed_crash_suffix_is_repaired_before_retry_or_append();
-    }
-}
-#[test]
-fn roster_sidecar_read_reissues_durability_barriers() {
-    let failure_modes: [(&str, fn()); 2] = [
-        ("index", fail_next_indexed_sidecar_index_sync_for_tests),
-        ("directory", fail_next_indexed_sidecar_dir_sync_for_tests),
-    ];
-    for (label, inject_failure) in failure_modes {
-        let kura = Kura::blank_kura_for_testing();
-        let block_hash = store_dummy_blocks(&kura, 1)[0];
-        let sidecar = RosterSidecar::new(1, block_hash, None, None, None);
-        inject_failure();
-        assert!(
-            !kura.write_roster_metadata(&sidecar),
-            "injected {label} failure must reject the strict roster write"
-        );
-        inject_failure();
-        assert!(
-            kura.read_roster_metadata(1).is_none(),
-            "page-cache bytes from a failed write must not be exposed when the fresh {label} barrier also fails"
-        );
-        let recovered = kura
-            .read_roster_metadata(1)
-            .expect("retry should expose the roster after all barriers succeed");
-        assert_eq!(recovered.height, sidecar.height);
-        assert_eq!(recovered.block_hash, sidecar.block_hash);
-        assert_eq!(recovered.commit_qc, sidecar.commit_qc);
-        assert_eq!(recovered.validator_checkpoint, sidecar.validator_checkpoint);
-        assert_eq!(recovered.stake_snapshot, sidecar.stake_snapshot);
     }
 }
 #[test]

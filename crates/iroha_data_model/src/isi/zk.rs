@@ -67,6 +67,10 @@ impl RegisterZkAsset {
     ///
     /// A shield verifier admits new confidential commitments. It is therefore
     /// invalid without an unshield verifier that can redeem those commitments.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `vk_shield` is set while `vk_unshield` is absent.
     pub fn validate_verifier_roles(&self) -> Result<(), &'static str> {
         if self.vk_shield.is_some() && self.vk_unshield.is_none() {
             return Err("vk_shield requires vk_unshield so shielded funds remain redeemable");

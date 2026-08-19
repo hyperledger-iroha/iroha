@@ -25,7 +25,6 @@ Options:
   --out-dir <DIR>            Localnet output directory (default: /tmp/iroha-localnet)
   --peers <N>                Exact revision-4 committee: 4, 7, ..., 31 (default: 4)
   --seed <SEED>              Deterministic key seed (default: Iroha)
-  --build-line <LINE>        Build line for generated configs: iroha2 or iroha3 (default: iroha3)
   --block-time-ms <MS>       Override block time (ms) in generated configs
   --commit-time-ms <MS>      Override commit time (ms) in generated configs
   --consensus-mode <MODE>    Override consensus mode (permissioned or npos)
@@ -88,7 +87,6 @@ resolve_dir() {
 OUT_DIR="/tmp/iroha-localnet"
 PEERS=4
 SEED="Iroha"
-BUILD_LINE="iroha3"
 BASE_API_PORT=29080
 BASE_P2P_PORT=33337
 BIND_HOST="127.0.0.1"
@@ -137,10 +135,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --seed)
       SEED="$2"
-      shift 2
-      ;;
-    --build-line)
-      BUILD_LINE="$2"
       shift 2
       ;;
     --block-time-ms)
@@ -297,20 +291,6 @@ if [[ -n "$KURA_BLOCKS_IN_MEMORY" && ! "$KURA_BLOCKS_IN_MEMORY" =~ ^[1-9][0-9]*$
   echo "Invalid --kura-blocks-in-memory value: $KURA_BLOCKS_IN_MEMORY (expected positive integer)" >&2
   exit 2
 fi
-
-BUILD_LINE_LOWER="$(printf '%s' "$BUILD_LINE" | tr '[:upper:]' '[:lower:]')"
-case "$BUILD_LINE_LOWER" in
-  iroha2|i2|2)
-    BUILD_LINE="iroha2"
-    ;;
-  iroha3|i3|3)
-    BUILD_LINE="iroha3"
-    ;;
-  *)
-    echo "Invalid --build-line value: $BUILD_LINE (expected iroha2 or iroha3)" >&2
-    exit 2
-    ;;
-esac
 
 for cmd in cargo curl; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -524,7 +504,6 @@ done
 echo "Generating localnet in $OUT_DIR..."
 KAGAMI_ARGS=(
   localnet
-  --build-line "$BUILD_LINE"
   --out-dir "$OUT_DIR"
   --peers "$PEERS"
   --seed "$SEED"

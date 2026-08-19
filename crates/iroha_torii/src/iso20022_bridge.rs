@@ -13002,6 +13002,18 @@ mod tests {
         file.write_all(contents.as_bytes()).expect("write snapshot");
         file
     }
+    fn payment_runtime_with_bic_reference(
+        mut config: actual::IsoBridge,
+    ) -> (Iso20022BridgeRuntime, NamedTempFile) {
+        let reference_file = write_snapshot(include_str!(
+            r"../../../fixtures/iso_bridge/bic_lei.sample.json"
+        ));
+        config.reference_data.bic_lei_path = Some(reference_file.path().to_path_buf());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        (runtime, reference_file)
+    }
     #[test]
     fn parse_account_address_literal_records_error_code() {
         let (value, observation) = super::parse_account_address_literal("not-an-address");
@@ -20235,11 +20247,79 @@ mod tests {
             Some(expected_asset_definition.as_str())
         );
     }
-    #[test]
-    fn pacs008_supplementary_accounts_must_match_iban_bindings() {
-        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
-            .expect("cfg")
-            .expect("enabled");
+    #[derive(Clone, Copy)]
+    enum PaymentRail {
+        CustomerCreditTransfer,
+        FinancialInstitutionCreditTransfer,
+    }
+    impl PaymentRail {
+        fn message_type(self) -> &'static str {
+            match self {
+                Self::CustomerCreditTransfer => "pacs.008",
+                Self::FinancialInstitutionCreditTransfer => "pacs.009",
+            }
+        }
+        fn default_amount(self) -> &'static str {
+            match self {
+                Self::CustomerCreditTransfer => "10",
+                Self::FinancialInstitutionCreditTransfer => "2500",
+            }
+        }
+        fn debtor_agent_field(self) -> &'static str {
+            match self {
+                Self::CustomerCreditTransfer => "DbtrAgt",
+                Self::FinancialInstitutionCreditTransfer => "InstgAgt",
+            }
+        }
+        fn message(
+            self,
+            amount: &str,
+            currency: &str,
+            iban: &str,
+            bic: &str,
+            extra: &str,
+        ) -> ParsedMessage {
+            let input = match self {
+                Self::CustomerCreditTransfer => format!(
+                    "MsgId=m1\nIntrBkSttlmAmt={amount}\nIntrBkSttlmCcy={currency}\nIntrBkSttlmDt=2024-01-01\nDbtrAcct={iban}\nCdtrAcct={iban}\nDbtrAgt={bic}\nCdtrAgt={bic}\n{extra}"
+                ),
+                Self::FinancialInstitutionCreditTransfer => format!(
+                    "BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt={amount}\nIntrBkSttlmCcy={currency}\nIntrBkSttlmDt=2024-01-03\nDbtrAcct={iban}\nCdtrAcct={iban}\nInstgAgt={bic}\nInstdAgt={bic}\nPurp=SECU\n{extra}"
+                ),
+            };
+            parse_message(self.message_type(), input.as_bytes()).expect("payment message parses")
+        }
+        fn build(
+            self,
+            runtime: &Iso20022BridgeRuntime,
+            parsed: &ParsedMessage,
+            world: &impl WorldReadOnly,
+            chain_id: &ChainId,
+            telemetry: &MaybeTelemetry,
+        ) -> Result<(TransactionPayload, IsoMessageContext), MsgError> {
+            let network_id = crate::test_utils::signed_query_network_id();
+            match self {
+                Self::CustomerCreditTransfer => runtime.build_pacs008_payload(
+                    parsed,
+                    world,
+                    10_000,
+                    chain_id,
+                    &network_id,
+                    telemetry,
+                ),
+                Self::FinancialInstitutionCreditTransfer => runtime.build_pacs009_payload(
+                    parsed,
+                    world,
+                    10_000,
+                    chain_id,
+                    &network_id,
+                    telemetry,
+                ),
+            }
+        }
+    }
+    fn assert_supplementary_accounts_match_iban_bindings(rail: PaymentRail) {
+        let (runtime, _reference_file) = payment_runtime_with_bic_reference(sample_config());
         let mismatched_account =
             AccountId::new(fixture_key_pair(0xAB).public_key().clone()).to_string();
         let world = sample_world(None);
@@ -20247,20 +20327,16 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         for hint_field in ["SplmtryData/SourceAccountId", "SplmtryData/TargetAccountId"] {
-            let message = format!(
-                "MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF\n{hint_field}={mismatched_account}"
+            let extra = format!("{hint_field}={mismatched_account}");
+            let parsed = rail.message(
+                rail.default_amount(),
+                "USD",
+                "GB82WEST12345698765432",
+                "DEUTDEFF",
+                &extra,
             );
-            let parsed =
-                parse_message("pacs.008", message.as_bytes()).expect("pacs.008 hint parses");
-            let err = runtime
-                .build_pacs008_payload(
-                    &parsed,
-                    &world_view,
-                    10_000,
-                    &chain_id,
-                    &crate::test_utils::signed_query_network_id(),
-                    &telemetry,
-                )
+            let err = rail
+                .build(&runtime, &parsed, &world_view, &chain_id, &telemetry)
                 .expect_err("mismatched account hint must not replace the IBAN binding");
             assert!(matches!(
                 err,
@@ -20271,44 +20347,31 @@ mod tests {
             ));
         }
     }
-    #[test]
-    fn pacs008_enforces_currency_cap_and_asset_binding() {
+    fn assert_currency_cap_and_asset_binding(rail: PaymentRail) {
         let mut config = sample_config();
         config.currency_assets[0].max_amount = Quantity::from(100_u32);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
+        let (runtime, _reference_file) = payment_runtime_with_bic_reference(config);
         let world = sample_world(None);
         let world_view = world.view();
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
         let message = |amount: &str, extra: &str| {
-            parse_message(
-                "pacs.008",
-                format!(
-                    "MsgId=m1\nIntrBkSttlmAmt={amount}\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF\n{extra}"
-                )
-                .as_bytes(),
-            )
-            .expect("pacs.008 parses")
+            rail.message(amount, "USD", "GB82WEST12345698765432", "DEUTDEFF", extra)
         };
-        runtime
-            .build_pacs008_payload(
-                &message("100", ""),
-                &world_view,
-                10_000,
-                &chain_id,
-                &crate::test_utils::signed_query_network_id(),
-                &telemetry,
-            )
-            .expect("amount equal to the configured cap must be accepted");
-        let err = runtime
-            .build_pacs008_payload(
+        rail.build(
+            &runtime,
+            &message("100", ""),
+            &world_view,
+            &chain_id,
+            &telemetry,
+        )
+        .expect("amount equal to the configured cap must be accepted");
+        let err = rail
+            .build(
+                &runtime,
                 &message("100.01", ""),
                 &world_view,
-                10_000,
                 &chain_id,
-                &crate::test_utils::signed_query_network_id(),
                 &telemetry,
             )
             .expect_err("amount above the configured cap must fail");
@@ -20323,16 +20386,15 @@ mod tests {
             DomainId::try_new("test", "universal").expect("domain"),
             "eur".parse().expect("name"),
         );
-        let err = runtime
-            .build_pacs008_payload(
+        let err = rail
+            .build(
+                &runtime,
                 &message(
                     "10",
                     &format!("SplmtryData/AssetDefinitionId={other_asset}"),
                 ),
                 &world_view,
-                10_000,
                 &chain_id,
-                &crate::test_utils::signed_query_network_id(),
                 &telemetry,
             )
             .expect_err("asset hint must not replace the currency binding");
@@ -20344,117 +20406,88 @@ mod tests {
             } if field == "SplmtryData/AssetDefinitionId"
         ));
     }
-    #[test]
-    fn pacs008_rejects_unknown_bic() {
-        let snapshot = r#"{
-            "version":"2024-05-01",
-            "source":"GLEIF sample",
-            "entries":[
-                {"bic":"DEUTDEFF","lei":"5493001KJTIIGC8Y1R12"}
-            ]
-        }"#;
-        let file = write_snapshot(snapshot);
-        let mut config = sample_config();
-        config.reference_data.bic_lei_path = Some(file.path().to_path_buf());
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let msg = parse_message(
-            "pacs.008",
-            b"MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=TESTUS33\nCdtrAgt=TESTUS33",
-        )
-        .expect("parsed");
+    #[derive(Clone, Copy)]
+    enum InvalidPaymentIdentifier {
+        UnmappedIban,
+        UnboundCurrency,
+        UnknownBic,
+    }
+    fn assert_payment_identifier_rejected(rail: PaymentRail, violation: InvalidPaymentIdentifier) {
+        let (runtime, _reference_file) = payment_runtime_with_bic_reference(sample_config());
+        let (iban, currency, bic, field, kind) = match violation {
+            InvalidPaymentIdentifier::UnmappedIban => (
+                "GB29NWBK60161331926819",
+                "USD",
+                "DEUTDEFF",
+                "DbtrAcct",
+                IdentifierKind::Iban,
+            ),
+            InvalidPaymentIdentifier::UnboundCurrency => (
+                "GB82WEST12345698765432",
+                "EUR",
+                "DEUTDEFF",
+                "IntrBkSttlmCcy",
+                IdentifierKind::Currency,
+            ),
+            InvalidPaymentIdentifier::UnknownBic => (
+                "GB82WEST12345698765432",
+                "USD",
+                "TESTUS33",
+                rail.debtor_agent_field(),
+                IdentifierKind::Bic,
+            ),
+        };
+        let parsed = rail.message(rail.default_amount(), currency, iban, bic, "");
         let world = sample_world(None);
         let world_view = world.view();
         let chain_id: ChainId = "test-chain".parse().unwrap();
         let telemetry = MaybeTelemetry::for_tests();
-        let err = runtime
-            .build_pacs008_payload(
-                &msg,
-                &world_view,
-                10_000,
-                &chain_id,
-                &crate::test_utils::signed_query_network_id(),
-                &telemetry,
-            )
-            .expect_err("unknown BIC must fail");
+        let err = rail
+            .build(&runtime, &parsed, &world_view, &chain_id, &telemetry)
+            .expect_err("invalid payment identifier must fail");
         match err {
-            MsgError::InvalidIdentifier { ref field, kind } => {
-                assert_eq!(field, "DbtrAgt");
-                assert_eq!(kind, IdentifierKind::Bic);
+            MsgError::InvalidIdentifier {
+                field: actual_field,
+                kind: actual_kind,
+            } => {
+                assert_eq!(actual_field, field);
+                assert_eq!(actual_kind, kind);
             }
             other => panic!("unexpected error: {other:?}"),
         }
+    }
+    #[test]
+    fn pacs008_supplementary_accounts_must_match_iban_bindings() {
+        assert_supplementary_accounts_match_iban_bindings(PaymentRail::CustomerCreditTransfer);
+    }
+    #[test]
+    fn pacs008_enforces_currency_cap_and_asset_binding() {
+        assert_currency_cap_and_asset_binding(PaymentRail::CustomerCreditTransfer);
+    }
+    #[test]
+    fn pacs008_rejects_unknown_bic() {
+        assert_payment_identifier_rejected(
+            PaymentRail::CustomerCreditTransfer,
+            InvalidPaymentIdentifier::UnknownBic,
+        );
     }
     #[test]
     fn pacs008_rejects_unmapped_iban() {
-        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
-            .expect("cfg")
-            .expect("enabled");
-        let msg = parse_message(
-            "pacs.008",
-            b"MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB29NWBK60161331926819\nCdtrAcct=GB29NWBK60161331926819\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",
-        )
-        .expect("parsed");
-        let world = sample_world(None);
-        let world_view = world.view();
-        let chain_id: ChainId = "test-chain".parse().unwrap();
-        let telemetry = MaybeTelemetry::for_tests();
-        let err = runtime
-            .build_pacs008_payload(
-                &msg,
-                &world_view,
-                10_000,
-                &chain_id,
-                &crate::test_utils::signed_query_network_id(),
-                &telemetry,
-            )
-            .expect_err("unmapped IBAN must fail");
-        match err {
-            MsgError::InvalidIdentifier { ref field, kind } => {
-                assert_eq!(field, "DbtrAcct");
-                assert_eq!(kind, IdentifierKind::Iban);
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert_payment_identifier_rejected(
+            PaymentRail::CustomerCreditTransfer,
+            InvalidPaymentIdentifier::UnmappedIban,
+        );
     }
     #[test]
     fn pacs008_rejects_unbound_currency() {
-        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
-            .expect("cfg")
-            .expect("enabled");
-        let msg = parse_message(
-            "pacs.008",
-            b"MsgId=m1\nIntrBkSttlmAmt=10\nIntrBkSttlmCcy=EUR\nIntrBkSttlmDt=2024-01-01\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nDbtrAgt=DEUTDEFF\nCdtrAgt=DEUTDEFF",
-        )
-        .expect("parsed");
-        let world = sample_world(None);
-        let world_view = world.view();
-        let chain_id: ChainId = "test-chain".parse().unwrap();
-        let telemetry = MaybeTelemetry::for_tests();
-        let err = runtime
-            .build_pacs008_payload(
-                &msg,
-                &world_view,
-                10_000,
-                &chain_id,
-                &crate::test_utils::signed_query_network_id(),
-                &telemetry,
-            )
-            .expect_err("unbound currency must fail");
-        match err {
-            MsgError::InvalidIdentifier { ref field, kind } => {
-                assert_eq!(field, "IntrBkSttlmCcy");
-                assert_eq!(kind, IdentifierKind::Currency);
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert_payment_identifier_rejected(
+            PaymentRail::CustomerCreditTransfer,
+            InvalidPaymentIdentifier::UnboundCurrency,
+        );
     }
     #[test]
     fn build_pacs009_payload_extracts_transfer() {
-        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
-            .expect("cfg")
-            .expect("enabled");
+        let (runtime, _reference_file) = payment_runtime_with_bic_reference(sample_config());
         let msg = parse_message(
             "pacs.009",
             b"BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU\nSplmtryData/SourceAccountAddress=0xdebtor\nSplmtryData/TargetAccountAddress=0xcreditor",
@@ -20504,118 +20537,17 @@ mod tests {
     }
     #[test]
     fn pacs009_supplementary_accounts_must_match_iban_bindings() {
-        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
-            .expect("cfg")
-            .expect("enabled");
-        let mismatched_account =
-            AccountId::new(fixture_key_pair(0xAB).public_key().clone()).to_string();
-        let world = sample_world(None);
-        let world_view = world.view();
-        let chain_id: ChainId = "test-chain".parse().unwrap();
-        let telemetry = MaybeTelemetry::for_tests();
-        for hint_field in ["SplmtryData/SourceAccountId", "SplmtryData/TargetAccountId"] {
-            let message = format!(
-                "BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU\n{hint_field}={mismatched_account}"
-            );
-            let parsed =
-                parse_message("pacs.009", message.as_bytes()).expect("pacs.009 hint parses");
-            let err = runtime
-                .build_pacs009_payload(
-                    &parsed,
-                    &world_view,
-                    10_000,
-                    &chain_id,
-                    &crate::test_utils::signed_query_network_id(),
-                    &telemetry,
-                )
-                .expect_err("mismatched account hint must not replace the IBAN binding");
-            assert!(matches!(
-                err,
-                MsgError::InvalidValue {
-                    field,
-                    kind: InvalidValueKind::Enum,
-                } if field == hint_field
-            ));
-        }
+        assert_supplementary_accounts_match_iban_bindings(
+            PaymentRail::FinancialInstitutionCreditTransfer,
+        );
     }
     #[test]
     fn pacs009_enforces_currency_cap_and_asset_binding() {
-        let mut config = sample_config();
-        config.currency_assets[0].max_amount = Quantity::from(100_u32);
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let world = sample_world(None);
-        let world_view = world.view();
-        let chain_id: ChainId = "test-chain".parse().unwrap();
-        let telemetry = MaybeTelemetry::for_tests();
-        let message = |amount: &str, extra: &str| {
-            parse_message(
-                "pacs.009",
-                format!(
-                    "BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt={amount}\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU\n{extra}"
-                )
-                .as_bytes(),
-            )
-            .expect("pacs.009 parses")
-        };
-        runtime
-            .build_pacs009_payload(
-                &message("100", ""),
-                &world_view,
-                10_000,
-                &chain_id,
-                &crate::test_utils::signed_query_network_id(),
-                &telemetry,
-            )
-            .expect("amount equal to the configured cap must be accepted");
-        let err = runtime
-            .build_pacs009_payload(
-                &message("100.01", ""),
-                &world_view,
-                10_000,
-                &chain_id,
-                &crate::test_utils::signed_query_network_id(),
-                &telemetry,
-            )
-            .expect_err("amount above the configured cap must fail");
-        assert!(matches!(
-            err,
-            MsgError::InvalidValue {
-                ref field,
-                kind: InvalidValueKind::Amount,
-            } if field == "IntrBkSttlmAmt"
-        ));
-        let other_asset = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("test", "universal").expect("domain"),
-            "eur".parse().expect("name"),
-        );
-        let err = runtime
-            .build_pacs009_payload(
-                &message(
-                    "10",
-                    &format!("SplmtryData/AssetDefinitionId={other_asset}"),
-                ),
-                &world_view,
-                10_000,
-                &chain_id,
-                &crate::test_utils::signed_query_network_id(),
-                &telemetry,
-            )
-            .expect_err("asset hint must not replace the currency binding");
-        assert!(matches!(
-            err,
-            MsgError::InvalidValue {
-                ref field,
-                kind: InvalidValueKind::Enum,
-            } if field == "SplmtryData/AssetDefinitionId"
-        ));
+        assert_currency_cap_and_asset_binding(PaymentRail::FinancialInstitutionCreditTransfer);
     }
     #[test]
     fn pacs009_requires_securities_purpose() {
-        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
-            .expect("cfg")
-            .expect("enabled");
+        let (runtime, _reference_file) = payment_runtime_with_bic_reference(sample_config());
         let msg = parse_message(
             "pacs.009",
             b"BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=OTHR",
@@ -20645,109 +20577,24 @@ mod tests {
     }
     #[test]
     fn pacs009_rejects_unmapped_iban() {
-        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
-            .expect("cfg")
-            .expect("enabled");
-        let msg = parse_message(
-            "pacs.009",
-            b"BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB29NWBK60161331926819\nCdtrAcct=GB29NWBK60161331926819\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU",
-        )
-        .expect("parsed");
-        let world = sample_world(None);
-        let world_view = world.view();
-        let chain_id: ChainId = "test-chain".parse().unwrap();
-        let telemetry = MaybeTelemetry::for_tests();
-        let err = runtime
-            .build_pacs009_payload(
-                &msg,
-                &world_view,
-                10_000,
-                &chain_id,
-                &crate::test_utils::signed_query_network_id(),
-                &telemetry,
-            )
-            .expect_err("unmapped IBAN must fail");
-        match err {
-            MsgError::InvalidIdentifier { ref field, kind } => {
-                assert_eq!(field, "DbtrAcct");
-                assert_eq!(kind, IdentifierKind::Iban);
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert_payment_identifier_rejected(
+            PaymentRail::FinancialInstitutionCreditTransfer,
+            InvalidPaymentIdentifier::UnmappedIban,
+        );
     }
     #[test]
     fn pacs009_rejects_unbound_currency() {
-        let runtime = Iso20022BridgeRuntime::from_config(&sample_config())
-            .expect("cfg")
-            .expect("enabled");
-        let msg = parse_message(
-            "pacs.009",
-            b"BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=EUR\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=DEUTDEFF\nInstdAgt=DEUTDEFF\nPurp=SECU",
-        )
-        .expect("parsed");
-        let world = sample_world(None);
-        let world_view = world.view();
-        let chain_id: ChainId = "test-chain".parse().unwrap();
-        let telemetry = MaybeTelemetry::for_tests();
-        let err = runtime
-            .build_pacs009_payload(
-                &msg,
-                &world_view,
-                10_000,
-                &chain_id,
-                &crate::test_utils::signed_query_network_id(),
-                &telemetry,
-            )
-            .expect_err("unbound currency must fail");
-        match err {
-            MsgError::InvalidIdentifier { ref field, kind } => {
-                assert_eq!(field, "IntrBkSttlmCcy");
-                assert_eq!(kind, IdentifierKind::Currency);
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert_payment_identifier_rejected(
+            PaymentRail::FinancialInstitutionCreditTransfer,
+            InvalidPaymentIdentifier::UnboundCurrency,
+        );
     }
     #[test]
     fn pacs009_rejects_unknown_bic() {
-        let snapshot = r#"{
-            "version":"2024-05-01",
-            "source":"GLEIF sample",
-            "entries":[
-                {"bic":"DEUTDEFF","lei":"5493001KJTIIGC8Y1R12"}
-            ]
-        }"#;
-        let file = write_snapshot(snapshot);
-        let mut config = sample_config();
-        config.reference_data.bic_lei_path = Some(file.path().to_path_buf());
-        let runtime = Iso20022BridgeRuntime::from_config(&config)
-            .expect("cfg")
-            .expect("enabled");
-        let msg = parse_message(
-            "pacs.009",
-            b"BizMsgIdr=b1\nMsgDefIdr=pacs.009.001.10\nCreDtTm=2024-01-01T12:00:00Z\nIntrBkSttlmAmt=2500\nIntrBkSttlmCcy=USD\nIntrBkSttlmDt=2024-01-03\nDbtrAcct=GB82WEST12345698765432\nCdtrAcct=GB82WEST12345698765432\nInstgAgt=TESTUS33\nInstdAgt=TESTUS33\nPurp=SECU",
-        )
-        .expect("parsed");
-        let world = sample_world(None);
-        let world_view = world.view();
-        let chain_id: ChainId = "test-chain".parse().unwrap();
-        let telemetry = MaybeTelemetry::for_tests();
-        let err = runtime
-            .build_pacs009_payload(
-                &msg,
-                &world_view,
-                10_000,
-                &chain_id,
-                &crate::test_utils::signed_query_network_id(),
-                &telemetry,
-            )
-            .expect_err("unknown BIC must fail");
-        match err {
-            MsgError::InvalidIdentifier { ref field, kind } => {
-                assert_eq!(field, "InstgAgt");
-                assert_eq!(kind, IdentifierKind::Bic);
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        assert_payment_identifier_rejected(
+            PaymentRail::FinancialInstitutionCreditTransfer,
+            InvalidPaymentIdentifier::UnknownBic,
+        );
     }
     #[test]
     fn rejected_message_can_be_retried() {

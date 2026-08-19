@@ -640,6 +640,7 @@ def _native_amx_receipt_payload(source_index: int = 0) -> Dict[str, Any]:
                         "descriptor_hash": _canonical_hash(0x73),
                     },
                     "proposal_hash": participant_proposal_hash,
+                    "payload_block_hint": None,
                 },
                 "participant_settlement": {
                     "block_height": 8,
@@ -4073,6 +4074,7 @@ def test_get_sumeragi_diagnostics_parses_exact_nested_fee_and_native_amx_receipt
         leg["participant_proposal"]["proposal_hash"]
         == leg["prepare_qc"]["body"]["participant_proposal_hash"]
     )
+    assert leg["participant_proposal"]["payload_block_hint"] is None
     assert (
         leg["participant_settlement_hash"]
         == leg["commit_qc"]["body"]["participant_settlement_commitment"]
@@ -4613,8 +4615,14 @@ def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tamper
     def mismatch_proposal_hash(leg: Dict[str, Any]) -> None:
         leg["participant_proposal"]["proposal_hash"] = _canonical_hash(0x75)
 
-    def add_payload_hint(leg: Dict[str, Any]) -> None:
-        leg["participant_proposal"]["payload_block_hint"] = None
+    def missing_payload_hint(leg: Dict[str, Any]) -> None:
+        del leg["participant_proposal"]["payload_block_hint"]
+
+    def nonnull_payload_hint(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"]["payload_block_hint"] = {}
+
+    def extra_proposal_field(leg: Dict[str, Any]) -> None:
+        leg["participant_proposal"]["future_proposal_field"] = None
 
     def missing_descriptor_field(leg: Dict[str, Any]) -> None:
         del leg["participant_proposal"]["descriptor"]["subject_hash"]
@@ -4692,7 +4700,9 @@ def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tamper
         wrong_body_type,
         mismatch_commit_identity,
         mismatch_proposal_hash,
-        add_payload_hint,
+        missing_payload_hint,
+        nonnull_payload_hint,
+        extra_proposal_field,
         missing_descriptor_field,
         extra_descriptor_field,
         missing_predecessor,
@@ -7432,9 +7442,7 @@ def test_offline_applied_status_rejects_zero_finality_fields() -> None:
             }
             result[field] = 0
             if kind == "top_up":
-                anchor = _offline_top_up_anchor(
-                    finalized_height=result["finalized_block_height"]
-                )
+                anchor = _offline_top_up_anchor(finalized_height=result["finalized_block_height"])
                 result["anchor"] = anchor
                 result["finality_proof"] = _offline_top_up_finality_proof(
                     anchor,
@@ -7474,9 +7482,7 @@ def test_offline_error_codes_use_the_global_finite_grammar() -> None:
         session = RecordingSession()
         session.queue(
             StubResponse(
-                payload=_offline_rejected_status(
-                    {"code": code, "message": "invalid code"}
-                )
+                payload=_offline_rejected_status({"code": code, "message": "invalid code"})
             )
         )
         with pytest.raises(RuntimeError):
@@ -7520,6 +7526,7 @@ def test_offline_error_details_are_closed_and_typed() -> None:
                         "actual": "replayed",
                         "profile": "minamoto",
                         "chain_discriminant": 753,
+                        "entrypoint_hash": _canonical_hash(0x21),
                         "tx_hash": OFFLINE_TRANSACTION_HASH,
                         "last_status": "queued",
                         "hint": "retry later",
@@ -7556,6 +7563,8 @@ def test_offline_error_details_are_closed_and_typed() -> None:
     assert details.reject_code == "QUEUE_FULL"
     assert details.retry_after_seconds == 3
     assert details.chain_discriminant == 753
+    assert details.entrypoint_hash == _canonical_hash(0x21)
+    assert details.tx_hash == OFFLINE_TRANSACTION_HASH
     assert details.queue is not None
     assert details.queue.queued == 5
     assert details.queue.saturated is True
@@ -7591,6 +7600,7 @@ def test_offline_error_details_reject_malformed_nested_types_and_ranges() -> Non
         },
         {"retry_after_seconds": -1},
         {"chain_discriminant": 65_536},
+        {"entrypoint_hash": 7},
         {"axt": {"lane": 1 << 32}},
         {"axt": {"snapshot_version": "1"}},
         {"axt": []},

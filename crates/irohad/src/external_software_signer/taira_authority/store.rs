@@ -155,7 +155,7 @@ where
 pub(super) fn read_private_regular(path: &Path) -> Result<Vec<u8>, ()> {
     let mut file = OpenOptions::new()
         .read(true)
-        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
         .open(path)
         .map_err(|_| ())?;
     let before = file.metadata().map_err(|_| ())?;

@@ -295,12 +295,18 @@ const STRUCTURAL_FIELDS_V1: [&str; 9] = [
     "validator_binary_sha256",
 ];
 
+type ValidatedCandidateV1 = (Value, BTreeMap<String, [u8; 32]>, [u8; 32]);
+
 /// Validate one controller-origin request before replay state is consumed.
 ///
 /// `now_unix` is the authority's current Unix time in seconds. The request's
 /// recorded validation time is checked separately so a previously prepared,
 /// still-live administrator assignment remains usable without trusting that
 /// caller-provided clock as the authority clock.
+#[allow(
+    clippy::too_many_lines,
+    reason = "this fail-closed API seam validates one ordered controller-origin evidence chain"
+)]
 pub(super) fn validate_privacy_protocol_origin_v1(
     subject: &Value,
     manifest: &[TairaAuthorityArtifactManifestEntryV1],
@@ -552,7 +558,7 @@ fn validate_candidate(
     expected_exact12_matrix: [u8; 32],
     expected_linux_archive: [u8; 32],
     expected_validator: [u8; 32],
-) -> Result<(Value, BTreeMap<String, [u8; 32]>, [u8; 32]), TairaAuthorityErrorV1> {
+) -> Result<ValidatedCandidateV1, TairaAuthorityErrorV1> {
     let candidate = exact_object(
         value,
         &[
@@ -752,7 +758,9 @@ fn validate_transcript(
             return rejected();
         }
         let output = decode_base64(encoded).ok_or(TairaAuthorityErrorV1::Rejected)?;
-        if output.len() != output_size as usize
+        let output_size =
+            usize::try_from(output_size).map_err(|_| TairaAuthorityErrorV1::Rejected)?;
+        if output.len() != output_size
             || sha256(&output) != required_digest(command, "output_sha256")?
         {
             return rejected();
@@ -1026,7 +1034,7 @@ fn hash_named_artifact(
     let mut reader = file.take(expected.size.saturating_add(1));
     let mut digest = Sha256::new();
     let mut observed = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
+    let mut buffer = vec![0_u8; 64 * 1024].into_boxed_slice();
     loop {
         let count = reader
             .read(&mut buffer)
@@ -1159,7 +1167,7 @@ fn encode_base64(bytes: &[u8]) -> String {
 }
 
 fn decode_base64(value: &str) -> Option<Vec<u8>> {
-    if value.len() % 4 != 0 {
+    if !value.len().is_multiple_of(4) {
         return None;
     }
     let bytes = value.as_bytes();
@@ -1210,7 +1218,7 @@ fn base64_value(byte: u8) -> Option<u8> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
     use std::{fs, path::PathBuf};
 
@@ -1553,6 +1561,10 @@ pub(crate) mod tests {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the cohesive fixture constructs the complete controller-origin evidence graph"
+    )]
     fn fixture() -> Fixture {
         let directory = tempfile::tempdir().expect("fixture directory");
         let source = object([
@@ -1786,7 +1798,7 @@ pub(crate) mod tests {
             paths.push(path.clone());
             artifacts.push(File::open(path).expect("open fixture artifact"));
             manifest.push(TairaAuthorityArtifactManifestEntryV1 {
-                ordinal: ordinal as u16,
+                ordinal: u16::try_from(ordinal).expect("fixture manifest ordinal fits u16"),
                 name: name.to_owned(),
                 size: bytes.len() as u64,
                 sha256: sha256(&bytes),
@@ -1800,25 +1812,6 @@ pub(crate) mod tests {
             artifacts,
             paths,
         }
-    }
-
-    /// Return the exact semantic fixture as portable bytes for the full
-    /// authority-service tests.  Those tests restage the artifacts under the
-    /// authority service identity before exercising descriptor admission.
-    pub(crate) fn service_fixture_material() -> (Value, Vec<(String, Vec<u8>)>) {
-        let fixture = fixture();
-        let artifacts = fixture
-            .manifest
-            .iter()
-            .zip(&fixture.paths)
-            .map(|(entry, path)| {
-                (
-                    entry.name.clone(),
-                    fs::read(path).expect("read privacy-protocol service fixture artifact"),
-                )
-            })
-            .collect();
-        (fixture.subject, artifacts)
     }
 
     fn network_output(case: &str) -> Vec<u8> {

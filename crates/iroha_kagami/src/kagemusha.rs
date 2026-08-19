@@ -237,7 +237,7 @@ impl<T: Write> RunArgs<T> for Args {
                     &policy_bytes,
                     &args.benchmark_evidence,
                     &args.cryptographic_review,
-                    &memory_guard,
+                    memory_guard,
                 )?;
                 let report = verified.verification_report()?;
                 writeln!(writer, "{}", report.canonical_json()?)?;
@@ -252,7 +252,7 @@ impl<T: Write> RunArgs<T> for Args {
                     &policy_bytes,
                     &args.benchmark_evidence,
                     &args.cryptographic_review,
-                    &memory_guard,
+                    memory_guard,
                 )?;
                 let record = verified.promotion_record()?;
                 record.validate().map_err(|error| eyre!(error))?;
@@ -307,13 +307,13 @@ impl<T: Write> RunArgs<T> for Args {
                 )?;
             }
             Command::PrepareReleaseCircuitParamsV4(args) => {
-                prepare_release_circuit_params_v4(args, writer)?;
+                prepare_release_circuit_params_v4(&args, writer)?;
             }
             Command::PrepareTairaReleaseRosterV4(args) => {
-                taira::prepare_release_roster_v4(args, writer)?;
+                taira::prepare_release_roster_v4(&args, writer)?;
             }
             Command::PrepareTairaTestnetBaseGenesisV4(args) => {
-                taira::prepare_testnet_base_genesis_v4(args, writer)?;
+                taira::prepare_testnet_base_genesis_v4(&args, writer)?;
             }
         }
         Ok(())
@@ -335,7 +335,7 @@ struct ReleaseCircuitParamsReportV4 {
     step_ep: ReleaseCircuitParamsArtifactReportV4,
 }
 fn prepare_release_circuit_params_v4<T: Write>(
-    args: PrepareReleaseCircuitParamsV4Args,
+    args: &PrepareReleaseCircuitParamsV4Args,
     writer: &mut std::io::BufWriter<T>,
 ) -> Outcome {
     let output_dir = args
@@ -656,6 +656,11 @@ impl VerifiedReleaseV4 {
                 .authenticated
                 .manifest()
                 .reviewed_rustc_binary_sha256,
+            generator_binary_sha256: self.authenticated.manifest().generator_binary_sha256,
+            sealed_candidate_build_report_sha256: self
+                .authenticated
+                .manifest()
+                .sealed_candidate_build_report_sha256,
             candidate_sha256: candidate
                 .sha256()
                 .map_err(|error| eyre!("failed to identify immutable V4 candidate: {error}"))?,
@@ -703,7 +708,7 @@ fn verify_release_directory_v4(
     policy_bytes: &[u8],
     benchmark_evidence_path: &Path,
     cryptographic_review_path: &Path,
-    memory_guard: &KagemushaGenerationMemoryGuardV4,
+    memory_guard: KagemushaGenerationMemoryGuardV4,
 ) -> Result<VerifiedReleaseV4> {
     let root = canonical_release_root(bundle_dir)?;
     let policy: KagemushaRecursiveSpendReleasePolicyV1 =
@@ -937,7 +942,7 @@ fn verify_qualification_receipt_v4(
     authenticated: &KagemushaAuthenticatedReleaseV4,
     candidate: &KagemushaRecursiveSpendCandidateV4,
     receipt: &KagemushaRecursiveSpendQualificationReceiptV4,
-    memory_guard: &KagemushaGenerationMemoryGuardV4,
+    memory_guard: KagemushaGenerationMemoryGuardV4,
 ) -> Outcome {
     let candidate_sha256 = candidate
         .sha256()
@@ -946,52 +951,52 @@ fn verify_qualification_receipt_v4(
         .wrap_err("failed to encode immutable V4 candidate manifest")?;
     let candidate_manifest_sha256 =
         kagemusha_recursive_spend_release_sha256(&candidate_manifest_bytes);
-    let eq_proving_key = kagemusha_artifact_descriptor_v4(
+    let vesta_proving_key = kagemusha_artifact_descriptor_v4(
         &candidate.manifest,
         KagemushaPastaCycleParityV1::StepEq,
         KagemushaPastaCycleArtifactKindV4::ProvingKey,
     )
     .map_err(|error| eyre!(error))?;
-    let ep_proving_key = kagemusha_artifact_descriptor_v4(
+    let pallas_proving_key = kagemusha_artifact_descriptor_v4(
         &candidate.manifest,
         KagemushaPastaCycleParityV1::StepEp,
         KagemushaPastaCycleArtifactKindV4::ProvingKey,
     )
     .map_err(|error| eyre!(error))?;
-    let eq_maximum = usize::try_from(eq_proving_key.size_bytes)
+    let vesta_maximum = usize::try_from(vesta_proving_key.size_bytes)
         .map_err(|_| eyre!("Kagemusha V4 Eq proving-key size does not fit this host"))?;
-    let ep_maximum = usize::try_from(ep_proving_key.size_bytes)
+    let pallas_maximum = usize::try_from(pallas_proving_key.size_bytes)
         .map_err(|_| eyre!("Kagemusha V4 Ep proving-key size does not fit this host"))?;
-    let eq_opened = open_regular_bounded(
+    let vesta_opened = open_regular_bounded(
         root,
-        &eq_proving_key.file_name,
-        eq_maximum,
+        &vesta_proving_key.file_name,
+        vesta_maximum,
         "Kagemusha V4 qualification Eq proving key",
     )?;
-    let ep_opened = open_regular_bounded(
+    let pallas_opened = open_regular_bounded(
         root,
-        &ep_proving_key.file_name,
-        ep_maximum,
+        &pallas_proving_key.file_name,
+        pallas_maximum,
         "Kagemusha V4 qualification Ep proving key",
     )?;
-    let eq_file = eq_opened
+    let vesta_file = vesta_opened
         .file
         .try_clone()
         .wrap_err("failed to duplicate Kagemusha V4 Eq proving-key handle")?;
-    let ep_file = ep_opened
+    let pallas_file = pallas_opened
         .file
         .try_clone()
         .wrap_err("failed to duplicate Kagemusha V4 Ep proving-key handle")?;
     let qualification_memory_contract =
-        KagemushaQualificationMemoryContractV4::for_operator(memory_guard);
+        KagemushaQualificationMemoryContractV4::for_operator(&memory_guard);
     verify_candidate_recursive_step_two_receipt_v4(
         candidate,
         candidate_sha256,
         candidate_manifest_sha256,
         receipt,
         &qualification_memory_contract,
-        eq_file,
-        ep_file,
+        vesta_file,
+        pallas_file,
         |parity, kind| {
             if kind == KagemushaPastaCycleArtifactKindV4::ProvingKey {
                 return Err(
@@ -1022,8 +1027,8 @@ fn verify_qualification_receipt_v4(
         },
     )
     .map_err(|error| eyre!("Kagemusha V4 qualification proof verification failed: {error}"))?;
-    eq_opened.verify_unchanged()?;
-    ep_opened.verify_unchanged()?;
+    vesta_opened.verify_unchanged()?;
+    pallas_opened.verify_unchanged()?;
     Ok(())
 }
 fn verify_roster_v4(root: &Path, manifest: &KagemushaRecursiveSpendArtifactManifestV4) -> Outcome {
@@ -1060,10 +1065,10 @@ fn verify_roster_v4(root: &Path, manifest: &KagemushaRecursiveSpendArtifactManif
 }
 fn insert_expected_release_file_v4(
     expected: &mut BTreeSet<String>,
-    file_name: String,
+    file_name: &str,
     role: &str,
 ) -> Outcome {
-    if !expected.insert(file_name.clone()) {
+    if !expected.insert(file_name.to_owned()) {
         bail!("Kagemusha V4 {role} aliases another release file as `{file_name}`");
     }
     Ok(())
@@ -1092,11 +1097,11 @@ fn verify_exact_inventory_v4(
         ),
         (PROMOTION_RECORD_FILE_NAME_V4, "promotion record"),
     ] {
-        insert_expected_release_file_v4(&mut expected, file_name.to_owned(), role)?;
+        insert_expected_release_file_v4(&mut expected, file_name, role)?;
     }
     insert_expected_release_file_v4(
         &mut expected,
-        manifest.topup_finality_roster_artifact.file_name.clone(),
+        &manifest.topup_finality_roster_artifact.file_name,
         "top-up finality roster",
     )?;
     for artifact in manifest
@@ -1106,7 +1111,7 @@ fn verify_exact_inventory_v4(
     {
         insert_expected_release_file_v4(
             &mut expected,
-            artifact.file_name.clone(),
+            &artifact.file_name,
             "authenticated artifact",
         )?;
     }
@@ -1379,6 +1384,14 @@ impl ReleaseCircuitParamsPublicationOutcomeV1 {
     }
 }
 #[cfg(unix)]
+fn stat_field_matches_v1<Actual, Expected>(actual: Actual, expected: Expected) -> bool
+where
+    Actual: TryInto<Expected>,
+    Expected: PartialEq,
+{
+    actual.try_into().ok() == Some(expected)
+}
+#[cfg(unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PromotionDirectorySnapshotV1 {
     device: u64,
@@ -1542,13 +1555,13 @@ impl PinnedPromotionParentV1 {
             .ok_or_else(|| eyre!("promotion-record parent component is not a directory"))?;
             let stat_after = statat(&file, name, AtFlags::SYMLINK_NOFOLLOW)
                 .wrap_err("failed to re-inspect promotion-record parent component")?;
-            let stat_identity_matches = u64::try_from(stat_after.st_dev).ok()
-                == Some(next_snapshot.device)
-                && u64::try_from(stat_after.st_ino).ok() == Some(next_snapshot.inode)
-                && u32::try_from(stat_after.st_mode).ok() == Some(next_snapshot.mode)
-                && u32::try_from(stat_after.st_uid).ok() == Some(next_snapshot.uid)
-                && u32::try_from(stat_after.st_gid).ok() == Some(next_snapshot.gid)
-                && u64::try_from(stat_after.st_nlink).ok() == Some(next_snapshot.links);
+            let stat_identity_matches =
+                stat_field_matches_v1(stat_after.st_dev, next_snapshot.device)
+                    && stat_field_matches_v1(stat_after.st_ino, next_snapshot.inode)
+                    && stat_field_matches_v1(stat_after.st_mode, next_snapshot.mode)
+                    && stat_field_matches_v1(stat_after.st_uid, next_snapshot.uid)
+                    && stat_field_matches_v1(stat_after.st_gid, next_snapshot.gid)
+                    && stat_field_matches_v1(stat_after.st_nlink, next_snapshot.links);
             if !stat_identity_matches {
                 bail!("promotion-record parent component changed while it was pinned");
             }
@@ -1731,13 +1744,13 @@ where
     let after_publication = (|| -> Result<()> {
         let target = statat(&parent.file, target_name, AtFlags::SYMLINK_NOFOLLOW)
             .wrap_err("failed to inspect published promotion record")?;
-        if u64::try_from(target.st_dev).ok() != Some(snapshot.device)
-            || u64::try_from(target.st_ino).ok() != Some(snapshot.inode)
-            || u32::try_from(target.st_mode).ok() != Some(snapshot.mode)
-            || u32::try_from(target.st_uid).ok() != Some(snapshot.uid)
-            || u32::try_from(target.st_gid).ok() != Some(snapshot.gid)
-            || u64::try_from(target.st_nlink).ok() != Some(snapshot.links)
-            || u64::try_from(target.st_size).ok() != Some(snapshot.length)
+        if !stat_field_matches_v1(target.st_dev, snapshot.device)
+            || !stat_field_matches_v1(target.st_ino, snapshot.inode)
+            || !stat_field_matches_v1(target.st_mode, snapshot.mode)
+            || !stat_field_matches_v1(target.st_uid, snapshot.uid)
+            || !stat_field_matches_v1(target.st_gid, snapshot.gid)
+            || !stat_field_matches_v1(target.st_nlink, snapshot.links)
+            || !stat_field_matches_v1(target.st_size, snapshot.length)
         {
             bail!("published promotion record changed identity or custody");
         }
@@ -1758,25 +1771,25 @@ fn release_circuit_params_file_snapshot_matches_stat_v1(
     snapshot: PromotionFileSnapshotV1,
     stat: &rustix::fs::Stat,
 ) -> bool {
-    u64::try_from(stat.st_dev).ok() == Some(snapshot.device)
-        && u64::try_from(stat.st_ino).ok() == Some(snapshot.inode)
-        && u32::try_from(stat.st_mode).ok() == Some(snapshot.mode)
-        && u32::try_from(stat.st_uid).ok() == Some(snapshot.uid)
-        && u32::try_from(stat.st_gid).ok() == Some(snapshot.gid)
-        && u64::try_from(stat.st_nlink).ok() == Some(snapshot.links)
-        && u64::try_from(stat.st_size).ok() == Some(snapshot.length)
+    stat_field_matches_v1(stat.st_dev, snapshot.device)
+        && stat_field_matches_v1(stat.st_ino, snapshot.inode)
+        && stat_field_matches_v1(stat.st_mode, snapshot.mode)
+        && stat_field_matches_v1(stat.st_uid, snapshot.uid)
+        && stat_field_matches_v1(stat.st_gid, snapshot.gid)
+        && stat_field_matches_v1(stat.st_nlink, snapshot.links)
+        && stat_field_matches_v1(stat.st_size, snapshot.length)
 }
 #[cfg(unix)]
 fn release_circuit_params_directory_snapshot_matches_stat_v1(
     snapshot: PromotionDirectorySnapshotV1,
     stat: &rustix::fs::Stat,
 ) -> bool {
-    u64::try_from(stat.st_dev).ok() == Some(snapshot.device)
-        && u64::try_from(stat.st_ino).ok() == Some(snapshot.inode)
-        && u32::try_from(stat.st_mode).ok() == Some(snapshot.mode)
-        && u32::try_from(stat.st_uid).ok() == Some(snapshot.uid)
-        && u32::try_from(stat.st_gid).ok() == Some(snapshot.gid)
-        && u64::try_from(stat.st_nlink).ok() == Some(snapshot.links)
+    stat_field_matches_v1(stat.st_dev, snapshot.device)
+        && stat_field_matches_v1(stat.st_ino, snapshot.inode)
+        && stat_field_matches_v1(stat.st_mode, snapshot.mode)
+        && stat_field_matches_v1(stat.st_uid, snapshot.uid)
+        && stat_field_matches_v1(stat.st_gid, snapshot.gid)
+        && stat_field_matches_v1(stat.st_nlink, snapshot.links)
 }
 #[cfg(unix)]
 fn write_release_circuit_params_staged_file_v1(
@@ -2071,6 +2084,8 @@ struct VerificationReport {
     authenticated_source_seal_projection_sha256: String,
     reviewed_cargo_binary_sha256: String,
     reviewed_rustc_binary_sha256: String,
+    generator_binary_sha256: String,
+    sealed_candidate_build_report_sha256: String,
     generation: String,
     generation_memory_limit_bytes: u64,
     generation_memory_enforcement_profile: String,
@@ -2124,6 +2139,10 @@ impl VerificationReport {
             ),
             reviewed_cargo_binary_sha256: hex::encode(manifest.reviewed_cargo_binary_sha256),
             reviewed_rustc_binary_sha256: hex::encode(manifest.reviewed_rustc_binary_sha256),
+            generator_binary_sha256: hex::encode(manifest.generator_binary_sha256),
+            sealed_candidate_build_report_sha256: hex::encode(
+                manifest.sealed_candidate_build_report_sha256,
+            ),
             generation: manifest.generation.clone(),
             generation_memory_limit_bytes: manifest.generation_memory_limit_bytes,
             generation_memory_enforcement_profile: manifest
@@ -2151,6 +2170,8 @@ struct VerificationReportV4 {
     authenticated_source_seal_projection_sha256: String,
     reviewed_cargo_binary_sha256: String,
     reviewed_rustc_binary_sha256: String,
+    generator_binary_sha256: String,
+    sealed_candidate_build_report_sha256: String,
     generation: String,
     generation_memory_limit_bytes: u64,
     generation_memory_enforcement_profile: String,
@@ -2181,6 +2202,10 @@ impl VerificationReportV4 {
                 .clone(),
             reviewed_cargo_binary_sha256: report.reviewed_cargo_binary_sha256.clone(),
             reviewed_rustc_binary_sha256: report.reviewed_rustc_binary_sha256.clone(),
+            generator_binary_sha256: report.generator_binary_sha256.clone(),
+            sealed_candidate_build_report_sha256: report
+                .sealed_candidate_build_report_sha256
+                .clone(),
             generation: report.generation.clone(),
             generation_memory_limit_bytes: report.generation_memory_limit_bytes,
             generation_memory_enforcement_profile: report
@@ -2382,7 +2407,7 @@ mod tests {
         let output_dir = parent.join("circuit-params-v4");
         let mut writer = std::io::BufWriter::new(Vec::new());
         prepare_release_circuit_params_v4(
-            PrepareReleaseCircuitParamsV4Args {
+            &PrepareReleaseCircuitParamsV4Args {
                 output_dir: output_dir.clone(),
             },
             &mut writer,
@@ -2451,7 +2476,7 @@ mod tests {
         )));
         let mut retry_report = std::io::BufWriter::new(Vec::new());
         let error = prepare_release_circuit_params_v4(
-            PrepareReleaseCircuitParamsV4Args { output_dir },
+            &PrepareReleaseCircuitParamsV4Args { output_dir },
             &mut retry_report,
         )
         .expect_err("closed publication must refuse to overwrite the complete directory");
@@ -2703,13 +2728,13 @@ mod tests {
         let mut expected = BTreeSet::new();
         insert_expected_release_file_v4(
             &mut expected,
-            "recursive-step-two-qualification-v4.norito".to_owned(),
+            "recursive-step-two-qualification-v4.norito",
             "qualification receipt",
         )
         .expect("first role owns its file name");
         let error = insert_expected_release_file_v4(
             &mut expected,
-            "recursive-step-two-qualification-v4.norito".to_owned(),
+            "recursive-step-two-qualification-v4.norito",
             "substituted artifact",
         )
         .expect_err("a descriptor cannot alias the fixed qualification receipt");
@@ -2794,7 +2819,8 @@ mod tests {
     }
     #[test]
     fn atomic_activation_rejects_noncanonical_app_policy_text() {
-        let cases: [(&str, fn(&mut OfflineDeviceAttestationPolicy)); 8] = [
+        type PolicyMutation = fn(&mut OfflineDeviceAttestationPolicy);
+        let cases: [(&str, PolicyMutation); 8] = [
             ("padded iOS Team ID", |policy| {
                 policy.ios_apps[0].team_id = " YLWWUD25VZ".to_owned();
             }),
@@ -2879,6 +2905,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the boundary test enumerates every governed collection and root cap with its exact plus-one rejection"
+    )]
     fn atomic_activation_policy_collection_and_root_caps_have_exact_boundaries() {
         let mut exact_roots = valid_device_attestation_policy();
         exact_roots.trusted_roots = (0..OFFLINE_DEVICE_ATTESTATION_POLICY_MAX_TRUSTED_ROOTS_V1)

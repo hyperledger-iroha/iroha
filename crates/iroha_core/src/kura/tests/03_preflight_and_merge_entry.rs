@@ -565,50 +565,6 @@ fn attach_merge_reference(block: &SignedBlock, entry: &MergeLedgerEntry) -> Arc<
     block.set_execution_context(Some(context));
     Arc::new(block)
 }
-fn sample_commit_roster_tuple(
-    height: u64,
-    block_hash: HashOf<BlockHeader>,
-    tag: u8,
-) -> (Qc, ValidatorSetCheckpoint) {
-    let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let roster = vec![PeerId::new(keypair.public_key().clone())];
-    let zero_root = Hash::prehashed([0; Hash::LENGTH]);
-    let signers_bitmap = vec![0b0000_0001];
-    let aggregate_signature = vec![tag; 96];
-    let qc = Qc {
-        phase: Phase::Commit,
-        subject_block_hash: block_hash,
-        parent_state_root: zero_root,
-        post_state_root: zero_root,
-        height,
-        view: 1,
-        epoch: 0,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&roster),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: roster.clone(),
-        aggregate: QcAggregate {
-            signers_bitmap: signers_bitmap.clone(),
-            bls_aggregate_signature: aggregate_signature.clone(),
-        },
-    };
-    let checkpoint = ValidatorSetCheckpoint::new(
-        height,
-        qc.view,
-        block_hash,
-        zero_root,
-        zero_root,
-        roster,
-        signers_bitmap,
-        aggregate_signature,
-        VALIDATOR_SET_HASH_VERSION_V1,
-        None,
-    );
-    (qc, checkpoint)
-}
 fn bind_merge_entry_to_carrier(
     block: Arc<SignedBlock>,
     entry: &mut MergeLedgerEntry,
@@ -1857,27 +1813,8 @@ fn block_index_encoding_is_fixed_little_endian_layout() {
 }
 #[test]
 fn merge_ledger_entries_persist_across_restart() {
-    use iroha_config::{
-        base::WithOrigin,
-        kura::InitMode,
-        parameters::{actual::Kura as Config, defaults::kura::MERGE_LEDGER_CACHE_CAPACITY},
-    };
     let dir = tempfile::tempdir().expect("tempdir");
-    let config = Config {
-        init_mode: InitMode::Strict,
-        store_dir: WithOrigin::inline(dir.path().to_path_buf()),
-        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-        blocks_in_memory: BLOCKS_IN_MEMORY,
-        debug_output_new_blocks: false,
-        merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
-        fsync_mode: iroha_config::kura::FsyncMode::Batched,
-        fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-        block_sync_roster_retention:
-            iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-        roster_sidecar_retention:
-            iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-    };
+    let config = kura_config_for_dir(&dir, BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("init kura");
     let mut blocks = DummyBlocks::new();
     let parent = blocks.next();
@@ -2426,8 +2363,7 @@ fn finality_store_rejects_missing_or_wrong_merge_carrier_projection() {
         ),
     ];
     for projection in projections {
-        let kura = Kura::blank_kura_for_testing();
-        let mut blocks = DummyBlocks::new();
+        let (kura, mut blocks) = blank_kura_with_blocks();
         let genesis = blocks.next();
         let mut entry = sample_merge_entry(1);
         let carrier = next_merge_carrier(&mut blocks, &mut entry);

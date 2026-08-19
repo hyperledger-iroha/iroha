@@ -1,7 +1,6 @@
 use super::*;
 use crate::tui;
 use clap::{ArgGroup, ValueEnum, builder::PossibleValue};
-use color_eyre::eyre::WrapErr as _;
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey};
 use std::path::PathBuf;
 use zeroize::Zeroizing;
@@ -192,15 +191,16 @@ fn write_key_custody<T: Write>(
     public_record.push('\n');
     crate::secure_fs::write_private_file_atomic(&public_path, public_record.as_bytes())
         .wrap_err("write public-key custody file")?;
-    let mut pop_path = None;
-    if let Some(pop_hex) = pop_hex {
-        let path = out_dir.join(POP_FILE);
-        let mut pop_record = pop_hex.to_owned();
-        pop_record.push('\n');
-        crate::secure_fs::write_private_file_atomic(&path, pop_record.as_bytes())
-            .wrap_err("write proof-of-possession custody file")?;
-        pop_path = Some(path);
-    }
+    let pop_path = pop_hex
+        .map(|pop_hex| -> color_eyre::Result<_> {
+            let path = out_dir.join(POP_FILE);
+            let mut pop_record = pop_hex.to_owned();
+            pop_record.push('\n');
+            crate::secure_fs::write_private_file_atomic(&path, pop_record.as_bytes())
+                .wrap_err("write proof-of-possession custody file")?;
+            Ok(path)
+        })
+        .transpose()?;
     let private_path = out_dir.join(PRIVATE_KEY_FILE);
     let canonical_private = Zeroizing::new(
         private_key
@@ -250,7 +250,7 @@ impl Args {
         Ok(key_pair)
     }
 }
-pub(crate) fn parse_keygen_seed_hex(seed: &str) -> color_eyre::Result<Vec<u8>> {
+pub fn parse_keygen_seed_hex(seed: &str) -> color_eyre::Result<Vec<u8>> {
     let seed = seed.strip_prefix("0x").unwrap_or(seed);
     if seed.len() != 64 {
         color_eyre::eyre::bail!(

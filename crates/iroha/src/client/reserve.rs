@@ -144,7 +144,7 @@ fn exact_json_object(response: &Response<Vec<u8>>, kind: &str, keys: &[&str]) ->
     }
     Ok(value)
 }
-fn exact_typed_payload<T>(value: Value, kind: &str, detail: &str) -> Result<T>
+fn exact_typed_payload<T>(value: &Value, kind: &str, detail: &str) -> Result<T>
 where
     T: norito::json::JsonDeserialize + norito::json::JsonSerialize,
 {
@@ -152,7 +152,7 @@ where
         norito::json::from_value(value.clone()).map_err(|_| response_error(kind, detail))?;
     let canonical = norito::json::to_value(&decoded)
         .map_err(|_| response_error(kind, "typed payload cannot be re-encoded"))?;
-    if canonical != value {
+    if &canonical != value {
         return Err(response_error(
             kind,
             "typed payload contains noncanonical or unknown fields",
@@ -187,7 +187,6 @@ fn exact_record_payload(
     let cursor = exact_typed_payload(
         object
             .get("finalized_cursor")
-            .cloned()
             .expect("exact record wrapper has finalized_cursor"),
         kind,
         "finalized cursor is not the typed DTO",
@@ -348,6 +347,10 @@ fn validate_event_record(record: &ReserveFinalizedEventV1, kind: &str) -> Result
     }
     Ok(())
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the shared page validator keeps every ordering and continuation binding explicit at each call site"
+)]
 pub(super) fn validate_id_page<T>(
     records: &[T],
     mut previous: Option<[u8; 32]>,
@@ -455,7 +458,7 @@ pub(super) fn validate_policy_response(
     }
     let (cursor, payload) = exact_record_payload(&response, "policy", "policy")?;
     let policy: ReserveAuthorityPolicyRecordV1 =
-        exact_typed_payload(payload, "policy", "payload is not the typed policy DTO")?;
+        exact_typed_payload(&payload, "policy", "payload is not the typed policy DTO")?;
     validate_policy_record(&policy, "policy")?;
     validate_finalized_cursor(cursor, expected, "policy")?;
     Ok(response)
@@ -480,7 +483,7 @@ macro_rules! define_id_page_response_validator {
                 &["finalized_cursor", stringify!($records), "has_more", "next_after"],
             )?;
             let page: $page = exact_typed_payload(
-                value,
+                &value,
                 $kind,
                 "body is not the typed page DTO",
             )?;
@@ -529,8 +532,11 @@ pub(super) fn validate_provider_response(
         return Ok(response);
     }
     let (cursor, payload) = exact_record_payload(&response, "provider", "provider")?;
-    let provider: ReserveProviderAccountV1 =
-        exact_typed_payload(payload, "provider", "payload is not the typed provider DTO")?;
+    let provider: ReserveProviderAccountV1 = exact_typed_payload(
+        &payload,
+        "provider",
+        "payload is not the typed provider DTO",
+    )?;
     validate_provider_record(&provider, "provider")?;
     validate_finalized_cursor(cursor, expected, "provider")?;
     if provider.terms.provider_id
@@ -565,8 +571,11 @@ pub(super) fn validate_movement_response(
         return Ok(response);
     }
     let (cursor, payload) = exact_record_payload(&response, "movement", "movement")?;
-    let movement: ReserveMovementRecordV1 =
-        exact_typed_payload(payload, "movement", "payload is not the typed movement DTO")?;
+    let movement: ReserveMovementRecordV1 = exact_typed_payload(
+        &payload,
+        "movement",
+        "payload is not the typed movement DTO",
+    )?;
     validate_movement_record(&movement, "movement")?;
     validate_finalized_cursor(cursor, expected, "movement")?;
     if movement.movement_id != parse_request_hash(movement_id_hex, "movement")? {
@@ -600,7 +609,7 @@ pub(super) fn validate_appeal_response(
     }
     let (cursor, payload) = exact_record_payload(&response, "appeal", "appeal")?;
     let appeal: ReserveAppealRecordV1 =
-        exact_typed_payload(payload, "appeal", "payload is not the typed appeal DTO")?;
+        exact_typed_payload(&payload, "appeal", "payload is not the typed appeal DTO")?;
     validate_appeal_record(&appeal, "appeal")?;
     validate_finalized_cursor(cursor, expected, "appeal")?;
     if appeal.appeal_id != parse_request_hash(appeal_id_hex, "appeal")? {
@@ -625,7 +634,7 @@ pub(super) fn validate_events_response(
         &["finalized_cursor", "events", "has_more", "next_after"],
     )?;
     let page: ReserveFinalizedEventPageV1 =
-        exact_typed_payload(value, "event page", "body is not the typed page DTO")?;
+        exact_typed_payload(&value, "event page", "body is not the typed page DTO")?;
     validate_encoded_page(&page, "event page")?;
     validate_finalized_cursor(page.finalized_cursor, &filter.finalized, "event page")?;
     if page.events.len() > validate_limit(filter.limit, "event page")? {
@@ -794,7 +803,7 @@ mod tests {
         id[28..].copy_from_slice(&index.to_be_bytes());
         id
     }
-    fn finalized_anchor<'a>(block_hash: &'a str) -> SorafsReserveFinalizedAnchor<'a> {
+    fn finalized_anchor(block_hash: &str) -> SorafsReserveFinalizedAnchor<'_> {
         SorafsReserveFinalizedAnchor {
             expected_finalized_height: Some(7),
             expected_finalized_block_hash_hex: Some(block_hash),
@@ -957,7 +966,7 @@ mod tests {
             .body(vec![0x00, 0xFF, 0x51, 0x00])
             .expect("build non-OK response")
     }
-    fn assert_rejected<T>(result: Result<T>) {
+    fn assert_rejected<T>(result: &Result<T>) {
         assert!(result.is_err());
     }
     fn event_page(events: Vec<ReserveFinalizedEventV1>) -> ReserveFinalizedEventPageV1 {
@@ -972,13 +981,13 @@ mod tests {
         page: &ReserveMovementPageV1,
         filter: &SorafsReserveMovementReadbackFilter<'_>,
     ) {
-        assert_rejected(validate_movements_response(page_response(page), filter));
+        assert_rejected(&validate_movements_response(page_response(page), filter));
     }
     fn assert_events_rejected(
         page: &ReserveFinalizedEventPageV1,
         filter: &SorafsReserveEventsReadbackFilter<'_>,
     ) {
-        assert_rejected(validate_events_response(page_response(page), filter));
+        assert_rejected(&validate_events_response(page_response(page), filter));
     }
     fn assert_exact_read_request(snapshot: &crate::http_default::RequestSnapshot, path: &str) {
         assert_eq!(snapshot.method, crate::http::Method::GET);
@@ -1097,7 +1106,7 @@ mod tests {
         transaction: &SignedTransaction,
     ) {
         super::super::repair::route_test_support::assert_rejected_before_http(
-            format!(
+            &format!(
                 "SoraFS reserve route requires exactly one `{}` native instruction",
                 route.expected_instruction_label()
             ),
@@ -1124,6 +1133,14 @@ mod tests {
             (
                 SorafsReserveCommandRoute::MovementDecision([0; 32]),
                 sign_instruction(&client, movement_decision([0; 32])),
+            ),
+            (
+                SorafsReserveCommandRoute::AppealDecision([0x72; 32]),
+                sign_instruction(&client, appeal_decision(APPEAL_ID)),
+            ),
+            (
+                SorafsReserveCommandRoute::AppealDecision([0; 32]),
+                sign_instruction(&client, appeal_decision([0; 32])),
             ),
         ];
         for (route, transaction) in mismatches {
@@ -1156,7 +1173,8 @@ mod tests {
         }
     }
 
-    fn assert_reserve_response_contract() {
+    #[test]
+    fn reserve_read_response_binding_accepts_exact_typed_records_and_pages() {
         let client = client_with_base_url(base_url());
         let hash = hex::encode(finalized_cursor().block_hash);
         let finalized = finalized_anchor(&hash);
@@ -1164,38 +1182,85 @@ mod tests {
             record_response("policy", &policy_record(&client)),
             &finalized,
         )
-        .expect("exact policy");
-
+        .expect("exact policy record");
         let provider = provider_account(&client, [0x20; 32]);
         validate_provider_response(
             record_response("provider", &provider),
             &hex::encode(provider.terms.provider_id.0),
             &finalized,
         )
-        .expect("exact provider");
+        .expect("exact provider record");
+        let provider_page = ReserveProviderAccountPageV1 {
+            finalized_cursor: finalized_cursor(),
+            accounts: vec![provider, provider_account(&client, [0x30; 32])],
+            has_more: true,
+            next_after: Some(ProviderId::new([0x30; 32])),
+        };
+        let provider_after = hex::encode([0x10; 32]);
+        validate_providers_response(
+            page_response(&provider_page),
+            &SorafsReserveProvidersReadbackFilter {
+                finalized,
+                limit: Some(2),
+                after_provider_id_hex: Some(&provider_after),
+            },
+        )
+        .expect("exact provider page");
         let movement = movement_record(&client, [0x20; 32]);
         validate_movement_response(
             record_response("movement", &movement),
             &hex::encode(movement.movement_id),
             &finalized,
         )
-        .expect("exact movement");
+        .expect("exact movement record");
+        validate_movements_response(
+            page_response(&ReserveMovementPageV1 {
+                finalized_cursor: finalized_cursor(),
+                movements: vec![movement, movement_record(&client, [0x30; 32])],
+                has_more: true,
+                next_after: Some([0x30; 32]),
+            }),
+            &SorafsReserveMovementReadbackFilter {
+                finalized,
+                limit: Some(2),
+                after_movement_id_hex: Some(&provider_after),
+            },
+        )
+        .expect("exact movement page");
         let appeal = appeal_record(&client, [0x20; 32]);
         validate_appeal_response(
             record_response("appeal", &appeal),
             &hex::encode(appeal.appeal_id),
             &finalized,
         )
-        .expect("exact appeal");
-        let events = vec![
+        .expect("exact appeal record");
+        validate_appeals_response(
+            page_response(&ReserveAppealPageV1 {
+                finalized_cursor: finalized_cursor(),
+                appeals: vec![appeal, appeal_record(&client, [0x30; 32])],
+                has_more: true,
+                next_after: Some([0x30; 32]),
+            }),
+            &SorafsReserveAppealReadbackFilter {
+                finalized,
+                limit: Some(2),
+                after_appeal_id_hex: Some(&provider_after),
+            },
+        )
+        .expect("exact appeal page");
+    }
+    #[test]
+    fn reserve_event_response_binding_accepts_exact_successors() {
+        let client = client_with_base_url(base_url());
+        let initial_events = vec![
             reserve_event(&client, 1, 5, [0x51; 32], 0),
             reserve_event(&client, 2, 5, [0x51; 32], 1),
         ];
         validate_events_response(
             page_response(&ReserveFinalizedEventPageV1 {
                 finalized_cursor: finalized_cursor(),
-                next_after: events.last().map(ReserveFinalizedEventV1::cursor),
-                events,
+                next_after: initial_events.last().map(ReserveFinalizedEventV1::cursor),
+                events: initial_events,
                 has_more: true,
             }),
             &SorafsReserveEventsReadbackFilter {
@@ -1203,15 +1268,42 @@ mod tests {
                 ..SorafsReserveEventsReadbackFilter::default()
             },
         )
-        .expect("exact event page");
-
+        .expect("exact initial policy-activation page");
+        let hash = hex::encode(finalized_cursor().block_hash);
+        let after_hash = hex::encode([0x51; 32]);
+        let events = vec![
+            reserve_event(&client, 2, 5, [0x51; 32], 1),
+            reserve_event(&client, 3, 7, finalized_cursor().block_hash, 0),
+        ];
+        let page = ReserveFinalizedEventPageV1 {
+            finalized_cursor: finalized_cursor(),
+            next_after: events.last().map(ReserveFinalizedEventV1::cursor),
+            events,
+            has_more: true,
+        };
+        validate_events_response(
+            page_response(&page),
+            &SorafsReserveEventsReadbackFilter {
+                finalized: finalized_anchor(&hash),
+                limit: Some(2),
+                after_sequence: Some(1),
+                after_block_height: Some(5),
+                after_block_hash_hex: Some(&after_hash),
+                after_event_index: Some(0),
+            },
+        )
+        .expect("exact contiguous event page");
+    }
+    #[test]
+    fn reserve_page_response_binding_separates_json_transport_and_norito_bounds() {
+        let client = client_with_base_url(base_url());
         let escaped_reason = "\u{0001}".repeat(RESERVE_MAX_REASON_BYTES_V1);
         let escaped_page = ReserveAppealPageV1 {
             finalized_cursor: finalized_cursor(),
             appeals: (1..=RESERVE_DEFAULT_PAGE_LIMIT_V1)
                 .map(|index| {
                     let mut appeal = appeal_record(&client, ordered_id(index));
-                    appeal.reason.clone_from(&escaped_reason);
+                    appeal.reason = escaped_reason.clone();
                     appeal
                 })
                 .collect(),
@@ -1220,34 +1312,45 @@ mod tests {
         };
         let response = page_response(&escaped_page);
         assert!(response.body().len() > RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1);
+        assert!(response.body().len() <= RESERVE_JSON_RESPONSE_MAX_BYTES_V1);
         let norito_len = norito::to_bytes(&escaped_page)
-            .expect("Norito appeal page")
+            .expect("encode escaped appeal page as Norito")
             .len();
         assert!(norito_len <= RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1);
         validate_appeals_response(response, &SorafsReserveAppealReadbackFilter::default())
-            .expect("escaped JSON with bounded Norito");
-
+            .expect("large escaped JSON with bounded canonical Norito is valid");
+        let movements = (1..=RESERVE_DEFAULT_PAGE_LIMIT_V1)
+            .map(|index| {
+                let mut movement = movement_record(&client, ordered_id(index));
+                movement.status = ReserveMovementStatusV1::Approved;
+                movement.decided_by = Some(client.account.clone());
+                movement.decided_at_unix = Some(2);
+                movement.rationale = Some("r".repeat(12 * 1024));
+                movement
+            })
+            .collect();
         let oversized_page = ReserveMovementPageV1 {
             finalized_cursor: finalized_cursor(),
-            movements: (1..=RESERVE_DEFAULT_PAGE_LIMIT_V1)
-                .map(|index| {
-                    let mut movement = movement_record(&client, ordered_id(index));
-                    movement.status = ReserveMovementStatusV1::Approved;
-                    movement.decided_by = Some(client.account.clone());
-                    movement.decided_at_unix = Some(2);
-                    movement.rationale = Some("r".repeat(12 * 1024));
-                    movement
-                })
-                .collect(),
+            movements,
             has_more: false,
             next_after: None,
         };
         let response = page_response(&oversized_page);
-        assert_rejected(validate_movements_response(
-            response,
-            &SorafsReserveMovementReadbackFilter::default(),
-        ));
-
+        assert!(response.body().len() <= RESERVE_JSON_RESPONSE_MAX_BYTES_V1);
+        assert!(
+            norito::to_bytes(&oversized_page)
+                .expect("encode oversized movement page as Norito")
+                .len()
+                > RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1
+        );
+        let error =
+            validate_movements_response(response, &SorafsReserveMovementReadbackFilter::default())
+                .expect_err("oversized canonical Norito page must be rejected");
+        assert!(error.to_string().contains("canonical Norito page exceeds"));
+    }
+    #[test]
+    fn reserve_read_response_binding_rejects_media_wrapper_finality_and_detail_mismatch() {
+        let client = client_with_base_url(base_url());
         let policy = policy_record(&client);
         let mut wrong_media = record_response("policy", &policy);
         wrong_media.headers_mut().insert(
@@ -1256,65 +1359,337 @@ mod tests {
                 .parse()
                 .expect("media type"),
         );
-        assert_rejected(validate_policy_response(
-            wrong_media,
-            &SorafsReserveFinalizedAnchor::default(),
-        ));
-        assert_rejected(validate_policy_response(
+        let mut duplicate_media = record_response("policy", &policy);
+        duplicate_media.headers_mut().append(
+            "content-type",
+            APPLICATION_JSON.parse().expect("media type"),
+        );
+        let mut identity_encoded = record_response("policy", &policy);
+        identity_encoded.headers_mut().insert(
+            "content-encoding",
+            "identity".parse().expect("identity encoding"),
+        );
+        validate_policy_response(identity_encoded, &SorafsReserveFinalizedAnchor::default())
+            .expect("exact identity encoding is allowed");
+        let mut compressed = record_response("policy", &policy);
+        compressed
+            .headers_mut()
+            .insert("content-encoding", "gzip".parse().expect("gzip encoding"));
+        for response in [wrong_media, duplicate_media, compressed] {
+            assert_rejected(&validate_policy_response(
+                response,
+                &SorafsReserveFinalizedAnchor::default(),
+            ));
+        }
+        let mut wrapper = record_response("policy", &policy);
+        let mut value: Value =
+            norito::json::from_slice(wrapper.body()).expect("decode record wrapper");
+        value
+            .as_object_mut()
+            .expect("record wrapper object")
+            .insert("extra".to_owned(), Value::from(true));
+        *wrapper.body_mut() = norito::json::to_vec(&value).expect("encode invalid wrapper");
+        let mut nested = record_response("policy", &policy);
+        let mut value: Value =
+            norito::json::from_slice(nested.body()).expect("decode record wrapper");
+        value
+            .as_object_mut()
+            .expect("record wrapper object")
+            .get_mut("policy")
+            .expect("policy payload")
+            .as_object_mut()
+            .expect("policy record object")
+            .insert("unexpected".to_owned(), Value::from(true));
+        *nested.body_mut() = norito::json::to_vec(&value).expect("encode nested mutant");
+        for response in [wrapper, nested] {
+            assert_rejected(&validate_policy_response(
+                response,
+                &SorafsReserveFinalizedAnchor::default(),
+            ));
+        }
+        let oversized = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_JSON)
+            .body(vec![b' '; RESERVE_JSON_RESPONSE_MAX_BYTES_V1 + 1])
+            .expect("build oversized response");
+        let error = validate_policy_response(oversized, &SorafsReserveFinalizedAnchor::default())
+            .expect_err("oversized response must fail before JSON decoding");
+        assert!(
+            error
+                .to_string()
+                .contains("body exceeds the JSON transport bound")
+        );
+        let wrong_hash = hex::encode([0x72; 32]);
+        assert_rejected(&validate_policy_response(
             record_response("policy", &policy),
-            &finalized_anchor(&hex::encode([0x72; 32])),
+            &finalized_anchor(&wrong_hash),
         ));
-        assert_rejected(validate_movement_response(
-            record_response("movement", &movement_record(&client, [0x20; 32])),
-            &hex::encode([0x21; 32]),
-            &SorafsReserveFinalizedAnchor::default(),
-        ));
-
+        for response in [
+            validate_provider_response(
+                record_response("provider", &provider_account(&client, [0x20; 32])),
+                &hex::encode([0x21; 32]),
+                &SorafsReserveFinalizedAnchor::default(),
+            ),
+            validate_movement_response(
+                record_response("movement", &movement_record(&client, [0x20; 32])),
+                &hex::encode([0x21; 32]),
+                &SorafsReserveFinalizedAnchor::default(),
+            ),
+            validate_appeal_response(
+                record_response("appeal", &appeal_record(&client, [0x20; 32])),
+                &hex::encode([0x21; 32]),
+                &SorafsReserveFinalizedAnchor::default(),
+            ),
+        ] {
+            assert_rejected(&response);
+        }
+    }
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn reserve_read_response_binding_rejects_typed_semantic_mutants() {
+        let client = client_with_base_url(base_url());
+        let finalized = SorafsReserveFinalizedAnchor::default();
+        for mutate in [
+            |record: &mut ReserveAuthorityPolicyRecordV1| record.policy_digest = [0x99; 32],
+            |record: &mut ReserveAuthorityPolicyRecordV1| record.activated_at_unix = 0,
+            |record: &mut ReserveAuthorityPolicyRecordV1| {
+                record.policy.custody_account = record.policy.treasury_account.clone();
+            },
+        ] {
+            let mut policy = policy_record(&client);
+            mutate(&mut policy);
+            assert_rejected(&validate_policy_response(
+                record_response("policy", &policy),
+                &finalized,
+            ));
+        }
         let mut provider = provider_account(&client, [0x20; 32]);
         provider.terms.capacity_gib = 0;
-        assert_rejected(validate_provider_record(&provider, "provider"));
+        assert_rejected(&validate_provider_response(
+            record_response("provider", &provider),
+            &hex::encode(provider.terms.provider_id.0),
+            &finalized,
+        ));
+        for mutate in [
+            |record: &mut ReserveProviderAccountV1| {
+                record.debt_principal = "2".parse().expect("debt principal");
+            },
+            |record: &mut ReserveProviderAccountV1| {
+                record.rent_charged_through_unix = record.updated_at_unix + 1;
+            },
+            |record: &mut ReserveProviderAccountV1| record.revision = 0,
+            |record: &mut ReserveProviderAccountV1| record.policy_digest = [0; 32],
+            |record: &mut ReserveProviderAccountV1| {
+                record.pending_movements = RESERVE_MAX_PENDING_MOVEMENTS_V1 + 1;
+            },
+            |record: &mut ReserveProviderAccountV1| {
+                record.open_appeals = RESERVE_MAX_OPEN_APPEALS_V1 + 1;
+            },
+            |record: &mut ReserveProviderAccountV1| record.updated_at_unix = 0,
+            |record: &mut ReserveProviderAccountV1| {
+                record.interest_accrued_at_unix = record.updated_at_unix + 1;
+            },
+        ] {
+            let mut provider = provider_account(&client, [0x20; 32]);
+            mutate(&mut provider);
+            assert_rejected(&validate_provider_record(&provider, "provider"));
+        }
         let mut movement = movement_record(&client, [0x20; 32]);
-        movement.amount = "0".parse().expect("zero amount");
-        assert_rejected(validate_movement_record(&movement, "movement"));
+        movement.amount = "0".parse().expect("zero movement amount");
+        assert_rejected(&validate_movement_response(
+            record_response("movement", &movement),
+            &hex::encode(movement.movement_id),
+            &finalized,
+        ));
+        let mut movement = movement_record(&client, [0x20; 32]);
+        movement.decided_by = Some(client.account.clone());
+        assert_rejected(&validate_movement_record(&movement, "movement"));
+        let mut movement = movement_record(&client, [0x20; 32]);
+        movement.status = ReserveMovementStatusV1::Approved;
+        assert_rejected(&validate_movement_record(&movement, "movement"));
+        for mutate in [
+            |record: &mut ReserveMovementRecordV1| record.expected_provider_revision = 0,
+            |record: &mut ReserveMovementRecordV1| record.policy_digest = [0; 32],
+            |record: &mut ReserveMovementRecordV1| record.requested_at_unix = 0,
+        ] {
+            let mut movement = movement_record(&client, [0x20; 32]);
+            mutate(&mut movement);
+            assert_rejected(&validate_movement_record(&movement, "movement"));
+        }
         let mut appeal = appeal_record(&client, [0x20; 32]);
         appeal.reason.clear();
-        assert_rejected(validate_appeal_record(&appeal, "appeal"));
+        assert_rejected(&validate_appeal_response(
+            record_response("appeal", &appeal),
+            &hex::encode(appeal.appeal_id),
+            &finalized,
+        ));
+        let mut appeal = appeal_record(&client, [0x20; 32]);
+        appeal.reason = "x".repeat(RESERVE_MAX_REASON_BYTES_V1 + 1);
+        assert_rejected(&validate_appeal_record(&appeal, "appeal"));
+        let mut appeal = appeal_record(&client, [0x20; 32]);
+        appeal.status = ReserveAppealStatusV1::Accepted;
+        assert_rejected(&validate_appeal_record(&appeal, "appeal"));
+        for mutate in [
+            |record: &mut ReserveAppealRecordV1| record.expected_provider_revision = 0,
+            |record: &mut ReserveAppealRecordV1| record.submitted_at_unix = 0,
+        ] {
+            let mut appeal = appeal_record(&client, [0x20; 32]);
+            mutate(&mut appeal);
+            assert_rejected(&validate_appeal_record(&appeal, "appeal"));
+        }
         let mut event = reserve_event(&client, 1, 5, [0x51; 32], 0);
         event.event.occurred_at_unix_ms = 0;
-        assert_rejected(validate_event_record(&event, "event page"));
-
-        let filter = SorafsReserveMovementReadbackFilter {
+        assert_rejected(&validate_events_response(
+            page_response(&event_page(vec![event])),
+            &SorafsReserveEventsReadbackFilter::default(),
+        ));
+        for mutate in [
+            |event: &mut ReserveFinalizedEventV1| event.event.operation_id = Some([0x91; 32]),
+            |event: &mut ReserveFinalizedEventV1| {
+                event.event.provider_id = Some(ProviderId::new([0; 32]));
+            },
+            |event: &mut ReserveFinalizedEventV1| event.event.policy_digest = [0; 32],
+        ] {
+            let mut event = reserve_event(&client, 1, 5, [0x51; 32], 0);
+            mutate(&mut event);
+            assert_rejected(&validate_event_record(&event, "event page"));
+        }
+        let mut invalid_kind = reserve_event(&client, 2, 5, [0x51; 32], 1);
+        invalid_kind.event.kind = SorafsReserveLedgerEventKind::MovementRequested;
+        assert_rejected(&validate_event_record(&invalid_kind, "event page"));
+    }
+    #[test]
+    fn reserve_page_response_binding_rejects_bounds_order_exclusivity_and_continuation() {
+        let client = client_with_base_url(base_url());
+        let first = movement_record(&client, [0x20; 32]);
+        let second = movement_record(&client, [0x30; 32]);
+        let mut page = ReserveMovementPageV1 {
+            finalized_cursor: finalized_cursor(),
+            movements: vec![first.clone(), second.clone()],
+            has_more: false,
+            next_after: None,
+        };
+        let limit_one = SorafsReserveMovementReadbackFilter {
+            limit: Some(1),
+            ..SorafsReserveMovementReadbackFilter::default()
+        };
+        assert_movements_rejected(&page, &limit_one);
+        page.movements = vec![second, first.clone()];
+        let limit_two = SorafsReserveMovementReadbackFilter {
             limit: Some(2),
             ..SorafsReserveMovementReadbackFilter::default()
         };
-        assert_movements_rejected(
-            &ReserveMovementPageV1 {
-                finalized_cursor: finalized_cursor(),
-                movements: vec![
-                    movement_record(&client, [0x30; 32]),
-                    movement_record(&client, [0x20; 32]),
-                ],
-                has_more: false,
-                next_after: None,
-            },
-            &filter,
+        assert_movements_rejected(&page, &limit_two);
+        page.movements = vec![first];
+        let after = hex::encode([0x20; 32]);
+        let not_exclusive = SorafsReserveMovementReadbackFilter {
+            limit: Some(2),
+            after_movement_id_hex: Some(&after),
+            ..SorafsReserveMovementReadbackFilter::default()
+        };
+        assert_movements_rejected(&page, &not_exclusive);
+        page.has_more = true;
+        page.next_after = Some([0x21; 32]);
+        assert_movements_rejected(&page, &limit_two);
+        let page = ReserveMovementPageV1 {
+            finalized_cursor: finalized_cursor(),
+            movements: (1..=RESERVE_DEFAULT_PAGE_LIMIT_V1 + 1)
+                .map(|index| movement_record(&client, ordered_id(index)))
+                .collect(),
+            has_more: false,
+            next_after: None,
+        };
+        let error = validate_movements_response(
+            page_response(&page),
+            &SorafsReserveMovementReadbackFilter::default(),
+        )
+        .expect_err("omitted movement limit must use Torii's 100-record default");
+        assert!(
+            error
+                .to_string()
+                .contains("payload exceeds the requested limit")
         );
-        let event_filter = SorafsReserveEventsReadbackFilter {
+    }
+    #[test]
+    fn reserve_event_response_binding_rejects_gaps_finality_and_bad_continuations() {
+        let client = client_with_base_url(base_url());
+        let filter = SorafsReserveEventsReadbackFilter {
             limit: Some(2),
             ..SorafsReserveEventsReadbackFilter::default()
         };
+        let empty = event_page(Vec::new());
+        assert_events_rejected(&empty, &filter);
+        let after_hash = hex::encode([0x51; 32]);
+        validate_events_response(
+            page_response(&empty),
+            &SorafsReserveEventsReadbackFilter {
+                limit: Some(2),
+                after_sequence: Some(1),
+                after_block_height: Some(5),
+                after_block_hash_hex: Some(&after_hash),
+                after_event_index: Some(0),
+                ..SorafsReserveEventsReadbackFilter::default()
+            },
+        )
+        .expect("empty terminal continuation page is valid");
+        let mut wrong_initial_kind = reserve_event(&client, 1, 5, [0x51; 32], 0);
+        wrong_initial_kind.event.kind = SorafsReserveLedgerEventKind::LifecycleAdvanced;
+        wrong_initial_kind.event.provider_id = Some(ProviderId::new([0x63; 32]));
+        wrong_initial_kind.event.provider_revision = 1;
+        wrong_initial_kind.event.resulting_lifecycle_stage = Some(ReserveLifecycleStage::Active);
         for events in [
-            Vec::new(),
+            vec![wrong_initial_kind],
             vec![reserve_event(&client, 2, 5, [0x51; 32], 0)],
             vec![
                 reserve_event(&client, 1, 5, [0x51; 32], 0),
                 reserve_event(&client, 3, 5, [0x51; 32], 1),
             ],
+            vec![
+                reserve_event(&client, 1, 5, [0x51; 32], 0),
+                reserve_event(&client, 2, 5, [0x52; 32], 1),
+            ],
+            vec![reserve_event(&client, 1, 8, [0x81; 32], 0)],
+            vec![reserve_event(
+                &client,
+                1,
+                finalized_cursor().height,
+                [0x72; 32],
+                0,
+            )],
         ] {
-            assert_events_rejected(&event_page(events), &event_filter);
+            assert_events_rejected(&event_page(events), &filter);
         }
+        let mut page = event_page(vec![reserve_event(&client, 1, 5, [0x51; 32], 0)]);
+        page.has_more = true;
+        page.next_after = Some(reserve_event(&client, 2, 5, [0x51; 32], 1).cursor());
+        assert_events_rejected(&page, &filter);
+        let page = ReserveFinalizedEventPageV1 {
+            finalized_cursor: finalized_cursor(),
+            events: (1_u64..=u64::from(RESERVE_DEFAULT_PAGE_LIMIT_V1 + 1))
+                .map(|sequence| {
+                    reserve_event(
+                        &client,
+                        sequence,
+                        5,
+                        [0x51; 32],
+                        u32::try_from(sequence - 1).expect("bounded event index"),
+                    )
+                })
+                .collect(),
+            has_more: false,
+            next_after: None,
+        };
+        let error = validate_events_response(
+            page_response(&page),
+            &SorafsReserveEventsReadbackFilter::default(),
+        )
+        .expect_err("omitted event limit must use Torii's 100-record default");
+        assert!(
+            error
+                .to_string()
+                .contains("payload exceeds the requested limit")
+        );
     }
-
     fn assert_reserve_request_contract() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::default();
@@ -1332,13 +1707,13 @@ mod tests {
         );
         assert!(error.to_string().contains("event cursor is incomplete"));
         assert!(snapshots.lock().expect("snapshot lock").is_empty());
-        assert_rejected(validate_providers_request(
+        assert_rejected(&validate_providers_request(
             &SorafsReserveProvidersReadbackFilter {
                 limit: Some(RESERVE_QUERY_MAX_ITEMS_V1 + 1),
                 ..SorafsReserveProvidersReadbackFilter::default()
             },
         ));
-        assert_rejected(validate_appeals_request(
+        assert_rejected(&validate_appeals_request(
             &SorafsReserveAppealReadbackFilter {
                 after_appeal_id_hex: Some("AA"),
                 ..SorafsReserveAppealReadbackFilter::default()
@@ -1407,33 +1782,13 @@ mod tests {
         }
     }
 
-    macro_rules! reserve_contract_tests {
-        ($matrix:ident => [$($name:ident),+ $(,)?]) => {
-            $(
-                #[test]
-                fn $name() {
-                    $matrix();
-                }
-            )+
-        };
+    #[test]
+    fn reserve_route_contract() {
+        assert_reserve_route_contract();
     }
 
-    reserve_contract_tests!(assert_reserve_route_contract => [
-        reserve_route_validation_accepts_every_exact_instruction,
-        reserve_route_validation_rejects_wrong_kind_and_identifiers_before_http,
-        reserve_route_validation_rejects_wrong_type_non_native_and_non_singleton_before_http,
-    ]);
-    reserve_contract_tests!(assert_reserve_response_contract => [
-        reserve_read_response_binding_accepts_exact_typed_records_and_pages,
-        reserve_event_response_binding_accepts_exact_successors,
-        reserve_page_response_binding_separates_json_transport_and_norito_bounds,
-        reserve_read_response_binding_rejects_media_wrapper_finality_and_detail_mismatch,
-        reserve_read_response_binding_rejects_typed_semantic_mutants,
-        reserve_page_response_binding_rejects_bounds_order_exclusivity_and_continuation,
-        reserve_event_response_binding_rejects_gaps_finality_and_bad_continuations,
-    ]);
-    reserve_contract_tests!(assert_reserve_request_contract => [
-        reserve_malformed_filters_fail_before_http_and_non_ok_is_unchanged,
-        reserve_read_requests_pin_identity_json_and_transport_bound,
-    ]);
+    #[test]
+    fn reserve_request_contract() {
+        assert_reserve_request_contract();
+    }
 }

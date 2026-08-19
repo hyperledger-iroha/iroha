@@ -1,4 +1,111 @@
 // Included from the world query implementation module to preserve its lexical scope.
+fn proof_record_alias_values(record: &ProofRecord, field: &str) -> Vec<String> {
+    match field {
+        "id" => vec![record.id.to_string()],
+        "backend" | "id.backend" => vec![record.id.backend.to_string()],
+        "status" => vec![proof_status_label(record.status).to_owned()],
+        _ => Vec::new(),
+    }
+}
+
+fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    if path.is_empty() {
+        return None;
+    }
+    let mut current = value;
+    for segment in path.split('.') {
+        if segment.is_empty() {
+            return None;
+        }
+        match current {
+            Value::Object(map) => current = map.get(segment)?,
+            _ => return None,
+        }
+    }
+    Some(current)
+}
+
+fn predicate_value_equals_str(value: &Value, expected: &str) -> bool {
+    matches!(value, Value::String(raw) if raw == expected)
+}
+
+fn predicate_values_contain_str(values: &[Value], expected: &str) -> bool {
+    values
+        .iter()
+        .any(|value| matches!(value, Value::String(raw) if raw == expected))
+}
+
+fn proof_record_json_value<'a>(
+    cache: &'a mut Option<Value>,
+    record: &ProofRecord,
+) -> Option<&'a Value> {
+    if cache.is_none() {
+        *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(record);
+    }
+    cache.as_ref()
+}
+
+fn predicate_matches_proof_record(predicate: &PredicateJson, record: &ProofRecord) -> bool {
+    let mut record_json = None;
+    for cond in &predicate.equals {
+        let aliases = proof_record_alias_values(record, &cond.field);
+        if !aliases.is_empty() {
+            if !aliases
+                .iter()
+                .any(|alias| predicate_value_equals_str(&cond.value, alias))
+            {
+                return false;
+            }
+            continue;
+        }
+        let Some(value) = proof_record_json_value(&mut record_json, record) else {
+            continue;
+        };
+        let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+            return false;
+        };
+        if actual != &cond.value {
+            return false;
+        }
+    }
+    for cond in &predicate.r#in {
+        let aliases = proof_record_alias_values(record, &cond.field);
+        if !aliases.is_empty() {
+            if !aliases
+                .iter()
+                .any(|alias| predicate_values_contain_str(&cond.values, alias))
+            {
+                return false;
+            }
+            continue;
+        }
+        let Some(value) = proof_record_json_value(&mut record_json, record) else {
+            continue;
+        };
+        let Some(actual) = predicate_value_at_path(value, &cond.field) else {
+            return false;
+        };
+        if !cond.values.iter().any(|candidate| candidate == actual) {
+            return false;
+        }
+    }
+    for field in &predicate.exists {
+        if !proof_record_alias_values(record, field).is_empty() {
+            continue;
+        }
+        let Some(value) = proof_record_json_value(&mut record_json, record) else {
+            continue;
+        };
+        let Some(actual) = predicate_value_at_path(value, field) else {
+            return false;
+        };
+        if actual.is_null() {
+            return false;
+        }
+    }
+    true
+}
+
 impl ValidQuery for iroha_data_model::query::proof::prelude::FindProofRecords {
     #[metrics(+"find_proof_records")]
     fn execute(

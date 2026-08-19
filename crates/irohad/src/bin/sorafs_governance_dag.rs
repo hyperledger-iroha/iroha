@@ -1,4 +1,4 @@
-//! Stock broker-backed SoraFS Governance DAG service launcher.
+//! Stock broker-backed `SoraFS` Governance DAG service launcher.
 //!
 //! The standalone config loader admits only the service's public endpoint policy, expected
 //! identities, stable provider handles, revisions, bounds, and policy digests. Runtime credentials
@@ -43,8 +43,12 @@ async fn main() {
     let runtime_registry: Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1> = Arc::new(
         StockGovernanceDagServiceRuntimeProviderRegistryV1::new(chain_id, network_id),
     );
-    if let Err(error) =
-        run_governance_dag_service_with_runtime_registry(config, once, Some(runtime_registry)).await
+    if let Err(error) = Box::pin(run_governance_dag_service_with_runtime_registry(
+        config,
+        once,
+        Some(runtime_registry),
+    ))
+    .await
     {
         eprintln!("sorafs governance DAG service failed: {error}");
         process::exit(1);

@@ -1,8 +1,26 @@
 //! Test that the global instruction registry can be overridden after it has
 //! been initialized lazily.
 use iroha_data_model::{instruction_registry, isi::set_instruction_registry, prelude::*};
+
+const REGISTRY_RESET_CHILD: &str = "IROHA_DATA_MODEL_REGISTRY_RESET_CHILD";
+
 #[test]
 fn set_instruction_registry_overrides_existing() {
+    if std::env::var_os(REGISTRY_RESET_CHILD).is_none() {
+        // This integration test is linked into a grouped harness. Exercise the
+        // process-global setter in a child so parallel codec tests never observe
+        // either deliberately incomplete registry.
+        let status = std::process::Command::new(
+            std::env::current_exe().expect("resolve grouped integration-test executable"),
+        )
+        .arg("set_instruction_registry_overrides_existing")
+        .env(REGISTRY_RESET_CHILD, "1")
+        .status()
+        .expect("run isolated instruction-registry reset test");
+        assert!(status.success(), "isolated registry reset test failed");
+        return;
+    }
+
     // Start with registry containing only `Log`
     set_instruction_registry(instruction_registry![Log]);
     let log: InstructionBox = Log::new(Level::INFO, "hello".to_owned()).into();

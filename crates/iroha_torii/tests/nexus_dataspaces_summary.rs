@@ -107,7 +107,6 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         .insert(uaid, set);
     let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
     let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
     nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
         DataSpaceMetadata {
@@ -218,7 +217,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
 async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_without_uaid() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-    let (state, kura, local_peer_id) = minimal_state(true);
+    let (state, kura, local_peer_id) = minimal_state();
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let account_literal = account_id.to_string();
@@ -266,7 +265,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
 async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_dataspace() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-    let (state, kura, local_peer_id) = minimal_state(true);
+    let (state, kura, local_peer_id) = minimal_state();
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let account_literal = account_id.to_string();
@@ -408,7 +407,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
         .insert(uaid, set);
     let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
     let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
     nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
         DataSpaceMetadata {
@@ -568,9 +566,6 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
     let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-    let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
-    state.set_nexus(nexus).expect("set nexus config");
     let mut block = state.block(block_header(1));
     let mut stx = block.transaction();
     Register::domain(Domain::new(domain_id.clone()))
@@ -703,7 +698,6 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         .insert(uaid, set);
     let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
     let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
     nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
         DataSpaceMetadata::default(),
         DataSpaceMetadata {
@@ -852,7 +846,7 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
 async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-    let (state, kura, local_peer_id) = minimal_state(true);
+    let (state, kura, local_peer_id) = minimal_state();
     let router = build_test_router(state, &kura, local_peer_id);
     let (status, body) = request_summary(
         router,
@@ -869,7 +863,7 @@ async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
 async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-    let (state, kura, local_peer_id) = minimal_state(true);
+    let (state, kura, local_peer_id) = minimal_state();
     let router = build_test_router(state, &kura, local_peer_id);
     let (status, body) =
         request_summary(router, "/v1/nexus/dataspaces/accounts/%20%20/summary").await;
@@ -883,7 +877,7 @@ async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
 async fn nexus_dataspaces_summary_endpoint_returns_not_found_for_missing_account() {
     let _guard = consensus_guard();
     sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-    let (state, kura, local_peer_id) = minimal_state(true);
+    let (state, kura, local_peer_id) = minimal_state();
     let router = build_test_router(state, &kura, local_peer_id);
     let account_literal = valid_missing_account_literal();
     let literal = urlencoding::encode(&account_literal);
@@ -891,33 +885,14 @@ async fn nexus_dataspaces_summary_endpoint_returns_not_found_for_missing_account
     let (status, _body) = request_summary(router, &uri).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
-#[tokio::test(flavor = "current_thread")]
-async fn nexus_dataspaces_summary_endpoint_rejects_when_nexus_disabled() {
-    let _guard = consensus_guard();
-    sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
-    let (state, kura, local_peer_id) = minimal_state(false);
-    let router = build_test_router(state, &kura, local_peer_id);
-    let account_literal = valid_missing_account_literal();
-    let literal = urlencoding::encode(&account_literal);
-    let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
-    let (status, body) = request_summary(router, &uri).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(
-        body.contains("nexus_disabled"),
-        "expected nexus_disabled code, got: {body}"
-    );
-}
-fn minimal_state(nexus_enabled: bool) -> (Arc<State>, Arc<Kura>, PeerId) {
+fn minimal_state() -> (Arc<State>, Arc<Kura>, PeerId) {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
     let mut world = World::default();
     fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-    let mut nexus = state.nexus_snapshot();
-    nexus.enabled = nexus_enabled;
-    state.set_nexus(nexus).expect("set nexus config");
+    let state = State::new_for_testing(world, Arc::clone(&kura), query);
     (Arc::new(state), kura, local_peer_id)
 }
 async fn request_summary(router: axum::Router, uri: &str) -> (StatusCode, String) {

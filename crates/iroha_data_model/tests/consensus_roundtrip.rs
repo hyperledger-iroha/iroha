@@ -24,7 +24,7 @@ use iroha_data_model::{
 };
 use norito::{
     NoritoDeserialize,
-    codec::{Decode, Encode},
+    codec::{Decode, DecodeAll, Encode},
 };
 use std::{
     convert::TryFrom,
@@ -64,6 +64,12 @@ fn checked_bls_keypair() -> KeyPair {
 }
 fn checked_bls_peer_id() -> PeerId {
     PeerId::new(checked_bls_keypair().public_key().clone())
+}
+
+fn checked_bls_peer_id_from_seed(seed: u8) -> PeerId {
+    let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+        .expect("derive checked BLS consensus fixture keypair");
+    PeerId::new(key_pair.public_key().clone())
 }
 fn assert_roundtrip<T>(value: &T)
 where
@@ -334,10 +340,14 @@ fn rng_vrf_reveal(rng: &mut DeterministicRng) -> VrfReveal {
     }
 }
 fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
-    let roster = vec![ValidatorPower {
-        validator: checked_bls_peer_id(),
-        power: 1,
-    }];
+    let mut roster = [0xA1, 0xA2, 0xA3, 0xA4]
+        .into_iter()
+        .map(|seed| ValidatorPower {
+            validator: checked_bls_peer_id_from_seed(seed),
+            power: 1,
+        })
+        .collect::<Vec<_>>();
+    roster.sort();
     let height = rng.next_u64().max(1);
     let context = HeightContext {
         network_id: NetworkId::from_genesis_hash(rng_block_hash(rng)),
@@ -349,7 +359,7 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
         mode: ConsensusMode::Permissioned,
         parent_commit_qc: None,
         snapshot_bootstrap: None,
-        quorum: DualQuorum::from_roster(&roster).expect("single-validator fixture quorum"),
+        quorum: DualQuorum::from_roster(&roster).expect("strict four-validator fixture quorum"),
         roster,
         nexus_amx_context_hash: rng_hash(rng),
         execution_policy_hash: rng_hash(rng),
@@ -368,10 +378,11 @@ fn rng_evidence(rng: &mut DeterministicRng) -> Evidence {
         height,
         view: rng.next_u64(),
     };
+    let proofs_of_possession = (0..context.roster.len()).map(|_| rng.bytes(96)).collect();
     Evidence {
         equivocation: SumeragiV2EquivocationEvidence {
             context,
-            proofs_of_possession: vec![rng.bytes(96)],
+            proofs_of_possession,
             conflict: SumeragiV2Equivocation::TimeoutVote {
                 first: TimeoutVote {
                     round,

@@ -668,8 +668,9 @@ finality bridge before calling this helper. Application Merkle leaves and
 internal nodes use
 distinct `iroha:merkle:leaf:v1\0` and `iroha:merkle:internal:v1\0` hash domains;
 the raw transaction/result hash is passed as the proof leaf and the verifier
-applies the leaf boundary itself. State roots and commit QCs returned by
-`getLedgerStateRoot()` and `getLedgerStateProof()` remain node-provided evidence
+applies the leaf boundary itself. `getLedgerStateRoot()` and
+`getLedgerStateProof()` return the same exact block header, post-state root, and
+Sumeragi-v2 finality artifact, but that carrier remains node-provided evidence
 until an official browser QC/BLS verifier is available.
 
 Node callers can authenticate the finality anchor and the proof together with
@@ -1907,10 +1908,7 @@ console.log(`leader index=${leader.leader_index} epoch seed=${leader.prf.epoch_s
 const params = await torii.getSumeragiParams();
 console.log(`block time=${params.block_time_ms}ms next mode=${params.next_mode ?? "current"}`);
 
-// Commit certificates and key lifecycle history
-const commitCerts = await torii.listSumeragiCommitCertificates();
-console.log(`latest commit cert height=${commitCerts[0]?.height ?? "none"}`);
-
+// Consensus key lifecycle history
 const keyRecords = await torii.listSumeragiKeyLifecycle();
 console.log(`latest key record status=${keyRecords[0]?.status ?? "none"}`);
 ```

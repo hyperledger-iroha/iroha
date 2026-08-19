@@ -285,10 +285,10 @@ fn payout_binding(fee_asset: &AssetDefinitionId) -> ValidationFeeTreasuryPayoutB
         entrypoint: "autonomous_validation_fee_tick"
             .parse()
             .expect("payout entrypoint"),
-        sbd_asset_id: fee_asset.clone(),
+        ds_asset_id: fee_asset.clone(),
         xor_asset_id: xor_asset_definition_id(),
         pool_vault_account_id: pool_contract_address().subject_id(),
-        batch_sbd: iroha_data_model::validation_fee::validation_fee_payout_batch_sbd(),
+        batch_ds: iroha_data_model::validation_fee::validation_fee_payout_batch_ds(),
         min_xor_out: iroha_data_model::validation_fee::validation_fee_payout_min_xor(),
         max_xor_out: iroha_data_model::validation_fee::validation_fee_payout_max_xor(),
         recipients: (3..=6)
@@ -803,7 +803,7 @@ fn install_validation_fee_policy(
         for (permission, label) in [
             (wrapper_permission, "wrapper selector"),
             (pool_permission, "pool selector"),
-            (derived_effect_permission, "wrapper-owned SBD effect"),
+            (derived_effect_permission, "wrapper-owned DS effect"),
         ] {
             assert!(
                 view.world()
@@ -924,7 +924,7 @@ fn install_validation_fee_policy(
             (
                 derived_effect_permission,
                 &payout_binding.pool_vault_account_id,
-                "wrapper-owned SBD effect",
+                "wrapper-owned DS effect",
             ),
         ] {
             let direct_holders = view
@@ -1498,7 +1498,7 @@ fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
             entrypoint: "swap_exact_in_quote_public".to_owned(),
         }
         .into();
-    let wrapper_sbd_transfer_permission: iroha_data_model::permission::Permission =
+    let wrapper_ds_transfer_permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::asset::CanTransferAsset {
             asset: AssetId::new(fee_asset_definition_id(), treasury.clone()),
         }
@@ -1512,7 +1512,7 @@ fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
         (wrapper_permission, treasury.clone()),
         (pool_permission, treasury.clone()),
         (
-            wrapper_sbd_transfer_permission,
+            wrapper_ds_transfer_permission,
             pool_contract_address().subject_id(),
         ),
     ] {

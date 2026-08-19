@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};
+use super::{default_oracle, *};
 use norito::codec::{DecodeAll, Encode};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use super::{default_oracle, *};
+use std::{collections::BTreeMap, marker::PhantomData, sync::OnceLock};
 enum SnapshotJsonField<'a> {
     Borrowed(&'a str),
     #[cfg(test)]
@@ -489,7 +489,6 @@ impl KuraSeed {
             field: "state.durable_merge_ledger".to_owned(),
             message: error.to_string(),
         })?;
-        validate_restored_commit_qcs(&state)?;
         super::validate_sccp_state_local_profile(&state).map_err(|message| {
             json::Error::InvalidField {
                 field: "state.world.sccp".to_owned(),
@@ -498,30 +497,6 @@ impl KuraSeed {
         })?;
         Ok(state)
     }
-}
-fn validate_restored_commit_qcs(state: &State) -> Result<(), json::Error> {
-    let block_hashes = state.block_hashes.view();
-    let commit_qcs = state.world.commit_qcs.view();
-    for (archive_key, commit_qc) in commit_qcs.iter() {
-        let canonical_hash = commit_qc
-            .height
-            .checked_sub(1)
-            .and_then(|index| usize::try_from(index).ok())
-            .and_then(|index| block_hashes.get(index))
-            .copied();
-        if canonical_hash != Some(*archive_key)
-            || !super::commit_qc_matches_block(commit_qc, commit_qc.height, *archive_key)
-        {
-            return Err(json::Error::InvalidField {
-                field: "world.commit_qcs".to_owned(),
-                message: format!(
-                    "commit-QC archive entry {archive_key} is not an exact commit-phase certificate for its canonical height {}",
-                    commit_qc.height
-                ),
-            });
-        }
-    }
-    Ok(())
 }
 fn nexus_from_snapshot_runtime(
     runtime: SnapshotNexusRuntime,

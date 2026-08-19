@@ -26,8 +26,6 @@ use super::{
     },
     v2_runtime::RuntimeQueueLaneSnapshot,
 };
-#[cfg(test)]
-use crate::commit_roster_journal::CommitRosterSnapshot;
 use crate::{
     governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
     queue::{BackpressureState, QueuePressureSnapshot},
@@ -62,7 +60,7 @@ use iroha_data_model::{
             SumeragiV2VoteQuorumStatus,
         },
     },
-    consensus::{ConsensusKeyRecord, Qc, ValidatorSetCheckpoint},
+    consensus::ConsensusKeyRecord,
     isi::settlement::{SettlementAtomicity, SettlementExecutionOrder},
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope, LaneRelayError},
 };
@@ -117,11 +115,6 @@ static MODE_TAG: OnceLock<Mutex<String>> = OnceLock::new();
 static STAGED_MODE_TAG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static STAGED_MODE_ACTIVATION_HEIGHT: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
 static MODE_ACTIVATION_LAG_BLOCKS: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
-static VALIDATOR_CHECKPOINT_HISTORY: OnceLock<Mutex<VecDeque<ValidatorSetCheckpoint>>> =
-    OnceLock::new();
-static COMMIT_CERT_HISTORY: OnceLock<Mutex<VecDeque<Qc>>> = OnceLock::new();
-const VALIDATOR_CHECKPOINT_HISTORY_CAP: usize = 64;
-const COMMIT_CERT_HISTORY_CAP: usize = 512;
 /// Guard serializing destructive canonical-chain transitions.
 pub(crate) struct ConsensusTransitionGuard {
     _guard: MutexGuard<'static, ()>,
@@ -152,141 +145,9 @@ fn fail_closed_after_consensus_transition_poison() -> ! {
     #[cfg(test)]
     panic!("consensus transition gate poisoned; refusing canonical mutation");
 }
-/// Opaque test-only view of one authenticated legacy commit-roster snapshot.
-///
-/// Sumeragi v2 carries finality in its exact Kura-owned v2 artifact and does
-/// not mint this capability. Unit tests use the type to prove that exact
-/// recovery-metadata fixtures cannot promote raw journal fields independently.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg(test)]
-pub(crate) struct AuthenticatedCommitRoster(CommitRosterSnapshot);
-#[cfg(test)]
-impl AuthenticatedCommitRoster {
-    /// Return the authenticated commit certificate.
-    #[must_use]
-    pub(crate) fn commit_qc(&self) -> &crate::sumeragi::consensus::Qc {
-        &self.0.commit_qc
-    }
-    /// Return the validator checkpoint bound to the certificate.
-    #[must_use]
-    pub(crate) fn validator_checkpoint(
-        &self,
-    ) -> &iroha_data_model::consensus::ValidatorSetCheckpoint {
-        &self.0.validator_checkpoint
-    }
-    /// Return the optional stake authority bound to the validator roster.
-    #[must_use]
-    pub(crate) fn stake_snapshot(
-        &self,
-    ) -> Option<&crate::sumeragi::stake_snapshot::CommitStakeSnapshot> {
-        self.0.stake_snapshot.as_ref()
-    }
-    /// Construct a capability from an internally authenticated fixture.
-    ///
-    /// This seam is deliberately test-only: production v2 code must never
-    /// promote decoded legacy journal metadata into finality authority.
-    pub(crate) fn from_snapshot_for_tests(snapshot: CommitRosterSnapshot) -> Option<Self> {
-        let qc = &snapshot.commit_qc;
-        let checkpoint = &snapshot.validator_checkpoint;
-        let exact_checkpoint = checkpoint.height == qc.height
-            && checkpoint.view == qc.view
-            && checkpoint.block_hash == qc.subject_block_hash
-            && checkpoint.parent_state_root == qc.parent_state_root
-            && checkpoint.post_state_root == qc.post_state_root
-            && checkpoint.chain_order_hash == qc.chain_order_hash
-            && checkpoint.rechain_seq == qc.rechain_seq
-            && checkpoint.validator_set_hash == qc.validator_set_hash
-            && checkpoint.validator_set_hash_version == qc.validator_set_hash_version
-            && checkpoint.validator_set == qc.validator_set
-            && checkpoint.signers_bitmap == qc.aggregate.signers_bitmap
-            && checkpoint.bls_aggregate_signature == qc.aggregate.bls_aggregate_signature
-            && checkpoint.expires_at_height.is_none();
-        let exact_stake = snapshot
-            .stake_snapshot
-            .as_ref()
-            .is_none_or(|stake| stake.matches_roster(&qc.validator_set));
-        (exact_checkpoint && exact_stake).then_some(Self(snapshot))
-    }
-}
 #[cfg(test)]
 mod archival_status_tests {
-    use super::AuthenticatedCommitRoster;
-    use crate::commit_roster_journal::CommitRosterSnapshot;
-    use crate::sumeragi::consensus::{PERMISSIONED_TAG, Phase};
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_data_model::{
-        block::{BlockHeader, consensus::QcAggregate},
-        consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
-        peer::PeerId,
-    };
-    fn fixture() -> CommitRosterSnapshot {
-        let key_pair = KeyPair::try_from_seed(
-            b"authenticated-commit-roster-status-test".to_vec(),
-            Algorithm::BlsNormal,
-        )
-        .expect("derive validator fixture");
-        let validator_set = vec![PeerId::new(key_pair.public_key().clone())];
-        let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block"));
-        let parent_state_root = Hash::new(b"parent-state");
-        let post_state_root = Hash::new(b"post-state");
-        let chain_order_hash = Hash::new(b"chain-order");
-        let signers_bitmap = vec![1];
-        let aggregate_signature = vec![0xA5; 96];
-        let qc = Qc {
-            phase: Phase::Commit,
-            subject_block_hash: block_hash,
-            parent_state_root,
-            post_state_root,
-            height: 7,
-            view: 2,
-            epoch: 1,
-            chain_order_hash,
-            rechain_seq: 3,
-            mode_tag: PERMISSIONED_TAG.to_owned(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set: validator_set.clone(),
-            aggregate: QcAggregate {
-                signers_bitmap: signers_bitmap.clone(),
-                bls_aggregate_signature: aggregate_signature.clone(),
-            },
-        };
-        let validator_checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
-            qc.height,
-            qc.view,
-            block_hash,
-            chain_order_hash,
-            qc.rechain_seq,
-            parent_state_root,
-            post_state_root,
-            validator_set,
-            signers_bitmap,
-            aggregate_signature,
-            VALIDATOR_SET_HASH_VERSION_V1,
-            None,
-        );
-        CommitRosterSnapshot {
-            commit_qc: qc,
-            validator_checkpoint,
-            stake_snapshot: None,
-        }
-    }
-    #[test]
-    fn capability_exposes_only_an_exact_roster_tuple() {
-        let snapshot = fixture();
-        let capability = AuthenticatedCommitRoster::from_snapshot_for_tests(snapshot.clone())
-            .expect("exact snapshot should mint a test capability");
-        assert_eq!(capability.commit_qc(), &snapshot.commit_qc);
-        assert_eq!(
-            capability.validator_checkpoint(),
-            &snapshot.validator_checkpoint
-        );
-        assert_eq!(capability.stake_snapshot(), None);
-        let mut mismatched = snapshot;
-        mismatched.validator_checkpoint.view += 1;
-        assert!(AuthenticatedCommitRoster::from_snapshot_for_tests(mismatched).is_none());
-    }
+    use crate::sumeragi::consensus::PERMISSIONED_TAG;
     #[test]
     fn archival_mode_tags_roundtrip_without_changing_v2_status() {
         let _guard = super::mode_tags_test_guard();
@@ -313,36 +174,6 @@ mod archival_status_tests {
             Some(19)
         );
         assert_eq!(super::age_ms(None), None);
-    }
-    #[test]
-    fn archival_commit_histories_are_newest_first_and_resettable() {
-        let _guard = super::commit_history_test_guard();
-        super::reset_commit_certs_for_tests();
-        super::reset_validator_checkpoints_for_tests();
-        let first = fixture();
-        let mut second = first.clone();
-        second.commit_qc.height += 1;
-        second.validator_checkpoint.height += 1;
-        super::record_commit_qc(first.commit_qc.clone());
-        super::record_validator_checkpoint(first.validator_checkpoint.clone());
-        super::record_commit_qc(second.commit_qc.clone());
-        super::record_validator_checkpoint(second.validator_checkpoint.clone());
-        assert_eq!(
-            super::commit_qc_history()
-                .first()
-                .map(|certificate| certificate.height),
-            Some(second.commit_qc.height)
-        );
-        assert_eq!(
-            super::validator_checkpoint_history()
-                .first()
-                .map(|checkpoint| checkpoint.height),
-            Some(second.validator_checkpoint.height)
-        );
-        super::reset_commit_certs_for_tests();
-        super::reset_validator_checkpoints_for_tests();
-        assert!(super::commit_qc_history().is_empty());
-        assert!(super::validator_checkpoint_history().is_empty());
     }
     #[test]
     fn lane_rbc_reset_clears_surviving_adapter_diagnostics() {
@@ -2276,7 +2107,7 @@ mod v2_liveness_watchdog_tests {
                 signature: vec![0x5A],
             },
         )));
-        let inbound = InboundBlockMessage::new(message, Some(transport.clone()));
+        let inbound = InboundBlockMessage::from_authenticated_peer(message, transport.clone());
         (transport, inbound)
     }
     fn status() -> SumeragiV2Status {
@@ -5315,69 +5146,6 @@ static KEY_LIFECYCLE_HISTORY: OnceLock<Mutex<VecDeque<ConsensusKeyRecord>>> = On
 fn key_history_slot() -> &'static Mutex<VecDeque<ConsensusKeyRecord>> {
     KEY_LIFECYCLE_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()))
 }
-fn checkpoint_history_slot() -> &'static Mutex<VecDeque<ValidatorSetCheckpoint>> {
-    VALIDATOR_CHECKPOINT_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()))
-}
-fn commit_cert_history_slot() -> &'static Mutex<VecDeque<Qc>> {
-    COMMIT_CERT_HISTORY.get_or_init(|| Mutex::new(VecDeque::new()))
-}
-/// Record a validator checkpoint for retained archival query routes.
-pub fn record_validator_checkpoint(checkpoint: ValidatorSetCheckpoint) {
-    let mut history =
-        lock_operator_status_slot(checkpoint_history_slot(), "validator checkpoint history");
-    history.push_back(checkpoint);
-    while history.len() > VALIDATOR_CHECKPOINT_HISTORY_CAP {
-        history.pop_front();
-    }
-}
-/// Return retained validator checkpoints newest first.
-#[must_use]
-pub fn validator_checkpoint_history() -> Vec<ValidatorSetCheckpoint> {
-    lock_operator_status_slot(checkpoint_history_slot(), "validator checkpoint history")
-        .iter()
-        .rev()
-        .cloned()
-        .collect()
-}
-/// Record a legacy commit certificate for archival query and fixture consumers.
-///
-/// Protocol-v2 finality remains represented exclusively by its typed finality
-/// artifact; this cache does not participate in v2 consensus decisions.
-pub fn record_commit_qc(cert: Qc) {
-    let mut history =
-        lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history");
-    history.retain(|entry| {
-        !(entry.height == cert.height
-            && entry.subject_block_hash == cert.subject_block_hash
-            && entry.view <= cert.view)
-    });
-    history.push_back(cert);
-    while history.len() > COMMIT_CERT_HISTORY_CAP {
-        history.pop_front();
-    }
-}
-/// Return retained legacy commit certificates newest first.
-#[must_use]
-pub fn commit_qc_history() -> Vec<Qc> {
-    let mut entries: Vec<_> =
-        lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history")
-            .iter()
-            .cloned()
-            .collect();
-    entries.sort_by(|left, right| {
-        right
-            .height
-            .cmp(&left.height)
-            .then_with(|| right.view.cmp(&left.view))
-    });
-    entries
-}
-/// Raw finality fixture hook for dependent-crate tests.
-#[cfg(all(feature = "iroha-core-tests", feature = "finality-test-fixtures"))]
-#[doc(hidden)]
-pub fn record_commit_qc_for_tests(cert: Qc) {
-    record_commit_qc(cert);
-}
 /// Record a consensus-key lifecycle entry for the remaining legacy Torii endpoint.
 pub fn record_consensus_key(record: ConsensusKeyRecord) {
     let mut history = lock_operator_status_slot(key_history_slot(), "key lifecycle history");
@@ -5400,16 +5168,6 @@ pub fn consensus_key_history() -> Vec<ConsensusKeyRecord> {
 #[cfg(test)]
 pub fn reset_consensus_keys_for_tests() {
     lock_operator_status_slot(key_history_slot(), "key lifecycle history").clear();
-}
-/// Clear validator checkpoint history in isolated tests.
-#[cfg(test)]
-pub fn reset_validator_checkpoints_for_tests() {
-    lock_operator_status_slot(checkpoint_history_slot(), "validator checkpoint history").clear();
-}
-/// Clear legacy commit-certificate history in isolated tests.
-#[cfg(test)]
-pub fn reset_commit_certs_for_tests() {
-    lock_operator_status_slot(commit_cert_history_slot(), "commit certificate history").clear();
 }
 static VRF_PENALTY_EPOCH: AtomicU64 = AtomicU64::new(0);
 static VRF_NON_REVEAL_TOTAL: AtomicU64 = AtomicU64::new(0);

@@ -630,6 +630,7 @@ public struct KagemushaOperationErrorDetails: Equatable, Sendable {
     public let actual: String?
     public let profile: String?
     public let chainDiscriminant: UInt16?
+    public let entrypointHash: String?
     public let transactionHash: String?
     public let lastStatus: String?
     public let hint: String?
@@ -646,6 +647,7 @@ public struct KagemushaOperationErrorDetails: Equatable, Sendable {
         actual: String? = nil,
         profile: String? = nil,
         chainDiscriminant: UInt16? = nil,
+        entrypointHash: String? = nil,
         transactionHash: String? = nil,
         lastStatus: String? = nil,
         hint: String? = nil,
@@ -663,6 +665,12 @@ public struct KagemushaOperationErrorDetails: Equatable, Sendable {
         self.actual = try Self.exactOptionalText(actual, field: "error.details.actual")
         self.profile = try Self.exactOptionalText(profile, field: "error.details.profile")
         self.chainDiscriminant = chainDiscriminant
+        self.entrypointHash = try entrypointHash.map {
+            try KagemushaOperationValidation.transactionHash(
+                $0,
+                field: "error.details.entrypoint_hash"
+            )
+        }
         self.transactionHash = try transactionHash.map {
             try KagemushaOperationValidation.transactionHash(
                 $0,
@@ -1063,6 +1071,7 @@ public enum KagemushaOperationCodec {
             compact: compact,
             decode: { try $0.readUInt16LE() }
         )
+        let entrypointHash = try readOptionalStringField(&reader, compact: compact)
         let transactionHash = try readOptionalStringField(&reader, compact: compact)
         let lastStatus = try readOptionalStringField(&reader, compact: compact)
         let hint = try readOptionalStringField(&reader, compact: compact)
@@ -1082,6 +1091,7 @@ public enum KagemushaOperationCodec {
             actual: actual,
             profile: profile,
             chainDiscriminant: chainDiscriminant,
+            entrypointHash: entrypointHash,
             transactionHash: transactionHash,
             lastStatus: lastStatus,
             hint: hint,

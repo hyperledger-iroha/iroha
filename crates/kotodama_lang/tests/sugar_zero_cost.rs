@@ -2,6 +2,7 @@
 use kotodama_lang::{
     compiler::Compiler, ir, metadata::ProgramMetadata, parser::parse, semantic::analyze,
 };
+use std::collections::BTreeSet;
 fn executable_code(source: &str) -> Vec<u8> {
     let artifact = Compiler::new()
         .compile_source(source)
@@ -16,14 +17,53 @@ fn assert_executable_equivalent(sugar: &str, explicit: &str, description: &str) 
         "{description} must be erased before executable code generation"
     );
 }
-fn assert_ir_equivalent(sugar: &str, explicit: &str, description: &str) {
-    let lower = |source| {
-        let parsed = parse(source).expect("parse Kotodama V1 source for IR comparison");
-        let typed = analyze(&parsed).expect("analyze Kotodama V1 source for IR comparison");
-        ir::lower(&typed).expect("lower Kotodama V1 source for IR comparison")
-    };
-    let sugar = lower(sugar);
-    let explicit = lower(explicit);
+fn lowered_ir(source: &str) -> ir::Program {
+    let parsed = parse(source).expect("parse Kotodama V1 source for IR comparison");
+    let typed = analyze(&parsed).expect("analyze Kotodama V1 source for IR comparison");
+    ir::lower(&typed).expect("lower Kotodama V1 source for IR comparison")
+}
+fn all_blocks(function: &ir::Function) -> Vec<&ir::BasicBlock> {
+    function.blocks.iter().collect()
+}
+fn reachable_blocks(function: &ir::Function) -> Vec<&ir::BasicBlock> {
+    let mut pending = vec![function.entry];
+    let mut reachable = BTreeSet::new();
+    while let Some(label) = pending.pop() {
+        if !reachable.insert(label.0) {
+            continue;
+        }
+        let block = function
+            .blocks
+            .iter()
+            .find(|block| block.label == label)
+            .expect("lowered terminator target must exist");
+        match &block.terminator {
+            ir::Terminator::Jump(target) => pending.push(*target),
+            ir::Terminator::Branch {
+                then_bb, else_bb, ..
+            } => {
+                pending.push(*then_bb);
+                pending.push(*else_bb);
+            }
+            ir::Terminator::Return(_)
+            | ir::Terminator::Return2(_, _)
+            | ir::Terminator::ReturnN(_) => {}
+        }
+    }
+    function
+        .blocks
+        .iter()
+        .filter(|block| reachable.contains(&block.label.0))
+        .collect()
+}
+fn assert_ir_equivalent_with(
+    sugar: &str,
+    explicit: &str,
+    description: &str,
+    blocks: for<'a> fn(&'a ir::Function) -> Vec<&'a ir::BasicBlock>,
+) {
+    let sugar = lowered_ir(sugar);
+    let explicit = lowered_ir(explicit);
     assert_eq!(
         sugar.functions.len(),
         explicit.functions.len(),
@@ -37,10 +77,17 @@ fn assert_ir_equivalent(sugar: &str, explicit: &str, description: &str) {
         );
         assert_eq!(sugar.entry, explicit.entry, "{description}: entry block");
         assert_eq!(
-            sugar.blocks, explicit.blocks,
+            blocks(sugar),
+            blocks(explicit),
             "{description} must be erased during IR lowering"
         );
     }
+}
+fn assert_ir_equivalent(sugar: &str, explicit: &str, description: &str) {
+    assert_ir_equivalent_with(sugar, explicit, description, all_blocks);
+}
+fn assert_reachable_ir_equivalent(sugar: &str, explicit: &str, description: &str) {
+    assert_ir_equivalent_with(sugar, explicit, description, reachable_blocks);
 }
 #[test]
 fn result_propagation_matches_the_exhaustive_early_return_form() {
@@ -88,7 +135,9 @@ fn function_tail_matches_explicit_return() {
     let explicit = include_str!("../fixtures/koto_v1/sugar_zero_cost/006.ko")
         .strip_suffix('\n')
         .expect("fixture sentinel newline");
-    assert_ir_equivalent(tail, explicit, "function tail expression");
+    // Explicit returns retain a dead continuation in raw lowering IR so the
+    // strict SSA budget covers source after a terminator before pruning it.
+    assert_reachable_ir_equivalent(tail, explicit, "function tail expression");
     assert_executable_equivalent(tail, explicit, "function tail expression");
 }
 #[test]

@@ -751,14 +751,11 @@ impl CanonicalExecutedBlockRecovery {
         let (message, sender, reply_routes) = inbound.into_message_sender_and_reply_routes();
         if !ownership.validate_exact()
             || !ownership.matches_message(&message)
-            || !ownership.matches_semantic_origin(sender.as_ref())
+            || !ownership.matches_semantic_origin(&sender)
             || !ownership.matches_reply_routes(reply_routes.as_ref())
         {
             return Ok(V2LaneIngressOutcome::Rejected);
         }
-        let Some(sender) = sender.as_ref() else {
-            return Ok(V2LaneIngressOutcome::Rejected);
-        };
         match message {
             BlockMessage::LaneHistoricalRecoveryRequest(request) => {
                 if self.effects.len() >= self.limits.effect_capacity.get() {
@@ -771,7 +768,7 @@ impl CanonicalExecutedBlockRecovery {
                     self.limits,
                     &self.local_peer,
                     &request,
-                    sender,
+                    &sender,
                 ) {
                     Ok(response) => response,
                     Err(error) => {
@@ -789,7 +786,7 @@ impl CanonicalExecutedBlockRecovery {
                 Ok(V2LaneIngressOutcome::Inserted)
             }
             BlockMessage::LaneHistoricalRecoveryResponse(response) => {
-                self.accept_response(*response, sender)
+                self.accept_response(*response, &sender)
             }
             _ => Ok(V2LaneIngressOutcome::Rejected),
         }

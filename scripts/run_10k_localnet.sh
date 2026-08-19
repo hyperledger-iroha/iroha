@@ -283,7 +283,6 @@ run_mode() {
     --out-dir "$out_dir"
     --peers "$PEERS"
     --seed "$seed"
-    --build-line iroha3
     --perf-profile "$perf_profile"
     --base-api-port "$base_api_port"
     --base-p2p-port "$base_p2p_port"

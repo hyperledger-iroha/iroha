@@ -22,7 +22,7 @@ targets:
       - path: App
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: org.hyperledger.iroha.kagemusha-candidate-lab.host
+        PRODUCT_BUNDLE_IDENTIFIER: org.hyperledger.iroha.kagemusha.appattestlab
   KagemushaCandidateEvidenceLabTests:
     type: bundle.unit-test
     platform: iOS

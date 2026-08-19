@@ -25,16 +25,15 @@ use std::{
     sync::Arc,
 };
 /// Maximum candidate rows retained across one bounded sparse-index collection.
-pub(crate) const MAX_COLLECTED_RESOLVER_ROWS_V1: usize = MUSUBI_MAX_RESOLUTION_NODES_V1 * 16;
+pub const MAX_COLLECTED_RESOLVER_ROWS_V1: usize = MUSUBI_MAX_RESOLUTION_NODES_V1 * 16;
 /// Maximum candidate dependency occurrences inspected across one collection.
-pub(crate) const MAX_COLLECTED_RESOLVER_DEPENDENCIES_V1: usize =
-    MUSUBI_MAX_RESOLUTION_NODES_V1 * 16;
+pub const MAX_COLLECTED_RESOLVER_DEPENDENCIES_V1: usize = MUSUBI_MAX_RESOLUTION_NODES_V1 * 16;
 /// Maximum candidate branches evaluated by one deterministic resolution.
 ///
 /// One unit is charged on entry to every ordered candidate-loop iteration, including a candidate
 /// rejected immediately for cycle, depth, node, or edge limits. A zero-candidate terminal task
 /// consumes no unit. The counter is global across failed branches and is never rolled back.
-pub(crate) const MAX_RESOLVER_SEARCH_ATTEMPTS_V1: usize = MAX_COLLECTED_RESOLVER_ROWS_V1;
+pub const MAX_RESOLVER_SEARCH_ATTEMPTS_V1: usize = MAX_COLLECTED_RESOLVER_ROWS_V1;
 /// One registry requirement declared by a selected workspace root.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct WorkspaceDependencyReqV1 {

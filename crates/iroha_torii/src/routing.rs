@@ -7,6 +7,8 @@
     clippy::result_large_err,
     clippy::struct_excessive_bools
 )]
+#[cfg(test)]
+#[allow(unused_macro_rules)]
 macro_rules! routing_test {
     (sync $name:ident $($body:tt)*) => {
         #[test]
@@ -111,7 +113,7 @@ use iroha_data_model::{
         BlockHeader, SignedBlock,
         consensus::{EvidenceRecord, LaneBlockCommitment},
     },
-    consensus::{ConsensusKeyRecord, ValidatorSetCheckpoint},
+    consensus::ConsensusKeyRecord,
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
         DataSpaceId, LaneConfig, LaneId, LaneLifecycleStatusV1, LaneRelayEnvelope, ManifestEffect,
@@ -140,9 +142,7 @@ use iroha_sccp::{
     sccp_payload_projection,
 };
 #[cfg(feature = "telemetry")]
-use iroha_telemetry::metrics::{
-    MicropaymentCreditSnapshot, MicropaymentTicketCounters, NexusStatus, Status,
-};
+use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyShareError};
 use mv::storage::StorageReadOnly;
@@ -166,10 +166,6 @@ use std::{
 use tokio::task;
 // use tokio::task; // not currently used
 use super::*;
-#[cfg(feature = "telemetry")]
-mod status_visibility;
-#[cfg(feature = "telemetry")]
-use status_visibility::is_nexus_status_segment;
 pub mod debug_match_flag {
     use std::sync::OnceLock;
     static DEBUG_MATCH_FROM_CONFIG: OnceLock<bool> = OnceLock::new();
@@ -266,29 +262,6 @@ pub async fn handler_openapi_spec(State(_state): State<crate::SharedAppState>) -
 struct EvidenceListWire {
     total: u64,
     items: Vec<EvidenceRecord>,
-}
-/// Validator-set snapshot derived from commit certificates.
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    PartialEq,
-    Eq,
-)]
-pub struct ValidatorSetSnapshot {
-    /// Block height certified by this validator set.
-    pub height: u64,
-    /// Block hash covered by the commit certificate.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Stable hash of the validator set.
-    pub validator_set_hash: HashOf<Vec<PeerId>>,
-    /// Version of the validator-set hashing scheme.
-    pub validator_set_hash_version: u16,
-    /// Ordered validator set used to assemble the certificate.
-    pub validator_set: Vec<PeerId>,
 }
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 struct SumeragiPacemakerResponse {
@@ -5241,21 +5214,6 @@ pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> R
     };
     Ok(crate::utils::respond_with_format(payload, format))
 }
-/// GET /v1/sumeragi/checkpoints — Bounded history of validator-set checkpoints (newest first)
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_checkpoints(
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    let checkpoints: Vec<ValidatorSetCheckpoint> = sumeragi::status::validator_checkpoint_history();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        return Ok(crate::NoritoBody(checkpoints).into_response());
-    }
-    pretty_json_response(&checkpoints)
-}
 /// Maximum registered consensus-key records returned by the operator snapshot.
 const CONSENSUS_KEY_RESPONSE_CAP: usize = 128;
 #[expect(single_use_lifetimes, reason = "impl Trait requires a named lifetime")]
@@ -5324,31 +5282,6 @@ mod consensus_key_response_bounds_tests {
             Some(2)
         );
     }
-}
-/// Maximum number of commit certificates returned in a single response.
-const COMMIT_CERT_PAGE_CAP: u64 = 128;
-/// GET /v1/sumeragi/commit-certificates — Bounded history of commit certificates (newest first)
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_commit_qcs(
-    crate::NoritoQuery(window): crate::NoritoQuery<HistoryWindowQuery>,
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    let certificates = sumeragi::status::commit_qc_history();
-    let certificates = clamp_history_window(
-        certificates,
-        window.from,
-        window.limit,
-        COMMIT_CERT_PAGE_CAP,
-        |cert| cert.height,
-    );
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        return Ok(crate::NoritoBody(certificates).into_response());
-    }
-    pretty_json_response(&certificates)
 }
 fn query_internal_error(message: impl Into<String>) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -8288,64 +8221,6 @@ pub(crate) async fn handle_v1_sccp_messages_recent(
         sccp_bundle_response_with_format(&snapshot, format)
     })
     .await
-}
-/// GET /v1/sumeragi/validator-sets — Bounded history of validator-set snapshots (newest first)
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_validator_sets(
-    crate::NoritoQuery(window): crate::NoritoQuery<HistoryWindowQuery>,
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    let snapshots = collect_validator_snapshots();
-    let windowed = clamp_history_window(
-        snapshots,
-        window.from,
-        window.limit,
-        COMMIT_CERT_PAGE_CAP,
-        |snap| snap.height,
-    );
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        return Ok(crate::NoritoBody(windowed).into_response());
-    }
-    pretty_json_response(&windowed)
-}
-/// GET /v1/sumeragi/validator-sets/{height} — Validator-set snapshot for a specific block height
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_validator_set_by_height(
-    axum::extract::Path(height): axum::extract::Path<u64>,
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    let snapshots = collect_validator_snapshots();
-    let snapshot = snapshots.into_iter().find(|snap| snap.height == height);
-    let Some(snapshot) = snapshot else {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        )));
-    };
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        return Ok(crate::NoritoBody(snapshot).into_response());
-    }
-    pretty_json_response(&snapshot)
-}
-fn collect_validator_snapshots() -> Vec<ValidatorSetSnapshot> {
-    let certificates = sumeragi::status::commit_qc_history();
-    certificates
-        .into_iter()
-        .map(|cert| ValidatorSetSnapshot {
-            height: cert.height,
-            block_hash: cert.subject_block_hash,
-            validator_set_hash: cert.validator_set_hash,
-            validator_set_hash_version: cert.validator_set_hash_version,
-            validator_set: cert.validator_set,
-        })
-        .collect()
 }
 /// GET /v1/sumeragi/key-lifecycle — Bounded history of consensus key records (newest first)
 #[iroha_futures::telemetry_future]
@@ -22953,7 +22828,6 @@ mod multisig_selector_tests {
     fn install_paynet_routing_state(state: &State) {
         let (lane_catalog, dataspace_catalog) = paynet_routing_catalogs();
         let mut nexus = state.nexus.write();
-        nexus.enabled = true;
         nexus.routing_policy = paynet_routing_policy();
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
@@ -22987,7 +22861,6 @@ mod multisig_selector_tests {
         )
         .expect("valid SBP lane catalog");
         let mut nexus = state.nexus.write();
-        nexus.enabled = true;
         nexus.routing_policy = paynet_routing_policy();
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
@@ -38016,33 +37889,28 @@ fn explorer_qr_error(err: iroha_torii_shared::qr::QrError) -> Error {
 mod address_metrics_tests {
     use super::*;
     use crate::filter::{FieldPath, FilterExpr};
-    use iroha_data_model::{
-        account::{AccountAddress, AccountId, address::AddressDomainKind},
-        domain::DomainId,
-    };
+    use iroha_data_model::account::{AccountAddress, AccountId, address::AddressDomainKind};
     use norito::json::Value;
     const TEST_CONTEXT: &str = "/tests/account-metrics";
     const KAIGI_SSE_CONTEXT: &str = "/v1/kaigi/relays/events?relay";
-    fn local8_literal() -> &'static str {
-        "sn12zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz@kaigi.sora"
-    }
+    const LOCAL8_LITERAL: &str = "sn12zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz@kaigi.sora";
     routing_test! { current_thread parse_account_literal_counts_local8_attempts
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
-        let reason = iroha_data_model::account::AccountId::parse_encoded(local8_literal())
+        let reason = iroha_data_model::account::AccountId::parse_encoded(LOCAL8_LITERAL)
             .expect_err("local8 literal should fail")
             .reason();
         let invalid_counter = metrics
             .torii_address_invalid_total
             .with_label_values(&[TEST_CONTEXT, reason]);
         let before_invalid = invalid_counter.get();
-        assert!(parse_account_literal(local8_literal(), &telemetry, TEST_CONTEXT).is_err());
+        assert!(parse_account_literal(LOCAL8_LITERAL, &telemetry, TEST_CONTEXT).is_err());
         assert_eq!(invalid_counter.get(), before_invalid + 1);
     }
     routing_test! { current_thread parse_account_literal_records_local8_domain_labels
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
-        let domain_label = local8_domain_label(local8_literal()).expect("domain parses");
+        let domain_label = local8_domain_label(LOCAL8_LITERAL).expect("domain parses");
         let local8_counter = metrics
             .torii_address_domain_total
             .with_label_values(&[TEST_CONTEXT, "local8"]);
@@ -38051,14 +37919,14 @@ mod address_metrics_tests {
             .with_label_values(&[TEST_CONTEXT, domain_label.as_str()]);
         let before_local8 = local8_counter.get();
         let before_domain = domain_counter.get();
-        assert!(parse_account_literal(local8_literal(), &telemetry, TEST_CONTEXT).is_err());
+        assert!(parse_account_literal(LOCAL8_LITERAL, &telemetry, TEST_CONTEXT).is_err());
         assert_eq!(local8_counter.get(), before_local8 + 1);
         assert_eq!(domain_counter.get(), before_domain + 1);
     }
     routing_test! { current_thread filter_validation_records_address_metrics
         let telemetry = MaybeTelemetry::for_tests();
         let metrics = telemetry.metrics().await;
-        let reason = iroha_data_model::account::AccountId::parse_encoded(local8_literal())
+        let reason = iroha_data_model::account::AccountId::parse_encoded(LOCAL8_LITERAL)
             .expect_err("local8 literal should fail")
             .reason();
         let invalid_counter = metrics
@@ -38067,7 +37935,7 @@ mod address_metrics_tests {
         let before_invalid = invalid_counter.get();
         let expr = FilterExpr::Eq(
             FieldPath("authority".to_string()),
-            Value::String(local8_literal().into()),
+            Value::String(LOCAL8_LITERAL.into()),
         );
         assert!(validate_tx_filter_adapter(&expr, &telemetry).is_err());
         assert_eq!(invalid_counter.get(), before_invalid + 1);
@@ -38123,20 +37991,18 @@ mod address_metrics_tests {
             .get();
         assert_eq!(after, before + 1);
     }
-    fn i105_literal(domain_label: &str) -> String {
-        let _domain = DomainId::try_new(domain_label, "universal").expect("domain parses");
+    fn i105_literal() -> String {
         let kp = checked_routing_fixture_keypair(
             0x97,
             iroha_crypto::Algorithm::Ed25519,
             "derive account literal metric fixture key",
         );
-        let account = AccountId::new(kp.public_key().clone());
-        account.to_string()
+        AccountId::new(kp.public_key().clone()).to_string()
     }
     routing_test! { current_thread parse_account_literal_records_default_domain_metrics
         let telemetry = MaybeTelemetry::for_tests();
         let endpoint = TEST_CONTEXT;
-        let literal = i105_literal("wonderland");
+        let literal = i105_literal();
         let label = AddressDomainKind::Default.as_str();
         let before = {
             let metrics = telemetry.metrics().await;
@@ -44126,7 +43992,6 @@ fn lane_settlement_commitment_json(entry: &LaneBlockCommitment) -> Value {
 pub async fn handle_v1_sumeragi_status(
     State(_state): State<std::sync::Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
-    _nexus_enabled: bool,
     restart_required: bool,
 ) -> Result<Response> {
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
@@ -44207,7 +44072,6 @@ pub async fn handle_v1_sumeragi_diagnostics(
     State(state): State<std::sync::Arc<CoreState>>,
     durable_queue: Option<std::sync::Arc<Queue>>,
     accept: Option<axum::http::HeaderValue>,
-    nexus_enabled: bool,
 ) -> Result<Response> {
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(format) => format,
@@ -44226,95 +44090,74 @@ pub async fn handle_v1_sumeragi_diagnostics(
         None => None,
     };
     drop(world);
-    let native_amx_participant_applications = if nexus_enabled {
-        state
-            .native_amx_participant_applications_diagnostics()
-            .map_err(|error| {
-                Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-                    "failed to derive Native AMX participant diagnostics: {error}",
-                )))
-            })?
-    } else {
-        Vec::new()
-    };
-    let durable_lane_diagnostics = nexus_enabled
-        .then(|| state.durable_lane_diagnostics())
-        .unwrap_or_default();
-    let autonomous_lane_executions = if nexus_enabled {
-        let derived = durable_queue.as_ref().map_or_else(
+    let native_amx_participant_applications = state
+        .native_amx_participant_applications_diagnostics()
+        .map_err(|error| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                "failed to derive Native AMX participant diagnostics: {error}",
+            )))
+        })?;
+    let durable_lane_diagnostics = state.durable_lane_diagnostics();
+    let autonomous_lane_executions = Option::as_ref(&durable_queue)
+        .map_or_else(
             || state.autonomous_lane_execution_diagnostics(),
             |queue| state.autonomous_lane_execution_diagnostics_with_queue(queue),
-        );
-        derived.map_err(|error| {
+        )
+        .map_err(|error| {
             Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
                 "failed to derive autonomous lane execution diagnostics: {error}",
             )))
-        })?
-    } else {
-        Vec::new()
-    };
-    let lane_commitments = nexus_enabled
-        .then(|| {
-            snapshot
-                .lane_commitments
-                .iter()
-                .map(|entry| SumeragiLaneCommitment {
-                    block_height: entry.block_height,
-                    lane_id: entry.lane_id.into(),
-                    tx_count: entry.tx_count,
-                    total_chunks: entry.total_chunks,
-                    rbc_bytes_total: entry.rbc_bytes_total,
-                    teu_total: entry.teu_total,
-                    block_hash: entry.block_hash,
-                })
-                .collect()
+        })?;
+    let lane_commitments = snapshot
+        .lane_commitments
+        .iter()
+        .map(|entry| SumeragiLaneCommitment {
+            block_height: entry.block_height,
+            lane_id: entry.lane_id.into(),
+            tx_count: entry.tx_count,
+            total_chunks: entry.total_chunks,
+            rbc_bytes_total: entry.rbc_bytes_total,
+            teu_total: entry.teu_total,
+            block_hash: entry.block_hash,
         })
-        .unwrap_or_default();
-    let dataspace_commitments = nexus_enabled
-        .then(|| {
-            snapshot
-                .dataspace_commitments
-                .iter()
-                .map(|entry| SumeragiDataspaceCommitment {
-                    block_height: entry.block_height,
-                    lane_id: entry.lane_id.into(),
-                    dataspace_id: entry.dataspace_id.into(),
-                    tx_count: entry.tx_count,
-                    total_chunks: entry.total_chunks,
-                    rbc_bytes_total: entry.rbc_bytes_total,
-                    teu_total: entry.teu_total,
-                    block_hash: entry.block_hash,
-                })
-                .collect()
+        .collect();
+    let dataspace_commitments = snapshot
+        .dataspace_commitments
+        .iter()
+        .map(|entry| SumeragiDataspaceCommitment {
+            block_height: entry.block_height,
+            lane_id: entry.lane_id.into(),
+            dataspace_id: entry.dataspace_id.into(),
+            tx_count: entry.tx_count,
+            total_chunks: entry.total_chunks,
+            rbc_bytes_total: entry.rbc_bytes_total,
+            teu_total: entry.teu_total,
+            block_hash: entry.block_hash,
         })
-        .unwrap_or_default();
-    let lane_governance = nexus_enabled
-        .then(|| {
-            snapshot
-                .lane_governance
-                .iter()
-                .map(|entry| SumeragiLaneGovernance {
-                    lane_id: entry.lane_id.into(),
-                    alias: entry.alias.clone(),
-                    governance: entry.governance.clone(),
-                    manifest_required: entry.manifest_required,
-                    manifest_ready: entry.manifest_ready,
-                    manifest_path: entry.manifest_path.clone(),
-                    validator_ids: entry.validator_ids.clone(),
-                    quorum: entry.quorum,
-                    protected_namespaces: entry.protected_namespaces.clone(),
-                    runtime_upgrade: entry.runtime_upgrade.as_ref().map(|hook| {
-                        SumeragiRuntimeUpgradeHook {
-                            allow: hook.allow,
-                            require_metadata: hook.require_metadata,
-                            metadata_key: hook.metadata_key.clone(),
-                            allowed_ids: hook.allowed_ids.clone(),
-                        }
-                    }),
-                })
-                .collect()
+        .collect();
+    let lane_governance = snapshot
+        .lane_governance
+        .iter()
+        .map(|entry| SumeragiLaneGovernance {
+            lane_id: entry.lane_id.into(),
+            alias: entry.alias.clone(),
+            governance: entry.governance.clone(),
+            manifest_required: entry.manifest_required,
+            manifest_ready: entry.manifest_ready,
+            manifest_path: entry.manifest_path.clone(),
+            validator_ids: entry.validator_ids.clone(),
+            quorum: entry.quorum,
+            protected_namespaces: entry.protected_namespaces.clone(),
+            runtime_upgrade: entry.runtime_upgrade.as_ref().map(|hook| {
+                SumeragiRuntimeUpgradeHook {
+                    allow: hook.allow,
+                    require_metadata: hook.require_metadata,
+                    metadata_key: hook.metadata_key.clone(),
+                    allowed_ids: hook.allowed_ids.clone(),
+                }
+            }),
         })
-        .unwrap_or_default();
+        .collect();
     let diagnostics = SumeragiDiagnosticsStatus {
         pipeline_execution: sumeragi_pipeline_execution_status(snapshot.pipeline_execution),
         tx_queue_depth: queue.depth,
@@ -44329,12 +44172,8 @@ pub async fn handle_v1_sumeragi_diagnostics(
         npos,
         lane_commitments,
         dataspace_commitments,
-        lane_settlement_commitments: nexus_enabled
-            .then_some(snapshot.lane_settlement_commitments)
-            .unwrap_or_default(),
-        lane_relay_envelopes: nexus_enabled
-            .then_some(snapshot.lane_relay_envelopes)
-            .unwrap_or_default(),
+        lane_settlement_commitments: snapshot.lane_settlement_commitments,
+        lane_relay_envelopes: snapshot.lane_relay_envelopes,
         lane_payload_ownerships: durable_lane_diagnostics.lane_payload_ownerships,
         committed_lane_blocks: durable_lane_diagnostics
             .committed_lane_blocks
@@ -44342,12 +44181,8 @@ pub async fn handle_v1_sumeragi_diagnostics(
             .map(committed_lane_block_wire)
             .collect(),
         lane_block_sessions: durable_lane_diagnostics.lane_block_sessions,
-        lane_governance_sealed_total: nexus_enabled
-            .then_some(snapshot.lane_governance_sealed_total)
-            .unwrap_or_default(),
-        lane_governance_sealed_aliases: nexus_enabled
-            .then_some(snapshot.lane_governance_sealed_aliases)
-            .unwrap_or_default(),
+        lane_governance_sealed_total: snapshot.lane_governance_sealed_total,
+        lane_governance_sealed_aliases: snapshot.lane_governance_sealed_aliases,
         lane_governance,
         native_amx_participant_applications,
         autonomous_lane_executions,
@@ -44375,7 +44210,6 @@ pub async fn handle_v1_sumeragi_diagnostics(
 pub fn handle_v1_sumeragi_status_sse(
     _state: std::sync::Arc<CoreState>,
     poll_ms: u64,
-    _nexus_enabled: bool,
     sumeragi_handle: Option<iroha_core::sumeragi::SumeragiHandle>,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     let interval = Duration::from_millis(poll_ms.max(100));
@@ -44548,67 +44382,6 @@ pub async fn handle_v1_sumeragi_vrf_epoch(
             json_entry("late_reveals_total", 0u64),
             json_entry("late_reveals", Value::Array(Vec::new())),
         ])
-    };
-    pretty_json_response(&payload)
-}
-/// GET /v1/sumeragi/commit-qcs/{block_hash} — return the full commit QC record for a block hash.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_sumeragi_commit_qc(
-    State(state): State<std::sync::Arc<CoreState>>,
-    axum::extract::Path(hash_hex): axum::extract::Path<String>,
-    accept: Option<axum::http::HeaderValue>,
-) -> Result<Response> {
-    use core::str::FromStr as _;
-    let parsed = iroha_crypto::Hash::from_str(&hash_hex).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-            "invalid hash: {}",
-            e
-        )))
-    })?;
-    let typed = iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(parsed);
-    let world = state.world_view();
-    let qc_opt = world.commit_qcs().get(&typed).cloned();
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    if matches!(format, crate::utils::ResponseFormat::Norito) {
-        return Ok(crate::NoritoBody(qc_opt).into_response());
-    }
-    let payload = match qc_opt.as_ref() {
-        Some(qc) => {
-            let validator_set = norito::json::Value::Array(
-                qc.validator_set
-                    .iter()
-                    .map(|peer| norito::json::Value::from(peer.to_string()))
-                    .collect(),
-            );
-            let commit_qc = crate::json_object(vec![
-                json_entry("phase", format!("{:?}", qc.phase)),
-                json_entry("parent_state_root", format!("{}", qc.parent_state_root)),
-                json_entry("post_state_root", format!("{}", qc.post_state_root)),
-                json_entry("height", qc.height),
-                json_entry("view", qc.view),
-                json_entry("epoch", qc.epoch),
-                json_entry("mode_tag", qc.mode_tag.clone()),
-                json_entry("validator_set_hash", format!("{}", qc.validator_set_hash)),
-                json_entry("validator_set_hash_version", qc.validator_set_hash_version),
-                json_entry("validator_set", validator_set),
-                json_entry("signers_bitmap", hex::encode(&qc.aggregate.signers_bitmap)),
-                json_entry(
-                    "bls_aggregate_signature",
-                    hex::encode(&qc.aggregate.bls_aggregate_signature),
-                ),
-            ]);
-            crate::json_object(vec![
-                json_entry("subject_block_hash", hash_hex.clone()),
-                json_entry("commit_qc", commit_qc),
-            ])
-        }
-        None => crate::json_object(vec![
-            json_entry("subject_block_hash", hash_hex.clone()),
-            json_entry("commit_qc", norito::json::Value::Null),
-        ]),
     };
     pretty_json_response(&payload)
 }
@@ -46058,10 +45831,10 @@ mod validation_fee_torii_ingress_tests {
             entrypoint: "autonomous_validation_fee_tick"
                 .parse()
                 .expect("payout entrypoint"),
-            sbd_asset_id: fee_asset.clone(),
+            ds_asset_id: fee_asset.clone(),
             xor_asset_id: xor_asset_definition_id(),
             pool_vault_account_id: payout_pool_vault_account(),
-            batch_sbd: iroha_data_model::validation_fee::validation_fee_payout_batch_sbd(),
+            batch_ds: iroha_data_model::validation_fee::validation_fee_payout_batch_ds(),
             min_xor_out: iroha_data_model::validation_fee::validation_fee_payout_min_xor(),
             max_xor_out: iroha_data_model::validation_fee::validation_fee_payout_max_xor(),
             recipients: payout_recipient_accounts()
@@ -62422,7 +62195,6 @@ routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_r
         )
         .expect("future-created autoscale lane catalog");
         let mut nexus = state.nexus.write();
-        nexus.enabled = true;
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lanes = nonzero_ext::nonzero!(1_u32);
         nexus.autoscale.max_lanes = nonzero_ext::nonzero!(2_u32);
@@ -66677,12 +66449,8 @@ pub fn handle_get_nexus_lane_lifecycle(state: &CoreState) -> Result<LaneLifecycl
     // `State::view` retries across the state generation barrier, so catalog and
     // active incarnations cannot be mixed across a concurrent lifecycle commit.
     let view = state.view();
-    LaneLifecycleStatusV1::new(
-        view.nexus.enabled,
-        &view.nexus.lane_catalog,
-        &view.lane_incarnations,
-    )
-    .map_err(|err| conversion_error(format!("invalid committed lane lifecycle status: {err}")))
+    LaneLifecycleStatusV1::new(&view.nexus.lane_catalog, &view.lane_incarnations)
+        .map_err(|err| conversion_error(format!("invalid committed lane lifecycle status: {err}")))
 }
 #[cfg(test)]
 mod nexus_lane_lifecycle_tests {
@@ -66926,26 +66694,6 @@ pub mod event {
         }
     }
 }
-/// Get running Iroha version (block header version).
-#[iroha_futures::telemetry_future]
-pub async fn handle_version(state: Arc<CoreState>) -> Response {
-    use iroha_version::Version;
-    let latest_block = std::num::NonZeroUsize::new(state.committed_height())
-        .and_then(|height| state.block_by_height(height));
-    let mut resp = match latest_block {
-        Some(block) => Response::new(Body::from(block.version().to_string())),
-        None => {
-            let mut resp = Response::new(Body::from("genesis not applied"));
-            *resp.status_mut() = StatusCode::SERVICE_UNAVAILABLE;
-            resp
-        }
-    };
-    resp.headers_mut().insert(
-        header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-    resp
-}
 include!("routing/version_and_status_visibility.rs");
 #[cfg(feature = "telemetry")]
 #[iroha_futures::telemetry_future]
@@ -67054,7 +66802,7 @@ pub async fn handle_post_soranet_privacy_share(
 }
 #[cfg(feature = "telemetry")]
 /// Render the Prometheus metrics exposition when enabled by the active telemetry profile.
-pub async fn handle_metrics(telemetry: &MaybeTelemetry, nexus_enabled: bool) -> Result<String> {
+pub async fn handle_metrics(telemetry: &MaybeTelemetry) -> Result<String> {
     if !telemetry.allows_expensive_metrics() {
         return Err(Error::telemetry_profile_forbidden(
             "metrics",
@@ -67064,7 +66812,7 @@ pub async fn handle_metrics(telemetry: &MaybeTelemetry, nexus_enabled: bool) -> 
     telemetry
         .metrics()
         .await
-        .try_to_string_with_nexus_gate(nexus_enabled)
+        .try_to_string()
         .map_err(Error::Prometheus)
 }
 /// Build a compact response with online peers.
@@ -67088,8 +66836,7 @@ pub async fn handle_status(
     telemetry: &MaybeTelemetry,
     accept: Option<axum::http::HeaderValue>,
     tail: Option<&str>,
-    nexus_enabled: bool,
-    nexus_routing_policy: Option<&ActualLaneRoutingPolicy>,
+    nexus_routing_policy: ActualLaneRoutingPolicy,
     authoritative_block_height: Option<u64>,
     offline: Option<iroha_torii_shared::offline_api::OfflineStatus>,
 ) -> Result<Response> {
@@ -67122,11 +66869,9 @@ pub async fn handle_status(
     let mut status = Status::from(metrics);
     ensure_status_metrics_match_authoritative_height(&status, authoritative_block_height)?;
     normalize_status_block_visibility(&mut status, authoritative_block_height);
-    if !nexus_enabled {
-        status.strip_nexus();
-    } else if let Some(policy) = nexus_routing_policy {
-        status.nexus = Some(NexusStatus::from_routing_policy(policy));
-    }
+    status.nexus = Some(iroha_telemetry::metrics::NexusStatus::from_routing_policy(
+        &nexus_routing_policy,
+    ));
     status.offline = offline;
     if let Some(handle) = telemetry.telemetry() {
         status.sorafs_micropayments = handle.sorafs_micropayment_samples();
@@ -67139,12 +66884,6 @@ pub async fn handle_status(
         "status snapshot built"
     );
     if let Some(tail) = tail {
-        if !nexus_enabled && is_nexus_status_segment(tail) {
-            return Err(Error::StatusSegmentNotFound(eyre!(
-                "Nexus lanes are disabled; field \"{}\" is unavailable",
-                tail
-            )));
-        }
         let segment = status_value_by_path(&status, tail)
             .ok_or_else(|| Error::StatusSegmentNotFound(eyre!("Path not found: \"{}\"", tail)))?;
         let s = norito::json::to_json(&segment).map_err(|e| Error::StatusFailure(eyre!(e)))?;

@@ -50,10 +50,6 @@ mod struct_index_random;
 mod struct_index_random_x86;
 #[path = "../telemetry_aggregate_json.rs"]
 mod telemetry_aggregate_json;
-#[path = "../temp_print_nested.rs"]
-mod temp_print_nested;
-#[path = "../temp_print_small3.rs"]
-mod temp_print_small3;
 #[path = "../transport_capabilities.rs"]
 mod transport_capabilities;
 #[path = "../truncation.rs"]
@@ -64,5 +60,3 @@ mod tuple_len_fallback;
 mod tuple_roundtrip_regressions;
 #[path = "../tx_like.rs"]
 mod tx_like;
-#[path = "../type_debug.rs"]
-mod type_debug;

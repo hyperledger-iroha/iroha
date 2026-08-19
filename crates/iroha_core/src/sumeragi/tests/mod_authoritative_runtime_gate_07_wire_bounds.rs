@@ -110,7 +110,7 @@ fn fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary() {
         .expect("test source geometry fits usize");
     let byte_capacity = source_bytes
         .checked_mul(2)
-        .expect("validator and anonymous partitions fit usize");
+        .expect("validator partition fits usize");
     let ingress_with_transport_caps = |block_sync, outbound_high| {
         super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
             7,

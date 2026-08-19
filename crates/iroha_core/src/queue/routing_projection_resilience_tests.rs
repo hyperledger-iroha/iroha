@@ -376,7 +376,6 @@ fn proposal_fee_drift_restores_fifo_and_retains_accepted_work() {
     );
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
         nexus.fees.fee_asset_id = fee_asset.canonical_address();

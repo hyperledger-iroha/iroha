@@ -1,4 +1,8 @@
 //! Consolidated integration-test harness for data-model derives.
+#[cfg(feature = "trybuild-tests")]
+#[path = "ui.rs"]
+mod ui;
+
 #[path = "event_set.rs"]
 mod event_set;
 #[path = "has_origin.rs"]

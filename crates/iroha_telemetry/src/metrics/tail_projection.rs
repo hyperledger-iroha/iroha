@@ -48,15 +48,3 @@ fn quantity_to_nano_f64(value: &Quantity) -> f64 {
     let nanos = value.as_numeric().to_f64_lossy() * 1_000_000_000.0;
     if nanos.is_finite() { nanos } else { f64::MAX }
 }
-fn family_has_lane_labels(family: &prometheus::proto::MetricFamily) -> bool {
-    family
-        .get_metric()
-        .iter()
-        .flat_map(prometheus::proto::Metric::get_label)
-        .any(|label| {
-            matches!(
-                label.name(),
-                "lane" | "lane_id" | "dataspace" | "dataspace_id"
-            )
-        })
-}

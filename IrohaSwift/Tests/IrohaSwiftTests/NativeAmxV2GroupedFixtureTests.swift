@@ -525,6 +525,7 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
             firstLeg.participantProposal.proposalHash,
             "hash:AAC0F352914C21699F3F8D571196C9A5DFCAA9EF1272A7DEFA7FFD35A93C21AD#8B3F"
         )
+        XCTAssertNil(firstLeg.participantProposal.payloadBlockHint)
         XCTAssertEqual(
             firstLeg.participantSettlementHash,
             "hash:C6B18DBE6BEC468DB021B79604233F3CB9E2D6CDF3384C491CE7A6DA89747825#9D72"
@@ -586,6 +587,45 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
             )
         )
         try validateApplicationEvidenceFixture(document)
+    }
+
+    func testParticipantProposalRequiresExplicitNullPayloadHint() throws {
+        try requireNativeAmxABI22Bridge()
+        let canonical = try loadNativeAmxGroupedFixture()
+        let proposalPath = [
+            "golden", "expected_diagnostics", "lane_settlement_commitments", "0",
+            "native_amx_receipts", "0", "legs", "0", "participant_proposal",
+        ]
+        let proposal = try XCTUnwrap(
+            try fixtureValue(at: proposalPath[...], in: canonical) as? [String: Any]
+        )
+        XCTAssertTrue(proposal.keys.contains("payload_block_hint"))
+        XCTAssertTrue(proposal["payload_block_hint"] is NSNull)
+
+        var missing = proposal
+        missing.removeValue(forKey: "payload_block_hint")
+        var nonnull = proposal
+        nonnull["payload_block_hint"] = ["proposal_height": 1]
+        var unknown = proposal
+        unknown["future_proposal_field"] = NSNull()
+
+        for invalidProposal in [missing, nonnull, unknown] {
+            let mutated = try assigningFixtureValue(
+                invalidProposal,
+                at: proposalPath[...],
+                in: canonical
+            )
+            let document = try XCTUnwrap(mutated as? [String: Any])
+            let golden = try XCTUnwrap(document["golden"] as? [String: Any])
+            let diagnostics = try XCTUnwrap(golden["expected_diagnostics"])
+            let data = try JSONSerialization.data(withJSONObject: diagnostics)
+            XCTAssertThrowsError(
+                try JSONDecoder().decode(
+                    ToriiSumeragiDiagnosticsSnapshot.self,
+                    from: data
+                )
+            )
+        }
     }
 
     func testRustOwnedGroupedNativeAmxV2EndpointSeparation() async throws {

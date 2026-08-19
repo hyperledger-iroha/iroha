@@ -697,9 +697,12 @@ function parseSumeragiNativeAmxQc(value, context) {
 function parseSumeragiNativeAmxParticipantProposal(value, context) {
   const proposal = assertExactSumeragiRecord(
     value,
-    ["descriptor", "proposal_hash"],
+    ["descriptor", "proposal_hash", "payload_block_hint"],
     context,
   );
+  if (proposal.payload_block_hint !== null) {
+    throw new TypeError(`${context}.payload_block_hint must be null`);
+  }
   const descriptorContext = `${context}.descriptor`;
   const descriptor = ensureRecord(proposal.descriptor, descriptorContext);
   const requiredFields = [
@@ -917,6 +920,7 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
   return Object.freeze({
     descriptor: Object.freeze(normalizedDescriptor),
     proposal_hash: proposalHash,
+    payload_block_hint: null,
   });
 }
 

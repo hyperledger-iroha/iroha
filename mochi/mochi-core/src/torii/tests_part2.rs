@@ -1017,7 +1017,7 @@ async fn fetch_lane_lifecycle_status_returns_valid_norito() {
     let Some(server) = try_start_mock_server() else {
         return;
     };
-    let expected = lifecycle_status(true);
+    let expected = lifecycle_status();
     let body = norito::to_bytes(&expected).expect("encode lifecycle status");
     let mock = server.mock(|when, then| {
         when.method(GET)
@@ -1059,7 +1059,7 @@ async fn fetch_lane_lifecycle_status_reports_unexpected_status() {
 }
 #[test]
 fn lane_lifecycle_transaction_binds_status_and_requires_permission() {
-    let status = lifecycle_status(true);
+    let status = lifecycle_status();
     let network_id = test_network_id();
     let alice = crate::compose::development_signing_authorities()
         .iter()
@@ -1110,7 +1110,7 @@ fn lane_lifecycle_transaction_binds_status_and_requires_permission() {
 }
 #[test]
 fn lane_lifecycle_transaction_rejects_forged_status_hash() {
-    let mut status = lifecycle_status(true);
+    let mut status = lifecycle_status();
     status.catalog_hash = Hash::prehashed([0xCC; Hash::LENGTH]);
     let signer = crate::compose::development_signing_authorities()
         .first()

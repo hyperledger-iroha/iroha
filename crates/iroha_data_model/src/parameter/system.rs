@@ -2718,10 +2718,12 @@ mod tests {
     }
     #[test]
     fn sumeragi_npos_reveal_window_must_close_before_boundary() {
-        let mut parameters = SumeragiNposParameters::default();
-        parameters.epoch_length_blocks = NonZeroU64::new(4).expect("non-zero epoch");
-        parameters.vrf_commit_window_blocks = 2;
-        parameters.vrf_reveal_window_blocks = 2;
+        let mut parameters = SumeragiNposParameters {
+            epoch_length_blocks: NonZeroU64::new(4).expect("non-zero epoch"),
+            vrf_commit_window_blocks: 2,
+            vrf_reveal_window_blocks: 2,
+            ..SumeragiNposParameters::default()
+        };
         assert_eq!(
             parameters.validate(),
             Err("VRF reveal window must close before the epoch boundary")

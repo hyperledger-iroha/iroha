@@ -1067,6 +1067,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "cohesive first-release telemetry and Sumeragi route policy matrix"
+    )]
     fn telemetry_and_sumeragi_routes_are_valid_sharp_first_release_surfaces() {
         let routes = telemetry::ROUTES
             .iter()
@@ -1081,17 +1085,18 @@ mod tests {
             "/v1/sumeragi/new_view/sse",
             "/v1/sumeragi/bls_keys",
             "/v1/sumeragi/commit_qc/{hash}",
+            "/v1/sumeragi/commit-certificates",
+            "/v1/sumeragi/commit-qcs/{block_hash}",
+            "/v1/sumeragi/checkpoints",
+            "/v1/sumeragi/validator-sets",
+            "/v1/sumeragi/validator-sets/{height}",
         ] {
             assert!(
                 routes.iter().all(|route| route.path() != unsupported_path),
                 "unsupported route must not enter the first-release catalog: {unsupported_path}"
             );
         }
-        for canonical_path in [
-            "/v1/sumeragi/bls-keys",
-            "/v1/sumeragi/commit-qcs/{block_hash}",
-            "/v1/sumeragi/diagnostics",
-        ] {
+        for canonical_path in ["/v1/sumeragi/bls-keys", "/v1/sumeragi/diagnostics"] {
             assert!(
                 routes.iter().any(|route| route.path() == canonical_path),
                 "missing canonical first-release route: {canonical_path}"
@@ -1109,14 +1114,9 @@ mod tests {
             sumeragi::LEADER,
             sumeragi::BLS_KEYS,
             sumeragi::QC,
-            sumeragi::CHECKPOINTS,
-            sumeragi::COMMIT_CERTIFICATES,
-            sumeragi::VALIDATOR_SETS,
-            sumeragi::VALIDATOR_SET_BY_HEIGHT,
             sumeragi::CONSENSUS_KEYS,
             sumeragi::KEY_LIFECYCLE,
             sumeragi::PARAMETERS,
-            sumeragi::COMMIT_QC,
             sumeragi::EVIDENCE_COUNT,
             sumeragi::EVIDENCE_LIST,
             sumeragi::VRF_PENALTIES,

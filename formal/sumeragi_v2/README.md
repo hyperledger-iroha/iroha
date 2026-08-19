@@ -1055,17 +1055,20 @@ semantic rank, so servicing one owner cannot hide another. Equal-count
 replacement and count-increasing replenishment remain explicit non-progress
 cases and require a prior finite or coalesced producer argument.
 
-The production queue closes the corresponding final-retirement race with a
-one-shot local handoff. Removing the last owner in a frozen Serve batch arms
-`producer_episode_due` under the same mutex; fresh Serve admission returns
-`Busy` while that bit is due or while `producer_episode_active` owns its bounded
-outer turn. The runner atomically consumes due into active, and the local lease
-clears active on drop before Serve admission reopens. Rejected replenishment
-does not allocate either an actor-global scheduler ordinal or a logical Serve
-lifecycle. Digest-refreshed checker mutations cover both Busy boundaries, the
-ordinal high-water marks, exact timeout-owner ordering, the strict predecessor
-prefix, and the real timeout-certificate/EnterView suffix. This is a source
-refinement boundary, not proof promotion or an additional fairness premise.
+The production lifecycle closes the corresponding final-retirement race
+through one coordinator-owned transaction. A current-height Serve remains in
+fair ingress until the lifecycle selector authenticates its exact carrier, and
+capacity backpressure returns `CapacityPending` without removing that
+occurrence. A successful transaction attests the complete Ready census, claims
+the durable ledger row, reserves the exact worker target, and only then commits
+dequeue. The serialized proposal runner separately claims and settles
+`ProducerTurn`; there is no queue-local Serve gate, barrier, reservation, or
+producer episode. Rejected replenishment does not allocate either an
+actor-global scheduler ordinal or a logical Serve lifecycle. Digest-refreshed
+checker mutations cover the coordinator transaction, ordinal high-water marks,
+exact timeout-owner ordering, the strict predecessor prefix, and the real
+timeout-certificate/EnterView suffix. This is a source refinement boundary,
+not proof promotion or an additional fairness premise.
 
 The exact-Decision producer audit narrows causal replenishment to reachable
 local debt setters; Serve-capacity growth to ordinary or historical request
@@ -1452,7 +1455,7 @@ ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
 Before network startup, the executable wrapper inventories 860 named tests
-across 40 Rust modules. The preceding 298-name inventory was produced from the
+across 43 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
 historical/current applied-height rollover; 2 bind peer-writer flush and
@@ -1573,9 +1576,9 @@ canonical-carrier completion regressions produced that historical 864-test,
 brings the historical inventory to the 856-test, 40-module checkpoint. The
 exact retired-attempt accessor, mixed-carrier successor, two-link cold-restart
 hydration, and noncanonical autonomous-output retirement regressions bring the current
-inventory to 860 tests across 40 modules.
+inventory to 860 tests across 43 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 88 legs. The
+corridor contains 91 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
 The first-release sidecar keeps wire protocol version 1 and uses positive
 `NonZeroU64` responder generation, requester epoch, and per-stream semantic
@@ -1648,7 +1651,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329`.
+`b6457553bc8d41f74ebc708ea3d4e6187117f0f008da2c2dea697b0771741b44`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1685,7 +1688,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The four integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 88 legs, including the governance-
+the complete pre-network corridor now spans 91 legs, including the governance-
 unlock audit module, the autonomous lifecycle-recovery module, and separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, and source-sealed
@@ -1693,7 +1696,7 @@ command-success legs. Its finality, offline compact-QC,
 and height-context proposal-origin modules each use a dedicated
 `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of those forty modules or eighty-eight legs. The
+geometry tests as part of those forty-three modules or ninety-one legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -1846,7 +1849,7 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and the exact
+binds original HEAD/tree/`Cargo.lock`, all 91 pre-network legs and the exact
 860-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable

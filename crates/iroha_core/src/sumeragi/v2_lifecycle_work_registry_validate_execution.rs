@@ -67,6 +67,18 @@ impl PreparedDurableValidateCompletion<'_> {
 // DURABLE_VALIDATE_WAIT_DISPATCH_IMPLEMENTATION_BEGIN
 #[cfg_attr(not(test), allow(dead_code))]
 impl DurableValidateDispatch {
+    /// Return the exact address/digest identity retained by the dedicated worker.
+    pub(in crate::sumeragi) fn dispatch_key(&self) -> LifecycleDurableValidateDispatchKeyV1 {
+        let context = LifecycleContext::new(
+            digest_from_bytes(self.request.durable_receipt.context_id().0.as_ref()),
+            self.request.durable_receipt.round().height,
+        );
+        LifecycleDurableValidateDispatchKeyV1::new(
+            context,
+            self.request.address,
+            self.request.incumbent_digest,
+        )
+    }
     /// Execute the exact request after its claimed lifecycle row became an
     /// external wait.
     ///
@@ -74,7 +86,7 @@ impl DurableValidateDispatch {
     /// reconstructs and returns the complete dispatch, including its exact
     /// wake authority, so retry cannot mint a second request or wait token.
     #[allow(clippy::result_large_err)]
-    pub(super) fn execute<F, E>(
+    pub(in crate::sumeragi) fn execute<F, E>(
         self,
         body_store: &mut V2BodyStore,
         validator: F,
@@ -92,6 +104,42 @@ impl DurableValidateDispatch {
 }
 #[cfg_attr(not(test), allow(dead_code))]
 impl ExecutedDurableValidateDispatch {
+    /// Return the exact worker identity retained across execution.
+    pub(in crate::sumeragi) fn dispatch_key(&self) -> LifecycleDurableValidateDispatchKeyV1 {
+        let context = LifecycleContext::new(
+            digest_from_bytes(
+                self.executed
+                    .request
+                    .durable_receipt
+                    .context_id()
+                    .0
+                    .as_ref(),
+            ),
+            self.executed.request.durable_receipt.round().height,
+        );
+        LifecycleDurableValidateDispatchKeyV1::new(
+            context,
+            self.executed.request.address,
+            self.executed.request.incumbent_digest,
+        )
+    }
+    /// Convert only a missing-sidecar outcome back into its unchanged request.
+    ///
+    /// The durable validation marker is deliberately discarded because this
+    /// outcome did not validate or reject the body. The exact wait authority
+    /// remains paired with the original request for bounded worker retry.
+    pub(in crate::sumeragi) fn into_missing_sidecar_retry(
+        self,
+    ) -> Result<DurableValidateDispatch, Self> {
+        if self.outcome().missing_merge_sidecar().is_none() {
+            return Err(self);
+        }
+        let Self { executed, wake } = self;
+        Ok(DurableValidateDispatch {
+            request: executed.request,
+            wake,
+        })
+    }
     /// Borrow the closed result without separating it from wake authority.
     pub(super) const fn outcome(&self) -> &DurableBodyValidationOutcome {
         self.executed.outcome()
@@ -440,6 +488,10 @@ impl DeferredDurableValidateDispatch {
             .missing_merge_sidecar()
             .expect("deferred Validate token retains one exact merge-sidecar reference")
     }
+    /// Return the exact executed dispatch to its dedicated worker owner.
+    pub(in crate::sumeragi) fn into_executed_dispatch(self) -> ExecutedDurableValidateDispatch {
+        self.dispatch
+    }
     #[cfg(test)]
     const fn dispatch_for_test(&self) -> &ExecutedDurableValidateDispatch {
         &self.dispatch
@@ -546,9 +598,9 @@ impl PreparedDurableCertifiedFetchCompletion<'_> {
     pub(super) const fn ready_projection(&self) -> &DurableCertifiedFetchReplayProjectionV1 {
         &self.ready_projection
     }
-    /// Return the exact Waiting incumbent address authenticated before persistence.
-    pub(super) const fn waiting_location(&self) -> CertifiedFetchWaitingLocation {
-        self.location
+    /// Borrow the exact durable body authority retained for terminal publication.
+    pub(super) const fn durable_body_receipt(&self) -> &DurableBodyReceipt {
+        self.durable_receipt.durable_body()
     }
     /// Revalidate the selector-retained exact response before LedgerV1 fsync.
     ///
@@ -732,7 +784,7 @@ fn exact_selected_response_matches(
     let Some(response) = selected_certified_response(inbound) else {
         return false;
     };
-    inbound.sender() == Some(authenticated_responder)
+    inbound.sender() == authenticated_responder
         && ingress_identity_matches_round(ingress_identity, response.manifest.round)
         && response.request_hash == request_hash
         && HashOf::new(response) == response_hash
@@ -826,8 +878,11 @@ fn certified_pipeline_replay_evidence_for_test(
     Some((store, validate))
 }
 fn digest_from_hash(hash: &iroha_crypto::Hash) -> LifecycleDigest {
+    digest_from_bytes(hash.as_ref())
+}
+fn digest_from_bytes(hash: &[u8]) -> LifecycleDigest {
     let mut bytes = [0_u8; 32];
-    bytes.copy_from_slice(hash.as_ref());
+    bytes.copy_from_slice(hash);
     LifecycleDigest::new(bytes)
 }
 fn durable_validate_body_payload(receipt: &DurableBodyReceipt) -> Option<DurablePayloadReference> {

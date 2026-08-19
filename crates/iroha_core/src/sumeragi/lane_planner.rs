@@ -68,22 +68,10 @@ fn align_exact_pinned_validator_pops(
 ///
 /// The gate intentionally uses the same height-aware routing surface as the
 /// queue router. Sidecar lanes that no policy path can select, future-created
-/// autoscale lanes, malformed autoscale anchors, and disabled Nexus state do not
-/// enable broader scans.
+/// autoscale lanes and malformed autoscale anchors do not enable broader scans.
 #[must_use]
 pub(crate) fn proposal_lookahead_enabled(nexus: &Nexus, block_height: u64) -> bool {
     crate::queue::routable_lane_ids_for_nexus_at_height(nexus, block_height).len() > 1
-}
-/// Return whether lane artifacts use the frozen global height-context roster.
-///
-/// Only disabled Nexus state has the canonical shared SINGLE/UNIVERSAL
-/// consensus domain. Once Nexus is enabled, every lane resolves its own
-/// authoritative committee even when only one lane is currently routable.
-/// Routable-lane count controls proposal scanning only; it is not an authority
-/// mode switch.
-#[must_use]
-pub(in crate::sumeragi) fn uses_global_lane_committee(nexus: &Nexus) -> bool {
-    !nexus.enabled
 }
 /// Compute how many queued transactions proposal assembly may inspect next.
 ///
@@ -1410,30 +1398,22 @@ pub(super) fn plan_lane_consensus_domains(
 }
 /// Derive lane-local committee descriptors for accepted proposal work.
 ///
-/// The authority callback is evaluated only for lanes with accepted work. If it
-/// returns no validators, the frozen shared-domain roster is used only when
-/// explicitly supplied by the caller. Enabled multi-lane paths pass `None` so
-/// stale or missing lane authority fails closed instead of inheriting global
-/// topology accidentally.
+/// The authority callback is evaluated only for lanes with accepted work. A
+/// stale or missing lane authority fails closed instead of inheriting the
+/// global height-context roster.
 pub(super) fn plan_lane_consensus_committees_with_authority<F>(
     routing_decisions: &[RoutingDecision],
     schedule: &ProposalBatchSchedule,
-    shared_domain_validators: Option<&[PeerId]>,
     mut validators_for_lane: F,
 ) -> Result<Vec<LaneConsensusCommittee>, LaneConsensusDomainError>
 where
-    F: FnMut(LaneId, DataSpaceId) -> Vec<PeerId>,
+    F: FnMut(LaneId, DataSpaceId) -> Result<Vec<PeerId>, crate::state::LaneAuthorityError>,
 {
     accepted_work_by_lane(routing_decisions, schedule)?
         .into_iter()
         .map(|(lane_id, work)| {
-            let mut validators = validators_for_lane(lane_id, work.dataspace_id);
-            if validators.is_empty() {
-                let Some(shared_validators) = shared_domain_validators else {
-                    return Err(LaneConsensusDomainError::MissingLaneCommittee { lane_id });
-                };
-                validators = shared_validators.to_vec();
-            }
+            let validators = validators_for_lane(lane_id, work.dataspace_id)
+                .map_err(|_| LaneConsensusDomainError::MissingLaneCommittee { lane_id })?;
             Ok(LaneConsensusCommittee {
                 lane_id,
                 dataspace_id: work.dataspace_id,
@@ -2376,21 +2356,15 @@ fn autonomous_lane_reservation_committee(
     state: &State,
     context: &wire::HeightContext,
     lane_id: LaneId,
+    dataspace_id: DataSpaceId,
 ) -> Result<Vec<PeerId>, AutonomousLaneReservationSlotPlanError> {
-    let nexus = state.nexus_snapshot();
-    let shared_committee = uses_global_lane_committee(&nexus);
-    let validators = if shared_committee {
-        context
-            .roster
-            .iter()
-            .map(|entry| entry.validator.clone())
-            .collect::<Vec<_>>()
-    } else {
-        state.authoritative_lane_peer_ids_at_height(lane_id, context.height)
-    };
-    if validators.is_empty() {
-        return Err(AutonomousLaneReservationSlotPlanError::MissingCommittee { lane_id });
-    }
+    let validators = state
+        .resolve_lane_committee_at_height(
+            crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
+            context.height,
+        )
+        .map(crate::state::LaneAuthorityCommittee::into_validators)
+        .map_err(|_| AutonomousLaneReservationSlotPlanError::MissingCommittee { lane_id })?;
     canonical_validator_set(lane_id, &validators).map_err(|error| {
         AutonomousLaneReservationSlotPlanError::InvalidCommittee {
             reason: format!("{error:?}"),
@@ -2549,7 +2523,8 @@ pub(crate) fn plan_autonomous_lane_reservation_slot(
                 dataspace_id,
             },
         )?;
-    let validator_set = autonomous_lane_reservation_committee(state, context, lane_id)?;
+    let validator_set =
+        autonomous_lane_reservation_committee(state, context, lane_id, dataspace_id)?;
     let plan = assemble_autonomous_lane_reservation_slot(
         context,
         lane_id,
@@ -2569,7 +2544,8 @@ pub(crate) fn plan_autonomous_lane_reservation_slot(
         dataspace_id,
         lane_incarnation,
     );
-    let exact_committee_after = autonomous_lane_reservation_committee(state, context, lane_id).ok();
+    let exact_committee_after =
+        autonomous_lane_reservation_committee(state, context, lane_id, dataspace_id).ok();
     if committed_height_after != committed_height
         || state.lane_incarnation_at_height(lane_id, context.height) != Some(lane_incarnation)
         || !state.lane_route_and_incarnation_active_at_height(
@@ -2593,10 +2569,9 @@ pub(crate) fn plan_autonomous_lane_reservation_slot(
 /// Derive deterministic lane-local RBC ownership and proposal artifacts for a
 /// v2 candidate without invoking the legacy global actor.
 ///
-/// The frozen context roster is used only for disabled Nexus's canonical
-/// SINGLE/UNIVERSAL domain. Every enabled Nexus route must have an authoritative
-/// lane committee in committed state. A global leader need not also be the rotating
-/// author for every selected lane: it commits the exact ownership and hands
+/// Every Nexus route must have an authoritative lane committee in committed
+/// state. A global leader need not also be the rotating author for every
+/// selected lane: it commits the exact ownership and hands
 /// executable bytes to the independently selected lane author. A lane whose
 /// predecessor is not durably applied remains unavailable.
 ///
@@ -2770,23 +2745,16 @@ fn prepare_v2_lane_payload_plan_inner(
             .collect(),
         ..ProposalBatchSchedule::default()
     };
-    let nexus = state.nexus_snapshot();
-    let shared_committee = uses_global_lane_committee(&nexus);
-    let frozen_voters = context
-        .roster
-        .iter()
-        .map(|entry| entry.validator.clone())
-        .collect::<Vec<_>>();
     let committees = plan_lane_consensus_committees_with_authority(
         routing_decisions,
         &schedule,
-        shared_committee.then_some(frozen_voters.as_slice()),
-        |lane_id, _| {
-            if shared_committee {
-                Vec::new()
-            } else {
-                state.authoritative_lane_peer_ids_at_height(lane_id, context.height)
-            }
+        |lane_id, dataspace_id| {
+            state
+                .resolve_lane_committee_at_height(
+                    crate::state::LaneAuthorityRoute::new(lane_id, dataspace_id),
+                    context.height,
+                )
+                .map(crate::state::LaneAuthorityCommittee::into_validators)
         },
     )
     .map_err(|error| {

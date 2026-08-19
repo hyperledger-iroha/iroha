@@ -68,8 +68,8 @@ fn signed_block_roundtrip_via_norito() {
         "payload should retain all genesis transactions"
     );
     assert!(
-        block.has_results(),
-        "genesis blocks now carry an empty results envelope for deterministic hashing"
+        block.is_resultless_proposal(),
+        "the raw genesis constructor must not invent execution results"
     );
     let expected_hashes: Vec<_> = txs
         .iter()

@@ -63,6 +63,7 @@ mod app_api;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
 mod iso_profile;
+mod ledger_state_finality;
 #[cfg(feature = "app_api")]
 mod offline_commands;
 mod operator_auth;
@@ -77,6 +78,9 @@ pub mod query_load_profiles;
 #[cfg(feature = "app_api")]
 mod validation_fee_api;
 mod vpn;
+#[cfg(test)]
+use ledger_state_finality::StateFinalityResponse;
+use ledger_state_finality::{handler_ledger_state_proof, handler_ledger_state_root};
 pub use vpn::VpnRelayTrust;
 /// Helpers for constructing Norito JSON values within Torii.
 pub mod json_utils {
@@ -1013,9 +1017,9 @@ pub use routing::{
 pub use routing::{
     handle_post_soranet_privacy_event, handle_post_soranet_privacy_share,
     handle_v1_kaigi_relay_detail, handle_v1_kaigi_relays, handle_v1_kaigi_relays_health,
-    handle_v1_kaigi_relays_sse, handle_v1_sumeragi_commit_qc, handle_v1_sumeragi_diagnostics,
-    handle_v1_sumeragi_leader, handle_v1_sumeragi_pacemaker, handle_v1_sumeragi_params,
-    handle_v1_sumeragi_qc, handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
+    handle_v1_kaigi_relays_sse, handle_v1_sumeragi_diagnostics, handle_v1_sumeragi_leader,
+    handle_v1_sumeragi_pacemaker, handle_v1_sumeragi_params, handle_v1_sumeragi_qc,
+    handle_v1_sumeragi_status, handle_v1_sumeragi_status_sse,
 };
 pub use runtime::{
     ActivateCancelResponse, handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade,
@@ -6131,6 +6135,7 @@ fn sanitize_error_details(details: &mut ErrorDetails) {
     retain_valid_error_detail(&mut details.expected);
     retain_valid_error_detail(&mut details.actual);
     retain_valid_error_detail(&mut details.profile);
+    retain_valid_error_detail(&mut details.entrypoint_hash);
     retain_valid_error_detail(&mut details.tx_hash);
     retain_valid_error_detail(&mut details.last_status);
     retain_valid_error_detail(&mut details.hint);
@@ -8126,6 +8131,7 @@ mod typed_error_contract_tests {
                             expected: Some("secret\0expected".to_owned()),
                             actual: Some(" secret".to_owned()),
                             profile: Some("secret\nprofile".to_owned()),
+                            entrypoint_hash: Some("secret\u{85}entrypoint".to_owned()),
                             tx_hash: Some("secret\u{85}hash".to_owned()),
                             last_status: Some("secret\rstatus".to_owned()),
                             hint: Some("secret\thint".to_owned()),
@@ -11390,46 +11396,6 @@ async fn handler_accounts_portfolio(
     let query_string = encode_torii_proxy_query(&query)?;
     Ok(execute_torii_fanout_portfolio_read(&app, uaid_literal, query_string).await)
 }
-pub(crate) fn ensure_nexus_lanes_enabled(
-    nexus_enabled: bool,
-    endpoint: &'static str,
-) -> Result<(), Error> {
-    if nexus_enabled {
-        Ok(())
-    } else {
-        Err(Error::AppQueryValidation {
-            code: "nexus_disabled",
-            message: format!(
-                "{endpoint} requires nexus.enabled=true; lanes are unavailable in Iroha 2 mode"
-            ),
-        })
-    }
-}
-#[cfg(feature = "app_api")]
-#[cfg(test)]
-mod nexus_lane_boundary_tests {
-    use super::*;
-    #[test]
-    fn gating_rejects_when_nexus_disabled() {
-        let err = ensure_nexus_lanes_enabled(false, routing::ENDPOINT_NEXUS_PUBLIC_LANE_STAKE)
-            .expect_err("lane endpoints must reject when Nexus is disabled");
-        match err {
-            Error::AppQueryValidation { code, message } => {
-                assert_eq!(code, "nexus_disabled");
-                assert!(
-                    message.contains("nexus.enabled=true"),
-                    "message should explain the required flag: {message}"
-                );
-            }
-            other => panic!("unexpected error variant: {other:?}"),
-        }
-    }
-    #[test]
-    fn gating_allows_when_nexus_enabled() {
-        ensure_nexus_lanes_enabled(true, routing::ENDPOINT_NEXUS_PUBLIC_LANE_STAKE)
-            .expect("lane endpoints should be available when Nexus is enabled");
-    }
-}
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_nexus_public_lane_validators(
@@ -11440,11 +11406,6 @@ async fn handler_nexus_public_lane_validators(
     crate::NoritoQuery(params): crate::NoritoQuery<routing::PublicLaneValidatorsQueryParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let nexus_enabled = app.state.nexus_snapshot().enabled;
-    ensure_nexus_lanes_enabled(
-        nexus_enabled,
-        routing::ENDPOINT_NEXUS_PUBLIC_LANE_VALIDATORS,
-    )?;
     let lane_id = routing::parse_lane_id_literal(&lane_literal)?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
@@ -11480,8 +11441,6 @@ async fn handler_nexus_public_lane_stake(
     crate::NoritoQuery(params): crate::NoritoQuery<routing::PublicLaneStakeQueryParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let nexus_enabled = app.state.nexus_snapshot().enabled;
-    ensure_nexus_lanes_enabled(nexus_enabled, routing::ENDPOINT_NEXUS_PUBLIC_LANE_STAKE)?;
     let lane_id = routing::parse_lane_id_literal(&lane_literal)?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
@@ -11517,8 +11476,6 @@ async fn handler_nexus_public_lane_rewards(
     crate::NoritoQuery(params): crate::NoritoQuery<routing::PublicLaneRewardsQueryParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let nexus_enabled = app.state.nexus_snapshot().enabled;
-    ensure_nexus_lanes_enabled(nexus_enabled, routing::ENDPOINT_NEXUS_PUBLIC_LANE_REWARDS)?;
     let lane_id = routing::parse_lane_id_literal(&lane_literal)?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
@@ -11556,11 +11513,6 @@ async fn handler_nexus_dataspaces_account_summary(
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    let nexus_enabled = app.state.nexus_snapshot().enabled;
-    ensure_nexus_lanes_enabled(
-        nexus_enabled,
-        routing::ENDPOINT_NEXUS_DATASPACES_ACCOUNT_SUMMARY,
-    )?;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -17407,7 +17359,6 @@ async fn handler_status_tail(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
     let nexus = app.state.nexus_snapshot();
-    let nexus_enabled = nexus.enabled;
     let nexus_routing_policy = nexus.routing_policy.clone();
     let offline = status_offline_snapshot(&app);
     // Allowlist bypass
@@ -17418,8 +17369,7 @@ async fn handler_status_tail(
             &app.telemetry,
             accept.map(|e| e.0),
             Some(&tail),
-            nexus_enabled,
-            Some(&nexus_routing_policy),
+            nexus_routing_policy,
             Some(authoritative_block_height),
             offline,
         )
@@ -17447,8 +17397,7 @@ async fn handler_status_tail(
         &app.telemetry,
         accept.map(|e| e.0),
         Some(&tail),
-        nexus_enabled,
-        Some(&nexus_routing_policy),
+        nexus_routing_policy,
         Some(authoritative_block_height),
         offline,
     )
@@ -17462,7 +17411,6 @@ async fn handler_status_root(
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<impl IntoResponse, Error> {
     let nexus = app.state.nexus_snapshot();
-    let nexus_enabled = nexus.enabled;
     let nexus_routing_policy = nexus.routing_policy.clone();
     let offline = status_offline_snapshot(&app);
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
@@ -17472,8 +17420,7 @@ async fn handler_status_root(
             &app.telemetry,
             accept.map(|e| e.0),
             None,
-            nexus_enabled,
-            Some(&nexus_routing_policy),
+            nexus_routing_policy,
             Some(authoritative_block_height),
             offline,
         )
@@ -17499,8 +17446,7 @@ async fn handler_status_root(
         &app.telemetry,
         accept.map(|e| e.0),
         None,
-        nexus_enabled,
-        Some(&nexus_routing_policy),
+        nexus_routing_policy,
         Some(authoritative_block_height),
         offline,
     )
@@ -17512,9 +17458,8 @@ async fn handler_metrics(
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<String, Error> {
-    let nexus_enabled = app.state.nexus_snapshot().enabled;
     if limits::is_allowed_by_cidr(&headers, Some(remote.ip()), &app.api_rate_limit_bypass_nets) {
-        return routing::handle_metrics(&app.telemetry, nexus_enabled).await;
+        return routing::handle_metrics(&app.telemetry).await;
     }
     validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
@@ -17530,7 +17475,7 @@ async fn handler_metrics(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-    routing::handle_metrics(&app.telemetry, nexus_enabled).await
+    routing::handle_metrics(&app.telemetry).await
 }
 fn soracloud_runtime_status_sections(
     app: &SharedAppState,
@@ -18903,12 +18848,8 @@ fn resolve_signed_query_routing_for_app(
         | SignedQueryScope::CrossDataspaceFanout => resolve_signed_query_routing(app, query),
     }
 }
-fn torii_lane_active_for_routing(
-    app: &AppState,
-    nexus: &iroha_config::parameters::actual::Nexus,
-    lane_id: LaneId,
-) -> bool {
-    !nexus.enabled || app.state.is_lane_active_for_authority(lane_id)
+fn torii_lane_active_for_routing(app: &AppState, lane_id: LaneId) -> bool {
+    app.state.is_lane_active_for_authority(lane_id)
 }
 fn torii_active_lane_ids_for_status(
     app: &AppState,
@@ -18918,7 +18859,7 @@ fn torii_active_lane_ids_for_status(
         .lane_catalog
         .lanes()
         .iter()
-        .filter(|lane| torii_lane_active_for_routing(app, nexus, lane.id))
+        .filter(|lane| torii_lane_active_for_routing(app, lane.id))
         .map(|lane| lane.id.as_u32())
         .collect::<Vec<_>>();
     lane_ids.sort_unstable();
@@ -18929,7 +18870,7 @@ fn torii_autoscale_capacity_lane_ids_for_status(
     app: &AppState,
     nexus: &iroha_config::parameters::actual::Nexus,
 ) -> Vec<u32> {
-    if !nexus.enabled || !nexus.autoscale.enabled {
+    if !nexus.autoscale.enabled {
         return Vec::new();
     }
     let mut lane_ids = nexus
@@ -18937,7 +18878,7 @@ fn torii_autoscale_capacity_lane_ids_for_status(
         .lanes()
         .iter()
         .filter(|lane| lane.is_autoscale_managed_elastic())
-        .filter(|lane| torii_lane_active_for_routing(app, nexus, lane.id))
+        .filter(|lane| torii_lane_active_for_routing(app, lane.id))
         .map(|lane| lane.id.as_u32())
         .collect::<Vec<_>>();
     lane_ids.sort_unstable();
@@ -18955,7 +18896,7 @@ fn resolve_torii_route_for_dataspace_id(
         .lanes()
         .iter()
         .filter(|lane| {
-            lane.dataspace_id == dataspace_id && torii_lane_active_for_routing(app, nexus, lane.id)
+            lane.dataspace_id == dataspace_id && torii_lane_active_for_routing(app, lane.id)
         })
         .map(|lane| lane.id)
         .min()
@@ -18968,7 +18909,7 @@ fn resolve_torii_route_for_dataspace_id(
                     .find(|lane| {
                         lane.id == LaneId::SINGLE
                             && lane.dataspace_id == DataSpaceId::UNIVERSAL
-                            && torii_lane_active_for_routing(app, nexus, lane.id)
+                            && torii_lane_active_for_routing(app, lane.id)
                     })
                     .map(|lane| lane.id)
             })?
@@ -19154,30 +19095,64 @@ struct AuthoritativeLanePeers {
     offline: Vec<AuthoritativeLanePeerStatus>,
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn authoritative_lane_peer_statuses_with_manifest_urls(
+    authoritative_peer_ids: Vec<PeerId>,
+    manifest_torii_urls: BTreeMap<PeerId, String>,
+) -> Vec<AuthoritativeLanePeerStatus> {
+    authoritative_peer_ids
+        .into_iter()
+        .map(|peer_id| AuthoritativeLanePeerStatus {
+            torii_url: manifest_torii_urls.get(&peer_id).cloned(),
+            peer_id,
+        })
+        .collect()
+}
+#[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
+fn lane_authority_route(
+    routing_decision: RoutingDecision,
+) -> iroha_core::state::LaneAuthorityRoute {
+    iroha_core::state::LaneAuthorityRoute::new(
+        routing_decision.lane_id,
+        routing_decision.dataspace_id,
+    )
+}
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn authoritative_lane_peer_statuses(
     app: &AppState,
     routing_decision: RoutingDecision,
 ) -> Vec<AuthoritativeLanePeerStatus> {
-    let manifest_bindings = app
+    // State authority is canonical. In particular, an autoscale lane's
+    // immutable incarnation committee must never be replaced by its mutable
+    // exact-lane manifest. Manifest bindings only decorate canonical peers
+    // with an optional HTTP bridge URL.
+    let committee = match app
         .state
-        .manifest_lane_validator_bindings(routing_decision.lane_id);
-    if !manifest_bindings.is_empty() {
-        return manifest_bindings
-            .into_iter()
-            .map(|binding| AuthoritativeLanePeerStatus {
-                peer_id: binding.peer_id,
-                torii_url: binding.torii_url,
-            })
-            .collect();
-    }
-    app.state
-        .authoritative_lane_peer_ids(routing_decision.lane_id)
+        .resolve_lane_committee(lane_authority_route(routing_decision))
+    {
+        Ok(committee) => committee,
+        Err(error) => {
+            iroha_logger::warn!(
+                lane = routing_decision.lane_id.as_u32(),
+                dataspace = routing_decision.dataspace_id.as_u64(),
+                %error,
+                "Torii failed closed while resolving current lane authority"
+            );
+            return Vec::new();
+        }
+    };
+    let authority_height = committee.authority_height();
+    let authoritative_peer_ids = committee.into_validators();
+    let manifest_torii_urls: BTreeMap<_, _> = app
+        .state
+        .manifest_lane_validator_bindings_at_height(routing_decision.lane_id, authority_height)
         .into_iter()
-        .map(|peer_id| AuthoritativeLanePeerStatus {
-            peer_id,
-            torii_url: None,
+        .filter_map(|binding| {
+            binding
+                .torii_url
+                .map(|torii_url| (binding.peer_id, torii_url))
         })
-        .collect()
+        .collect();
+    authoritative_lane_peer_statuses_with_manifest_urls(authoritative_peer_ids, manifest_torii_urls)
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn authoritative_lane_peer_statuses_at_height(
@@ -19185,26 +19160,33 @@ fn authoritative_lane_peer_statuses_at_height(
     routing_decision: RoutingDecision,
     authority_height: u64,
 ) -> Vec<AuthoritativeLanePeerStatus> {
-    let manifest_bindings = app
+    let authoritative_peer_ids = match app
         .state
-        .manifest_lane_validator_bindings_at_height(routing_decision.lane_id, authority_height);
-    if !manifest_bindings.is_empty() {
-        return manifest_bindings
-            .into_iter()
-            .map(|binding| AuthoritativeLanePeerStatus {
-                peer_id: binding.peer_id,
-                torii_url: binding.torii_url,
-            })
-            .collect();
-    }
-    app.state
-        .authoritative_lane_peer_ids_at_height(routing_decision.lane_id, authority_height)
+        .resolve_lane_committee_at_height(lane_authority_route(routing_decision), authority_height)
+    {
+        Ok(committee) => committee.into_validators(),
+        Err(error) => {
+            iroha_logger::warn!(
+                lane = routing_decision.lane_id.as_u32(),
+                dataspace = routing_decision.dataspace_id.as_u64(),
+                authority_height,
+                %error,
+                "Torii failed closed while resolving height-bound lane authority"
+            );
+            return Vec::new();
+        }
+    };
+    let manifest_torii_urls: BTreeMap<_, _> = app
+        .state
+        .manifest_lane_validator_bindings_at_height(routing_decision.lane_id, authority_height)
         .into_iter()
-        .map(|peer_id| AuthoritativeLanePeerStatus {
-            peer_id,
-            torii_url: None,
+        .filter_map(|binding| {
+            binding
+                .torii_url
+                .map(|torii_url| (binding.peer_id, torii_url))
         })
-        .collect()
+        .collect();
+    authoritative_lane_peer_statuses_with_manifest_urls(authoritative_peer_ids, manifest_torii_urls)
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn authoritative_lane_peers(
@@ -19701,22 +19683,17 @@ fn is_local_authoritative_for_peers(app: &AppState, authoritative_peers: &[PeerI
 }
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 fn is_local_authoritative_for_route(app: &AppState, routing_decision: RoutingDecision) -> bool {
-    let authoritative_peers = app
+    let Ok(committee) = app
         .state
-        .authoritative_lane_peer_ids(routing_decision.lane_id);
-    is_local_authoritative_for_peers(app, &authoritative_peers)
+        .resolve_lane_committee(lane_authority_route(routing_decision))
+    else {
+        return false;
+    };
+    is_local_authoritative_for_peers(app, committee.validators())
 }
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 fn should_execute_route_locally(app: &AppState, routing_decision: RoutingDecision) -> bool {
-    let authoritative_peers = app
-        .state
-        .authoritative_lane_peer_ids(routing_decision.lane_id);
-    if is_local_authoritative_for_peers(app, &authoritative_peers) {
-        return true;
-    }
-    routing_decision.lane_id == LaneId::SINGLE
-        && routing_decision.dataspace_id == DataSpaceId::UNIVERSAL
-        && authoritative_peers.is_empty()
+    is_local_authoritative_for_route(app, routing_decision)
 }
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn should_execute_route_locally_cached(
@@ -19793,7 +19770,7 @@ fn validate_incoming_read_proxy_route(
         );
         response
     })?;
-    if !torii_lane_active_for_routing(app, nexus, resolved.lane_id) {
+    if !torii_lane_active_for_routing(app, resolved.lane_id) {
         iroha_logger::warn!(
             request_kind,
             lane = routing_decision.lane_id.as_u32(),
@@ -19835,7 +19812,7 @@ fn torii_route_for_lane_id(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         )));
     };
-    if !torii_lane_active_for_routing(app, nexus, lane_id) {
+    if !torii_lane_active_for_routing(app, lane_id) {
         return Err(Error::PushIntoQueue {
             source: Box::new(queue::Error::UnresolvedRoute {
                 reason: format!(
@@ -19877,7 +19854,7 @@ fn torii_restricted_routes(app: &AppState) -> Vec<RoutingDecision> {
     let mut seen_dataspaces = BTreeSet::new();
     let mut routes = Vec::new();
     for lane in nexus.lane_catalog.lanes() {
-        if !torii_lane_active_for_routing(app, nexus, lane.id) {
+        if !torii_lane_active_for_routing(app, lane.id) {
             continue;
         }
         if lane.visibility != iroha_data_model::nexus::LaneVisibility::Restricted {
@@ -20016,7 +19993,7 @@ fn torii_public_dataspace_ids(app: &AppState) -> BTreeSet<DataSpaceId> {
     let mut dataspaces = BTreeSet::new();
     for lane in nexus.lane_catalog.lanes() {
         if lane.visibility == iroha_data_model::nexus::LaneVisibility::Public
-            && torii_lane_active_for_routing(app, nexus, lane.id)
+            && torii_lane_active_for_routing(app, lane.id)
         {
             dataspaces.insert(lane.dataspace_id);
         }
@@ -20479,7 +20456,7 @@ fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
     let mut routes =
         BTreeMap::<iroha_data_model::nexus::DataSpaceId, iroha_data_model::nexus::LaneId>::new();
     for lane in nexus.lane_catalog.lanes() {
-        if !torii_lane_active_for_routing(app, nexus, lane.id) {
+        if !torii_lane_active_for_routing(app, lane.id) {
             continue;
         }
         routes
@@ -29996,7 +29973,6 @@ async fn handler_soracloud_status(
     let autoscale_capacity_lane_count =
         u64::try_from(autoscale_capacity_lane_ids.len()).unwrap_or(u64::MAX);
     let routing = json_object(vec![
-        json_entry("nexus_enabled", nexus.enabled),
         json_entry("configured_lane_count", configured_lane_count),
         json_entry("lane_count", configured_lane_count),
         json_entry("declared_lane_count", declared_lane_count),
@@ -32122,19 +32098,13 @@ async fn handler_sumeragi_status(
         ));
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    let nexus_enabled = app.state.nexus_snapshot().enabled;
     let restart_required = app
         .sumeragi
         .as_ref()
         .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
-    routing::handle_v1_sumeragi_status(
-        State(app.state.clone()),
-        accept,
-        nexus_enabled,
-        restart_required,
-    )
-    .await
-    .map(axum::response::IntoResponse::into_response)
+    routing::handle_v1_sumeragi_status(State(app.state.clone()), accept, restart_required)
+        .await
+        .map(axum::response::IntoResponse::into_response)
 }
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_diagnostics(
@@ -32161,12 +32131,10 @@ async fn handler_sumeragi_diagnostics(
         ));
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    let nexus_enabled = app.state.nexus_snapshot().enabled;
     routing::handle_v1_sumeragi_diagnostics(
         State(app.state.clone()),
         Some(Arc::clone(&app.queue)),
         accept,
-        nexus_enabled,
     )
     .await
     .map(axum::response::IntoResponse::into_response)
@@ -32199,14 +32167,10 @@ async fn handler_sumeragi_status_sse(
             &app.telemetry,
         ));
     }
-    let nexus_enabled = app.state.nexus_snapshot().enabled;
-    Ok(routing::handle_v1_sumeragi_status_sse(
-        app.state.clone(),
-        1_000,
-        nexus_enabled,
-        app.sumeragi.clone(),
+    Ok(
+        routing::handle_v1_sumeragi_status_sse(app.state.clone(), 1_000, app.sumeragi.clone())
+            .into_response(),
     )
-    .into_response())
 }
 async fn handler_sumeragi_vrf_penalties(
     State(app): State<SharedAppState>,
@@ -32366,64 +32330,6 @@ async fn handler_sumeragi_qc(
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     Ok(routing::handle_v1_sumeragi_qc(accept)
-        .await?
-        .into_response())
-}
-#[cfg(feature = "telemetry")]
-async fn handler_sumeragi_checkpoints(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/checkpoints",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    if !app.telemetry.allows_developer_outputs() {
-        return Ok(telemetry_unavailable_response(
-            "/v1/sumeragi/checkpoints",
-            &app.telemetry,
-        ));
-    }
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(routing::handle_v1_sumeragi_checkpoints(accept)
-        .await?
-        .into_response())
-}
-#[cfg(feature = "telemetry")]
-async fn handler_sumeragi_commit_qcs(
-    State(app): State<SharedAppState>,
-    window: crate::NoritoQuery<routing::HistoryWindowQuery>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "/v1/sumeragi/commit-certificates",
-        app.api_token_enforced(),
-    );
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    if let Some(api_token) = token_hdr {
-        crate::telemetry::report_torii_api_hit(
-            &app.telemetry,
-            api_token,
-            "v1/sumeragi/commit-certificates",
-        );
-    }
-    rate_limit_requests(&app, &key).await?;
-    Ok(routing::handle_v1_sumeragi_commit_qcs(window, accept)
         .await?
         .into_response())
 }
@@ -32871,64 +32777,6 @@ async fn handler_sccp_messages_recent(
     .await
 }
 #[cfg(feature = "telemetry")]
-async fn handler_sumeragi_validator_sets(
-    State(app): State<SharedAppState>,
-    window: crate::NoritoQuery<routing::HistoryWindowQuery>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        iroha_torii_shared::uri::SUMERAGI_VALIDATOR_SETS,
-        app.api_token_enforced(),
-    );
-    if let Some(api_token) = token_hdr {
-        crate::telemetry::report_torii_api_hit(
-            &app.telemetry,
-            api_token,
-            iroha_torii_shared::uri::SUMERAGI_VALIDATOR_SETS,
-        );
-    }
-    rate_limit_requests(&app, &key).await?;
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(routing::handle_v1_sumeragi_validator_sets(window, accept)
-        .await?
-        .into_response())
-}
-#[cfg(feature = "telemetry")]
-async fn handler_sumeragi_validator_set_by_height(
-    State(app): State<SharedAppState>,
-    AxPath(height): AxPath<u64>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = validate_api_token(app.as_ref(), &headers)?.authenticated_token();
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        iroha_torii_shared::uri::SUMERAGI_VALIDATOR_SET_BY_HEIGHT,
-        app.api_token_enforced(),
-    );
-    if let Some(api_token) = token_hdr {
-        crate::telemetry::report_torii_api_hit(
-            &app.telemetry,
-            api_token,
-            iroha_torii_shared::uri::SUMERAGI_VALIDATOR_SET_BY_HEIGHT,
-        );
-    }
-    rate_limit_requests(&app, &key).await?;
-    let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(
-        routing::handle_v1_sumeragi_validator_set_by_height(AxPath(height), accept)
-            .await?
-            .into_response(),
-    )
-}
-#[cfg(feature = "telemetry")]
 async fn handler_sumeragi_consensus_keys(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -32981,35 +32829,6 @@ async fn handler_sumeragi_key_lifecycle(
     Ok(routing::handle_v1_sumeragi_key_lifecycle(accept)
         .await?
         .into_response())
-}
-#[cfg(feature = "telemetry")]
-async fn handler_commit_qc(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    accept: Option<utils::extractors::ExtractAccept>,
-    AxPath(hash): AxPath<String>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(app.as_ref(), &headers)?;
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sumeragi/commit-qcs",
-        app.api_token_enforced(),
-    );
-    if !app.rate_limiter.allow(&key).await {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    routing::handle_v1_sumeragi_commit_qc(
-        State(app.state.clone()),
-        AxPath(hash),
-        accept.map(|e| e.0),
-    )
-    .await
-    .map(axum::response::IntoResponse::into_response)
 }
 // ---------------- Contracts/VK POST handlers ----------------
 #[cfg(feature = "app_api")]
@@ -37899,7 +37718,7 @@ async fn handler_alias_setup_plan(
     let world = state_view.world();
     let nexus = state_view.nexus();
     let catalog = &nexus.dataspace_catalog;
-    let default_domain_endorsement_required = nexus.enabled && nexus.endorsement.quorum > 0;
+    let default_domain_endorsement_required = nexus.endorsement.quorum > 0;
     let mut resources = Vec::with_capacity(request.intents.len());
     let mut instructions = Vec::with_capacity(request.intents.len());
     let mut transaction_instructions = Vec::with_capacity(request.intents.len());
@@ -40548,38 +40367,6 @@ fn tx_history_viewer_from_headers(
     })
 }
 const LEDGER_HEADER_PAGE_CAP: u64 = 512;
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-struct StateRootResponse {
-    height: u64,
-    block_hash: HashOf<BlockHeader>,
-    /// State root if available (from commit QC or result Merkle root).
-    state_root: iroha_crypto::Hash,
-    /// Source of the state root for observability (`commit_qc` or `result_merkle_root`).
-    source: String,
-    /// Commit QC payload when available for attestation (subject hash, bitmap, aggregate sig).
-    commit_qc: Option<iroha_data_model::consensus::Qc>,
-}
-#[derive(
-    Debug,
-    Clone,
-    crate::json_macros::JsonSerialize,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-)]
-struct StateProofResponse {
-    height: u64,
-    block_hash: HashOf<BlockHeader>,
-    state_root: iroha_crypto::Hash,
-    commit_qc: iroha_data_model::consensus::Qc,
-}
 async fn handler_ledger_headers(
     State(app): State<SharedAppState>,
     crate::NoritoQuery(window): crate::NoritoQuery<routing::HistoryWindowQuery>,
@@ -40590,16 +40377,11 @@ async fn handler_ledger_headers(
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
-    let current_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
+    let state_view = app.state.view();
+    let current_height = u64::try_from(state_view.height()).unwrap_or(u64::MAX);
     let start_height = match window.from {
         Some(0) => return Err(conversion_error("from must be at least 1".to_owned())),
-        Some(from) => {
-            if current_height == 0 {
-                from
-            } else {
-                from.min(current_height)
-            }
-        }
+        Some(from) => from.min(current_height),
         None => current_height,
     };
     let limit = window
@@ -40619,148 +40401,26 @@ async fn handler_ledger_headers(
         let Some(nz_height) = NonZeroUsize::new(height as usize) else {
             break;
         };
-        if let Some(block) = app.state.block_by_height(nz_height) {
-            headers.push(block.header());
-        } else {
-            break;
-        }
+        let block = state_view
+            .canonical_block_by_height(nz_height)
+            .map_err(|error| {
+                Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                    iroha_data_model::query::error::QueryExecutionFail::CanonicalHistory(error),
+                ))
+            })?;
+        headers.push(block.header());
         if height == 1 {
             break;
         }
         height -= 1;
     }
+    drop(state_view);
     match format {
         ResponseFormat::Norito => Ok(NoritoBody(headers).into_response()),
         ResponseFormat::Json => {
             let body = norito::json::to_json_pretty(&headers).map_err(|err| {
                 Error::Query(iroha_data_model::ValidationFail::InternalError(
                     err.to_string(),
-                ))
-            })?;
-            let mut resp = Response::new(Body::from(body));
-            resp.headers_mut().insert(
-                axum::http::header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            );
-            Ok(resp)
-        }
-    }
-}
-async fn handler_ledger_state_root(
-    State(app): State<SharedAppState>,
-    axum::extract::Path(height): axum::extract::Path<u64>,
-    headers: axum::http::HeaderMap,
-) -> Result<Response, Error> {
-    let accept = headers.get(axum::http::header::ACCEPT);
-    let format = match crate::utils::negotiate_response_format(accept) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    let height_nz = NonZeroU64::new(height)
-        .ok_or_else(|| conversion_error("height must be at least 1".to_owned()))?;
-    let Some(height_usize) = NonZeroUsize::new(
-        height_nz
-            .get()
-            .try_into()
-            .map_err(|_| conversion_error("height exceeds host pointer width".to_owned()))?,
-    ) else {
-        return Err(conversion_error("height must be at least 1".to_owned()));
-    };
-    let Some(block) = app.state.block_by_height(height_usize) else {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        )));
-    };
-    let block_hash = block.hash();
-    let world = app.state.world_view();
-    let commit_qc = world.commit_qcs().get(&block_hash).cloned();
-    let payload = if let Some(qc) = commit_qc {
-        StateRootResponse {
-            height,
-            block_hash,
-            state_root: qc.post_state_root,
-            source: "commit_qc".to_owned(),
-            commit_qc: Some(qc),
-        }
-    } else if let Some(result_root) = block.header().result_merkle_root() {
-        StateRootResponse {
-            height,
-            block_hash,
-            state_root: iroha_crypto::Hash::prehashed(*result_root.as_ref()),
-            source: "result_merkle_root".to_owned(),
-            commit_qc: None,
-        }
-    } else {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        )));
-    };
-    match format {
-        ResponseFormat::Norito => Ok(NoritoBody(payload).into_response()),
-        ResponseFormat::Json => {
-            let body = norito::json::to_json_pretty(&payload).map_err(|e| {
-                Error::Query(iroha_data_model::ValidationFail::InternalError(
-                    e.to_string(),
-                ))
-            })?;
-            let mut resp = Response::new(Body::from(body));
-            resp.headers_mut().insert(
-                axum::http::header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json"),
-            );
-            Ok(resp)
-        }
-    }
-}
-async fn handler_ledger_state_proof(
-    State(app): State<SharedAppState>,
-    axum::extract::Path(height): axum::extract::Path<u64>,
-    headers: axum::http::HeaderMap,
-) -> Result<Response, Error> {
-    let accept = headers.get(axum::http::header::ACCEPT);
-    let format = match crate::utils::negotiate_response_format(accept) {
-        Ok(fmt) => fmt,
-        Err(resp) => return Ok(resp),
-    };
-    let height_nz = NonZeroU64::new(height)
-        .ok_or_else(|| conversion_error("height must be at least 1".to_owned()))?;
-    let Some(height_usize) = NonZeroUsize::new(
-        height_nz
-            .get()
-            .try_into()
-            .map_err(|_| conversion_error("height exceeds host pointer width".to_owned()))?,
-    ) else {
-        return Err(conversion_error("height must be at least 1".to_owned()));
-    };
-    let Some(block) = app.state.block_by_height(height_usize) else {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        )));
-    };
-    let block_hash = block.hash();
-    // Ledger state proof requires a persisted commit QC; avoid placeholder synthesis.
-    let world = app.state.world_view();
-    let commit_qc = world
-        .commit_qcs()
-        .get(&block_hash)
-        .cloned()
-        .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ))
-        })?;
-    let payload = StateProofResponse {
-        height,
-        block_hash,
-        state_root: commit_qc.post_state_root,
-        commit_qc,
-    };
-    match format {
-        ResponseFormat::Norito => Ok(NoritoBody(payload).into_response()),
-        ResponseFormat::Json => {
-            let body = norito::json::to_json_pretty(&payload).map_err(|e| {
-                Error::Query(iroha_data_model::ValidationFail::InternalError(
-                    e.to_string(),
                 ))
             })?;
             let mut resp = Response::new(Body::from(body));
@@ -40908,7 +40568,8 @@ fn map_block_proof_error(error: BlockProofError) -> Error {
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
             ))
         }
-        BlockProofError::BlockHeightMismatch { .. }
+        BlockProofError::BlockHashMismatch { .. }
+        | BlockProofError::BlockHeightMismatch { .. }
         | BlockProofError::MissingResults(_)
         | BlockProofError::ExecutionResultMissing { .. }
         | BlockProofError::MerkleProofUnavailable { .. }
@@ -40918,7 +40579,6 @@ fn map_block_proof_error(error: BlockProofError) -> Error {
     }
 }
 // -------------- Runtime handlers (removed AppState-based; use closures in router) --------------
-// (re-exports consolidated above)
 mod da;
 #[cfg(feature = "app_api")]
 pub use self::da::compute_taikai_ingest_tags;
@@ -45055,17 +44715,9 @@ impl Torii {
             mount_operator_get!(LEADER, handler_sumeragi_leader);
             mount_operator_get!(BLS_KEYS, handler_sumeragi_bls_keys);
             mount_operator_get!(QC, handler_sumeragi_qc);
-            mount_operator_get!(CHECKPOINTS, handler_sumeragi_checkpoints);
-            mount_operator_get!(COMMIT_CERTIFICATES, handler_sumeragi_commit_qcs);
-            mount_operator_get!(VALIDATOR_SETS, handler_sumeragi_validator_sets);
-            mount_operator_get!(
-                VALIDATOR_SET_BY_HEIGHT,
-                handler_sumeragi_validator_set_by_height
-            );
             mount_operator_get!(CONSENSUS_KEYS, handler_sumeragi_consensus_keys);
             mount_operator_get!(KEY_LIFECYCLE, handler_sumeragi_key_lifecycle);
             mount_operator_get!(PARAMETERS, handler_sumeragi_params);
-            mount_operator_get!(COMMIT_QC, handler_commit_qc);
         }
     }
     fn add_core_info_routes(&self, builder: &mut RouterBuilder) {
@@ -52793,6 +52445,10 @@ impl Error {
             QueryFailed(query_error)
             | InstructionFailed(InstructionExecutionError::Query(query_error)) => match query_error
             {
+                CanonicalHistory(error) if error.is_unavailable() => {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+                CanonicalHistory(_) => StatusCode::INTERNAL_SERVER_ERROR,
                 Conversion(_)
                 | CursorMismatch
                 | CursorDone
@@ -52818,161 +52474,6 @@ impl Error {
     #[cfg(feature = "telemetry")]
     fn telemetry_profile_forbidden(endpoint: &'static str, profile: TelemetryProfile) -> Self {
         Self::TelemetryProfileRestricted { endpoint, profile }
-    }
-}
-impl Error {
-    fn status_code_for_queue_error(err: &queue::Error) -> StatusCode {
-        match err {
-            queue::Error::Full
-            | queue::Error::LatencySaturated
-            | queue::Error::MaximumTransactionsPerUser => StatusCode::TOO_MANY_REQUESTS,
-            queue::Error::Expired => StatusCode::BAD_REQUEST,
-            queue::Error::UnresolvedRoute { .. } => StatusCode::BAD_REQUEST,
-            queue::Error::InBlockchain => StatusCode::CONFLICT,
-            queue::Error::IsInQueue => StatusCode::CONFLICT,
-            queue::Error::UnregisteredAuthority { .. } => StatusCode::FORBIDDEN,
-            queue::Error::Governance(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            queue::Error::GovernanceNotPermitted { .. } => StatusCode::FORBIDDEN,
-            queue::Error::LaneComplianceDenied { .. } => StatusCode::FORBIDDEN,
-            queue::Error::LanePrivacyProofRejected { .. } => StatusCode::FORBIDDEN,
-            queue::Error::NexusFeeAdmissionRejected { .. } => StatusCode::UNPROCESSABLE_ENTITY,
-            queue::Error::ConfidentialPolicyAdmissionRejected { .. } => StatusCode::FORBIDDEN,
-            queue::Error::NexusFeeAdmissionConfigInvalid { .. } => StatusCode::SERVICE_UNAVAILABLE,
-            queue::Error::PlanJournalDurabilityRejected { .. }
-            | queue::Error::PlanJournalDurabilityIndeterminate { .. } => {
-                StatusCode::SERVICE_UNAVAILABLE
-            }
-        }
-    }
-    fn queue_error_summary(err: &queue::Error) -> (&'static str, &'static str) {
-        match err {
-            queue::Error::Full => ("queue_full", "transaction queue is at capacity"),
-            queue::Error::LatencySaturated => (
-                "queue_latency_saturated",
-                "transaction queue latency budget is saturated",
-            ),
-            queue::Error::MaximumTransactionsPerUser => (
-                "per_user_queue_limit",
-                "authority reached its per-user queue capacity",
-            ),
-            queue::Error::Expired => (
-                "transaction_expired",
-                "transaction expired before admission",
-            ),
-            queue::Error::UnresolvedRoute { .. } => (
-                "queue_unresolved_route",
-                "transaction route could not be resolved",
-            ),
-            queue::Error::InBlockchain => (
-                "already_committed",
-                "transaction already committed to the blockchain",
-            ),
-            queue::Error::IsInQueue => (
-                "already_enqueued",
-                "transaction already present in the queue",
-            ),
-            queue::Error::UnregisteredAuthority { .. } => (
-                "unregistered_authority",
-                "transaction authority is not registered",
-            ),
-            queue::Error::Governance(_) => (
-                "queue_governance_invalid",
-                "lane governance manifest is missing or invalid",
-            ),
-            queue::Error::GovernanceNotPermitted { .. } => (
-                "queue_governance_rejected",
-                "lane governance manifest rejected the transaction",
-            ),
-            queue::Error::LaneComplianceDenied { .. } => (
-                "queue_lane_compliance_denied",
-                "lane compliance policy rejected the transaction",
-            ),
-            queue::Error::LanePrivacyProofRejected { .. } => (
-                "queue_lane_privacy_proof_rejected",
-                "lane privacy proof rejected the transaction",
-            ),
-            queue::Error::NexusFeeAdmissionRejected { .. } => (
-                "queue_nexus_fee_rejected",
-                "transaction cannot cover the Nexus fee admission bound",
-            ),
-            queue::Error::ConfidentialPolicyAdmissionRejected { .. } => (
-                "queue_confidential_policy_rejected",
-                "confidential policy rejected the transaction",
-            ),
-            queue::Error::NexusFeeAdmissionConfigInvalid { .. } => (
-                "queue_nexus_fee_config_invalid",
-                "node Nexus fee configuration is invalid",
-            ),
-            queue::Error::PlanJournalDurabilityRejected { .. } => (
-                "queue_plan_journal_unavailable",
-                "transaction queue could not establish the required durability boundary",
-            ),
-            queue::Error::PlanJournalDurabilityIndeterminate { .. } => (
-                "queue_plan_journal_outcome_unknown",
-                "transaction admission outcome is unknown; reconcile by exact entrypoint hash before retrying",
-            ),
-        }
-    }
-    fn queue_error_envelope(
-        err: &queue::Error,
-        backpressure: queue::BackpressureState,
-    ) -> ErrorEnvelope {
-        let (code, message) = Self::queue_error_summary(err);
-        let saturated = backpressure.is_saturated();
-        let retry_after_seconds = match err {
-            queue::Error::Full
-            | queue::Error::LatencySaturated
-            | queue::Error::MaximumTransactionsPerUser => Some(1),
-            _ => None,
-        };
-        let (reject_code, _detail) = queue_rejection_metadata(err);
-        let fee = match err {
-            queue::Error::NexusFeeAdmissionRejected { code, .. }
-            | queue::Error::NexusFeeAdmissionConfigInvalid { code, .. } => Some(FeeErrorDetails {
-                code: code.as_str().to_owned(),
-                retryable: fee_quote_rejection_retryable(*code),
-                remediation: Some(fee_quote_remediation(*code).to_owned()),
-                ..FeeErrorDetails::default()
-            }),
-            _ => None,
-        };
-        let (tx_hash, hint) = match err {
-            queue::Error::PlanJournalDurabilityIndeterminate {
-                entrypoint_hash, ..
-            } => (
-                Some(entrypoint_hash.to_string()),
-                Some(
-                    "Query status by this exact entrypoint hash; do not create a replacement transaction until the outcome is known."
-                        .to_owned(),
-                ),
-            ),
-            queue::Error::PlanJournalDurabilityRejected { .. } => (
-                None,
-                Some(
-                    "The transaction was not admitted; restore queue-plan journal health before retrying."
-                        .to_owned(),
-                ),
-            ),
-            _ => (None, None),
-        };
-        ErrorEnvelope::new(code, message).with_details(ErrorDetails {
-            reject_code: Some(reject_code.to_owned()),
-            queue: Some(QueueErrorSnapshot {
-                state: if saturated {
-                    "saturated".to_owned()
-                } else {
-                    "healthy".to_owned()
-                },
-                queued: backpressure.queued() as u64,
-                capacity: backpressure.capacity().get() as u64,
-                saturated,
-            }),
-            retry_after_seconds,
-            fee,
-            tx_hash,
-            hint,
-            ..Default::default()
-        })
     }
 }
 include!("queue_rejection_metadata.rs");

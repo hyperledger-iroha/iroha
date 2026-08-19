@@ -519,8 +519,9 @@ fn ordinary_validate_predecessor_for_test(
     .pop()
     .expect("one ordinary Store owner");
     let store_pending = owner
-        .pending_adapter_effect_binding(&store)
-        .expect("bind ordinary Store predecessor");
+        .current_effect_producer(&store)
+        .expect("seal ordinary Store predecessor producer")
+        .mint_pending_binding();
     let validate_pending = store_pending
         .project_store_validate_successor(&store, &validate)
         .expect("project ordinary Validate predecessor");
@@ -1499,7 +1500,7 @@ fn bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open() {
     assert_eq!(row_count, 4);
     assert!(apply_ordinal > 0);
     assert_eq!(
-                owner.plan_direct_registry_turn(),
+                owner.plan_direct_registry_turn(0),
                 Err(
                     super::super::v2_lifecycle_coordinator::ProductionSchedulerInputsError::IoCapacityObservationRequired {
                         ordinal: apply_ordinal,
@@ -2578,4 +2579,6 @@ fn bls_mutated_control_frame_identity_fails_before_serve_or_ledger_open() {
     assert!(!storage.path().join("serve").exists());
     assert!(crate::sumeragi::status::v2_status().is_none());
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(recovered_wal_first_release_source_is_closed_and_store_ordered);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    recovered_wal_first_release_source_is_closed_and_store_ordered
+);

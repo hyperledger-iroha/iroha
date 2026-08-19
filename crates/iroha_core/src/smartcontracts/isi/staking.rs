@@ -988,11 +988,6 @@ impl Execute for RecordPublicLaneRewards {
         _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if !state_transaction.nexus.enabled {
-            return Err(Error::InvariantViolation(
-                "Nexus rewards are disabled on this build".into(),
-            ));
-        }
         ensure_lane_allows_staking(
             state_transaction,
             self.lane_id,
@@ -1020,9 +1015,7 @@ impl Execute for RecordPublicLaneRewards {
             self.reward_asset.definition(),
             state_transaction,
         )?;
-        if state_transaction.nexus.enabled {
-            validate_reward_sink(&self.reward_asset, &self.total_reward, state_transaction)?;
-        }
+        validate_reward_sink(&self.reward_asset, &self.total_reward, state_transaction)?;
         let record = PublicLaneRewardRecord {
             lane_id: self.lane_id,
             epoch: self.epoch,
@@ -1060,11 +1053,6 @@ impl Execute for ClaimPublicLaneRewards {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        if !state_transaction.nexus.enabled {
-            return Err(Error::InvariantViolation(
-                "Nexus rewards are disabled on this build".into(),
-            ));
-        }
         ensure_lane_allows_staking(state_transaction, self.lane_id, "claim_public_lane_rewards")?;
         finalize_validator_lifecycle(state_transaction)?;
         if &self.account != authority {
@@ -2336,7 +2324,6 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
         let lane_id = LaneId::new(7);
-        stx.nexus.enabled = true;
         set_transaction_lane_catalog(
             &mut stx,
             LaneCatalog::new(
@@ -2399,7 +2386,6 @@ mod tests {
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_owned(), "7".to_owned());
         crate::state::attach_synthetic_autoscale_committee_for_test(&mut autoscale_lane);
-        stx.nexus.enabled = true;
         stx.nexus.autoscale.enabled = true;
         stx.nexus.autoscale.min_lanes = nonzero!(1_u32);
         stx.nexus.autoscale.max_lanes = nonzero!(2_u32);
@@ -2447,10 +2433,8 @@ mod tests {
         let block = new_block_with_height(1);
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-        stx.nexus.enabled = true;
         let stake_lane = LaneId::new(0);
         let admin_lane = LaneId::new(1);
-        stx.nexus.enabled = true;
         set_transaction_lane_catalog(
             &mut stx,
             LaneCatalog::new(
@@ -2565,7 +2549,6 @@ mod tests {
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-        stx.nexus.enabled = true;
         set_transaction_lane_catalog(
             &mut stx,
             LaneCatalog::new(
@@ -3452,7 +3435,6 @@ mod tests {
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-        stx.nexus.enabled = true;
         stx.nexus.lane_catalog = LaneCatalog::new(
             nonzero!(2_u32),
             vec![LaneConfig {
@@ -4183,7 +4165,6 @@ mod tests {
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-        stx.nexus.enabled = true;
         let lane_id = LaneId::new(15);
         stx.nexus.lane_catalog = LaneCatalog::new(
             nonzero!(16_u32),
@@ -4256,7 +4237,6 @@ mod tests {
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-        stx.nexus.enabled = true;
         let lane_id = LaneId::new(16);
         stx.nexus.lane_catalog = LaneCatalog::new(
             nonzero!(17_u32),
@@ -4332,7 +4312,6 @@ mod tests {
         let block = new_block_with_height(1);
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-        stx.nexus.enabled = true;
         let lane_id = LaneId::new(17);
         stx.nexus.lane_catalog = LaneCatalog::new(
             nonzero!(18_u32),

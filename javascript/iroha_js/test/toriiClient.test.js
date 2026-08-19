@@ -1115,6 +1115,7 @@ function createNativeAmxReceiptFixture(overrides = {}, sourceIndex = 0) {
             descriptor_hash: fakeSumeragiHash(0x73),
           },
           proposal_hash: participantProposalHash,
+          payload_block_hint: null,
         },
         participant_settlement: {
           block_height: 8,
@@ -11974,7 +11975,7 @@ test("getSumeragiDiagnosticsTyped parses exact nested fee and native AMX receipt
   assert.equal(leg.participant_settlement.receipts.length, 2);
   assert.equal(leg.prepare_qc.body.source_id, "AB".repeat(32));
   assert.equal(leg.prepare_qc.body.tx_entrypoint_hash, fakeSumeragiHash(0x61));
-  assert.equal(leg.participant_proposal.descriptor.payload_block_hint, undefined);
+  assert.equal(leg.participant_proposal.payload_block_hint, null);
 });
 
 test("getSumeragiDiagnosticsTyped accepts the canonical first participant-lane block", async () => {
@@ -12104,7 +12105,9 @@ test("getSumeragiDiagnosticsTyped rejects participant-finality tampering", async
     (leg) => { leg.prepare_qc.body.participant_lane_block_view = "1"; },
     (leg) => { leg.commit_qc.body.participant_proposal_hash = fakeSumeragiHash(0x75); },
     (leg) => { leg.participant_proposal.proposal_hash = fakeSumeragiHash(0x75); },
-    (leg) => { leg.participant_proposal.payload_block_hint = null; },
+    (leg) => { delete leg.participant_proposal.payload_block_hint; },
+    (leg) => { leg.participant_proposal.payload_block_hint = {}; },
+    (leg) => { leg.participant_proposal.future_proposal_field = null; },
     (leg) => { delete leg.participant_proposal.descriptor.subject_hash; },
     (leg) => { leg.participant_proposal.descriptor.future_descriptor_field = 1; },
     (leg) => { delete leg.participant_proposal.descriptor.previous_lane_block_descriptor_hash; },
@@ -12551,40 +12554,6 @@ test("getSumeragiQc requires both nullable v2 slots", async () => {
     () => client.getSumeragiQc(),
     /sumeragi qc response\.locked_prepare_qc is required/u,
   );
-});
-
-test("getSumeragiCommitQc fetches commit QC record", async () => {
-  const hashHex = "aa".repeat(32);
-  const fetchImpl = async (url, init) => {
-    assert.equal(url, `${BASE_URL}/v1/sumeragi/commit-qcs/${hashHex}`);
-    assert.equal(init.headers.Accept, "application/json");
-    return createResponse({
-      status: 200,
-      jsonData: {
-        subject_block_hash: hashHex,
-        commit_qc: {
-          phase: "Commit",
-          parent_state_root: "bb".repeat(32),
-          post_state_root: "cc".repeat(32),
-          height: "12",
-          view: "3",
-          epoch: "4",
-          mode_tag: "iroha2-consensus::permissioned-sumeragi@v2",
-          validator_set_hash: "dd".repeat(32),
-          validator_set_hash_version: 1,
-          validator_set: ["alice@test", "bob@test"],
-          signers_bitmap: "0a",
-          bls_aggregate_signature: "ff",
-        },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const record = await client.getSumeragiCommitQc(`0x${hashHex}`);
-  assert.equal(record.subject_block_hash, hashHex);
-  assert.equal(record.commit_qc?.parent_state_root, "bb".repeat(32));
-  assert.equal(record.commit_qc?.validator_set.length, 2);
 });
 
 test("getSumeragiBlsKeys returns network map", async () => {

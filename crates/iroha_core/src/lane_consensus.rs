@@ -6053,9 +6053,6 @@ mod tests {
             .iter()
             .find(|keypair| keypair.public_key() == producer.public_key())
             .expect("producer fixture key");
-        let accepted = AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(
-            entrypoint.clone(),
-        ));
         let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,

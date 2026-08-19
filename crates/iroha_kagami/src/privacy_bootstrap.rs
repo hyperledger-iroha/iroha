@@ -119,7 +119,7 @@ impl<T: Write> RunArgs<T> for Args {
                 writeln!(writer, "{}", norito::json::to_json(&status)?)?;
             }
             Command::RenderTairaReleaseV1(args) => {
-                release::render_taira_release_v1(args, writer)?;
+                release::render_taira_release_v1(&args, writer)?;
             }
         }
         Ok(())

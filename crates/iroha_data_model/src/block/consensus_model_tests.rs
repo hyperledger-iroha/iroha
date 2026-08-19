@@ -1146,7 +1146,7 @@ fn apply_grouped_native_amx_fixture_mutation(
 }
 #[test]
 fn native_amx_receipt_negative_corpus_fails_closed() {
-    const EXPECTED_RECEIPT_CONTROLS: usize = 45;
+    const EXPECTED_RECEIPT_CONTROLS: usize = 46;
     let canonical = grouped_native_amx_fixture_document();
     let controls = canonical
         .get("negative_controls")

@@ -1,4 +1,4 @@
-//! Validate the exact-signature hard cut for SoraNet privacy telemetry ingress.
+//! Validate the exact-signature hard cut for `SoraNet` privacy telemetry ingress.
 use iroha_config::parameters::user::Root as UserConfig;
 use iroha_config_base::{read::ConfigReader, toml::TomlSource};
 use std::path::PathBuf;

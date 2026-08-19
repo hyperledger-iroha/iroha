@@ -14,6 +14,7 @@ use super::{
     authority,
     body_pipeline_transition::{
         SealedInvalidBodyReportProjection, SealedInvalidBodyReportProjectionPermit,
+        SealedValidateApplyProjection, SealedValidateApplyProjectionPermit,
         SealedValidateNoSuccessorProjection, SealedValidateNoSuccessorProjectionPermit,
         SealedValidateSignProjection, SealedValidateSignProjectionPermit,
     },
@@ -24,13 +25,13 @@ use super::{
         AuthenticatedCertifiedFetchReplayOriginV1, CertifiedFetchReplayEvidenceV1,
         CertifiedServeReplayEvidencePairV1, CertifiedServeTerminalReplayAuthorityPairV1,
         CertifiedStoreReplayEvidenceV1, CertifiedValidateReplayEvidenceV1,
-        DurableCertifiedFetchReplayProjectionV1, DurableValidateReplayEvidenceV1,
-        LifecycleReplayAuthorityV1, PreparedDurableCertifiedFetchStartupV1,
-        RecoveredLifecycleNextWalVoteCandidateProjectionV1, RemoteProposalFetchReplayEvidenceV1,
-        RemoteProposalStoreReplayEvidenceV1, RemoteProposalStoredReplayEvidenceV1,
-        RemoteProposalValidateReplayEvidenceV1, SealedLiveWalPersistedEffectV1,
-        SignedBroadcastReplayEvidenceV1, SignedEquivocationReplayEvidenceV1,
-        exact_direct_signed_admission_authority,
+        DurableCertifiedFetchReplayProjectionV1, DurableValidateApplyReplayEvidenceV1,
+        DurableValidateReplayEvidenceV1, LifecycleReplayAuthorityV1,
+        PreparedDurableCertifiedFetchStartupV1, RecoveredLifecycleNextWalVoteCandidateProjectionV1,
+        RemoteProposalFetchReplayEvidenceV1, RemoteProposalStoreReplayEvidenceV1,
+        RemoteProposalStoredReplayEvidenceV1, RemoteProposalValidateReplayEvidenceV1,
+        SealedLiveWalPersistedEffectV1, SignedBroadcastReplayEvidenceV1,
+        SignedEquivocationReplayEvidenceV1, exact_direct_signed_admission_authority,
     },
     schema::DurablePayloadReference,
     selector::{CertifiedFetchCompletionAuthority, CertifiedFetchDequeuedResponse},
@@ -146,6 +147,272 @@ impl DurableCertifiedServeWork {
             && lease.output_reservation.is_none()
     }
 }
+/// Opaque proof that one exact LedgerV1-backed Ready Serve row owns its
+/// authenticated request and installed durable carrier.
+///
+/// The ready record, physical address, and ledger frame remain private. A
+/// scheduler can only compare this proof with a complete Ready census and then
+/// consume it after the coordinator creates the matching lease.
+#[must_use = "the Ready Certified-Serve attestation has not entered scheduling"]
+pub(in crate::sumeragi) struct ReadyCertifiedServeAttestationV1 {
+    ledger_frame: LifecycleDigest,
+    ready_record: super::LifecycleRecord,
+    address: ConcreteWorkAddress,
+    authenticated: AuthenticatedCertifiedBodyRequest,
+    _linearity: ReadyCertifiedServeAttestationLinearityV1,
+}
+struct ReadyCertifiedServeAttestationLinearityV1;
+impl Drop for ReadyCertifiedServeAttestationLinearityV1 {
+    fn drop(&mut self) {}
+}
+impl fmt::Debug for ReadyCertifiedServeAttestationV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReadyCertifiedServeAttestationV1")
+            .finish_non_exhaustive()
+    }
+}
+impl ReadyCertifiedServeAttestationV1 {
+    /// Compare this seal with one exact Ready row in the retained LedgerV1 frame.
+    pub(super) fn matches_ready_record(
+        &self,
+        record: &super::LifecycleRecord,
+        ledger: &super::ledger::LifecycleLedgerV1,
+    ) -> bool {
+        self.ledger_frame == ledger.frame_identity()
+            && record == &self.ready_record
+            && record.state == super::LifecycleState::Ready
+            && HashOf::new(self.authenticated.request()) == self.authenticated.request_hash()
+    }
+    fn matches_claimed_record(
+        &self,
+        record: &super::LifecycleRecord,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        lease: &TurnLease,
+    ) -> bool {
+        let mut expected = self.ready_record.clone();
+        expected.state = super::LifecycleState::Claimed(lease.id());
+        self.ledger_frame == ledger.frame_identity()
+            && record == &expected
+            && lease.ordinal() == record.ordinal
+            && lease.owner() == record.owner
+            && lease.key() == record.key
+            && lease.work_class() == record.work_class
+            && lease.stage() == record.stage
+            && lease.physical_slots() == &record.physical_slots
+            && lease.output_reservation().is_none()
+            && HashOf::new(self.authenticated.request()) == self.authenticated.request_hash()
+    }
+}
+/// Closed failure while minting a Ready Certified-Serve carrier attestation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ReadyCertifiedServeAttestationErrorV1 {
+    /// The logical owner is faulted or still owns a prior lease.
+    CoordinatorUnavailable,
+    /// The supplied durable frame is not the exact current coordinator frame.
+    LedgerMismatch,
+    /// No Ready Serve row owns the authenticated request.
+    RequestNotReady,
+    /// More than one Ready Serve row claims the authenticated request.
+    AmbiguousRequest,
+    /// Logical indexes, durable metadata, or installed work are not exact.
+    InvalidCarrier,
+}
+/// Opaque claimed Serve carrier ready to cross the worker-dispatch boundary.
+///
+/// The exact lease and authenticated request remain co-owned until the worker
+/// consumes both together. No ordinal or physical digest is accepted at this
+/// boundary.
+#[must_use = "the claimed Certified-Serve dispatch has not entered its worker"]
+pub(in crate::sumeragi) struct ClaimedCertifiedServeDispatchV1 {
+    lease: TurnLease,
+    authenticated: AuthenticatedCertifiedBodyRequest,
+    _linearity: ClaimedCertifiedServeDispatchLinearityV1,
+}
+struct ClaimedCertifiedServeDispatchLinearityV1;
+impl Drop for ClaimedCertifiedServeDispatchLinearityV1 {
+    fn drop(&mut self) {}
+}
+impl fmt::Debug for ClaimedCertifiedServeDispatchV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClaimedCertifiedServeDispatchV1")
+            .finish_non_exhaustive()
+    }
+}
+impl ClaimedCertifiedServeDispatchV1 {
+    /// Borrow the exact claimed lifecycle lease.
+    pub(in crate::sumeragi) const fn lease(&self) -> &TurnLease {
+        &self.lease
+    }
+    /// Borrow the exact authenticated request owned by the claimed Serve.
+    pub(in crate::sumeragi) const fn authenticated_request(
+        &self,
+    ) -> &AuthenticatedCertifiedBodyRequest {
+        &self.authenticated
+    }
+    /// Move the exact lease and request together into the dedicated worker.
+    pub(in crate::sumeragi) fn into_worker_parts(
+        self,
+    ) -> (TurnLease, AuthenticatedCertifiedBodyRequest) {
+        (self.lease, self.authenticated)
+    }
+}
+/// Closed failure while projecting an already-claimed Serve into its worker carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ClaimedCertifiedServeDispatchErrorV1 {
+    /// The supplied durable frame is not the exact current coordinator frame.
+    LedgerMismatch,
+    /// The coordinator claim does not match the sealed Ready row.
+    InvalidLease,
+    /// Durable metadata or installed concrete work changed before projection.
+    InvalidCarrier,
+}
+impl ConcreteLifecycleWorkRegistry {
+    /// Seal one exact Ready Serve, current LedgerV1 frame, installed durable
+    /// carrier, and authenticated request without accepting raw coordinates.
+    pub(super) fn attest_ready_certified_serve_request(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+    ) -> Result<ReadyCertifiedServeAttestationV1, ReadyCertifiedServeAttestationErrorV1> {
+        if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
+            return Err(ReadyCertifiedServeAttestationErrorV1::CoordinatorUnavailable);
+        }
+        if !super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+            .is_ok_and(|current| &current == ledger)
+        {
+            return Err(ReadyCertifiedServeAttestationErrorV1::LedgerMismatch);
+        }
+        let mut matches = coordinator.records.values().filter(|record| {
+            record.work_class == LifecycleWorkClass::CertifiedServe
+                && record.state == super::LifecycleState::Ready
+                && coordinator
+                    .durable_records
+                    .get(&record.ordinal)
+                    .is_some_and(|metadata| {
+                        metadata
+                            .replay_authority
+                            .exactly_matches_certified_serve_request(authenticated)
+                    })
+        });
+        let record = matches
+            .next()
+            .ok_or(ReadyCertifiedServeAttestationErrorV1::RequestNotReady)?;
+        if matches.next().is_some() {
+            return Err(ReadyCertifiedServeAttestationErrorV1::AmbiguousRequest);
+        }
+        let metadata = coordinator
+            .durable_records
+            .get(&record.ordinal)
+            .ok_or(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier)?;
+        let (slot, digest) =
+            exact_single_record_slot(record, LifecycleWorkClass::CertifiedServe.capacity_class())
+                .ok_or(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier)?;
+        let address = ConcreteWorkAddress::new(record.owner, record.ordinal, slot)
+            .ok_or(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier)?;
+        let work = self
+            .entries
+            .get(&address)
+            .ok_or(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier)?;
+        let ConcreteLifecycleWorkKind::DurableCertifiedServe(serve) = &work.kind else {
+            return Err(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier);
+        };
+        if coordinator.active_context.id() != record.key.context()
+            || coordinator.active_context.height() != record.key.round().height()
+            || record.stage.kind() != LifecycleStageKind::CertifiedServe
+            || record.stage.predecessor_scope() != PredecessorScope::ReadyOrdinalPrefix
+            || coordinator.key_index.get(&record.key) != Some(&record.ordinal)
+            || coordinator.owner_index.get(&record.owner.causal_root()) != Some(&record.owner)
+            || !coordinator.ready_index.contains(&record.ordinal)
+            || coordinator
+                .episode_authority
+                .universe_for(record.key)
+                .as_ref()
+                != Some(&record.episode.universe)
+            || !coordinator.episode_authority.admits_slots(
+                LifecycleWorkClass::CertifiedServe.capacity_class(),
+                &record.episode.slot_universe,
+            )
+            || !super::schema::frozen_predecessors(
+                &coordinator.records,
+                record.stage.predecessor_scope(),
+                record.ordinal,
+            )
+            .is_subset(&record.episode.frozen_predecessors)
+            || record
+                .episode
+                .frozen_predecessors
+                .iter()
+                .any(|predecessor| {
+                    *predecessor >= record.ordinal || !coordinator.records.contains_key(predecessor)
+                })
+            || metadata.continuation != super::schema::DurableContinuation::None
+            || work.digest != digest
+            || !serve.matches_record(record, metadata, digest)
+        {
+            return Err(ReadyCertifiedServeAttestationErrorV1::InvalidCarrier);
+        }
+        Ok(ReadyCertifiedServeAttestationV1 {
+            ledger_frame: ledger.frame_identity(),
+            ready_record: record.clone(),
+            address,
+            authenticated: authenticated.clone(),
+            _linearity: ReadyCertifiedServeAttestationLinearityV1,
+        })
+    }
+
+    /// Consume a sealed Ready attestation and exact active lease into the
+    /// worker-owned Serve dispatch carrier.
+    pub(super) fn project_claimed_certified_serve_dispatch(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        lease: TurnLease,
+        attestation: ReadyCertifiedServeAttestationV1,
+    ) -> Result<ClaimedCertifiedServeDispatchV1, ClaimedCertifiedServeDispatchErrorV1> {
+        if !super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+            .is_ok_and(|current| &current == ledger)
+        {
+            return Err(ClaimedCertifiedServeDispatchErrorV1::LedgerMismatch);
+        }
+        let record = coordinator
+            .records
+            .get(&lease.ordinal())
+            .ok_or(ClaimedCertifiedServeDispatchErrorV1::InvalidLease)?;
+        if coordinator.fault.is_some()
+            || coordinator.active_lease.as_ref() != Some(&lease)
+            || !attestation.matches_claimed_record(record, ledger, &lease)
+            || coordinator.ready_index.contains(&record.ordinal)
+        {
+            return Err(ClaimedCertifiedServeDispatchErrorV1::InvalidLease);
+        }
+        let metadata = coordinator
+            .durable_records
+            .get(&record.ordinal)
+            .ok_or(ClaimedCertifiedServeDispatchErrorV1::InvalidCarrier)?;
+        let work = self
+            .entries
+            .get(&attestation.address)
+            .ok_or(ClaimedCertifiedServeDispatchErrorV1::InvalidCarrier)?;
+        let ConcreteLifecycleWorkKind::DurableCertifiedServe(serve) = &work.kind else {
+            return Err(ClaimedCertifiedServeDispatchErrorV1::InvalidCarrier);
+        };
+        if !metadata
+            .replay_authority
+            .exactly_matches_certified_serve_request(&attestation.authenticated)
+            || !serve.matches_claimed_record(record, metadata, work.digest, &lease)
+        {
+            return Err(ClaimedCertifiedServeDispatchErrorV1::InvalidCarrier);
+        }
+        Ok(ClaimedCertifiedServeDispatchV1 {
+            lease,
+            authenticated: attestation.authenticated,
+            _linearity: ClaimedCertifiedServeDispatchLinearityV1,
+        })
+    }
+}
 /// Exact process-local carrier for one nonterminal durable ProducerTurn row.
 ///
 /// This is the adjacent owner of the same opaque replay allocation as its Serve
@@ -213,7 +480,258 @@ impl DurableProducerTurnWork {
             && metadata.payload == DurablePayloadReference::None
             && metadata.replay_authority == self.replay_authority
     }
+    fn matches_claimed_record(
+        &self,
+        record: &super::LifecycleRecord,
+        metadata: &super::schema::DurableRecordMetadata,
+        installed_digest: LifecycleDigest,
+        lease: &TurnLease,
+    ) -> bool {
+        self.validates(installed_digest)
+            && record.work_class == LifecycleWorkClass::ProducerTurn
+            && record.state == super::LifecycleState::Claimed(lease.id)
+            && record.key == self.key
+            && record.owner == self.address.owner
+            && record.ordinal == self.address.ordinal
+            && record.stage == self.stage
+            && record.physical_slots == BTreeMap::from([(self.address.slot, installed_digest)])
+            && record.episode.consumed_slots
+                == std::collections::BTreeSet::from([self.address.slot])
+            && record.episode.slot_universe == std::collections::BTreeSet::from([self.address.slot])
+            && metadata.reconstruction_source == self.reconstruction_source
+            && metadata.payload == DurablePayloadReference::None
+            && metadata.replay_authority == self.replay_authority
+            && lease.ordinal == record.ordinal
+            && lease.owner == record.owner
+            && lease.key == record.key
+            && lease.work_class == record.work_class
+            && lease.stage == record.stage
+            && lease.physical_slots == record.physical_slots
+            && lease.output_reservation.is_none()
+    }
 }
+
+/// Registry-authenticated proof of the complete Ready census whose oldest row
+/// is one executable ProducerTurn.
+///
+/// The census and physical address remain private. Scheduling can only bind
+/// live debts to the exact retained records and consume this proof with the
+/// matching coordinator claim.
+#[must_use = "the Ready ProducerTurn census has not entered scheduling"]
+pub(in crate::sumeragi) struct ReadyProducerTurnCensusAttestationV1 {
+    ledger_frame: LifecycleDigest,
+    ready_records: BTreeMap<u128, super::LifecycleRecord>,
+    producer_address: ConcreteWorkAddress,
+    producer_digest: LifecycleDigest,
+    _linearity: ReadyProducerTurnCensusAttestationLinearityV1,
+}
+struct ReadyProducerTurnCensusAttestationLinearityV1;
+impl Drop for ReadyProducerTurnCensusAttestationLinearityV1 {
+    fn drop(&mut self) {}
+}
+impl fmt::Debug for ReadyProducerTurnCensusAttestationV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ReadyProducerTurnCensusAttestationV1")
+            .finish_non_exhaustive()
+    }
+}
+impl ReadyProducerTurnCensusAttestationV1 {
+    pub(super) fn target_ordinal(&self) -> u128 {
+        self.producer_address.ordinal
+    }
+
+    /// Seal one later Ready row which is statically ineligible while this
+    /// attested ProducerHandoffBarrier remains selectable.
+    pub(super) fn blocked_ready_seal(
+        &self,
+        record: &super::LifecycleRecord,
+    ) -> Option<ProducerHandoffBlockedReadySealV1> {
+        let producer = self.ready_records.get(&self.producer_address.ordinal)?;
+        (producer.stage.predecessor_scope() == PredecessorScope::ProducerHandoffBarrier
+            && producer.ordinal < record.ordinal
+            && self.ready_records.get(&record.ordinal) == Some(record))
+        .then_some(ProducerHandoffBlockedReadySealV1 {
+            producer_ordinal: producer.ordinal,
+            ordinal: record.ordinal,
+            owner: record.owner,
+            key: record.key,
+            _linearity: ProducerHandoffBlockedReadySealLinearityV1,
+        })
+    }
+
+    pub(super) fn matches_ready_census(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ledger: &super::ledger::LifecycleLedgerV1,
+    ) -> bool {
+        let ready_records = coordinator
+            .records
+            .iter()
+            .filter_map(|(&ordinal, record)| {
+                (record.state == super::LifecycleState::Ready).then_some((ordinal, record.clone()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        self.ledger_frame == ledger.frame_identity()
+            && super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+                .is_ok_and(|current| &current == ledger)
+            && coordinator.active_lease.is_none()
+            && coordinator.ready_index
+                == self
+                    .ready_records
+                    .keys()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>()
+            && ready_records == self.ready_records
+            && self
+                .ready_records
+                .first_key_value()
+                .is_some_and(|(&ordinal, record)| {
+                    ordinal == self.producer_address.ordinal
+                        && record.work_class == LifecycleWorkClass::ProducerTurn
+                        && record.stage.kind() == LifecycleStageKind::ProducerTurn
+                        && record.stage.predecessor_scope()
+                            == PredecessorScope::ProducerHandoffBarrier
+                })
+    }
+
+    fn matches_claimed_census(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        lease: &TurnLease,
+    ) -> bool {
+        if self.ledger_frame != ledger.frame_identity()
+            || !super::ledger::LifecycleLedgerV1::from_coordinator(coordinator)
+                .is_ok_and(|current| &current == ledger)
+            || coordinator.active_lease.as_ref() != Some(lease)
+            || lease.ordinal != self.producer_address.ordinal
+            || lease.work_class != LifecycleWorkClass::ProducerTurn
+            || lease.output_reservation.is_some()
+        {
+            return false;
+        }
+        let mut expected_ready = self.ready_records.clone();
+        let Some(mut producer) = expected_ready.remove(&lease.ordinal) else {
+            return false;
+        };
+        producer.state = super::LifecycleState::Claimed(lease.id);
+        coordinator.records.get(&lease.ordinal) == Some(&producer)
+            && coordinator.ready_index
+                == expected_ready
+                    .keys()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>()
+            && expected_ready
+                .iter()
+                .all(|(ordinal, record)| coordinator.records.get(ordinal) == Some(record))
+    }
+}
+
+/// Registry-authenticated identity of a later Ready row blocked by the oldest
+/// selectable ProducerHandoffBarrier.
+#[must_use = "the blocked Ready seal has not entered the complete scheduler census"]
+pub(super) struct ProducerHandoffBlockedReadySealV1 {
+    producer_ordinal: u128,
+    ordinal: u128,
+    owner: OwnerId,
+    key: LifecycleKey,
+    _linearity: ProducerHandoffBlockedReadySealLinearityV1,
+}
+struct ProducerHandoffBlockedReadySealLinearityV1;
+impl Drop for ProducerHandoffBlockedReadySealLinearityV1 {
+    fn drop(&mut self) {}
+}
+impl ProducerHandoffBlockedReadySealV1 {
+    pub(super) fn matches_record(&self, record: &super::LifecycleRecord) -> bool {
+        self.producer_ordinal < self.ordinal
+            && record.ordinal == self.ordinal
+            && record.owner == self.owner
+            && record.key == self.key
+            && record.state == super::LifecycleState::Ready
+    }
+}
+
+/// Closed failure while sealing a complete Ready census for ProducerTurn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ReadyProducerTurnCensusAttestationErrorV1 {
+    /// The lifecycle owner is faulted or still owns a prior lease.
+    CoordinatorUnavailable,
+    /// The retained durable frame is not the exact coordinator frame.
+    LedgerMismatch,
+    /// Ready records and their reverse index are not bijective.
+    InvalidReadyCensus,
+    /// The complete concrete registry does not exactly cover all live work.
+    InvalidRegistry,
+    /// The oldest Ready ProducerTurn lost its adjacent Serve/debt authority.
+    InvalidProducer,
+}
+
+/// Opaque ownership of one claimed ProducerTurn and its exact durable carrier.
+#[must_use = "the claimed ProducerTurn must be attempted and settled"]
+pub(in crate::sumeragi) struct ClaimedProducerTurnV1 {
+    lease: TurnLease,
+    address: ConcreteWorkAddress,
+    digest: LifecycleDigest,
+    ledger_frame: LifecycleDigest,
+    _linearity: ClaimedProducerTurnLinearityV1,
+}
+struct ClaimedProducerTurnLinearityV1;
+impl Drop for ClaimedProducerTurnLinearityV1 {
+    fn drop(&mut self) {}
+}
+impl fmt::Debug for ClaimedProducerTurnV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClaimedProducerTurnV1")
+            .finish_non_exhaustive()
+    }
+}
+impl ClaimedProducerTurnV1 {
+    pub(super) const fn lease(&self) -> &TurnLease {
+        &self.lease
+    }
+
+    /// Join the claimed carrier to the serialized runner's proof that its one
+    /// bounded producer service pass returned successfully.
+    pub(in crate::sumeragi) fn into_attempted(
+        self,
+        _attempt: crate::sumeragi::v2_runner::ProducerTurnAttemptPermitV1,
+    ) -> AttemptedProducerTurnV1 {
+        AttemptedProducerTurnV1 { claimed: self }
+    }
+}
+
+/// Opaque ProducerTurn terminal authority available only after one successful
+/// bounded producer service pass.
+#[must_use = "the attempted ProducerTurn must enter durable terminal settlement"]
+pub(in crate::sumeragi) struct AttemptedProducerTurnV1 {
+    claimed: ClaimedProducerTurnV1,
+}
+impl fmt::Debug for AttemptedProducerTurnV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("AttemptedProducerTurnV1")
+            .finish_non_exhaustive()
+    }
+}
+impl AttemptedProducerTurnV1 {
+    pub(super) const fn claimed(&self) -> &ClaimedProducerTurnV1 {
+        &self.claimed
+    }
+}
+
+/// Closed failure while projecting a ProducerTurn claim onto its carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum ClaimedProducerTurnErrorV1 {
+    /// The retained durable frame changed across the volatile claim.
+    LedgerMismatch,
+    /// The lease is not the exact claim authorized by the sealed census.
+    InvalidLease,
+    /// The complete concrete census or exact Producer carrier changed.
+    InvalidCarrier,
+}
+
 #[cfg(test)]
 use crate::sumeragi::v2_runtime::bind_adapter_effect_batch_ownership;
 use crate::sumeragi::{
@@ -236,7 +754,8 @@ use crate::sumeragi::{
     v2_certified_serve_payload_store::CertifiedServePayloadStoreV1,
     v2_core::EventTag,
     v2_runtime::{
-        PendingRuntimeEffectBinding, RuntimeCandidateSemanticStatement, RuntimeEffectOwnership,
+        CurrentRuntimeEffectProducer, PendingRuntimeEffectBinding,
+        RuntimeCandidateSemanticStatement, RuntimeEffectOwnership,
         reconstruct_recovered_wal_vote_successor,
     },
     v2_transport::AuthenticatedCertifiedBodyRequest,
@@ -362,6 +881,96 @@ impl ConcreteWorkAddress {
             ordinal,
             slot,
         })
+    }
+}
+/// Copyable queue identity for one exact ordinary durable Validate dispatch.
+///
+/// This process-local key is deliberately independent from reducer work IDs.
+/// It binds the immutable height, logical owner, actor-global ordinal, physical
+/// slot, and installed carrier digest retained while the lifecycle row waits on
+/// the dedicated validation worker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(in crate::sumeragi) struct LifecycleDurableValidateDispatchKeyV1 {
+    context: LifecycleDigest,
+    height: u64,
+    owner: OwnerId,
+    ordinal: u128,
+    slot: PhysicalSlotId,
+    digest: LifecycleDigest,
+}
+impl LifecycleDurableValidateDispatchKeyV1 {
+    pub(super) const fn new(
+        context: LifecycleContext,
+        address: ConcreteWorkAddress,
+        digest: LifecycleDigest,
+    ) -> Self {
+        Self {
+            context: context.id(),
+            height: context.height(),
+            owner: address.owner,
+            ordinal: address.ordinal,
+            slot: address.slot,
+            digest,
+        }
+    }
+    /// Derive the worker identity from the exact claimed one-slot Validate row.
+    ///
+    /// This is the only pre-dispatch projection used outside the registry. The
+    /// later detached request must reproduce the same key before the reserved
+    /// FIFO position can commit.
+    pub(in crate::sumeragi) fn from_claimed(
+        context: LifecycleContext,
+        lease: &TurnLease,
+    ) -> Option<Self> {
+        if lease.work_class() != LifecycleWorkClass::Validate
+            || lease.key().phase() != LifecyclePhase::Validate
+            || lease.stage().kind() != LifecycleStageKind::ValidateBody
+            || lease.stage().predecessor_scope() != PredecessorScope::Independent
+            || lease.physical_slots().len() != 1
+        {
+            return None;
+        }
+        let (&slot, &digest) = lease.physical_slots().first_key_value()?;
+        let address = ConcreteWorkAddress::new(lease.owner(), lease.ordinal(), slot)?;
+        Some(Self::new(context, address, digest))
+    }
+    /// Return the immutable actor-global lifecycle ordinal.
+    pub(in crate::sumeragi) const fn lifecycle_ordinal(self) -> u128 {
+        self.ordinal
+    }
+    /// Recheck the immutable height context owning this command.
+    pub(in crate::sumeragi) fn matches_height_context(self, context: &wire::HeightContext) -> bool {
+        let mut context_id = [0_u8; 32];
+        context_id.copy_from_slice(context.id().0.as_ref());
+        self.context == LifecycleDigest::new(context_id) && self.height == context.height
+    }
+    pub(super) fn matches(
+        self,
+        context: LifecycleContext,
+        address: ConcreteWorkAddress,
+        digest: LifecycleDigest,
+    ) -> bool {
+        self.context == context.id()
+            && self.height == context.height()
+            && self.owner == address.owner
+            && self.ordinal == address.ordinal
+            && self.slot == address.slot
+            && self.digest == digest
+    }
+    /// Build a deterministic address-keyed identity for focused queue tests.
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn for_test(ordinal: u128, discriminator: u8) -> Self {
+        let context = LifecycleDigest::new([discriminator; 32]);
+        let causal_root =
+            super::CausalRoot::new(LifecycleDigest::new([discriminator.wrapping_add(1); 32]));
+        Self {
+            context,
+            height: 1,
+            owner: OwnerId::new(causal_root, ordinal),
+            ordinal,
+            slot: PhysicalSlotId::for_capacity(CapacityClass::Effect, 0),
+            digest: LifecycleDigest::new([discriminator.wrapping_add(2); 32]),
+        }
     }
 }
 /// Copyable queue key for one exact recovered Decision Apply dispatch.
@@ -505,15 +1114,6 @@ impl RecoveredDecisionApplyDispatchIdentityV1 {
         context: &wire::HeightContext,
     ) -> bool {
         self.key.matches_height_context(context)
-    }
-    /// Recheck this identity against one exact installed registry location.
-    fn matches(
-        &self,
-        context: LifecycleContext,
-        address: ConcreteWorkAddress,
-        digest: LifecycleDigest,
-    ) -> bool {
-        self.key.matches(context, address, digest)
     }
 }
 /// Closed semantic class of one lifecycle-owned recovered signing command.
@@ -1337,12 +1937,13 @@ impl PreparedRemoteProposalFetchReplayPreAdmission {
         effect: AdapterEffect,
         ownership: RuntimeEffectOwnership,
     ) -> Result<Self, RemoteProposalFetchReplayPreAdmissionError> {
-        let Some(pending) = ownership.pending_adapter_effect_binding(&effect) else {
+        let Some(producer) = ownership.current_effect_producer(&effect) else {
             return Err(RemoteProposalFetchReplayPreAdmissionError {
                 _effect: effect,
                 _ownership: ownership,
             });
         };
+        let pending = producer.mint_pending_binding();
         let Some(replay_evidence) = ownership.exact_remote_proposal_fetch_replay(&effect) else {
             return Err(RemoteProposalFetchReplayPreAdmissionError {
                 _effect: effect,
@@ -1377,9 +1978,10 @@ impl PreparedRemoteProposalFetchReplayPreAdmission {
         effect: &AdapterEffect,
         ownership: &RuntimeEffectOwnership,
     ) -> bool {
-        let Some(pending) = ownership.pending_adapter_effect_binding(effect) else {
+        let Some(producer) = ownership.current_effect_producer(effect) else {
             return false;
         };
+        let pending = producer.mint_pending_binding();
         let Some(candidate) = ownership.exact_remote_proposal_fetch_replay(effect) else {
             return false;
         };
@@ -1400,13 +2002,14 @@ impl PreparedRemoteProposalFetchReplayPreAdmission {
         PreparedRemoteProposalStoreReplayPreAdmission,
         RemoteProposalStoreReplayPreAdmissionError,
     > {
-        let Some(pending) = ownership.pending_adapter_effect_binding(&effect) else {
+        let Some(producer) = ownership.current_effect_producer(&effect) else {
             return Err(RemoteProposalStoreReplayPreAdmissionError {
                 _fetch: self,
                 _effect: effect,
                 _ownership: ownership,
             });
         };
+        let pending = producer.mint_pending_binding();
         let Self {
             effect: fetch_effect,
             pending: fetch_pending,
@@ -1447,7 +2050,8 @@ impl PreparedRemoteProposalStoreReplayPreAdmission {
         ownership: &RuntimeEffectOwnership,
     ) -> bool {
         ownership
-            .pending_adapter_effect_binding(effect)
+            .current_effect_producer(effect)
+            .map(CurrentRuntimeEffectProducer::mint_pending_binding)
             .is_some_and(|pending| {
                 self.validates()
                     && self.effect == *effect
@@ -1512,13 +2116,14 @@ impl PreparedRemoteProposalStoredReplayPreAdmission {
         PreparedRemoteProposalValidateReplayPreAdmission,
         RemoteProposalValidateReplayPreAdmissionError,
     > {
-        let Some(pending) = ownership.pending_adapter_effect_binding(&effect) else {
+        let Some(producer) = ownership.current_effect_producer(&effect) else {
             return Err(RemoteProposalValidateReplayPreAdmissionError {
                 _stored: self,
                 _effect: effect,
                 _ownership: ownership,
             });
         };
+        let pending = producer.mint_pending_binding();
         let Self {
             store_effect,
             store_pending,
@@ -1570,7 +2175,8 @@ impl PreparedRemoteProposalValidateReplayPreAdmission {
         ownership: &RuntimeEffectOwnership,
     ) -> bool {
         ownership
-            .pending_adapter_effect_binding(effect)
+            .current_effect_producer(effect)
+            .map(CurrentRuntimeEffectProducer::mint_pending_binding)
             .is_some_and(|pending| {
                 self.validates()
                     && self.effect == *effect
@@ -1902,6 +2508,12 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
             .carrier
             .owns_signed_broadcast_recovery(recovery, &self.broadcast)
     }
+    // TODO: Wire this combined phase projection from cold startup or remove it
+    // after the split next-Sign path is proven exhaustive.
+    #[expect(
+        dead_code,
+        reason = "combined phase Broadcast recovery remains a dormant cold-start seam"
+    )]
     fn owns_phase_recovery(&self, recovery: &AuthenticatedLifecycleRecoveryCut) -> bool {
         let DurableRecoveredLifecycleSignParentV1::PhaseVote(parent) = &self.parent else {
             return false;
@@ -2104,197 +2716,7 @@ impl DurableRecoveredDecisionStoreWork {
         self.fetch.owns_store_recovery(&self.store, recovery)
     }
 }
-/// Closed concrete carrier for the sole live Apply in a recovered Decision body chain.
-///
-/// The carrier retains the original WAL Fetch, all three body successors, and
-/// the final pending binding. It has no generic adapter-effect extraction path.
-struct DurableRecoveredDecisionApplyWork {
-    carrier: RecoveredDecisionApplyRegistryCarrierV1,
-    address: ConcreteWorkAddress,
-    dispatch_key: Option<RecoveredDecisionApplyDispatchKeyV1>,
-}
-impl fmt::Debug for DurableRecoveredDecisionApplyWork {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("DurableRecoveredDecisionApplyWork")
-            .field("address", &self.address)
-            .field("dispatched", &self.dispatch_key.is_some())
-            .finish_non_exhaustive()
-    }
-}
-impl DurableRecoveredDecisionApplyWork {
-    fn validates_digest(&self, installed_digest: LifecycleDigest) -> bool {
-        self.carrier.installed_digest() == installed_digest
-            && self.carrier.lineage().is_exact(self.carrier.context())
-    }
-    fn validates_at(
-        &self,
-        address: ConcreteWorkAddress,
-        installed_digest: LifecycleDigest,
-    ) -> bool {
-        self.address == address
-            && self.address.slot
-                == PhysicalSlotId::for_capacity(LifecycleWorkClass::Apply.capacity_class(), 0)
-            && self.validates_digest(installed_digest)
-    }
-    fn matches_current_ready_record(
-        &self,
-        address: ConcreteWorkAddress,
-        installed_digest: LifecycleDigest,
-        coordinator: &LifecycleCoordinator,
-    ) -> bool {
-        let (Some(record), Some(metadata)) = (
-            coordinator.records.get(&address.ordinal),
-            coordinator.durable_records.get(&address.ordinal),
-        ) else {
-            return false;
-        };
-        let Some((slot, digest)) =
-            exact_single_record_slot(record, LifecycleWorkClass::Apply.capacity_class())
-        else {
-            return false;
-        };
-        let candidate = CandidateAdmission::new(
-            record.key,
-            record.owner.causal_root(),
-            record.work_class,
-            record.stage,
-            InitialLifecycleState::Ready,
-            metadata.reconstruction_source,
-            metadata.payload,
-            metadata.replay_authority.clone(),
-            super::PhysicalGeometry::new([PhysicalSlot::new(slot, digest)], [slot]),
-            None,
-        );
-        self.validates_at(address, installed_digest)
-            && coordinator.fault.is_none()
-            && coordinator.active_context == self.carrier.context()
-            && record.owner == address.owner
-            && record.ordinal == address.ordinal
-            && record.work_class == LifecycleWorkClass::Apply
-            && record.state == super::LifecycleState::Ready
-            && slot == address.slot
-            && digest == installed_digest
-            && metadata.matches_admission(&candidate)
-            && self.carrier.exactly_matches_candidate(&candidate)
-            && coordinator.key_index.get(&record.key) == Some(&record.ordinal)
-            && coordinator.owner_index.get(&record.owner.causal_root()) == Some(&record.owner)
-            && coordinator.ready_index.contains(&record.ordinal)
-    }
-    fn matches_claimed_record(
-        &self,
-        address: ConcreteWorkAddress,
-        installed_digest: LifecycleDigest,
-        coordinator: &LifecycleCoordinator,
-        lease: &TurnLease,
-    ) -> bool {
-        let (Some(record), Some(metadata)) = (
-            coordinator.records.get(&address.ordinal),
-            coordinator.durable_records.get(&address.ordinal),
-        ) else {
-            return false;
-        };
-        let Some((slot, digest)) =
-            exact_single_record_slot(record, LifecycleWorkClass::Apply.capacity_class())
-        else {
-            return false;
-        };
-        let candidate = CandidateAdmission::new(
-            record.key,
-            record.owner.causal_root(),
-            record.work_class,
-            record.stage,
-            InitialLifecycleState::Ready,
-            metadata.reconstruction_source,
-            metadata.payload,
-            metadata.replay_authority.clone(),
-            super::PhysicalGeometry::new([PhysicalSlot::new(slot, digest)], [slot]),
-            None,
-        );
-        self.validates_at(address, installed_digest)
-            && coordinator.fault.is_none()
-            && coordinator.active_context == self.carrier.context()
-            && coordinator.active_lease.as_ref() == Some(lease)
-            && record.owner == address.owner
-            && record.ordinal == address.ordinal
-            && record.key == lease.key()
-            && record.owner == lease.owner()
-            && record.work_class == LifecycleWorkClass::Apply
-            && record.work_class == lease.work_class()
-            && record.stage == lease.stage()
-            && record.state == super::LifecycleState::Claimed(lease.id())
-            && lease.ordinal() == address.ordinal
-            && lease.physical_slots() == &record.physical_slots
-            && slot == address.slot
-            && digest == installed_digest
-            && metadata.matches_admission(&candidate)
-            && self.carrier.exactly_matches_candidate(&candidate)
-            && coordinator.key_index.get(&record.key) == Some(&record.ordinal)
-            && coordinator.owner_index.get(&record.owner.causal_root()) == Some(&record.owner)
-            && !coordinator.ready_index.contains(&record.ordinal)
-    }
-}
-/// Closed service demand authenticated for one Ready recovered Decision Apply.
-///
-/// The classifier has exactly one first-release outcome: execution must enter
-/// the bounded height-local I/O worker before the coordinator may claim the
-/// Apply. Keeping this as a typed outcome prevents callers from supplying an
-/// unbound boolean capacity hint.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ReadyRecoveredDecisionApplyDemand {
-    /// Reserve one bounded I/O command position before claiming the Apply.
-    BoundedIo,
-}
-/// Opaque proof that one Ready row is the exact recovered Decision Apply carrier.
-///
-/// Construction is private to the concrete registry classifier. The retained
-/// carrier, body receipt, effect, pending binding, address, and digest never
-/// leave the registry; the scheduler can inspect only the typed service demand
-/// and an opaque key for reserving the exact worker position.
-#[must_use = "a Ready recovered Decision Apply attestation must enter scheduler classification"]
-pub(super) struct ReadyRecoveredDecisionApplyAttestation {
-    demand: ReadyRecoveredDecisionApplyDemand,
-    dispatch_key: RecoveredDecisionApplyDispatchKeyV1,
-    _seal: ReadyRecoveredDecisionApplyAttestationSeal,
-}
-struct ReadyRecoveredDecisionApplyAttestationSeal;
-impl Drop for ReadyRecoveredDecisionApplyAttestationSeal {
-    fn drop(&mut self) {}
-}
-impl ReadyRecoveredDecisionApplyAttestation {
-    /// Return the sole typed service demand without exposing carrier parts.
-    pub(super) const fn demand(&self) -> ReadyRecoveredDecisionApplyDemand {
-        self.demand
-    }
-    /// Return the queue key derived from the exact Ready carrier location.
-    pub(super) const fn dispatch_key(&self) -> RecoveredDecisionApplyDispatchKeyV1 {
-        self.dispatch_key
-    }
-    /// Recheck that this attestation still belongs to the exact Ready row.
-    pub(super) fn matches_ready_record(&self, record: &super::LifecycleRecord) -> bool {
-        record.state == super::LifecycleState::Ready
-            && record.work_class == LifecycleWorkClass::Apply
-            && record.key.phase() == LifecyclePhase::Apply
-            && record.stage.kind() == LifecycleStageKind::ApplyDecision
-            && record.stage.predecessor_scope() == PredecessorScope::Independent
-            && record.physical_slots.len() == 1
-            && record
-                .physical_slots
-                .first_key_value()
-                .and_then(|(&slot, &digest)| {
-                    ConcreteWorkAddress::new(record.owner, record.ordinal, slot)
-                        .map(|address| (address, digest))
-                })
-                .is_some_and(|(address, digest)| {
-                    self.dispatch_key.context == record.key.context()
-                        && self.dispatch_key.height == record.key.round().height()
-                        && self.dispatch_key.owner == address.owner
-                        && self.dispatch_key.ordinal == address.ordinal
-                        && self.dispatch_key.slot == address.slot
-                        && self.dispatch_key.digest == digest
-                })
-    }
-}
+include!("v2_lifecycle_work_registry_decision_apply.rs");
 /// Closed service demand authenticated for one Ready recovered Sign carrier.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ReadyRecoveredLifecycleSignDemandV1 {
@@ -2449,6 +2871,66 @@ impl PreparedRecoveredLifecycleSignDispatch<'_> {
 pub(super) enum ReadyRecoveredDecisionFetchDemandV1 {
     /// Reserve one exact-output fanout and one vacant executor owner before claim.
     ExactOutputAndExecutor,
+}
+/// Opaque proof that one Ready Fetch is the ordinary durable completion carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ReadyCertifiedFetchAttestationV1 {
+    address: ConcreteWorkAddress,
+    digest: LifecycleDigest,
+}
+impl ReadyCertifiedFetchAttestationV1 {
+    /// Recheck the proof against the unchanged Ready Fetch row.
+    pub(super) fn matches_ready_record(&self, record: &super::LifecycleRecord) -> bool {
+        record.state == super::LifecycleState::Ready
+            && record.work_class == LifecycleWorkClass::Fetch
+            && record.key.phase() == LifecyclePhase::Fetch
+            && record.stage.kind() == LifecycleStageKind::FetchBody
+            && record.stage.predecessor_scope() == PredecessorScope::Independent
+            && record.physical_slots.len() == 1
+            && record.owner == self.address.owner
+            && record.ordinal == self.address.ordinal
+            && record.physical_slots.get(&self.address.slot) == Some(&self.digest)
+    }
+}
+/// Closed rejection while attesting an ordinary durable Fetch completion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReadyCertifiedFetchAttestationErrorV1 {
+    /// Coordinator indexes or record geometry were not exact.
+    InvalidCoordinatorIndex,
+    /// The concrete row was missing or did not validate.
+    InvalidRegistryCarrier,
+    /// The concrete row belonged to another Fetch authority family.
+    WrongWorkKind,
+}
+/// Opaque proof that one Ready Store row owns the ordinary durable body carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ReadyDurableStoreAttestationV1 {
+    address: ConcreteWorkAddress,
+    digest: LifecycleDigest,
+}
+impl ReadyDurableStoreAttestationV1 {
+    /// Recheck the proof against the unchanged Ready Store row.
+    pub(super) fn matches_ready_record(&self, record: &super::LifecycleRecord) -> bool {
+        record.state == super::LifecycleState::Ready
+            && record.work_class == LifecycleWorkClass::Store
+            && record.key.phase() == LifecyclePhase::Store
+            && record.stage.kind() == LifecycleStageKind::StoreBody
+            && record.stage.predecessor_scope() == PredecessorScope::Independent
+            && record.physical_slots.len() == 1
+            && record.owner == self.address.owner
+            && record.ordinal == self.address.ordinal
+            && record.physical_slots.get(&self.address.slot) == Some(&self.digest)
+    }
+}
+/// Closed rejection while attesting an ordinary durable Store carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReadyDurableStoreAttestationErrorV1 {
+    /// Coordinator indexes or record geometry were not exact.
+    InvalidCoordinatorIndex,
+    /// The concrete row was missing or did not validate.
+    InvalidRegistryCarrier,
+    /// The concrete row belonged to another Store authority family.
+    WrongWorkKind,
 }
 /// Opaque proof and move-only request authority for one Ready recovered Decision Fetch.
 ///
@@ -3149,26 +3631,6 @@ impl ConcreteLifecycleWork {
     }
     const fn is_pending_adapter(&self) -> bool {
         matches!(&self.kind, ConcreteLifecycleWorkKind::PendingAdapter { .. })
-    }
-    const fn pending_adapter_pair(&self) -> Option<(&AdapterEffect, &PendingRuntimeEffectBinding)> {
-        match &self.kind {
-            ConcreteLifecycleWorkKind::PendingAdapter {
-                effect, pending, ..
-            } => Some((effect, pending)),
-            ConcreteLifecycleWorkKind::CertifiedFetchCompletion(_) => None,
-            ConcreteLifecycleWorkKind::DurableStoreBody(_) => None,
-            ConcreteLifecycleWorkKind::DurableValidateBody(_) => None,
-            ConcreteLifecycleWorkKind::DurableValidateCompletion(_) => None,
-            ConcreteLifecycleWorkKind::DurableRecoveredWalSign(_) => None,
-            ConcreteLifecycleWorkKind::DurableRecoveredLifecycleNextWalVoteSign(_) => None,
-            ConcreteLifecycleWorkKind::DurableRecoveredWalControlSign(_) => None,
-            ConcreteLifecycleWorkKind::DurableRecoveredLifecycleSignedBroadcast(_) => None,
-            ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch(_) => None,
-            ConcreteLifecycleWorkKind::DurableRecoveredDecisionStore(_) => None,
-            ConcreteLifecycleWorkKind::DurableRecoveredDecisionApply(_) => None,
-            ConcreteLifecycleWorkKind::DurableCertifiedServe(_) => None,
-            ConcreteLifecycleWorkKind::DurableProducerTurn(_) => None,
-        }
     }
 }
 /// One completely preflighted Certified-Serve/ProducerTurn carrier batch.
@@ -3984,6 +4446,33 @@ pub(super) enum CertifiedServeTerminalRegistryPublicationError<E> {
     /// was restored before returning.
     Publication(E, PreparedCertifiedServeTerminalRegistryTransitionV1),
 }
+/// Exact carrier removal prepared from one registry-authenticated active
+/// ProducerTurn claim.
+#[must_use = "the ProducerTurn terminal carrier transition has not been published"]
+pub(super) struct PreparedProducerTurnTerminalRegistryTransitionV1 {
+    address: ConcreteWorkAddress,
+    digest: LifecycleDigest,
+    ledger_frame: LifecycleDigest,
+    _linearity: PreparedProducerTurnTerminalRegistryTransitionLinearityV1,
+}
+struct PreparedProducerTurnTerminalRegistryTransitionLinearityV1;
+impl Drop for PreparedProducerTurnTerminalRegistryTransitionLinearityV1 {
+    fn drop(&mut self) {}
+}
+impl fmt::Debug for PreparedProducerTurnTerminalRegistryTransitionV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedProducerTurnTerminalRegistryTransitionV1")
+            .finish_non_exhaustive()
+    }
+}
+/// Failure from the ProducerTurn carrier-before-LedgerV1 publication boundary.
+pub(super) enum ProducerTurnTerminalRegistryPublicationError<E> {
+    /// Current or staged whole-census validation failed before mutation.
+    Preflight(PreparedProducerTurnTerminalRegistryTransitionV1),
+    /// LedgerV1 publication failed while the exact incumbent remained installed.
+    Publication(E, PreparedProducerTurnTerminalRegistryTransitionV1),
+}
 struct StagedCertifiedServeRegistryBatch<'registry> {
     entries: &'registry mut BTreeMap<ConcreteWorkAddress, ConcreteLifecycleWork>,
     addresses: Vec<ConcreteWorkAddress>,
@@ -4064,6 +4553,91 @@ impl Drop for StagedCertifiedServeTerminalProducer<'_> {
 #[must_use = "prepared live Sign work has not entered its reserved registry row"]
 pub(in crate::sumeragi) struct PreparedLiveValidateSignRegistryWork {
     work: ConcreteLifecycleWork,
+}
+/// One-shot permit for converting a sealed invalid-body replay into concrete
+/// registry work without exposing effect or pending parts.
+pub(in crate::sumeragi) struct InvalidBodyReportRegistryWorkProjectionPermit {
+    _linearity: InvalidBodyReportRegistryWorkProjectionLinearity,
+}
+struct InvalidBodyReportRegistryWorkProjectionLinearity;
+impl Drop for InvalidBodyReportRegistryWorkProjectionLinearity {
+    fn drop(&mut self) {}
+}
+impl InvalidBodyReportRegistryWorkProjectionPermit {
+    pub(super) fn new() -> Self {
+        Self {
+            _linearity: InvalidBodyReportRegistryWorkProjectionLinearity,
+        }
+    }
+}
+/// Closed invalid-body report carrier prepared before LifecycleLedgerV1 fsync.
+#[must_use = "prepared invalid-body report work has not been installed"]
+pub(in crate::sumeragi) struct PreparedInvalidBodyReportRegistryWork {
+    work: ConcreteLifecycleWork,
+}
+/// Preflighted parent-retirement/child-vacancy cut for one invalid-body report.
+pub(in crate::sumeragi) struct LiveValidateReportRegistryReservation<'a> {
+    entries: &'a mut BTreeMap<ConcreteWorkAddress, ConcreteLifecycleWork>,
+    parent_address: ConcreteWorkAddress,
+    parent_digest: LifecycleDigest,
+    child_address: ConcreteWorkAddress,
+    child_digest: LifecycleDigest,
+}
+impl PreparedInvalidBodyReportRegistryWork {
+    pub(super) fn from_exact(
+        _permit: InvalidBodyReportRegistryWorkProjectionPermit,
+        effect: AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+        replay_authority: LifecycleReplayAuthorityV1,
+    ) -> Result<Self, (RegistryError, AdapterEffect, PendingRuntimeEffectBinding)> {
+        ConcreteLifecycleWork::from_authorized_exact(effect, pending, replay_authority)
+            .map(|work| Self { work })
+    }
+    pub(super) fn validates_publication(
+        &self,
+        owner: OwnerId,
+        ordinal: u128,
+        slot: PhysicalSlotId,
+        digest: LifecycleDigest,
+    ) -> bool {
+        ConcreteWorkAddress::new(owner, ordinal, slot).is_some()
+            && slot == PhysicalSlotId::for_capacity(CapacityClass::Consensus, 0)
+            && self.work.validate_exact()
+            && self.work.digest() == digest
+            && self.work.causal_root() == owner.causal_root()
+            && matches!(
+                &self.work.kind,
+                ConcreteLifecycleWorkKind::PendingAdapter {
+                    effect: AdapterEffect::ReportInvalidCertifiedBody { .. },
+                    ..
+                }
+            )
+    }
+    /// Install after the matching LifecycleLedgerV1 successor is durable.
+    pub(in crate::sumeragi) fn install_into(
+        self,
+        reservation: LiveValidateReportRegistryReservation<'_>,
+    ) {
+        assert!(self.validates_publication(
+            reservation.child_address.owner,
+            reservation.child_address.ordinal,
+            reservation.child_address.slot,
+            reservation.child_digest,
+        ));
+        let parent = reservation
+            .entries
+            .remove(&reservation.parent_address)
+            .expect("preflighted report publication retains its Validate parent");
+        assert_eq!(parent.digest(), reservation.parent_digest);
+        assert!(
+            reservation
+                .entries
+                .insert(reservation.child_address, self.work)
+                .is_none(),
+            "preflighted report child address remains vacant"
+        );
+        drop(parent);
+    }
 }
 impl PreparedLiveValidateSignRegistryWork {
     /// Close exact effect/pending authority without exposing concrete work.

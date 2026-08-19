@@ -1,6 +1,6 @@
 use super::{SignedBlock, execution_context::BlockExecutionContextBundle, header::BlockHeader};
 use crate::{
-    consensus::{NposConsensusEffects, PreviousRosterEvidence},
+    consensus::NposConsensusEffects,
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -21,10 +21,7 @@ use std::{cmp::Ordering, collections::BTreeMap, fmt, vec::Vec};
 #[model]
 mod model {
     use super::*;
-    use crate::{
-        consensus::{NposConsensusEffects, PreviousRosterEvidence},
-        da::commitment::DaCommitmentBundle,
-    };
+    use crate::{consensus::NposConsensusEffects, da::commitment::DaCommitmentBundle};
     /// Core contents of a block.
     #[derive(Debug, Clone, Encode, IntoSchema, Decode)]
     #[cfg_attr(
@@ -46,9 +43,6 @@ mod model {
         /// Optional DA pin intent bundle embedded in this block.
         #[norito(required)]
         pub da_pin_intents: Option<DaPinIntentBundle>,
-        /// Optional previous-height roster evidence embedded in this block.
-        #[norito(required)]
-        pub previous_roster_evidence: Option<PreviousRosterEvidence>,
         /// Deterministic `NPoS` effects embedded in this block.
         #[norito(required)]
         pub npos_consensus_effects: Option<NposConsensusEffects>,
@@ -87,7 +81,7 @@ mod model {
         pub trigger_completions: Vec<TriggerCompletedEvent>,
         /// Canonical AXT policy snapshot used while executing the block.
         pub axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
-        /// Canonically ordered post-execution lane effects authenticated by the global CommitQC.
+        /// Canonically ordered post-execution lane effects authenticated by the global `CommitQC`.
         ///
         /// Every V1 result field is required; this field stays last to make truncated layouts fail
         /// closed.
@@ -103,7 +97,6 @@ impl PartialEq for BlockPayload {
             && self.da_commitments == other.da_commitments
             && self.da_proof_policies == other.da_proof_policies
             && self.da_pin_intents == other.da_pin_intents
-            && self.previous_roster_evidence == other.previous_roster_evidence
             && self.npos_consensus_effects == other.npos_consensus_effects
     }
 }
@@ -126,7 +119,6 @@ impl Ord for BlockPayload {
             &self.da_commitments,
             &self.da_proof_policies,
             &self.da_pin_intents,
-            &self.previous_roster_evidence,
             &self_npos_effects_hash,
         )
             .cmp(&(
@@ -136,7 +128,6 @@ impl Ord for BlockPayload {
                 &other.da_commitments,
                 &other.da_proof_policies,
                 &other.da_pin_intents,
-                &other.previous_roster_evidence,
                 &other_npos_effects_hash,
             ))
     }
@@ -320,17 +311,6 @@ impl SignedBlock {
         self.payload.da_pin_intents = intents;
         self.payload.header.set_da_pin_intents_hash(hash);
     }
-    /// Optional previous-height roster evidence embedded in this block.
-    #[inline]
-    pub fn previous_roster_evidence(&self) -> Option<&PreviousRosterEvidence> {
-        self.payload.previous_roster_evidence.as_ref()
-    }
-    /// Set or clear previous-height roster evidence and update the header hash accordingly.
-    pub fn set_previous_roster_evidence(&mut self, evidence: Option<PreviousRosterEvidence>) {
-        let hash = evidence.as_ref().map(HashOf::new);
-        self.payload.previous_roster_evidence = evidence;
-        self.payload.header.set_prev_roster_evidence_hash(hash);
-    }
     /// Deterministic `NPoS` effects embedded in this block.
     #[inline]
     pub fn npos_consensus_effects(&self) -> Option<&NposConsensusEffects> {
@@ -399,9 +379,6 @@ impl SignedBlock {
         {
             return false;
         }
-        if self.payload.previous_roster_evidence.is_some() {
-            return false;
-        }
         if self
             .payload
             .npos_consensus_effects
@@ -459,6 +436,12 @@ impl SignedBlock {
     ///
     /// The validation walks the retained tree in place and does not rebuild an
     /// entry-sized node vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MerkleError::InvalidLayout`] if transaction results are absent or the retained
+    /// tree layout is malformed. Returns [`MerkleError::InconsistentCachedNodes`] if a retained
+    /// hash or leaf count differs from the canonical entrypoints.
     pub fn validate_entrypoint_merkle_cache(&self) -> Result<(), MerkleError> {
         let result = self.result.as_ref().ok_or_else(|| {
             MerkleError::InvalidLayout("block transaction results are missing".to_owned())
@@ -518,6 +501,12 @@ impl SignedBlock {
     ///
     /// The validation walks the retained tree in place and does not rebuild a
     /// result-sized node vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MerkleError::InvalidLayout`] if transaction results are absent or the retained
+    /// tree layout is malformed. Returns [`MerkleError::InconsistentCachedNodes`] if a retained
+    /// hash or leaf count differs from the canonical transaction results.
     pub fn validate_result_merkle_cache(&self) -> Result<(), MerkleError> {
         let result = self.result.as_ref().ok_or_else(|| {
             MerkleError::InvalidLayout("block transaction results are missing".to_owned())
@@ -706,7 +695,7 @@ impl DoubleEndedIterator for EntrypointIterator<'_> {
         if let Some(entrypoint) = self
             .time_triggers
             .as_mut()
-            .and_then(|time_triggers| time_triggers.next_back())
+            .and_then(DoubleEndedIterator::next_back)
         {
             return Some(TransactionEntrypoint::from(entrypoint.clone()));
         }

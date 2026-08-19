@@ -1522,16 +1522,14 @@ impl DurableRecoveredWalControlSignCarrierV1 {
             .children_are_exact(verified)
             .then_some((key, combined))
     }
-    /// Reconstruct a durable signed child only through this exact control WAL owner.
-    pub(super) fn recover_durable_signed_broadcast(
-        &self,
-        verified: &VerifiedHeightContext,
-        child: super::replay_authority::DurableRecoveredSignedBroadcastChildV1,
-    ) -> Option<RecoveredLifecycleSignedBroadcastProjectionV1> {
-        self.projection
-            .recover_durable_signed_broadcast(verified, child)
-    }
     /// Bind the durable child back to this exact Sign for cold adapter replay.
+    #[cfg_attr(
+        test,
+        expect(
+            dead_code,
+            reason = "the control-Sign cold-adapter projection remains a source-audited restart seam"
+        )
+    )]
     pub(super) fn project_cold_adapter_authority(
         &self,
         verified: &VerifiedHeightContext,
@@ -2148,25 +2146,6 @@ impl RecoveredDecisionFetchStoreProjectionV1 {
             && record.continuation() == Some(super::schema::DurableContinuation::None)
             && record.replay_matches_candidate(&self.candidate)
     }
-    /// Construct the deterministic live Store row for LedgerV1 publication.
-    pub(super) fn fresh_record(
-        &self,
-        owner: super::OwnerId,
-        ordinal: u128,
-    ) -> Result<super::ledger::LifecycleLedgerRecordV1, super::ledger::LifecycleLedgerError> {
-        super::ledger::LifecycleLedgerRecordV1::new(
-            self.candidate.key,
-            owner,
-            ordinal,
-            self.candidate.work_class,
-            self.candidate.stage,
-            None,
-            self.candidate.reconstruction_source,
-            self.candidate.payload,
-            self.candidate.replay_authority.clone(),
-            super::schema::DurableContinuation::None,
-        )
-    }
     /// Insert the exact live Store candidate during typed cold recovery.
     pub(super) fn splice_candidate_from_record(
         &self,
@@ -2770,15 +2749,6 @@ impl DurableAuthenticatedWalVoteLifecycleRepair {
         (self.matches_signed_broadcast(verified, &combined.broadcast)
             && combined.children_are_exact(verified))
         .then_some((key, combined))
-    }
-    /// Reconstruct a durable signed child only through this exact phase-vote WAL owner.
-    pub(super) fn recover_durable_signed_broadcast(
-        &self,
-        verified: &VerifiedHeightContext,
-        child: super::replay_authority::DurableRecoveredSignedBroadcastChildV1,
-    ) -> Option<RecoveredLifecycleSignedBroadcastProjectionV1> {
-        self.repair
-            .recover_durable_signed_broadcast(verified, child)
     }
     /// Bind the durable vote child back to this exact WAL Sign for cold replay.
     pub(super) fn project_cold_adapter_authority(

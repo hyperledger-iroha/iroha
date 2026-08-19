@@ -4,12 +4,6 @@
 //! by [`IrohaRuntimeProviderBindingsV1`]. Provider credentials, private keys,
 //! tokens, attestations, and private evidence remain encapsulated by the
 //! deployment-owned backend objects returned by the registry.
-use std::{
-    fmt,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
-use clap::Parser;
 use super::api::{
     RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
     RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
@@ -21,6 +15,12 @@ use crate::runtime_provider_registry::RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1;
 use crate::runtime_provider_registry::{
     IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderCatalogErrorV1,
     IrohaRuntimeProviderRegistryErrorV1,
+};
+use clap::Parser;
+use std::{
+    fmt,
+    path::{Path, PathBuf},
+    sync::Arc,
 };
 /// Deployment-owned resolver for the complete broker-server backend set.
 ///
@@ -644,16 +644,16 @@ impl RuntimeProviderBrokerSystemdNotifierV1 {
                 }
                 let address = SocketAddr::from_abstract_name(&raw[1..]).map_err(|_| ())?;
                 socket.connect_addr(&address).map_err(|_| ())?;
+                return Ok(Self { socket });
             }
             #[cfg(not(target_os = "linux"))]
             return Err(());
-        } else {
-            let path = Path::new(notify_socket);
-            if !path.is_absolute() {
-                return Err(());
-            }
-            socket.connect(path).map_err(|_| ())?;
         }
+        let path = Path::new(notify_socket);
+        if !path.is_absolute() {
+            return Err(());
+        }
+        socket.connect(path).map_err(|_| ())?;
         Ok(Self { socket })
     }
     fn publish_ready(self) -> Result<(), RuntimeProviderBrokerReadinessErrorV1> {
@@ -665,11 +665,11 @@ impl RuntimeProviderBrokerSystemdNotifierV1 {
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::IrohaRuntimeProviderSlotV1;
     use std::sync::atomic::{AtomicUsize, Ordering};
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use std::{fs, sync::atomic::AtomicBool};
-    use super::*;
-    use crate::IrohaRuntimeProviderSlotV1;
     struct RecordingRegistry {
         calls: AtomicUsize,
         outcome: Result<RuntimeProviderBrokerBackendsV1, IrohaRuntimeProviderRegistryErrorV1>,
@@ -989,17 +989,20 @@ mod tests {
         use std::os::unix::net::UnixDatagram;
         let directory = tempfile::tempdir().expect("systemd notifier socket directory");
         let path = directory.path().join("notify.sock");
-        let receiver = UnixDatagram::bind(&path).expect("bind fake systemd notification socket");
-        receiver
+        let notification_socket =
+            UnixDatagram::bind(&path).expect("bind fake systemd notification socket");
+        notification_socket
             .set_read_timeout(Some(std::time::Duration::from_secs(1)))
             .expect("bound fake systemd receive timeout");
         let notifier =
             RuntimeProviderBrokerSystemdNotifierV1::try_from_notify_socket(path.as_os_str())
                 .expect("connect systemd notifier");
         notifier.publish_ready().expect("publish READY=1");
-        let mut received = [0_u8; 32];
-        let received_len = receiver.recv(&mut received).expect("receive READY=1");
-        assert_eq!(&received[..received_len], SYSTEMD_READY_MESSAGE_V1);
+        let mut datagram = [0_u8; 32];
+        let byte_count = notification_socket
+            .recv(&mut datagram)
+            .expect("receive READY=1");
+        assert_eq!(&datagram[..byte_count], SYSTEMD_READY_MESSAGE_V1);
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]

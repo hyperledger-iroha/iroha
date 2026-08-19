@@ -265,7 +265,6 @@ if [ "${RESET_STORAGE:-1}" -ne 0 ]; then
 fi
 
 export NORITO_SKIP_BINDINGS_SYNC=1
-export IROHA_BUILD_LINE=iroha3
 if [ "${SKIP_BUILD:-0}" -ne 1 ]; then
   cargo build --release --bin iroha3d --bin iroha --bin kagami
 fi
@@ -390,8 +389,6 @@ init_mode = "fast"
 store_dir = "$store_dir"
 [snapshot]
 store_dir = "$store_dir/snapshot"
-[nexus]
-enabled = false
 [confidential]
 enabled = true
 # Consensus mode, validator set, and DA geometry come from the signed genesis.

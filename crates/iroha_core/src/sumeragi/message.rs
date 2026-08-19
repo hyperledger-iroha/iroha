@@ -146,6 +146,18 @@ impl<'a> ncore::DecodeFromSlice<'a> for BlockMessage {
 ///
 /// Cached bytes always store a full Norito-framed [`BlockMessage`] so the payload remains
 /// self-describing even when it is forwarded through other framed envelopes.
+/// Decoding the payload alone does not create an authenticated consensus-ingress envelope:
+///
+/// ```compile_fail
+/// use iroha_core::sumeragi::{SumeragiHandle, message::BlockMessageWire};
+///
+/// fn submit_senderless_frame(handle: &SumeragiHandle, decoded: BlockMessageWire) {
+///     handle.try_incoming_block_message_from_owned(decoded.into_message());
+/// }
+/// ```
+///
+/// A network consumer must pair the decoded payload with its transport-authenticated peer
+/// through one of the identity-requiring `SumeragiHandle` entry points.
 #[derive(Debug, Clone)]
 pub struct BlockMessageWire {
     message: Arc<BlockMessage>,
@@ -581,11 +593,6 @@ mod tests {
     use std::sync::Arc;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("Sumeragi message fixture key generation should succeed")
-    }
-    fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
-        KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
-            panic!("{algorithm:?} Sumeragi message fixture key generation should succeed: {err}")
-        })
     }
     fn checked_random_peer_id() -> PeerId {
         PeerId::from(checked_random_keypair().public_key().clone())

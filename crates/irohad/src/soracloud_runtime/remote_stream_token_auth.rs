@@ -135,9 +135,9 @@ pub(super) fn build_request(
 }
 #[cfg(test)]
 mod tests {
+    use super::*;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, PublicKey};
     use iroha_data_model::{NetworkId, block::BlockHeader};
-    use super::*;
     const PUBLIC_KEY: &str = "x-iroha-operator-public-key";
     const TIMESTAMP: &str = "x-iroha-operator-timestamp-ms";
     const NONCE: &str = "x-iroha-operator-nonce";

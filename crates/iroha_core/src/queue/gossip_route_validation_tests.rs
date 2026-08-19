@@ -191,13 +191,13 @@ fn state_backed_queue_rejects_new_ownership_at_committed_drain_close() {
     assert_eq!(queue.routing_plan_hint(&hash), None);
 }
 #[test]
-fn state_backed_queue_routes_reject_unknown_dataspace_when_nexus_is_disabled() {
-    let mut state = State::new(
+fn state_backed_queue_routes_reject_unknown_dataspace() {
+    let state = State::new(
         world_with_test_domains(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
-    state.nexus.get_mut().enabled = false;
+
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let dynamic_dataspace = DataSpaceId::new(4_242);
     let queue = Queue::test_with_router(

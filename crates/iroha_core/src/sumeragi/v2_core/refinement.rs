@@ -1542,75 +1542,6 @@ macro_rules! production_historical_certificate_trace_body {
             && !$projection.request_present_after
     }};
 }
-macro_rules! production_historical_body_pipeline_trace_body {
-    ($projection:expr) => {{
-        $projection.context_height > 0u64
-            && canonical_identity_is_typed_body!(
-                $projection.context_id,
-                refinement_tag_value!(IDENTITY_DOMAIN_CONTEXT),
-                refinement_tag_value!(IDENTITY_KIND_WIRE_HEIGHT_CONTEXT)
-            )
-            && canonical_identity_is_typed_body!(
-                $projection.request_hash,
-                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
-                refinement_tag_value!(IDENTITY_KIND_CERTIFIED_BODY_REQUEST)
-            )
-            && canonical_identity_equal_body!(
-                $projection.request_hash,
-                $projection.pending_request_hash
-            )
-            && canonical_identity_equal_body!(
-                $projection.pending_request_hash,
-                $projection.authenticated_request_hash
-            )
-            && $projection.fetch_tag.height == $projection.context_height
-            && canonical_identity_equal_body!($projection.round_context_id, $projection.context_id)
-            && $projection.round_height == $projection.context_height
-            && canonical_identity_is_typed_body!(
-                $projection.subject,
-                refinement_tag_value!(IDENTITY_DOMAIN_SUBJECT),
-                refinement_tag_value!(IDENTITY_KIND_WIRE_BLOCK_SUBJECT)
-            )
-            && canonical_identity_equal_body!(
-                $projection.manifest_round_context_id,
-                $projection.round_context_id
-            )
-            && $projection.manifest_round_height == $projection.round_height
-            && $projection.manifest_round_view == $projection.round_view
-            && canonical_identity_equal_body!($projection.manifest_subject, $projection.subject)
-            && canonical_identity_is_typed_body!(
-                $projection.response_manifest,
-                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
-                refinement_tag_value!(IDENTITY_KIND_PAYLOAD_MANIFEST)
-            )
-            && canonical_identity_equal_body!(
-                $projection.response_manifest,
-                $projection.ready_manifest
-            )
-            && canonical_identity_is_typed_body!(
-                $projection.subject_payload_hash,
-                refinement_tag_value!(IDENTITY_DOMAIN_PAYLOAD),
-                refinement_tag_value!(IDENTITY_KIND_CANONICAL_PAYLOAD)
-            )
-            && canonical_identity_equal_body!(
-                $projection.subject_payload_hash,
-                $projection.body_payload_hash
-            )
-            && $projection.owner_present_after
-            && $projection.owner_tag.height == $projection.fetch_tag.height
-            && $projection.owner_tag.view == $projection.fetch_tag.view
-            && $projection.owner_tag.generation == $projection.fetch_tag.generation
-            && canonical_identity_equal_body!(
-                $projection.owner_round_context_id,
-                $projection.round_context_id
-            )
-            && $projection.owner_round_height == $projection.round_height
-            && $projection.owner_round_view == $projection.round_view
-            && canonical_identity_equal_body!($projection.owner_subject, $projection.subject)
-            && !$projection.pending_fetch_present_after
-            && !$projection.request_present_after
-    }};
-}
 // One exact body-pipeline identity is carried unchanged through FetchBody,
 // BodyAvailable, StoreBody, and ValidateBody. These macros are instantiated by
 // typed production helpers below and by Verus over mathematical identities.
@@ -5529,36 +5460,6 @@ pub struct ProductionHistoricalCertificateTraceProjection {
     pub(crate) request_present_before: bool,
     pub(crate) request_present_after: bool,
 }
-/// Exact certified historical body handoff into the ordinary body pipeline.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ProductionHistoricalBodyPipelineTraceProjection {
-    pub(crate) context_id: CanonicalIdentityProjection,
-    pub(crate) context_height: u64,
-    pub(crate) request_hash: CanonicalIdentityProjection,
-    pub(crate) pending_request_hash: CanonicalIdentityProjection,
-    pub(crate) authenticated_request_hash: CanonicalIdentityProjection,
-    pub(crate) fetch_tag: TagProjection,
-    pub(crate) round_context_id: CanonicalIdentityProjection,
-    pub(crate) round_height: u64,
-    pub(crate) round_view: u64,
-    pub(crate) subject: CanonicalIdentityProjection,
-    pub(crate) manifest_round_context_id: CanonicalIdentityProjection,
-    pub(crate) manifest_round_height: u64,
-    pub(crate) manifest_round_view: u64,
-    pub(crate) manifest_subject: CanonicalIdentityProjection,
-    pub(crate) response_manifest: CanonicalIdentityProjection,
-    pub(crate) ready_manifest: CanonicalIdentityProjection,
-    pub(crate) subject_payload_hash: CanonicalIdentityProjection,
-    pub(crate) body_payload_hash: CanonicalIdentityProjection,
-    pub(crate) owner_present_after: bool,
-    pub(crate) owner_tag: TagProjection,
-    pub(crate) owner_round_context_id: CanonicalIdentityProjection,
-    pub(crate) owner_round_height: u64,
-    pub(crate) owner_round_view: u64,
-    pub(crate) owner_subject: CanonicalIdentityProjection,
-    pub(crate) pending_fetch_present_after: bool,
-    pub(crate) request_present_after: bool,
-}
 /// Primitive durable-intent ownership observed around one reducer step.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ProductionDurableIntentTraceProjection {
@@ -8169,12 +8070,6 @@ pub(crate) const fn production_historical_certificate_trace_refines_indexed_asyn
 ) -> bool {
     production_historical_certificate_trace_body!(projection)
 }
-/// Validate one authenticated historical body entering its exact body pipeline.
-pub(crate) const fn production_historical_body_pipeline_trace_refines_indexed_async_kernel(
-    projection: ProductionHistoricalBodyPipelineTraceProjection,
-) -> bool {
-    production_historical_body_pipeline_trace_body!(projection)
-}
 /// Validate one reducer step's durable intent owner and WAL cursor movement.
 pub(crate) fn production_durable_intent_trace_refines_progress_witness_kernel(
     projection: ProductionDurableIntentTraceProjection,
@@ -8362,17 +8257,6 @@ pub(crate) fn check_production_historical_certificate_transition(
     projection: ProductionHistoricalCertificateTraceProjection,
 ) -> Option<CheckedProductionTransition<ProductionHistoricalCertificateTraceProjection>> {
     if production_historical_certificate_trace_refines_indexed_async_kernel(projection) {
-        Some(CheckedProductionTransition::unwitnessed(projection))
-    } else {
-        None
-    }
-}
-/// Check one authenticated historical body-pipeline handoff.
-#[must_use]
-pub(crate) fn check_production_historical_body_pipeline_transition(
-    projection: ProductionHistoricalBodyPipelineTraceProjection,
-) -> Option<CheckedProductionTransition<ProductionHistoricalBodyPipelineTraceProjection>> {
-    if production_historical_body_pipeline_trace_refines_indexed_async_kernel(projection) {
         Some(CheckedProductionTransition::unwitnessed(projection))
     } else {
         None

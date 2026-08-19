@@ -1,8 +1,8 @@
 // Core Musubi identity, archive, verification, and publication tests.
-use iroha_crypto::{Algorithm, KeyPair, Signature};
-use norito::codec::DecodeAll as _;
 use super::*;
 use crate::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1;
+use iroha_crypto::{Algorithm, KeyPair, Signature};
+use norito::codec::DecodeAll as _;
 #[derive(Encode)]
 struct UncheckedMultisigMemberWire {
     public_key: PublicKey,
@@ -851,6 +851,10 @@ fn archive_registration_projection_excludes_mutable_location_state() {
     assert!(zero_height.validate().is_err());
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one provider-attestation scenario covers quorum, replay, substitution, retention, and wire invariants"
+)]
 fn provider_bundle_attestation_requires_controller_quorum_and_exact_finalized_completion() {
     let first =
         KeyPair::try_from_seed(vec![61; 32], Algorithm::Ed25519).expect("first provider keypair");
@@ -994,6 +998,10 @@ fn structured_version_rejects_build_metadata_overflow_and_leading_zeroes() {
     assert!(MusubiVersionV1::new(1, 0, 0, too_many).is_err());
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one cursor-ceiling matrix pins every structured Musubi V1 key family"
+)]
 fn finalized_cursor_ceiling_covers_every_structured_v1_key_family() {
     let maximum_version = MusubiVersionV1::new(
         u64::MAX,
@@ -1512,8 +1520,13 @@ fn canonical_bundle_file_size_gate_is_inclusive() {
     );
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one large-lock regression covers aligned, misaligned, measured-allocation, and byte-limit decoding"
+)]
 fn canonical_lock_decoder_accepts_large_aligned_and_misaligned_metadata() {
-    let maximum = MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 as usize;
+    let maximum = usize::try_from(MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1)
+        .expect("Musubi metadata byte cap fits usize");
     let mut lower_fanout = 1;
     let mut upper_fanout = 64;
     let mut largest = None;
@@ -1542,7 +1555,7 @@ fn canonical_lock_decoder_accepts_large_aligned_and_misaligned_metadata() {
     );
     let mut aligned_storage = vec![0_u8; bytes.len() + alignment];
     let aligned_offset = (0..alignment)
-        .find(|offset| (aligned_storage.as_ptr() as usize + offset) % alignment == 0)
+        .find(|offset| (aligned_storage.as_ptr() as usize + offset).is_multiple_of(alignment))
         .expect("one offset within an alignment span is aligned");
     aligned_storage[aligned_offset..aligned_offset + bytes.len()].copy_from_slice(&bytes);
     let aligned = &aligned_storage[aligned_offset..aligned_offset + bytes.len()];
@@ -1554,18 +1567,13 @@ fn canonical_lock_decoder_accepts_large_aligned_and_misaligned_metadata() {
     );
     let mut misaligned_storage = vec![0_u8; bytes.len() + alignment];
     let misaligned_offset = (0..alignment)
-        .find(|offset| (misaligned_storage.as_ptr() as usize + offset) % alignment != 0)
+        .find(|offset| !(misaligned_storage.as_ptr() as usize + offset).is_multiple_of(alignment))
         .expect("one offset within an alignment span is misaligned");
     misaligned_storage[misaligned_offset..misaligned_offset + bytes.len()].copy_from_slice(&bytes);
     let misaligned = &misaligned_storage[misaligned_offset..misaligned_offset + bytes.len()];
     assert_ne!(misaligned.as_ptr() as usize % alignment, 0);
-    let measurement_limits = norito::DecodeLimits::new(
-        usize::MAX,
-        usize::MAX,
-        usize::MAX,
-        usize::MAX,
-        usize::MAX,
-    );
+    let measurement_limits =
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, usize::MAX);
     let (decoded, usage) = norito::core::with_decode_limits_measured(measurement_limits, || {
         decode_canonical_bundle_file_v1(
             misaligned,
@@ -1580,9 +1588,11 @@ fn canonical_lock_decoder_accepts_large_aligned_and_misaligned_metadata() {
         lock
     );
     let exact_allocation = usage.total_allocated_bytes();
-    assert!(exact_allocation > 0, "the dense lock must charge allocations");
-    let exact_limits =
-        norito::DecodeLimits::new(1_024, maximum, 8_000_000, exact_allocation, 64);
+    assert!(
+        exact_allocation > 0,
+        "the dense lock must charge allocations"
+    );
+    let exact_limits = norito::DecodeLimits::new(1_024, maximum, 8_000_000, exact_allocation, 64);
     assert_eq!(
         decode_canonical_bundle_file_v1(
             misaligned,
@@ -1594,13 +1604,8 @@ fn canonical_lock_decoder_accepts_large_aligned_and_misaligned_metadata() {
         .expect("the exact measured allocation budget decodes the large lock"),
         lock
     );
-    let below_measured_minimum_limits = norito::DecodeLimits::new(
-        1_024,
-        maximum,
-        8_000_000,
-        exact_allocation - 1,
-        64,
-    );
+    let below_measured_minimum_limits =
+        norito::DecodeLimits::new(1_024, maximum, 8_000_000, exact_allocation - 1, 64);
     assert!(
         decode_canonical_bundle_file_v1(
             misaligned,
@@ -1618,8 +1623,7 @@ fn canonical_lock_decoder_accepts_large_aligned_and_misaligned_metadata() {
         "pin the reviewed production allocation corridor"
     );
     assert!(
-        MUSUBI_BUNDLE_METADATA_DECODE_MAX_ALLOCATED_BYTES_V1 - exact_allocation
-            >= 5 * 1024 * 1024,
+        MUSUBI_BUNDLE_METADATA_DECODE_MAX_ALLOCATED_BYTES_V1 - exact_allocation >= 5 * 1024 * 1024,
         "the production corridor retains at least 5 MiB above the measured minimum"
     );
     assert_eq!(
@@ -1718,13 +1722,23 @@ fn canonical_bundle_file_decoders_reject_empty_trailing_and_oversized_inputs() {
     let mut trailing_lock = lock.encode();
     trailing_lock.push(0);
     assert!(MusubiVerificationLockV1::decode_canonical_bundle_file(&trailing_lock).is_err());
-    let oversized_descriptor =
-        vec![0; MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1 as usize + 1].into_boxed_slice();
+    let oversized_descriptor = vec![
+        0;
+        usize::try_from(MUSUBI_MAX_ARTIFACT_DESCRIPTOR_BYTES_V1)
+            .expect("Musubi artifact descriptor byte cap fits usize")
+            + 1
+    ]
+    .into_boxed_slice();
     assert!(
         MusubiArtifactDescriptorV1::decode_canonical_bundle_file(&oversized_descriptor).is_err()
     );
-    let oversized_metadata =
-        vec![0; MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1 as usize + 1].into_boxed_slice();
+    let oversized_metadata = vec![
+        0;
+        usize::try_from(MUSUBI_MAX_BUNDLE_METADATA_FILE_BYTES_V1)
+            .expect("Musubi metadata byte cap fits usize")
+            + 1
+    ]
+    .into_boxed_slice();
     assert!(
         MusubiSemanticReleaseManifestV1::decode_canonical_bundle_file(&oversized_metadata).is_err()
     );

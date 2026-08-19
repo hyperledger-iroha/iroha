@@ -150,10 +150,6 @@ impl KagemushaRecursiveSpendArtifactManifestV5 {
     /// # Errors
     ///
     /// Returns [`KagemushaValidationError`] when any source, profile, or candidate invariant is invalid.
-    #[allow(
-        clippy::too_many_lines,
-        reason = "the V5 candidate manifest keeps its complete fail-closed validation boundary explicit"
-    )]
     pub fn validate_unsigned_candidate(&self) -> Result<(), KagemushaValidationError> {
         self.validate_with_attestation_state(false)
     }
@@ -181,61 +177,7 @@ impl KagemushaRecursiveSpendArtifactManifestV5 {
         &self,
         finalized: bool,
     ) -> Result<(), KagemushaValidationError> {
-        let reviewed_source_closure_valid = self.reviewed_source_closure.validate().is_ok()
-            && self.reviewed_source_closure.source_commit == self.source_commit
-            && self.reviewed_source_closure.source_git_tree == self.source_git_tree
-            && self.reviewed_source_closure.source_tree_sha256 == self.source_tree_sha256
-            && self.reviewed_source_closure.source_repo_dirty == self.source_repo_dirty
-            && self
-                .reviewed_source_closure
-                .canonical_descriptor_sha256()
-                .is_ok_and(|sha256| sha256 == self.reviewed_source_closure_descriptor_sha256);
-        let measured_step_bytes = self.profiles.iter().try_fold(0_u32, |sum, profile| {
-            sum.checked_add(profile.step_proof_size_bytes)
-        });
-        if self.schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V5
-            || self.version != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V5
-            || self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
-            || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
-            || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4
-            || !is_kagemusha_portable_identifier(&self.generation)
-            || !is_kagemusha_source_commit(&self.source_commit)
-            || !is_kagemusha_source_commit(&self.source_git_tree)
-            || self.source_tree_sha256 == [0; 32]
-            || self.source_repo_dirty
-            || !reviewed_source_closure_valid
-            || self.authenticated_source_seal_projection_sha256 == [0; 32]
-            || !is_kagemusha_network_id(&self.network_id)
-            || self.asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
-            || self.activation_height == 0
-            || self.withdrawal_height <= self.activation_height
-            || self.max_proof_bytes == 0
-            || self.max_proof_bytes > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
-            || measured_step_bytes.is_none_or(|minimum| self.max_proof_bytes <= minimum)
-            || self.profiles.len() != 2
-            || self.profiles[0].parity != KagemushaPastaCycleParityV1::StepEq
-            || self.profiles[1].parity != KagemushaPastaCycleParityV1::StepEp
-            || self.topup_finality_roster_artifact.artifact_generation != self.generation
-            || self.generation_memory_limit_bytes == 0
-            || self.generation_memory_limit_bytes
-                > KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4
-            || self.generation_memory_enforcement_profile
-                != KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4
-            || (finalized && self.qualification_receipt_sha256 == [0; 32])
-            || (finalized && self.qualified_candidate_sha256 == [0; 32])
-            || (finalized && self.benchmark_evidence_sha256 == [0; 32])
-            || (finalized && self.cryptographic_review_sha256 == [0; 32])
-            || (finalized && self.release_attestation_sha256 == [0; 32])
-            || (!finalized && self.qualification_receipt_sha256 != [0; 32])
-            || (!finalized && self.qualified_candidate_sha256 != [0; 32])
-            || (!finalized && self.benchmark_evidence_sha256 != [0; 32])
-            || (!finalized && self.cryptographic_review_sha256 != [0; 32])
-            || (!finalized && self.release_attestation_sha256 != [0; 32])
-        {
-            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "pasta_cycle.v5.artifact_manifest",
-            });
-        }
+        self.validate_manifest_identity_and_attestation_fields(finalized)?;
         self.topup_finality_roster_artifact.validate()?;
         let mut names = std::collections::BTreeSet::new();
         let mut digests = std::collections::BTreeSet::new();
@@ -294,6 +236,67 @@ impl KagemushaRecursiveSpendArtifactManifestV5 {
                     field: "pasta_cycle.v5.artifact_manifest.qualified_candidate",
                 });
             }
+        }
+        Ok(())
+    }
+    fn validate_manifest_identity_and_attestation_fields(
+        &self,
+        finalized: bool,
+    ) -> Result<(), KagemushaValidationError> {
+        let reviewed_source_closure_valid = self.reviewed_source_closure.validate().is_ok()
+            && self.reviewed_source_closure.source_commit == self.source_commit
+            && self.reviewed_source_closure.source_git_tree == self.source_git_tree
+            && self.reviewed_source_closure.source_tree_sha256 == self.source_tree_sha256
+            && self.reviewed_source_closure.source_repo_dirty == self.source_repo_dirty
+            && self
+                .reviewed_source_closure
+                .canonical_descriptor_sha256()
+                .is_ok_and(|sha256| sha256 == self.reviewed_source_closure_descriptor_sha256);
+        let measured_step_bytes = self.profiles.iter().try_fold(0_u32, |sum, profile| {
+            sum.checked_add(profile.step_proof_size_bytes)
+        });
+        if self.schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V5
+            || self.version != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V5
+            || self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
+            || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+            || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4
+            || !is_kagemusha_portable_identifier(&self.generation)
+            || !is_kagemusha_source_commit(&self.source_commit)
+            || !is_kagemusha_source_commit(&self.source_git_tree)
+            || self.source_tree_sha256 == [0; 32]
+            || self.source_repo_dirty
+            || !reviewed_source_closure_valid
+            || self.authenticated_source_seal_projection_sha256 == [0; 32]
+            || !is_kagemusha_network_id(&self.network_id)
+            || self.asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+            || self.activation_height == 0
+            || self.withdrawal_height <= self.activation_height
+            || self.max_proof_bytes == 0
+            || self.max_proof_bytes > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
+            || measured_step_bytes.is_none_or(|minimum| self.max_proof_bytes <= minimum)
+            || self.profiles.len() != 2
+            || self.profiles[0].parity != KagemushaPastaCycleParityV1::StepEq
+            || self.profiles[1].parity != KagemushaPastaCycleParityV1::StepEp
+            || self.topup_finality_roster_artifact.artifact_generation != self.generation
+            || self.generation_memory_limit_bytes == 0
+            || self.generation_memory_limit_bytes
+                > KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ABSOLUTE_MAX_BYTES_V4
+            || self.generation_memory_enforcement_profile
+                != KAGEMUSHA_RECURSIVE_SPEND_GENERATION_MEMORY_ENFORCEMENT_PROFILE_V4
+            || (finalized && self.qualification_receipt_sha256 == [0; 32])
+            || (finalized && self.qualified_candidate_sha256 == [0; 32])
+            || (finalized && self.benchmark_evidence_sha256 == [0; 32])
+            || (finalized && self.cryptographic_review_sha256 == [0; 32])
+            || (finalized && self.release_attestation_sha256 == [0; 32])
+            || (!finalized && self.qualification_receipt_sha256 != [0; 32])
+            || (!finalized && self.qualified_candidate_sha256 != [0; 32])
+            || (!finalized && self.benchmark_evidence_sha256 != [0; 32])
+            || (!finalized && self.cryptographic_review_sha256 != [0; 32])
+            || (!finalized && self.release_attestation_sha256 != [0; 32])
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v5.artifact_manifest",
+            });
         }
         Ok(())
     }
@@ -582,6 +585,8 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
             || self.authenticated_source_seal_projection_sha256 == [0; 32]
             || self.reviewed_cargo_binary_sha256 == [0; 32]
             || self.reviewed_rustc_binary_sha256 == [0; 32]
+            || self.generator_binary_sha256 == [0; 32]
+            || self.sealed_candidate_build_report_sha256 == [0; 32]
             || !is_kagemusha_network_id(&self.network_id)
             || self.asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
             || self.activation_height == 0
@@ -726,6 +731,8 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
                 .authenticated_source_seal_projection_sha256,
             reviewed_cargo_binary_sha256: self.reviewed_cargo_binary_sha256,
             reviewed_rustc_binary_sha256: self.reviewed_rustc_binary_sha256,
+            generator_binary_sha256: self.generator_binary_sha256,
+            sealed_candidate_build_report_sha256: self.sealed_candidate_build_report_sha256,
             benchmark_evidence_sha256: self.benchmark_evidence_sha256,
             cryptographic_review_sha256: self.cryptographic_review_sha256,
         })
@@ -856,6 +863,10 @@ impl KagemushaRecursiveSpendCandidateV4 {
                 .authenticated_source_seal_projection_sha256,
             reviewed_cargo_binary_sha256: self.manifest.reviewed_cargo_binary_sha256,
             reviewed_rustc_binary_sha256: self.manifest.reviewed_rustc_binary_sha256,
+            generator_binary_sha256: self.manifest.generator_binary_sha256,
+            sealed_candidate_build_report_sha256: self
+                .manifest
+                .sealed_candidate_build_report_sha256,
             network_id: self.manifest.network_id,
             asset: self.manifest.asset.clone(),
             bridge_abi_version: self.manifest.bridge_abi_version,
@@ -898,6 +909,10 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
                 .authenticated_source_seal_projection_sha256,
             reviewed_cargo_binary_sha256: candidate.manifest.reviewed_cargo_binary_sha256,
             reviewed_rustc_binary_sha256: candidate.manifest.reviewed_rustc_binary_sha256,
+            generator_binary_sha256: candidate.manifest.generator_binary_sha256,
+            sealed_candidate_build_report_sha256: candidate
+                .manifest
+                .sealed_candidate_build_report_sha256,
             generation_memory_limit_bytes: candidate.manifest.generation_memory_limit_bytes,
             generation_memory_enforcement_profile: candidate
                 .manifest
@@ -976,6 +991,9 @@ impl KagemushaRecursiveSpendQualificationReceiptV4 {
                     .authenticated_source_seal_projection_sha256
             || self.reviewed_cargo_binary_sha256 != candidate.manifest.reviewed_cargo_binary_sha256
             || self.reviewed_rustc_binary_sha256 != candidate.manifest.reviewed_rustc_binary_sha256
+            || self.generator_binary_sha256 != candidate.manifest.generator_binary_sha256
+            || self.sealed_candidate_build_report_sha256
+                != candidate.manifest.sealed_candidate_build_report_sha256
             || self.generation_memory_limit_bytes
                 != candidate.manifest.generation_memory_limit_bytes
             || self.generation_memory_enforcement_profile
@@ -2095,6 +2113,8 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
             || self.authenticated_source_seal_projection_sha256 == [0; 32]
             || self.reviewed_cargo_binary_sha256 == [0; 32]
             || self.reviewed_rustc_binary_sha256 == [0; 32]
+            || self.generator_binary_sha256 == [0; 32]
+            || self.sealed_candidate_build_report_sha256 == [0; 32]
             || !digests_are_distinct_and_nonzero
             || !signers_are_canonical
             || represented_roles
@@ -2135,6 +2155,9 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
                     .authenticated_source_seal_projection_sha256
             || self.reviewed_cargo_binary_sha256 != release.manifest().reviewed_cargo_binary_sha256
             || self.reviewed_rustc_binary_sha256 != release.manifest().reviewed_rustc_binary_sha256
+            || self.generator_binary_sha256 != release.manifest().generator_binary_sha256
+            || self.sealed_candidate_build_report_sha256
+                != release.manifest().sealed_candidate_build_report_sha256
             || self.manifest_sha256 != release.manifest_sha256()
             || self.release_attestation_sha256 != release.release_attestation_sha256()
             || self.release_policy_sha256 != release.release_policy_sha256()
@@ -2183,6 +2206,10 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
                 != release.manifest().reviewed_cargo_binary_sha256
             || candidate.manifest.reviewed_rustc_binary_sha256
                 != release.manifest().reviewed_rustc_binary_sha256
+            || candidate.manifest.generator_binary_sha256
+                != release.manifest().generator_binary_sha256
+            || candidate.manifest.sealed_candidate_build_report_sha256
+                != release.manifest().sealed_candidate_build_report_sha256
             || candidate.manifest.network_id != release.manifest().network_id
             || candidate.manifest.asset != release.manifest().asset
             || candidate.manifest.asset_scale != release.manifest().asset_scale
@@ -2390,6 +2417,10 @@ impl KagemushaRecursiveSpendReleaseRecordV4 {
                 != self.manifest.reviewed_cargo_binary_sha256
             || self.promotion_record.reviewed_rustc_binary_sha256
                 != self.manifest.reviewed_rustc_binary_sha256
+            || self.promotion_record.generator_binary_sha256
+                != self.manifest.generator_binary_sha256
+            || self.promotion_record.sealed_candidate_build_report_sha256
+                != self.manifest.sealed_candidate_build_report_sha256
             || self.promotion_record.qualification_receipt_sha256
                 != self.manifest.qualification_receipt_sha256
             || self.promotion_record.qualified_candidate_sha256

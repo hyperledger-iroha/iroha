@@ -51,7 +51,7 @@ fn block_candidate_heights(
             intersect_block_candidate_heights(
                 &mut best,
                 block_hash_from_value(&cond.value)
-                    .and_then(|hash| state_ro.kura().get_block_height_by_hash(hash))
+                    .and_then(|hash| state_ro.block_height_by_hash(hash))
                     .into_iter()
                     .collect(),
             );
@@ -74,7 +74,7 @@ fn block_candidate_heights(
                 cond.values
                     .iter()
                     .filter_map(block_hash_from_value)
-                    .filter_map(|hash| state_ro.kura().get_block_height_by_hash(hash))
+                    .filter_map(|hash| state_ro.block_height_by_hash(hash))
                     .collect(),
             );
         }
@@ -304,32 +304,36 @@ impl ValidQuery for FindBlocks {
                 |field| matches!(field, "hash" | "block_hash" | "header.hash"),
             )
         }) {
-            let iter: Box<dyn Iterator<Item = SignedBlock> + '_> = Box::new(
-                candidate_heights
-                    .into_iter()
-                    .rev()
-                    .filter_map(move |height| {
-                        state_ro
-                            .kura()
-                            .get_block(height)
-                            .filter(|block| {
-                                predicate_json.as_ref().map_or_else(
-                                    || filter.applies(block.as_ref()),
-                                    |predicate| predicate_matches_signed_block(predicate, block),
-                                )
-                            })
-                            .map(|block| block.as_ref().clone())
-                    }),
-            );
+            let blocks = candidate_heights
+                .into_iter()
+                .filter(|height| height.get() <= state_ro.height())
+                .rev()
+                .map(|height| state_ro.canonical_block_by_height(height))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(QueryExecutionFail::CanonicalHistory)?;
+            let iter: Box<dyn Iterator<Item = SignedBlock> + '_> =
+                Box::new(blocks.into_iter().filter_map(move |block| {
+                    predicate_json
+                        .as_ref()
+                        .map_or_else(
+                            || filter.applies(block.as_ref()),
+                            |predicate| predicate_matches_signed_block(predicate, &block),
+                        )
+                        .then(|| block.as_ref().clone())
+                }));
             return Ok(iter);
         }
+        let blocks = state_ro
+            .all_blocks(nonzero!(1_usize))
+            .rev()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(QueryExecutionFail::CanonicalHistory)?;
         let iter: Box<dyn Iterator<Item = SignedBlock> + '_> = Box::new(
-            state_ro
-                .all_blocks(nonzero!(1_usize))
-                .rev()
+            blocks
+                .into_iter()
                 .filter(move |block| {
                     predicate_json.as_ref().map_or_else(
-                        || filter.applies(block),
+                        || filter.applies(block.as_ref()),
                         |predicate| predicate_matches_signed_block(predicate, block),
                     )
                 })
@@ -356,34 +360,38 @@ impl ValidQuery for FindBlockHeaders {
                 |field| matches!(field, "hash" | "block_hash"),
             )
         }) {
-            let iter: Box<dyn Iterator<Item = BlockHeader> + '_> = Box::new(
-                candidate_heights
-                    .into_iter()
-                    .rev()
-                    .filter_map(move |height| {
-                        let header = state_ro.kura().get_block(height)?.header();
-                        let matches = predicate_json.as_ref().map_or_else(
-                            || filter.applies(&header),
-                            |predicate| predicate_matches_block_header(predicate, &header),
-                        );
-                        matches.then_some(header)
-                    }),
-            );
-            return Ok(iter);
-        }
-        let iter: Box<dyn Iterator<Item = BlockHeader> + '_> = Box::new(
-            state_ro
-                .all_blocks(nonzero!(1_usize))
+            let blocks = candidate_heights
+                .into_iter()
+                .filter(|height| height.get() <= state_ro.height())
                 .rev()
-                .filter_map(move |block| {
+                .map(|height| state_ro.canonical_block_by_height(height))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(QueryExecutionFail::CanonicalHistory)?;
+            let iter: Box<dyn Iterator<Item = BlockHeader> + '_> =
+                Box::new(blocks.into_iter().filter_map(move |block| {
                     let header = block.header();
                     let matches = predicate_json.as_ref().map_or_else(
                         || filter.applies(&header),
                         |predicate| predicate_matches_block_header(predicate, &header),
                     );
                     matches.then_some(header)
-                }),
-        );
+                }));
+            return Ok(iter);
+        }
+        let blocks = state_ro
+            .all_blocks(nonzero!(1_usize))
+            .rev()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(QueryExecutionFail::CanonicalHistory)?;
+        let iter: Box<dyn Iterator<Item = BlockHeader> + '_> =
+            Box::new(blocks.into_iter().filter_map(move |block| {
+                let header = block.header();
+                let matches = predicate_json.as_ref().map_or_else(
+                    || filter.applies(&header),
+                    |predicate| predicate_matches_block_header(predicate, &header),
+                );
+                matches.then_some(header)
+            }));
         Ok(iter)
     }
 }

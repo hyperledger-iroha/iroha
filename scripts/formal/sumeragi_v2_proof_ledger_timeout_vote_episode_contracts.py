@@ -202,26 +202,6 @@ def _timeout_vote_episode_source_fidelity_errors(
         "ordinary lifecycle retained-response timeout episode",
         expected_attributes=("#[allow(clippy::too_many_arguments)]",),
     )
-    ordinary_serve = bind_item(
-        "lifecycle_runner::service_certified_serve_barrier",
-        "lifecycle_runner",
-        "service_certified_serve_barrier",
-        (),
-        "ordinary lifecycle selected-Serve timeout episode",
-        expected_attributes=(
-            "#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",
-        ),
-    )
-    pending_serve = bind_item(
-        "pending_runner::service_pending_certified_serve_barrier",
-        "pending_runner",
-        "service_pending_certified_serve_barrier",
-        (),
-        "no-clock pending-Kura selected-Serve timeout episode",
-        expected_attributes=(
-            "#[allow(clippy::too_many_arguments, clippy::too_many_lines)]",
-        ),
-    )
     drain = bind_item(
         "runner::drain_v2_ingress",
         "runner",
@@ -313,8 +293,6 @@ def _timeout_vote_episode_source_fidelity_errors(
         "ingress::fair_v2_ingress_queue_gate_verdict",
         "ingress::select_fair_v2_ingress_candidate",
         "lifecycle_runner::service_retained_certified_response",
-        "lifecycle_runner::service_certified_serve_barrier",
-        "pending_runner::service_pending_certified_serve_barrier",
         "runner::drain_v2_ingress",
         "runtime::RuntimeTimeoutVoteEpisodeOwner::validate_against",
         "runtime::RuntimeTimeoutVoteEpisodeOwner::same_lifecycle_owner_as",
@@ -452,18 +430,15 @@ let timeout_vote_episode_dependency =
     barrier_bypass
         == FairV2IngressBarrierBypass::TimeoutVoteEpisode
         && fair_v2_ingress_is_direct_validator_timeout_vote_owner(source, entry)
-        && (leader_wire_barrier.is_some_and(|owner| {
+        && leader_wire_barrier.is_some_and(|owner| {
             owner.token.identity.phase
                 == FairV2IngressLeaderWirePhase::CertifiedResponse
-        }) || (leader_wire_barrier.is_none()
-            && (selected_serve_barrier.is_some()
-                || certified_body_request_cutoff.is_some())));
+        });
 let dependency_bypass = !ingress_barrier_allows
-    && (serve_fence_escape_dependency
-        || timeout_vote_episode_dependency
+    && (timeout_vote_episode_dependency
         || (leader_wire_control_barrier
 """,
-        "TimeoutVote bypass must be mode-scoped, direct-source checked, limited to a CertifiedResponse leader owner or Serve barrier, and subordinate to a blocked ordinary barrier",
+        "TimeoutVote bypass must be mode-scoped, direct-source checked, limited to a CertifiedResponse leader owner, and subordinate to a blocked ordinary barrier",
         errors,
     )
     _require_rust_token_sequence(
@@ -519,8 +494,8 @@ for dependency_pass in [false, true] {
         "shared TimeoutVote selector must preserve strict-before-dependency, Blocked exclusion, downstream predicate, and exact disposition",
         errors,
     )
-    if selector is not None:
-        selector_tokens = rust_code_tokens(selector.body)
+    if queue_gate is not None:
+        queue_gate_tokens = rust_code_tokens(queue_gate.body)
         forbidden_predequeue_claims = [
             token
             for token in (
@@ -529,13 +504,13 @@ for dependency_pass in [false, true] {
                 "claim_certified_body_response",
             )
             if _token_sequence_count(
-                selector_tokens,
+                queue_gate_tokens,
                 rust_code_tokens(token),
             )
         ]
         if forbidden_predequeue_claims:
             errors.append(
-                f"{ingress_path}:{selector.line}: the pre-dequeue "
+                f"{ingress_path}:{queue_gate.line}: the pre-dequeue "
                 "CertifiedResponse barrier exception may not require a response "
                 "claim acquired only after fair-ingress removal; found "
                 f"{forbidden_predequeue_claims!r}"
@@ -656,148 +631,6 @@ if response_backpressured {
         "retained-response backpressure must give a conditional one-shot certificate drain and then an unconditional distinct TimeoutVote drain before pacemaker service",
         errors,
     )
-    _require_rust_token_sequence(
-        lifecycle_runner_path,
-        ordinary_serve,
-        """
-let completion_evidence = services
-    .certified_serve_predecessor_completion_evidence(
-        executor.remaining_completion_capacity() != 0,
-        serve_barrier.scheduler_ordinal(),
-    )
-    .map_err(V2RunnerError::Service)?;
-let predecessor = executor.exact_serve_predecessor_observation(
-    Instant::now(),
-    serve_barrier.scheduler_ordinal(),
-    completion_evidence,
-)?;
-let predecessor_admission = predecessor
-    .should_open_predecessor_admission()
-    .then(|| {
-        services
-            .open_certified_serve_predecessor_admission(serve_barrier)
-            .map_err(V2RunnerError::Service)
-    })
-    .transpose()?;
-if let Some(predecessor_admission) = predecessor_admission {
-    services
-        .drain_exact_serve_runtime_predecessor(executor, serve_barrier.scheduler_ordinal())?;
-    let completion_evidence = services
-        .certified_serve_predecessor_completion_evidence(
-            executor.remaining_completion_capacity() != 0,
-            serve_barrier.scheduler_ordinal(),
-        )
-        .map_err(V2RunnerError::Service)?;
-    let predecessor = executor.exact_serve_predecessor_observation(
-        Instant::now(),
-        serve_barrier.scheduler_ordinal(),
-        completion_evidence,
-    )?;
-    if predecessor.has_runnable_predecessor()
-        && services
-            .certified_serve_predecessor_capacity_available(serve_barrier)
-            .map_err(V2RunnerError::Service)?
-    {
-        advance_executor_once_before_exact_serve(receiver, executor, services)?;
-    }
-    drain_v2_ingress(
-        receiver,
-        executor,
-        services,
-        lane_work,
-        output_guard,
-        kura,
-        key_pair,
-        block_sync_server,
-        block_sync,
-        block_sync_request,
-        npos_vrf,
-        V2IngressDrainMode::CertifiedFenceEscape,
-        1,
-    )?;
-""",
-        "selected Serve certificate escape must open one direct-observation "
-        "admission, drain its exact completion, and service at most one "
-        "capacity-gated predecessor before the bounded certificate escape",
-        errors,
-    )
-    _require_rust_token_sequence(
-        lifecycle_runner_path,
-        ordinary_serve,
-        """
-let completion_evidence = services
-    .certified_serve_predecessor_completion_evidence(
-        executor.remaining_completion_capacity() != 0,
-        serve_barrier.scheduler_ordinal(),
-    )
-    .map_err(V2RunnerError::Service)?;
-let predecessor = executor.exact_serve_predecessor_observation(
-    Instant::now(),
-    serve_barrier.scheduler_ordinal(),
-    completion_evidence,
-)?;
-older_predecessor_remains = predecessor.has_runnable_predecessor();
-predecessor_admission
-    .finish()
-    .map_err(V2RunnerError::Service)?;
-}
-service_certified_serve_barrier_liveness_turn(false, |action| match action {
-        CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode => drain_v2_ingress(
-            receiver,
-            executor,
-            services,
-            lane_work,
-            output_guard,
-            kura,
-            key_pair,
-            block_sync_server,
-            block_sync,
-            block_sync_request,
-            npos_vrf,
-            V2IngressDrainMode::TimeoutVoteEpisode,
-            1,
-        ),
-        CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
-            if let Some(timeout_recovery_cut) = executor.timeout_recovery_lifecycle_cut()? {
-                services
-                    .drain_timeout_recovery_prefix_completion(executor, timeout_recovery_cut)?;
-            }
-            Ok(())
-        }
-        CertifiedServeBarrierLivenessAction::Pacemaker => {
-            advance_pacemaker_once(receiver, executor, services)
-        }
-})?;
-""",
-        "selected Serve must close its move-only predecessor admission before "
-        "mapping the complete timeout-recovery suffix independently of it",
-        errors,
-    )
-    _require_rust_token_sequence(
-        pending_runner_path,
-        pending_serve,
-        """
-service_certified_serve_barrier_liveness_turn(true, |action| match action {
-    CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
-        if let Some(timeout_recovery_cut) = executor.timeout_recovery_lifecycle_cut()? {
-            services
-                .drain_timeout_recovery_prefix_completion(executor, timeout_recovery_cut)?;
-        }
-        Ok(())
-    }
-    CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode
-    | CertifiedServeBarrierLivenessAction::Pacemaker => {
-        output_guard.close_admission_for_restart();
-        Err(V2RunnerError::Service(
-            "pending Kura Serve barrier attempted pacemaker work".to_owned(),
-        ))
-    }
-})?;
-""",
-        "the no-clock pending-Kura Serve turn may service only an existing timeout-recovery prefix and must fail closed on TimeoutVote or pacemaker work",
-        errors,
-    )
-
     _require_rust_source_token_sequence(
         runtime_path,
         sources["runtime"],
@@ -1605,71 +1438,6 @@ record.status == super::FairV2IngressLeaderWireStatus::Ingress
                 errors,
             )
 
-    for name, expected_sha256 in (
-        _TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256.items()
-    ):
-        item = _require_rust_item(worker_path, sources["worker"], name, errors)
-        _require_rust_item_context(
-            worker_path,
-            item,
-            worker_test_context,
-            f"timeout-vote Serve-barrier regression {name}",
-            errors,
-            expected_attributes=("#[test]",),
-        )
-        _require_rust_item_token_sha256(
-            worker_path,
-            item,
-            expected_sha256,
-            f"timeout-vote Serve-barrier regression {name}",
-            errors,
-        )
-        for sequence, description in (
-            (
-                """
-ingress
-    .try_recv_if_checked_retiring_obsolete(|inbound| {
-""",
-                "ordinary selection must exercise the selected Serve barrier without bypass",
-            ),
-            (
-                """
-.try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
-    FairV2IngressBarrierBypass::TimeoutVoteEpisode,
-    |_| false,
-)
-""",
-                "the episode bypass must still reject when its downstream predicate rejects",
-            ),
-            (
-                """
-.try_recv_if_checked_retiring_obsolete_with_barrier_bypass(
-    FairV2IngressBarrierBypass::TimeoutVoteEpisode,
-    |inbound| {
-""",
-                "the exact direct TimeoutVote must reach the authoritative predicate",
-            ),
-            (
-                """
-assert_eq!(
-    serve_gate
-        .selected_barrier()
-        .expect("inspect the retained Serve barrier")
-        .map(|barrier| barrier.carrier_ordinal()),
-    Some(1)
-);
-""",
-                "TimeoutVote predicate service must retain the selected Serve owner",
-            ),
-        ):
-            _require_rust_token_sequence(
-                worker_path,
-                item,
-                sequence,
-                description,
-                errors,
-            )
-
     expected_runtime_tests = {
         "restored_pre_runtime_tc_cannot_deadlock_a_newly_frozen_timeout_owner",
         "restored_pre_runtime_timeout_vote_releases_only_an_absolute_timeout_cut",
@@ -1684,13 +1452,11 @@ assert_eq!(
             f"missing={sorted(expected_runtime_tests - observed_runtime_tests)}, "
             f"extra={sorted(observed_runtime_tests - expected_runtime_tests)}"
         )
-    expected_worker_tests = {
-        "timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier"
-    }
+    expected_worker_tests: set[str] = set()
     observed_worker_tests = set(_TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256)
     if observed_worker_tests != expected_worker_tests:
         errors.append(
-            "timeout-vote Serve-barrier regression seal inventory must be exact; "
+            "timeout-vote worker regression seal inventory must be exact; "
             f"missing={sorted(expected_worker_tests - observed_worker_tests)}, "
             f"extra={sorted(observed_worker_tests - expected_worker_tests)}"
         )
@@ -1913,10 +1679,10 @@ assert_eq!(
         boundary_continuation_filename, {}
     )
     expected_boundary_symbols = {
-        "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue",
-        "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue",
-        "AsyncNextPreservesServeProducerEpisodeTypeInvariant",
-        "AsyncNextPreservesServeProducerEpisodeInvariants",
+        "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileProducerTurnReady",
+        "AsyncNextPreservesEmptyServeIngressOwnersWhileProducerTurnReady",
+        "AsyncNextPreservesServeProducerTurnTypeInvariant",
+        "AsyncNextPreservesServeProducerTurnInvariants",
         "AsyncTimeoutRecoveryMutationFrameProjectsBoundaryFrame",
         "AsyncTimeoutRecoveryEpisodeFromParametersHasMutationFrameShape",
         "AsyncTimeoutRecoveryEpisodeSetHasMutationFrameShape",
@@ -2572,37 +2338,37 @@ PROVE AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
             )
 
     producer_bridge_exact_statements = {
-        "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue": r"""
+        "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileProducerTurnReady": r"""
 \A node \in ValidatorIds:
   /\ AsyncTypeInvariant
-  /\ asyncServeProducerEpisodeDue[node]
+  /\ asyncServeProducerTurnReady[node]
   /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
   /\ AsyncNetworkStep
   => AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
 """,
-        "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue": r"""
+        "AsyncNextPreservesEmptyServeIngressOwnersWhileProducerTurnReady": r"""
 \A node \in ValidatorIds:
   /\ AsyncTypeInvariant
-  /\ asyncServeProducerEpisodeDue[node]
+  /\ asyncServeProducerTurnReady[node]
   /\ AsyncServeIngressLifecycleOwnerIdentities(node) = {}
   /\ AsyncNext
   => AsyncServeIngressLifecycleOwnerIdentities(node)' = {}
 """,
-        "AsyncNextPreservesServeProducerEpisodeTypeInvariant": r"""
-/\ AsyncServeProducerEpisodeTypeInvariant
+        "AsyncNextPreservesServeProducerTurnTypeInvariant": r"""
+/\ AsyncServeProducerTurnTypeInvariant
 /\ AsyncNext
-=> AsyncServeProducerEpisodeTypeInvariant'
+=> AsyncServeProducerTurnTypeInvariant'
 """,
-        "AsyncNextPreservesServeProducerEpisodeInvariants": r"""
+        "AsyncNextPreservesServeProducerTurnInvariants": r"""
 /\ AsyncStrongTypeInvariant
 /\ AsyncNext
-=> /\ AsyncServeProducerEpisodeTypeInvariant'
-   /\ AsyncServeProducerEpisodeOwnershipInvariant'
+=> /\ AsyncServeProducerTurnTypeInvariant'
+   /\ AsyncServeProducerTurnOwnershipInvariant'
 """,
     }
     producer_bridge_required_proof_dependencies = {
-        "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue": (
-            "AsyncServeProducerEpisodeBlocksFreshServeAdmission",
+        "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileProducerTurnReady": (
+            "AsyncServeProducerTurnBlocksFreshServeAdmission",
             "PopSelectedIngressDoesNotCreateServeIngressOwners",
             "HiddenIngressAdmissionPreservesOtherNodeOwners",
             "ServeIngressAdmissionStutterPreservesOwnerIdentities",
@@ -2612,8 +2378,8 @@ PROVE AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
             "AsyncServeLifecycleAdmissionRequired",
             "ExactServeTransportAdmissionCanAdvanceVia",
         ),
-        "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue": (
-            "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue",
+        "AsyncNextPreservesEmptyServeIngressOwnersWhileProducerTurnReady": (
+            "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileProducerTurnReady",
             "RunnerStepPreservesEmptyServeIngressOwners",
             "FaultStepPreservesEmptyServeIngressOwners",
             "PopSelectedIngressDoesNotCreateServeIngressOwners",
@@ -2622,18 +2388,18 @@ PROVE AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
             "ServeIngressAdmissionStutterPreservesOwnerIdentities",
             "AsyncNext",
         ),
-        "AsyncNextPreservesServeProducerEpisodeTypeInvariant": (
+        "AsyncNextPreservesServeProducerTurnTypeInvariant": (
             "AsyncNext",
-            "AsyncServeProducerEpisodeTransition",
+            "AsyncServeProducerTurnTransition",
             "FunctionValueHasCodomain",
         ),
-        "AsyncNextPreservesServeProducerEpisodeInvariants": (
+        "AsyncNextPreservesServeProducerTurnInvariants": (
             "AsyncStrongTypeProjectsAsyncType",
-            "AsyncNextPreservesServeProducerEpisodeTypeInvariant",
+            "AsyncNextPreservesServeProducerTurnTypeInvariant",
             "AsyncNextPreservesSchedulerType",
-            "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue",
-            "AsyncServeProducerEpisodeFinalRetirementStep",
-            "AsyncServeProducerEpisodeTransition",
+            "AsyncNextPreservesEmptyServeIngressOwnersWhileProducerTurnReady",
+            "AsyncServeProducerTurnCompletionStep",
+            "AsyncServeProducerTurnTransition",
             "AsyncServeIngressAdmissionOwned",
         ),
     }
@@ -2646,7 +2412,7 @@ PROVE AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
         expected_statement = " ".join(expected.split())
         if statement != expected_statement:
             errors.append(
-                f"{boundary_path}:{line}: producer-episode bridge theorem "
+                f"{boundary_path}:{line}: ProducerTurn bridge theorem "
                 f"{symbol} must retain the exact reviewed statement; "
                 f"found {statement!r}"
             )
@@ -2666,7 +2432,7 @@ PROVE AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
         ]
         if missing:
             errors.append(
-                f"{boundary_path}:{line}: producer-episode bridge theorem "
+                f"{boundary_path}:{line}: ProducerTurn bridge theorem "
                 f"{symbol} must retain the exact reviewed proof dependencies; "
                 f"missing={missing!r}"
             )

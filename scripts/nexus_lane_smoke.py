@@ -511,10 +511,20 @@ def validate_lane_lifecycle(payload: Dict) -> Dict[str, LaneCheck]:
 
     if not isinstance(payload, dict):
         raise SmokeError("lane lifecycle payload must be a JSON object")
+    expected_fields = {
+        "version",
+        "lane_count",
+        "lanes",
+        "catalog_hash",
+        "incarnations",
+        "incarnation_root",
+    }
+    if set(payload) != expected_fields:
+        raise SmokeError(
+            "lane lifecycle payload fields do not match the current V1 layout"
+        )
     if payload.get("version") != 1:
         raise SmokeError("lane lifecycle payload did not advertise version 1")
-    if payload.get("nexus_enabled") is not True:
-        raise SmokeError("lane lifecycle reports that Nexus routing is disabled")
     lane_count = _require_uint(payload.get("lane_count"), "lane_count", positive=True)
     _require_hash(payload.get("catalog_hash"), "catalog_hash")
     _require_hash(payload.get("incarnation_root"), "incarnation_root")

@@ -5,24 +5,27 @@ fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
     ingress.close();
     ingress
         .configure_roster(validators.clone())
-        .expect("two validators, their progress and TimeoutVote slots, and anonymous fit");
+        .expect("two validators and their protected slots fit");
     ingress.open().expect("open configured roster");
     let captured_at = Instant::now();
     ingress
         .try_push_at(
-            InboundBlockMessage::new(v2_message(), Some(validators[0].clone())),
+            InboundBlockMessage::from_authenticated_peer(v2_message(), validators[0].clone()),
             captured_at - Duration::from_secs(5),
         )
         .expect("enqueue oldest validator message");
     ingress
         .try_push_at(
-            InboundBlockMessage::new(v2_message(), Some(validators[1].clone())),
+            InboundBlockMessage::from_authenticated_peer(v2_message(), validators[1].clone()),
             captured_at - Duration::from_secs(2),
         )
         .expect("enqueue newer validator message");
     ingress
         .try_push_at(
-            InboundBlockMessage::new(v2_message_with_index(1), Some(validators[0].clone())),
+            InboundBlockMessage::from_authenticated_peer(
+                v2_message_with_index(1),
+                validators[0].clone(),
+            ),
             captured_at - Duration::from_secs(7),
         )
         .expect("enqueue timestamp-inverted message behind the source head");
@@ -79,18 +82,21 @@ fn fair_v2_ingress_service_idle_age_tracks_scans_not_oldest_item_age() {
     ingress.close();
     ingress
         .configure_roster([validator.clone()])
-        .expect("validator plus anonymous lane fit");
+        .expect("validator lane fits");
     ingress.open().expect("open configured roster");
     let captured_at = Instant::now();
     ingress
         .try_push_at(
-            InboundBlockMessage::new(v2_auxiliary_prepare(0), Some(validator.clone())),
+            InboundBlockMessage::from_authenticated_peer(
+                v2_auxiliary_prepare(0),
+                validator.clone(),
+            ),
             captured_at - Duration::from_secs(5),
         )
         .expect("enqueue old blocked entry");
     ingress
         .try_push_at(
-            InboundBlockMessage::new(v2_auxiliary_prepare(1), Some(validator)),
+            InboundBlockMessage::from_authenticated_peer(v2_auxiliary_prepare(1), validator),
             captured_at - Duration::from_secs(1),
         )
         .expect("enqueue later admissible entry");
@@ -127,16 +133,17 @@ fn fair_v2_ingress_service_idle_age_tracks_scans_not_oldest_item_age() {
 #[test]
 fn fair_v2_ingress_empty_to_nonempty_resets_service_idle_baseline() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(2);
+    let sender = authenticated_peer_for_test();
     ingress.close();
     ingress
         .configure_roster(std::iter::empty())
-        .expect("anonymous ingress lane fits");
+        .expect("empty authenticated roster fits");
     ingress.open().expect("open configured roster");
     let captured_at = Instant::now();
     assert!(ingress.try_recv_if_at(captured_at, |_| true).is_none());
     ingress
         .try_push_at(
-            InboundBlockMessage::new(v2_auxiliary_prepare(0), None),
+            InboundBlockMessage::from_authenticated_peer(v2_auxiliary_prepare(0), sender.clone()),
             captured_at + Duration::from_secs(5),
         )
         .expect("enqueue after an empty-queue scan");
@@ -158,7 +165,7 @@ fn fair_v2_ingress_empty_to_nonempty_resets_service_idle_baseline() {
     );
     ingress
         .try_push_at(
-            InboundBlockMessage::new(v2_auxiliary_prepare(1), None),
+            InboundBlockMessage::from_authenticated_peer(v2_auxiliary_prepare(1), sender),
             captured_at + Duration::from_secs(10),
         )
         .expect("enqueue a fresh ownership interval");
@@ -171,10 +178,10 @@ fn fair_v2_ingress_empty_to_nonempty_resets_service_idle_baseline() {
     );
 }
 #[test]
-fn anonymous_and_authenticated_non_validator_sources_use_distinct_bounded_lanes() {
+fn authenticated_non_validator_sources_use_distinct_bounded_lanes() {
     const SOURCE_BYTES: usize = 1024 * 1024;
     let ingress = super::FairV2Ingress::new_with_source_geometry_and_transport_frame_caps(
-        28,
+        29,
         7 * SOURCE_BYTES,
         SOURCE_BYTES,
         0,
@@ -184,40 +191,38 @@ fn anonymous_and_authenticated_non_validator_sources_use_distinct_bounded_lanes(
         usize::MAX,
         usize::MAX,
         usize::MAX,
-        Some(2),
+        Some(3),
     );
     let validators = validator_peers(4);
     let outsiders = validator_peers(9).split_off(4);
     ingress
         .configure_roster(validators.clone())
-        .expect("four validators, two authenticated non-validator sources, and anonymous fit");
+        .expect("four validators and three authenticated non-validator sources fit");
     ingress.open().expect("open configured roster");
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(v2_auxiliary_prepare(0), None)),
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            v2_auxiliary_prepare(0),
+            outsiders[0].clone(),
+        )),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
     let relayed = |index, via: PeerId| {
         InboundBlockMessage::from_transport(v2_auxiliary_prepare(index), validators[0].clone(), via)
     };
     assert!(matches!(
-        ingress.try_push(relayed(1, outsiders[0].clone())),
+        ingress.try_push(relayed(1, outsiders[1].clone())),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
     assert!(matches!(
-        ingress.try_push(relayed(2, outsiders[1].clone())),
+        ingress.try_push(relayed(2, outsiders[2].clone())),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
     assert!(matches!(
-        ingress.try_push(relayed(3, outsiders[2].clone())),
+        ingress.try_push(relayed(3, outsiders[3].clone())),
         Err(super::FairV2IngressPushError::Full(_))
     ));
     {
         let state = ingress.state.lock();
-        assert!(
-            state
-                .lanes
-                .contains_key(&super::FairV2IngressSource::Anonymous)
-        );
         assert!(
             state
                 .lanes
@@ -229,24 +234,16 @@ fn anonymous_and_authenticated_non_validator_sources_use_distinct_bounded_lanes(
             state
                 .lanes
                 .contains_key(&super::FairV2IngressSource::Authenticated(
-                    outsiders[1].clone()
+                    outsiders[2].clone()
                 ))
         );
     }
-    let anonymous = ingress
-        .try_recv_if(|inbound| inbound.sender().is_none())
-        .expect("the anonymous owner remains independently serviceable");
-    assert!(anonymous.sender().is_none());
+    let first_authenticated = ingress
+        .try_recv_if(|inbound| inbound.via() == &outsiders[0])
+        .expect("the first authenticated owner remains independently serviceable");
+    assert_eq!(first_authenticated.sender(), &outsiders[0]);
     assert!(matches!(
-        ingress.try_push(relayed(3, outsiders[2].clone())),
-        Err(super::FairV2IngressPushError::Full(_))
-    ));
-    let source_a = ingress
-        .try_recv()
-        .expect("oldest authenticated non-validator source receives its turn");
-    assert_eq!(source_a.via(), Some(&outsiders[0]));
-    assert!(matches!(
-        ingress.try_push(relayed(3, outsiders[2].clone())),
+        ingress.try_push(relayed(3, outsiders[3].clone())),
         Ok(super::FairV2IngressPushDisposition::Enqueued)
     ));
 }

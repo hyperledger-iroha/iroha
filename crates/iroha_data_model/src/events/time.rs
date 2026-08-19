@@ -602,14 +602,6 @@ mod json_tests {
     #[cfg(feature = "json")]
     #[test]
     fn json_roundtrip() {
-        let interval = TimeInterval {
-            since_ms: 1_000,
-            length_ms: 2_000,
-        };
-        let json = norito::json::to_json(&interval).expect("serialize");
-        assert_eq!(json, r#"{"since_ms":1000,"length_ms":2000}"#);
-        let deserialized: TimeInterval = norito::json::from_str(&json).expect("deserialize");
-        assert_eq!(deserialized, interval);
         fn assert_bounded<T: norito::json::JsonSerialize>(value: &T) {
             let expected = norito::json::to_json(value).expect("serialize ordinary JSON");
             assert_eq!(
@@ -622,6 +614,14 @@ mod json_tests {
                 Err(norito::json::BoundedJsonError::BodyTooLarge)
             );
         }
+        let interval = TimeInterval {
+            since_ms: 1_000,
+            length_ms: 2_000,
+        };
+        let json = norito::json::to_json(&interval).expect("serialize");
+        assert_eq!(json, r#"{"since_ms":1000,"length_ms":2000}"#);
+        let deserialized: TimeInterval = norito::json::from_str(&json).expect("deserialize");
+        assert_eq!(deserialized, interval);
         let schedule = Schedule {
             start_ms: 500,
             period_ms: Some(250),

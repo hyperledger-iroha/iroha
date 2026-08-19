@@ -1,4 +1,6 @@
 //! Versioned Norito codec tests for `iroha_version_derive`.
+#[path = "json.rs"]
+mod json;
 #[cfg(test)]
 mod tests {
     use iroha_version::{

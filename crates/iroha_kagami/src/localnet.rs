@@ -3,7 +3,7 @@ use crate::{
     Outcome, RunArgs,
     genesis::{
         ConsensusPolicy, generate_default, profile::known_chain_discriminant_for_chain_id,
-        validate_consensus_mode_for_line,
+        validate_consensus_mode,
     },
     tui,
 };
@@ -72,7 +72,6 @@ use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_test_samples::ALICE_ID;
 #[cfg(test)]
 use iroha_test_samples::REAL_GENESIS_ACCOUNT_KEYPAIR;
-use iroha_version::BuildLine;
 use rand::{TryRngCore as _, rngs::OsRng};
 use std::{
     collections::BTreeSet,
@@ -87,8 +86,6 @@ use zeroize::{Zeroize as _, Zeroizing};
 /// User-facing options for generating a bare-metal localnet.
 #[derive(Debug, Clone)]
 pub struct LocalnetOptions {
-    /// Build line selector (Iroha2 vs Iroha3).
-    pub build_line: BuildLine,
     /// Optional Sora profile selector (multi-lane / dataspace defaults).
     pub sora_profile: Option<SoraProfile>,
     /// Optional localnet performance profile (throughput presets).
@@ -335,30 +332,6 @@ impl From<LocalnetPerfProfileArg> for LocalnetPerfProfile {
         }
     }
 }
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BuildLineArg {
-    #[value(alias = "i2", alias = "2")]
-    Iroha2,
-    #[value(alias = "i3", alias = "3")]
-    Iroha3,
-}
-impl From<BuildLineArg> for BuildLine {
-    fn from(value: BuildLineArg) -> Self {
-        match value {
-            BuildLineArg::Iroha2 => BuildLine::Iroha2,
-            BuildLineArg::Iroha3 => BuildLine::Iroha3,
-        }
-    }
-}
-impl std::fmt::Display for BuildLineArg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let label = match self {
-            BuildLineArg::Iroha2 => "iroha2",
-            BuildLineArg::Iroha3 => "iroha3",
-        };
-        f.write_str(label)
-    }
-}
 pub(crate) fn consensus_mode_label(mode: SumeragiConsensusMode) -> &'static str {
     match mode {
         SumeragiConsensusMode::Permissioned => "permissioned",
@@ -433,7 +406,7 @@ fn localnet_sumeragi_body_bytes(validator_count: usize) -> Result<usize> {
 const LOCALNET_TX_GOSSIP_PERIOD_FAST_MS: u64 = 100;
 /// Transaction gossip resend ticks for 1s localnet pipelines.
 const LOCALNET_TX_GOSSIP_RESEND_TICKS_FAST: u32 = 1;
-/// Tx gossip frame cap for Nexus-enabled localnets so large public transactions still fit.
+/// Tx gossip frame cap for localnets so large public transactions still fit.
 const LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS: usize = 1_048_576;
 /// Base P2P frame cap for generated localnets.
 ///
@@ -453,8 +426,6 @@ const LOCALNET_MAX_FRAME_BYTES_BLOCK_SYNC: usize =
 /// This carries maximal consensus-safety proposals and timeout certificates.
 const LOCALNET_MAX_FRAME_BYTES_CONTROL: usize =
     iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONTROL.get();
-/// Default tx-gossip frame cap for generated localnets.
-const LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP: usize = 262_144;
 /// Peer-gossip frame cap for generated localnets.
 const LOCALNET_MAX_FRAME_BYTES_PEER_GOSSIP: usize = 65_536;
 /// Health-check frame cap for generated localnets.
@@ -874,13 +845,8 @@ pub struct Args {
     /// custody; use `--seed` only for reproducible development fixtures.
     #[arg(long, conflicts_with = "seed")]
     fresh_random_keys: bool,
-    /// Select the build line (`iroha2` or `iroha3`) for genesis compatibility.
-    /// Defaults to `iroha3`; consensus still defaults to `permissioned` unless a profile or
-    /// perf preset requires `npos`.
-    #[arg(long, value_enum, value_name = "LINE", default_value_t = BuildLineArg::Iroha3)]
-    build_line: BuildLineArg,
     /// Enable Sora profile defaults; `nexus` enforces public dataspace rules (NPoS).
-    /// Requires `--build-line iroha3` and at least 4 peers.
+    /// Requires at least 4 peers.
     #[arg(long, value_enum, value_name = "PROFILE")]
     sora_profile: Option<SoraProfileArg>,
     /// Select an exact restricted dataspace preset for the `dataspace` Sora profile.
@@ -951,7 +917,6 @@ fn resolve_requested_consensus_mode(
 }
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
-        let build_line = BuildLine::from(self.build_line);
         let sora_profile = resolve_sora_profile(self.sora_profile, self.private_dataspace)?;
         let perf_profile = self.perf_profile.map(LocalnetPerfProfile::from);
         let consensus_mode = resolve_requested_consensus_mode(self.consensus_mode, perf_profile);
@@ -977,7 +942,6 @@ impl<T: Write> RunArgs<T> for Args {
             self.seed
         };
         let mut opts = LocalnetOptions {
-            build_line,
             sora_profile,
             perf_profile,
             peers: self.peers,
@@ -992,7 +956,7 @@ impl<T: Write> RunArgs<T> for Args {
             consensus_mode,
             block_cadence_ms: self.block_cadence_ms,
         };
-        let outcome = generate_localnet_with_line(&opts, writer, fresh_random_keys);
+        let outcome = generate_localnet_inner(&opts, writer, fresh_random_keys);
         if fresh_random_keys && let Some(seed) = opts.seed.as_mut() {
             seed.zeroize();
         }
@@ -1024,7 +988,7 @@ struct BlsEntry {
 /// # Errors
 /// Returns an error if port ranges are invalid or if config, genesis, or script files cannot be written.
 pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWriter<T>) -> Outcome {
-    generate_localnet_with_line(opts, writer, false)
+    generate_localnet_inner(opts, writer, false)
 }
 #[allow(clippy::too_many_lines)]
 fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
@@ -1049,15 +1013,7 @@ fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
             "`--peers` ({validator_count}) must form an exact Sumeragi v2 3f+1 validator committee in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}"
         ));
     }
-    if opts.sora_profile.is_some() && !opts.build_line.is_iroha3() {
-        return Err(eyre!("`--sora-profile` requires `--build-line iroha3`"));
-    }
     if let Some(perf_spec) = opts.perf_profile.map(LocalnetPerfProfile::spec) {
-        if !opts.build_line.is_iroha3() {
-            return Err(eyre!(
-                "`--perf-profile` requires `--build-line iroha3` for 1s finality presets"
-            ));
-        }
         if opts.consensus_mode != perf_spec.consensus_mode {
             return Err(eyre!(
                 "`--perf-profile` {:?} requires `--consensus-mode {}`",
@@ -1082,16 +1038,13 @@ fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
     let consensus_policy = opts
         .sora_profile
         .map_or(ConsensusPolicy::Any, SoraProfile::consensus_policy);
-    validate_consensus_mode_for_line(opts.build_line, opts.consensus_mode, consensus_policy)?;
+    validate_consensus_mode(opts.consensus_mode, consensus_policy)?;
     let bind = CanonicalHost::parse(&opts.bind_host, "--bind-host")?;
     let public = CanonicalHost::parse(&opts.public_host, "--public-host")?;
     Ok(ResolvedHosts { bind, public })
 }
 fn localnet_uses_npos(consensus_mode: SumeragiConsensusMode) -> bool {
     matches!(consensus_mode, SumeragiConsensusMode::Npos)
-}
-fn localnet_should_enable_nexus(sora_profile: Option<SoraProfile>, npos_bootstrap: bool) -> bool {
-    sora_profile.is_some() || npos_bootstrap
 }
 #[derive(Debug, Clone, Copy)]
 struct LocalnetTxGossipOverrides {
@@ -1134,13 +1087,12 @@ fn localnet_client_account_literal(chain_discriminant: Option<u16>) -> String {
     account_id_runtime_literal(&localnet_client_account_id(), chain_discriminant)
 }
 #[allow(clippy::too_many_lines)]
-fn generate_localnet_with_line<T: Write>(
+fn generate_localnet_inner<T: Write>(
     opts: &LocalnetOptions,
     writer: &mut BufWriter<T>,
     redact_seed_metadata: bool,
 ) -> Outcome {
     init_instruction_registry();
-    let build_line = opts.build_line;
     let hosts = validate_localnet_options(opts)?;
     validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
     if redact_seed_metadata {
@@ -1194,10 +1146,9 @@ fn generate_localnet_with_line<T: Write>(
     let signature_batch_max_ed25519 = perf_spec.map(|_| LOCALNET_SIGNATURE_BATCH_MAX_ED25519);
     let runtime_block_max_transactions =
         perf_spec.map(|_| LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS);
-    // Nexus stays enabled for Sora profiles and whenever NPoS bootstrap is requested.
-    let nexus_enabled = localnet_should_enable_nexus(opts.sora_profile, npos_bootstrap);
-    let dataspace_fault_tolerance =
-        nexus_enabled.then(|| localnet_dataspace_fault_tolerance(opts.peers));
+    // Sora profiles and NPoS bootstrap emit a dataspace catalog. Nexus itself is mandatory.
+    let dataspace_fault_tolerance = (opts.sora_profile.is_some() || npos_bootstrap)
+        .then(|| localnet_dataspace_fault_tolerance(opts.peers));
     let block_cadence_override = opts
         .block_cadence_ms
         .or_else(|| perf_spec.map(|spec| spec.block_cadence_ms));
@@ -1339,7 +1290,6 @@ fn generate_localnet_with_line<T: Write>(
         (&hosts.bind, &hosts.public),
         RenderPeerFeatures {
             mcp_enabled,
-            nexus_enabled,
             npos_bootstrap,
             operator_account: &operator_account_literal,
             operator_private_key_file: &runtime_bundle.operator_signer_key,
@@ -1438,7 +1388,6 @@ fn generate_localnet_with_line<T: Write>(
             (&hosts.bind, &hosts.public),
             RenderPeerFeatures {
                 mcp_enabled,
-                nexus_enabled,
                 npos_bootstrap,
                 operator_account: &operator_account_literal,
                 operator_private_key_file: &runtime_bundle.operator_signer_key,
@@ -1477,8 +1426,7 @@ fn generate_localnet_with_line<T: Write>(
     write_scripts(
         &out_dir,
         opts.peers.get(),
-        build_line,
-        nexus_enabled,
+        opts.sora_profile.is_some(),
         &client_account_literal,
         &fee_asset_definition_id,
     )?;
@@ -1499,7 +1447,6 @@ fn generate_localnet_with_line<T: Write>(
     write_localnet_readme(
         &out_dir,
         &chain_id,
-        build_line,
         if redact_seed_metadata {
             None
         } else {
@@ -1532,7 +1479,6 @@ fn generate_localnet_with_line<T: Write>(
     tui::success("Localnet ready");
     writeln!(writer, "out_dir: {}", out_dir.display())?;
     writeln!(writer, "chain_id: {}", chain_id)?;
-    writeln!(writer, "build_line: {}", build_line.as_str())?;
     writeln!(
         writer,
         "consensus_mode: {}",
@@ -2091,7 +2037,6 @@ fn configured_chain_id() -> String {
 #[derive(Clone, Copy)]
 struct RenderPeerFeatures<'a> {
     mcp_enabled: bool,
-    nexus_enabled: bool,
     npos_bootstrap: bool,
     operator_account: &'a str,
     operator_private_key_file: &'a Path,
@@ -2133,7 +2078,6 @@ fn render_peer_config(
     let (bind_host, public_host) = hosts;
     let RenderPeerFeatures {
         mcp_enabled,
-        nexus_enabled,
         npos_bootstrap,
         operator_account,
         operator_private_key_file,
@@ -2290,7 +2234,6 @@ fn render_peer_config(
     );
     sumeragi.insert("keys".into(), Value::Table(keys));
     let mut nexus = Table::new();
-    nexus.insert("enabled".into(), Value::Boolean(nexus_enabled));
     let mut fusion = Table::new();
     fusion.insert(
         "exit_teu".into(),
@@ -2640,12 +2583,8 @@ fn render_peer_config(
     network.insert(
         "max_frame_bytes_tx_gossip".into(),
         Value::Integer(
-            i64::try_from(if nexus_enabled {
-                LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS
-            } else {
-                LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP
-            })
-            .expect("tx gossip frame cap fits i64"),
+            i64::try_from(LOCALNET_MAX_FRAME_BYTES_TX_GOSSIP_NEXUS)
+                .expect("tx gossip frame cap fits i64"),
         ),
     );
     network.insert(
@@ -4218,7 +4157,6 @@ fn default_irohad_bin_paths() -> (PathBuf, PathBuf) {
 fn write_scripts(
     out_dir: &Path,
     peers: u16,
-    build_line: BuildLine,
     sora_mode: bool,
     client_account_literal: &str,
     fee_asset_definition_id: &str,
@@ -4228,7 +4166,6 @@ fn write_scripts(
     write_start_script(
         &start,
         peers,
-        build_line,
         sora_mode,
         client_account_literal,
         fee_asset_definition_id,
@@ -4248,7 +4185,6 @@ fn write_scripts(
 fn write_start_script(
     start: &Path,
     peers: u16,
-    build_line: BuildLine,
     sora_mode: bool,
     client_account_literal: &str,
     fee_asset_definition_id: &str,
@@ -4273,11 +4209,6 @@ fn write_start_script(
     writeln!(start_file, "  command -v ps >/dev/null 2>&1 || return 0")?;
     writeln!(start_file, "  ps -p \"$pid\" -o pid= >/dev/null 2>&1")?;
     writeln!(start_file, "}}")?;
-    writeln!(
-        start_file,
-        "export IROHA_BUILD_LINE=\"{}\"",
-        build_line.as_str()
-    )?;
     writeln!(
         start_file,
         "DEFAULT_IROHAD_BIN_DEBUG=\"{}\"",
@@ -4792,7 +4723,6 @@ fn write_client_config(
 fn write_localnet_readme(
     out_dir: &Path,
     chain_id: &str,
-    build_line: BuildLine,
     seed: Option<&str>,
     private_custody: bool,
     consensus_mode: SumeragiConsensusMode,
@@ -4826,7 +4756,6 @@ fn write_localnet_readme(
         concat!(
             "# Kagami Localnet\n\n",
             "- Chain ID: `{chain_id}`\n",
-            "- Build line: `{build_line}`\n",
             "{seed_line}",
             "- Consensus mode: `{consensus_mode}`\n",
             "- Peer count: `{peers}`\n",
@@ -4866,7 +4795,6 @@ fn write_localnet_readme(
             "Logs are written to `peerN.log` files next to the generated configs.\n",
         ),
         chain_id = chain_id,
-        build_line = build_line.as_str(),
         seed_line = seed_line,
         consensus_mode = consensus_mode_label(consensus_mode),
         peers = peers,
@@ -5163,7 +5091,6 @@ mod tests {
         ] {
             let seed = format!("private-profile-sns-bootstrap-{}", case.alias);
             let opts = LocalnetOptions {
-                build_line: BuildLine::Iroha3,
                 sora_profile: Some(case.profile),
                 perf_profile: None,
                 peers: NonZeroU16::new(4).expect("non-zero"),
@@ -5579,7 +5506,6 @@ mod tests {
         ] {
             let temp = tempfile::tempdir().expect("create private-profile signing directory");
             let opts = LocalnetOptions {
-                build_line: BuildLine::Iroha3,
                 sora_profile: Some(profile),
                 perf_profile: None,
                 peers: NonZeroU16::new(4).expect("non-zero"),
@@ -5625,7 +5551,6 @@ mod tests {
     fn generated_configs_parse_with_current_schema() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -5667,7 +5592,6 @@ mod tests {
     fn generated_configs_for_user_localnet_parse() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -5714,7 +5638,6 @@ mod tests {
     fn generated_localnet_registers_requested_asset_definition_for_client_owner() {
         let requested_asset_literal = localnet_sample_asset_literal();
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -5786,7 +5709,6 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn generated_localnet_bootstraps_universal_kagemusha_asset() {
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -5960,7 +5882,6 @@ mod tests {
     #[test]
     fn permissioned_localnet_genesis_deduplicates_offline_escrow_grant() {
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -6002,7 +5923,6 @@ mod tests {
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))
             .expect("make localnet output directory owner-held");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -6018,7 +5938,7 @@ mod tests {
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         let mut command_output = BufWriter::new(Vec::new());
-        generate_localnet_with_line(&opts, &mut command_output, true)
+        generate_localnet_inner(&opts, &mut command_output, true)
             .expect("generate fresh-custody localnet files");
         let command_output = String::from_utf8(
             command_output
@@ -6286,7 +6206,6 @@ mod tests {
     fn generated_peer_config_includes_required_addr_literals() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -6394,7 +6313,6 @@ mod tests {
     fn generated_peer_config_allows_bls_signing_for_npos() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -6432,7 +6350,6 @@ mod tests {
     fn generated_genesis_allows_bls_signing_for_npos() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -6470,7 +6387,6 @@ mod tests {
     fn generated_peer_configs_include_peer_telemetry_urls() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -6570,7 +6486,6 @@ mod tests {
     fn generated_sora_profile_peer_config_includes_mcp_writer_profile() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: Some(SoraProfile::Nexus),
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -6653,7 +6568,6 @@ mod tests {
     fn generated_configs_use_strict_sumeragi_v2_schema() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -6807,7 +6721,6 @@ mod tests {
     fn perf_profile_permissioned_applies_bounded_runtime_limits() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: Some(LocalnetPerfProfile::Throughput10kPermissioned),
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -6866,7 +6779,6 @@ mod tests {
     fn perf_profile_npos_applies_election_and_runtime_limits() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: Some(LocalnetPerfProfile::Throughput10kNpos),
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -6912,7 +6824,6 @@ mod tests {
     #[test]
     fn validate_localnet_options_rejects_perf_profile_mismatch() {
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: Some(LocalnetPerfProfile::Throughput10kNpos),
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -6956,7 +6867,6 @@ mod tests {
     fn generated_genesis_handshake_meta_decodes() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -7015,7 +6925,6 @@ mod tests {
     fn localnet_signed_genesis_uses_first_release_npos_context() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -7039,7 +6948,6 @@ mod tests {
     fn default_block_cadence_is_injected_when_unset() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -7067,7 +6975,6 @@ mod tests {
     fn localnet_sets_block_max_transactions() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -7098,7 +7005,6 @@ mod tests {
         use std::collections::BTreeSet;
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -7254,7 +7160,6 @@ mod tests {
         let temp = tempfile::tempdir().expect("tmp dir");
         let peer_count = NonZeroU16::new(7).expect("non-zero");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: peer_count,
@@ -7355,7 +7260,6 @@ mod tests {
         let temp = tempfile::tempdir().expect("tmp dir");
         let peer_count = NonZeroU16::new(4).expect("non-zero");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: Some(SoraProfile::Nexus),
             perf_profile: None,
             peers: peer_count,
@@ -7866,7 +7770,6 @@ mod tests {
         let temp = tempfile::tempdir().expect("tmp dir");
         let peer_count = NonZeroU16::new(4).expect("non-zero");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: Some(SoraProfile::Dataspace),
             perf_profile: None,
             peers: peer_count,
@@ -8093,7 +7996,6 @@ mod tests {
     fn nexus_localnet_signed_genesis_uses_peer_config_da_proof_policies() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: Some(SoraProfile::Nexus),
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -8136,7 +8038,6 @@ mod tests {
     fn permissioned_localnet_pins_gas_limit_without_enabling_gas_fees() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -8179,7 +8080,6 @@ mod tests {
     fn block_cadence_override_is_signed_into_genesis() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -8231,7 +8131,6 @@ mod tests {
     fn npos_localnet_keeps_payload_for_fast_block_cadence() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -8263,7 +8162,6 @@ mod tests {
     fn npos_localnet_keeps_genesis_under_transaction_cap() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -8369,7 +8267,6 @@ mod tests {
     fn generated_permissioned_localnet_grants_operator_exact_fee_asset_mint_permission() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -8409,7 +8306,6 @@ mod tests {
     fn generated_nexus_localnet_mints_fee_asset_to_client_signer() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: Some(SoraProfile::Nexus),
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -8448,7 +8344,6 @@ mod tests {
     #[test]
     fn npos_localnet_seeds_exact_onboarding_fee_sponsor_program() {
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: Some(SoraProfile::Nexus),
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -8520,7 +8415,6 @@ mod tests {
     fn generated_nexus_localnet_serves_xor_faucet_from_client_signer() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: Some(SoraProfile::Nexus),
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -8592,7 +8486,6 @@ mod tests {
     fn generated_nexus_localnet_keeps_fee_asset_convertible_for_taira_wallets() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: Some(SoraProfile::Nexus),
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -8758,7 +8651,6 @@ mod tests {
         write_localnet_readme(
             tmp.path(),
             DEFAULT_CHAIN_ID,
-            BuildLine::Iroha3,
             Some("Iroha"),
             false,
             SumeragiConsensusMode::Npos,
@@ -8810,7 +8702,6 @@ mod tests {
         write_localnet_readme(
             tmp.path(),
             DEFAULT_CHAIN_ID,
-            BuildLine::Iroha3,
             None,
             true,
             SumeragiConsensusMode::Npos,
@@ -8871,18 +8762,12 @@ mod tests {
             .expect("read second onboarding token");
         assert_ne!(first_token, second_token);
     }
-    fn mandatory_da_localnet_options(build_line: BuildLine, out_dir: PathBuf) -> LocalnetOptions {
-        let consensus_mode = if build_line.is_iroha3() {
-            SumeragiConsensusMode::Npos
-        } else {
-            SumeragiConsensusMode::Permissioned
-        };
+    fn mandatory_da_localnet_options(out_dir: PathBuf) -> LocalnetOptions {
         LocalnetOptions {
-            build_line,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
-            seed: Some(format!("mandatory-da-{build_line:?}")),
+            seed: Some("mandatory-da".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_owned(),
             public_host: DEFAULT_PUBLIC_HOST.to_owned(),
             base_api_port: 19090,
@@ -8891,12 +8776,12 @@ mod tests {
             extra_accounts: 0,
             assets: Vec::new(),
             block_cadence_ms: None,
-            consensus_mode,
+            consensus_mode: SumeragiConsensusMode::Npos,
         }
     }
-    fn assert_da_is_protocol_invariant_not_configuration(build_line: BuildLine) {
+    fn assert_da_is_protocol_invariant_not_configuration() {
         let temp = tempfile::tempdir().expect("tmp dir");
-        let opts = mandatory_da_localnet_options(build_line, temp.path().to_path_buf());
+        let opts = mandatory_da_localnet_options(temp.path().to_path_buf());
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
@@ -8919,14 +8804,12 @@ mod tests {
         assert!(!manifest_json.contains("collectors_k"));
     }
     #[test]
-    fn every_build_line_omits_retired_da_configuration() {
-        assert_da_is_protocol_invariant_not_configuration(BuildLine::Iroha2);
-        assert_da_is_protocol_invariant_not_configuration(BuildLine::Iroha3);
+    fn localnet_omits_retired_da_configuration() {
+        assert_da_is_protocol_invariant_not_configuration();
     }
     #[test]
     fn rejects_overflowing_port_ranges() {
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).unwrap(),
@@ -8951,7 +8834,6 @@ mod tests {
     #[test]
     fn rejects_overlapping_port_ranges() {
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).unwrap(),
@@ -8976,7 +8858,6 @@ mod tests {
     #[test]
     fn rejects_zero_ports() {
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).unwrap(),
@@ -9001,7 +8882,6 @@ mod tests {
     #[test]
     fn validate_localnet_options_rejects_zero_block_cadence() {
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).unwrap(),
@@ -9027,7 +8907,6 @@ mod tests {
         let oversized =
             u16::try_from(MAX_VALIDATORS_PER_HEIGHT + 1).expect("protocol test boundary fits u16");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(oversized).expect("non-zero"),
@@ -9055,7 +8934,6 @@ mod tests {
     #[test]
     fn validate_localnet_options_rejects_non_three_f_plus_one_roster() {
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(5).expect("non-zero"),
@@ -9078,33 +8956,8 @@ mod tests {
         );
     }
     #[test]
-    fn validate_localnet_options_rejects_sora_profile_on_iroha2() {
-        let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha2,
-            sora_profile: Some(SoraProfile::Dataspace),
-            perf_profile: None,
-            peers: NonZeroU16::new(4).unwrap(),
-            seed: None,
-            bind_host: DEFAULT_BIND_HOST.to_string(),
-            public_host: DEFAULT_PUBLIC_HOST.to_string(),
-            base_api_port: 28080,
-            base_p2p_port: 28337,
-            out_dir: PathBuf::from("unused"),
-            extra_accounts: 0,
-            assets: Vec::new(),
-            block_cadence_ms: None,
-            consensus_mode: SumeragiConsensusMode::Permissioned,
-        };
-        let err = validate_localnet_options(&opts).expect_err("sora profile should require iroha3");
-        assert!(
-            err.to_string().contains("--build-line iroha3"),
-            "unexpected error: {err}"
-        );
-    }
-    #[test]
     fn validate_localnet_options_rejects_every_profile_with_too_few_peers() {
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(3).unwrap(),
@@ -9129,7 +8982,6 @@ mod tests {
     #[test]
     fn validate_localnet_options_rejects_permissioned_on_sora_nexus() {
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: Some(SoraProfile::Nexus),
             perf_profile: None,
             peers: NonZeroU16::new(4).unwrap(),
@@ -9153,7 +9005,6 @@ mod tests {
     #[test]
     fn validate_localnet_options_rejects_permissioned_on_sora_dataspace() {
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: Some(SoraProfile::Dataspace),
             perf_profile: None,
             peers: NonZeroU16::new(4).unwrap(),
@@ -9175,9 +9026,8 @@ mod tests {
         );
     }
     #[test]
-    fn validate_localnet_options_allows_permissioned_on_iroha3() {
+    fn validate_localnet_options_allows_permissioned_localnet() {
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).unwrap(),
@@ -9192,17 +9042,16 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
-        validate_localnet_options(&opts).expect("permissioned should be allowed on Iroha3");
+        validate_localnet_options(&opts).expect("permissioned localnet should be allowed");
     }
     #[test]
-    fn permissioned_iroha3_disables_nexus_in_peer_config() {
+    fn permissioned_localnet_uses_mandatory_nexus_default() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).unwrap(),
-            seed: Some("permissioned-iroha3".to_owned()),
+            seed: Some("permissioned-localnet".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_string(),
             public_host: DEFAULT_PUBLIC_HOST.to_string(),
             base_api_port: 28080,
@@ -9214,33 +9063,30 @@ mod tests {
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
         generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
-            .expect("generate permissioned iroha3 localnet");
+            .expect("generate permissioned localnet");
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
                 .expect("read generated peer config"),
         )
         .expect("parse peer config");
-        let nexus_enabled = peer_cfg
+        let nexus = peer_cfg
             .get("nexus")
             .and_then(toml::Value::as_table)
-            .and_then(|nexus| nexus.get("enabled"))
-            .and_then(toml::Value::as_bool);
-        assert_eq!(
-            nexus_enabled,
-            Some(false),
-            "permissioned iroha3 localnet should disable nexus"
+            .expect("nexus table");
+        assert!(
+            !nexus.contains_key("enabled"),
+            "generated configs must not expose the retired Nexus availability switch"
         );
     }
     #[test]
     #[allow(clippy::too_many_lines)] // End-to-end config assertions are kept together for this localnet scenario.
-    fn npos_iroha3_without_sora_profile_enables_nexus_in_peer_config() {
+    fn npos_without_sora_profile_uses_mandatory_nexus() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).unwrap(),
-            seed: Some("npos-iroha3".to_owned()),
+            seed: Some("npos-localnet".to_owned()),
             bind_host: DEFAULT_BIND_HOST.to_string(),
             public_host: DEFAULT_PUBLIC_HOST.to_string(),
             base_api_port: 28080,
@@ -9251,8 +9097,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-        generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
-            .expect("generate npos iroha3 localnet");
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate npos localnet");
         let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
             .expect("test localnet genesis key generation should succeed");
@@ -9267,11 +9112,9 @@ mod tests {
             .get("nexus")
             .and_then(toml::Value::as_table)
             .expect("nexus table");
-        let nexus_enabled = nexus.get("enabled").and_then(toml::Value::as_bool);
-        assert_eq!(
-            nexus_enabled,
-            Some(true),
-            "npos iroha3 localnet should enable nexus without a sora profile"
+        assert!(
+            !nexus.contains_key("enabled"),
+            "generated configs must rely on mandatory Nexus"
         );
         let gas_account_id = account_id_runtime_literal(&gas_account_id, None);
         let staking = nexus
@@ -9387,7 +9230,6 @@ mod tests {
     fn localnet_npos_bootstrap_does_not_re_register_genesis_account() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -9427,7 +9269,6 @@ mod tests {
         write_scripts(
             temp.path(),
             1,
-            BuildLine::Iroha3,
             true,
             &client_account_literal,
             &fee_asset_definition_id,

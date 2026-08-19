@@ -1936,7 +1936,6 @@ impl TieredStateBackend {
         collect_map!(TieredSegment::Proofs, Proof, world.proofs);
         collect_map!(TieredSegment::ProofTags, ProofTag, world.proof_tags);
         collect_map!(TieredSegment::ProofsByTag, ProofByTag, world.proofs_by_tag);
-        collect_map!(TieredSegment::CommitQcs, CommitQc, world.commit_qcs);
         collect_map!(
             TieredSegment::ContractManifests,
             ContractManifest,
@@ -2571,7 +2570,7 @@ mod measured_bytes_impls {
         },
         common::Owned,
         confidential::ConfidentialStatus,
-        consensus::{CertPhase, Qc, QcAggregate, QcRef},
+        consensus::{CertPhase, QcRef},
         domain::{Domain, DomainId},
         events::EventFilterBox,
         governance::types::{
@@ -3516,33 +3515,6 @@ mod measured_bytes_impls {
             size_of::<Self>()
         }
     }
-    impl MeasuredBytes for QcAggregate {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<QcAggregate>();
-            total = total.saturating_add(self.signers_bitmap.measured_bytes_extra());
-            total = total.saturating_add(self.bls_aggregate_signature.measured_bytes_extra());
-            total
-        }
-    }
-    impl MeasuredBytes for Qc {
-        fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<Qc>();
-            total = total.saturating_add(self.phase.measured_bytes_extra());
-            total = total.saturating_add(self.subject_block_hash.measured_bytes_extra());
-            total = total.saturating_add(self.parent_state_root.measured_bytes_extra());
-            total = total.saturating_add(self.post_state_root.measured_bytes_extra());
-            total = total.saturating_add(self.height.measured_bytes_extra());
-            total = total.saturating_add(self.view.measured_bytes_extra());
-            total = total.saturating_add(self.epoch.measured_bytes_extra());
-            total = total.saturating_add(self.mode_tag.measured_bytes_extra());
-            total = total.saturating_add(self.highest_qc.measured_bytes_extra());
-            total = total.saturating_add(self.validator_set_hash.measured_bytes_extra());
-            total = total.saturating_add(self.validator_set_hash_version.measured_bytes_extra());
-            total = total.saturating_add(self.validator_set.measured_bytes_extra());
-            total = total.saturating_add(self.aggregate.measured_bytes_extra());
-            total
-        }
-    }
     impl MeasuredBytes for ZkAssetVerifierBinding {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ZkAssetVerifierBinding>();
@@ -4079,7 +4051,6 @@ enum TieredSegment {
     Proofs,
     ProofTags,
     ProofsByTag,
-    CommitQcs,
     ContractManifests,
     ContractCode,
     ContractCodeUploads,
@@ -4136,7 +4107,6 @@ impl TieredSegment {
             TieredSegment::Proofs => "proofs",
             TieredSegment::ProofTags => "proof_tags",
             TieredSegment::ProofsByTag => "proofs_by_tag",
-            TieredSegment::CommitQcs => "commit_qcs",
             TieredSegment::ContractManifests => "contract_manifests",
             TieredSegment::ContractCode => "contract_code",
             TieredSegment::ContractCodeUploads => "contract_code_uploads",
@@ -4205,7 +4175,6 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "proofs" => TieredSegment::Proofs,
             "proof_tags" => TieredSegment::ProofTags,
             "proofs_by_tag" => TieredSegment::ProofsByTag,
-            "commit_qcs" => TieredSegment::CommitQcs,
             "contract_manifests" => TieredSegment::ContractManifests,
             "contract_code" => TieredSegment::ContractCode,
             "contract_code_uploads" => TieredSegment::ContractCodeUploads,
@@ -4403,7 +4372,6 @@ pub(crate) enum TieredKeyHandle {
     Proof(iroha_data_model::proof::ProofId),
     ProofTag(iroha_data_model::proof::ProofId),
     ProofByTag([u8; 4]),
-    CommitQc(iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>),
     ContractManifest(iroha_crypto::Hash),
     ContractCode(iroha_crypto::Hash),
     ContractCodeUpload(super::SmartContractCodeUploadKey),
@@ -4466,7 +4434,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::Proof(_) => TieredSegment::Proofs,
             TieredKeyHandle::ProofTag(_) => TieredSegment::ProofTags,
             TieredKeyHandle::ProofByTag(_) => TieredSegment::ProofsByTag,
-            TieredKeyHandle::CommitQc(_) => TieredSegment::CommitQcs,
             TieredKeyHandle::ContractManifest(_) => TieredSegment::ContractManifests,
             TieredKeyHandle::ContractCode(_) => TieredSegment::ContractCode,
             TieredKeyHandle::ContractCodeUpload(_) => TieredSegment::ContractCodeUploads,
@@ -4536,7 +4503,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::Proof(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ProofTag(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ProofByTag(key) => Ok(norito::codec::Encode::encode(key)),
-            TieredKeyHandle::CommitQc(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ContractManifest(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ContractCode(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ContractCodeUpload(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4628,7 +4594,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::Proof(id) => fetch!(world.proofs, id),
             TieredKeyHandle::ProofTag(id) => fetch!(world.proof_tags, id),
             TieredKeyHandle::ProofByTag(tag) => fetch!(world.proofs_by_tag, tag),
-            TieredKeyHandle::CommitQc(hash) => fetch!(world.commit_qcs, hash),
             TieredKeyHandle::ContractManifest(hash) => fetch!(world.contract_manifests, hash),
             TieredKeyHandle::ContractCode(hash) => fetch!(world.contract_code, hash),
             TieredKeyHandle::ContractCodeUpload(key) => fetch!(world.contract_code_uploads, key),
@@ -4727,7 +4692,6 @@ impl TieredKeyHandle {
             TieredKeyHandle::Proof(id) => fetch!(world.proofs, id),
             TieredKeyHandle::ProofTag(id) => fetch!(world.proof_tags, id),
             TieredKeyHandle::ProofByTag(tag) => fetch!(world.proofs_by_tag, tag),
-            TieredKeyHandle::CommitQc(hash) => fetch!(world.commit_qcs, hash),
             TieredKeyHandle::ContractManifest(hash) => fetch!(world.contract_manifests, hash),
             TieredKeyHandle::ContractCode(hash) => fetch!(world.contract_code, hash),
             TieredKeyHandle::ContractCodeUpload(key) => fetch!(world.contract_code_uploads, key),
@@ -4858,7 +4822,6 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::Proof(id) => write!(f, "proof:{id}"),
             TieredKeyHandle::ProofTag(id) => write!(f, "proof_tag:{id}"),
             TieredKeyHandle::ProofByTag(tag) => write!(f, "proofs_by_tag:{tag:?}"),
-            TieredKeyHandle::CommitQc(hash) => write!(f, "commit_qc:{hash}"),
             TieredKeyHandle::ContractManifest(hash) => write!(f, "contract_manifest:{hash}"),
             TieredKeyHandle::ContractCode(hash) => write!(f, "contract_code:{hash}"),
             TieredKeyHandle::ContractCodeUpload(key) => write!(
@@ -4952,10 +4915,9 @@ impl TieredManifestEntry {
 mod tests {
     use super::*;
     use iroha_config::parameters::actual::LaneConfig as RuntimeLaneConfig;
-    use iroha_crypto::{Hash, HashOf};
+    use iroha_crypto::Hash;
     use iroha_data_model::{
         account::OpaqueAccountId,
-        block::BlockHeader,
         bridge::{
             BridgeNativeProofBackendV1, SccpNativeTrustAnchorV1, SccpOutboundMessageKeyV1,
             SccpOutboundProofRecordV1,
@@ -4963,9 +4925,7 @@ mod tests {
                 SccpInboundMessageKeyV1, SccpInboundMessageRecordV1, SccpLaneIdV1, SccpNetworkV1,
             },
         },
-        consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
         nexus::{DataSpaceId, LaneCatalog, LaneConfig, LaneId},
-        peer::PeerId,
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
     };
     use nonzero_ext::nonzero;
@@ -4973,6 +4933,19 @@ mod tests {
     use std::os::unix::fs::MetadataExt;
     use std::{fs, num::NonZeroU32};
     use tempfile::tempdir;
+
+    #[test]
+    fn retired_commit_qc_segment_is_rejected() {
+        let error = norito::json::from_str::<TieredSegment>(r#""commit_qcs""#)
+            .expect_err("the retired commit-QC segment must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("unknown tiered segment `commit_qcs`"),
+            "unexpected retired-segment rejection: {error}"
+        );
+    }
+
     fn sccp_inbound_fixture() -> (SccpInboundMessageKeyV1, SccpInboundMessageRecordV1) {
         let key = SccpInboundMessageKeyV1::new(
             SccpLaneIdV1 {
@@ -5155,30 +5128,13 @@ mod tests {
             std::mem::size_of::<AssetDefinitionId>()
         );
     }
-    fn dummy_qc(seed: u8) -> Qc {
-        let validator_set: Vec<PeerId> = Vec::new();
-        Qc {
-            phase: crate::sumeragi::consensus::Phase::Commit,
-            subject_block_hash: iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(
-                Hash::new([seed; 4]),
-            ),
-            parent_state_root: Hash::new([seed.wrapping_add(1); 8]),
-            post_state_root: Hash::new([seed; 8]),
-            height: u64::from(seed),
-            view: u64::from(seed),
-            epoch: 0,
-            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-            rechain_seq: 0,
-            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
-            highest_qc: None,
-            validator_set_hash: HashOf::new(&validator_set),
-            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-            validator_set,
-            aggregate: QcAggregate {
-                signers_bitmap: vec![seed],
-                bls_aggregate_signature: vec![seed, seed + 1],
-            },
-        }
+    fn dummy_state_entry(seed: u8) -> (StatePath, Vec<u8>) {
+        (
+            format!("tiered_state_{seed}")
+                .parse()
+                .expect("valid tiered-state fixture path"),
+            vec![seed; usize::from(seed).saturating_add(2)],
+        )
     }
     #[test]
     fn snapshot_failure_leaves_existing_snapshot_intact() {
@@ -5408,10 +5364,14 @@ mod tests {
         let mut backend =
             TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 1, 0);
         let mut world = World::default();
-        let qc1 = dummy_qc(1);
-        let qc2 = dummy_qc(2);
-        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
-        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
+        let (key1, value1) = dummy_state_entry(1);
+        let (key2, value2) = dummy_state_entry(2);
+        world
+            .smart_contract_state
+            .insert(key1.clone(), value1.clone());
+        world
+            .smart_contract_state
+            .insert(key2.clone(), value2.clone());
         backend
             .record_world_snapshot(&world)
             .expect("first snapshot");
@@ -5440,14 +5400,13 @@ mod tests {
         let payload_path = snapshot_dir.join(spill_path);
         assert!(payload_path.exists());
         let encoded = fs::read(&payload_path).expect("payload read");
-        let decoded: Qc = json::from_slice(&encoded).expect("cold payload decodes");
-        assert!(decoded == qc1 || decoded == qc2);
+        let decoded: Vec<u8> = json::from_slice(&encoded).expect("cold payload decodes");
+        assert!(decoded == value1 || decoded == value2);
         // Mutate the other record so the hot entry flips on the next snapshot.
-        let mut updated = qc2.clone();
-        updated.view = 99;
+        let updated = vec![99; value2.len()];
         world
-            .commit_qcs
-            .insert(updated.subject_block_hash, updated.clone());
+            .smart_contract_state
+            .insert(key2.clone(), updated.clone());
         backend
             .record_world_snapshot(&world)
             .expect("second snapshot");
@@ -5468,10 +5427,10 @@ mod tests {
         let mut backend =
             TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-        let qc1 = dummy_qc(1);
-        let qc2 = dummy_qc(2);
-        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
-        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
+        let (key1, value1) = dummy_state_entry(1);
+        let (key2, value2) = dummy_state_entry(2);
+        world.smart_contract_state.insert(key1.clone(), value1);
+        world.smart_contract_state.insert(key2.clone(), value2);
         backend
             .record_world_snapshot(&world)
             .expect("initial snapshot");
@@ -5479,29 +5438,29 @@ mod tests {
             .last_manifest()
             .expect("manifest recorded")
             .snapshot_index;
-        let mut qc1_updated = qc1.clone();
-        qc1_updated.view = qc1_updated.view.saturating_add(1);
-        world.commit_qcs.insert(qc1.subject_block_hash, qc1_updated);
+        world
+            .smart_contract_state
+            .insert(key1.clone(), vec![0xA1; 8]);
         let mut diff = TieredSnapshotDiff::default();
-        diff.push(TieredKeyHandle::CommitQc(qc1.subject_block_hash));
+        diff.push(TieredKeyHandle::SmartContractState(key1.clone()));
         backend
             .record_world_snapshot_with_diff(&world, &diff)
             .expect("diff snapshot");
         let manifest = backend.last_manifest().expect("manifest recorded");
-        let qc1_key = TieredKeyHandle::CommitQc(qc1.subject_block_hash)
+        let key1_payload = TieredKeyHandle::SmartContractState(key1)
             .encode_key()
-            .expect("qc1 key encode");
-        let qc2_key = TieredKeyHandle::CommitQc(qc2.subject_block_hash)
+            .expect("first state key encode");
+        let key2_payload = TieredKeyHandle::SmartContractState(key2)
             .encode_key()
-            .expect("qc2 key encode");
+            .expect("second state key encode");
         let mut entries = manifest.hot_entries.iter().chain(&manifest.cold_entries);
         let entry1 = entries
             .clone()
-            .find(|entry| entry.key_payload == qc1_key)
-            .expect("qc1 entry present");
+            .find(|entry| entry.key_payload == key1_payload)
+            .expect("first state entry present");
         let entry2 = entries
-            .find(|entry| entry.key_payload == qc2_key)
-            .expect("qc2 entry present");
+            .find(|entry| entry.key_payload == key2_payload)
+            .expect("second state entry present");
         assert_eq!(entry1.last_mutated_snapshot, manifest.snapshot_index);
         assert_eq!(entry2.last_mutated_snapshot, snapshot1);
     }
@@ -5737,10 +5696,10 @@ mod tests {
         let mut backend =
             TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-        let qc1 = dummy_qc(1);
-        let qc2 = dummy_qc(2);
-        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
-        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
+        let (key1, value1) = dummy_state_entry(1);
+        let (key2, value2) = dummy_state_entry(2);
+        world.smart_contract_state.insert(key1.clone(), value1);
+        world.smart_contract_state.insert(key2.clone(), value2);
         backend
             .record_world_snapshot(&world)
             .expect("initial snapshot");
@@ -5748,34 +5707,33 @@ mod tests {
             .last_manifest()
             .expect("manifest recorded")
             .snapshot_index;
-        let mut qc1_updated = qc1.clone();
-        qc1_updated.view = qc1_updated.view.saturating_add(1);
+        let updated = vec![0xA1; 8];
         world
-            .commit_qcs
-            .insert(qc1.subject_block_hash, qc1_updated.clone());
+            .smart_contract_state
+            .insert(key1.clone(), updated.clone());
         let mut payload = TieredSnapshotPayload::default();
         payload.push_value(
-            TieredKeyHandle::CommitQc(qc1.subject_block_hash),
-            Some(qc1_updated),
+            TieredKeyHandle::SmartContractState(key1.clone()),
+            Some(updated),
         );
         backend
             .record_world_snapshot_with_payload(&payload)
             .expect("payload snapshot");
         let manifest = backend.last_manifest().expect("manifest recorded");
-        let qc1_key = TieredKeyHandle::CommitQc(qc1.subject_block_hash)
+        let key1_payload = TieredKeyHandle::SmartContractState(key1)
             .encode_key()
-            .expect("qc1 key encode");
-        let qc2_key = TieredKeyHandle::CommitQc(qc2.subject_block_hash)
+            .expect("first state key encode");
+        let key2_payload = TieredKeyHandle::SmartContractState(key2)
             .encode_key()
-            .expect("qc2 key encode");
+            .expect("second state key encode");
         let mut entries = manifest.hot_entries.iter().chain(&manifest.cold_entries);
         let entry1 = entries
             .clone()
-            .find(|entry| entry.key_payload == qc1_key)
-            .expect("qc1 entry present");
+            .find(|entry| entry.key_payload == key1_payload)
+            .expect("first state entry present");
         let entry2 = entries
-            .find(|entry| entry.key_payload == qc2_key)
-            .expect("qc2 entry present");
+            .find(|entry| entry.key_payload == key2_payload)
+            .expect("second state entry present");
         assert_eq!(entry1.last_mutated_snapshot, manifest.snapshot_index);
         assert_eq!(entry2.last_mutated_snapshot, snapshot1);
     }
@@ -5785,15 +5743,17 @@ mod tests {
         let mut backend =
             TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-        let qc1 = dummy_qc(1);
-        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
+        let (key1, value1) = dummy_state_entry(1);
+        world.smart_contract_state.insert(key1, value1);
         backend
             .record_world_snapshot(&world)
             .expect("initial snapshot");
-        let qc2 = dummy_qc(2);
-        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
+        let (key2, value2) = dummy_state_entry(2);
+        world
+            .smart_contract_state
+            .insert(key2.clone(), value2.clone());
         let mut payload = TieredSnapshotPayload::default();
-        payload.push_value(TieredKeyHandle::CommitQc(qc2.subject_block_hash), Some(qc2));
+        payload.push_value(TieredKeyHandle::SmartContractState(key2), Some(value2));
         backend
             .record_world_snapshot_with_payload(&payload)
             .expect("payload snapshot");
@@ -5807,10 +5767,14 @@ mod tests {
         let da_root = temp.path().join("da");
         let mut backend = TieredStateBackend::new(true, 1, 0, 0, None, Some(da_root.clone()), 0, 0);
         let mut world = World::default();
-        let qc1 = dummy_qc(1);
-        let qc2 = dummy_qc(2);
-        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
-        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
+        let (key1, value1) = dummy_state_entry(1);
+        let (key2, value2) = dummy_state_entry(2);
+        world
+            .smart_contract_state
+            .insert(key1.clone(), value1.clone());
+        world
+            .smart_contract_state
+            .insert(key2.clone(), value2.clone());
         backend
             .record_world_snapshot(&world)
             .expect("snapshot recorded");
@@ -5833,8 +5797,8 @@ mod tests {
             .read_cold_payload(manifest.snapshot_index, cold_entry)
             .expect("read cold payload")
             .expect("payload present");
-        let decoded: Qc = json::from_slice(&encoded).expect("cold payload decodes");
-        assert!(decoded == qc1 || decoded == qc2);
+        let decoded: Vec<u8> = json::from_slice(&encoded).expect("cold payload decodes");
+        assert!(decoded == value1 || decoded == value2);
     }
     #[test]
     fn cold_snapshots_offload_to_da_root_and_rehydrate_on_read() {
@@ -5852,10 +5816,14 @@ mod tests {
             1,
         );
         let mut world = World::default();
-        let qc1 = dummy_qc(1);
-        let qc2 = dummy_qc(2);
-        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
-        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
+        let (key1, value1) = dummy_state_entry(1);
+        let (key2, value2) = dummy_state_entry(2);
+        world
+            .smart_contract_state
+            .insert(key1.clone(), value1.clone());
+        world
+            .smart_contract_state
+            .insert(key2.clone(), value2.clone());
         backend
             .record_world_snapshot(&world)
             .expect("first snapshot");
@@ -5865,9 +5833,9 @@ mod tests {
             "expected cold entries in first snapshot"
         );
         let first_index = manifest1.snapshot_index;
-        let mut updated = qc2.clone();
-        updated.view = 99;
-        world.commit_qcs.insert(updated.subject_block_hash, updated);
+        world
+            .smart_contract_state
+            .insert(key2, vec![99; value2.len()]);
         backend
             .record_world_snapshot(&world)
             .expect("second snapshot");
@@ -5895,8 +5863,8 @@ mod tests {
             .read_cold_payload(first_index, cold_entry)
             .expect("read cold payload")
             .expect("payload present");
-        let decoded: Qc = json::from_slice(&encoded).expect("cold payload decodes");
-        assert!(decoded == qc1 || decoded == qc2);
+        let decoded: Vec<u8> = json::from_slice(&encoded).expect("cold payload decodes");
+        assert!(decoded == value1 || decoded == value2);
         let rehydrated_path = cold_root
             .join(format!("{first_index:020}"))
             .join(spill_path);
@@ -5921,12 +5889,14 @@ mod tests {
             0,
         );
         let mut world = World::default();
-        let qc1 = dummy_qc(1);
-        let qc2 = dummy_qc(2);
-        let qc1_hash = qc1.subject_block_hash;
-        let qc2_hash = qc2.subject_block_hash;
-        world.commit_qcs.insert(qc1_hash, qc1);
-        world.commit_qcs.insert(qc2_hash, qc2);
+        let (key1, value1) = dummy_state_entry(1);
+        let (key2, value2) = dummy_state_entry(2);
+        world
+            .smart_contract_state
+            .insert(key1.clone(), value1.clone());
+        world
+            .smart_contract_state
+            .insert(key2.clone(), value2.clone());
         backend
             .record_world_snapshot(&world)
             .expect("snapshot recorded");
@@ -5950,8 +5920,8 @@ mod tests {
             .read_cold_payload(manifest.snapshot_index, cold_entry)
             .expect("read cold payload")
             .expect("payload present");
-        let decoded: Qc = json::from_slice(&encoded).expect("cold payload decodes");
-        assert!(decoded.subject_block_hash == qc1_hash || decoded.subject_block_hash == qc2_hash);
+        let decoded: Vec<u8> = json::from_slice(&encoded).expect("cold payload decodes");
+        assert!(decoded == value1 || decoded == value2);
         assert!(
             cold_payload_path.exists(),
             "cold payload rehydrated into primary root"
@@ -5963,10 +5933,10 @@ mod tests {
         let mut backend =
             TieredStateBackend::new(true, 0, 1, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-        let qc1 = dummy_qc(1);
-        let qc2 = dummy_qc(2);
-        world.commit_qcs.insert(qc1.subject_block_hash, qc1);
-        world.commit_qcs.insert(qc2.subject_block_hash, qc2);
+        let (key1, value1) = dummy_state_entry(1);
+        let (key2, value2) = dummy_state_entry(2);
+        world.smart_contract_state.insert(key1, value1);
+        world.smart_contract_state.insert(key2, value2);
         backend
             .record_world_snapshot(&world)
             .expect("snapshot recorded");
@@ -5983,30 +5953,24 @@ mod tests {
         let mut backend =
             TieredStateBackend::new(true, 1, 0, 1, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-        let qc1 = dummy_qc(1);
-        let qc2 = dummy_qc(2);
-        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
-        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
+        let (key1, value1) = dummy_state_entry(1);
+        let (key2, value2) = dummy_state_entry(2);
+        world.smart_contract_state.insert(key1.clone(), value1);
+        world.smart_contract_state.insert(key2.clone(), value2);
         backend
             .record_world_snapshot(&world)
             .expect("first snapshot");
         let manifest = backend.last_manifest().expect("manifest recorded");
         assert_eq!(manifest.hot_entries.len(), 1);
-        let qc1_hash = hex::encode(sha256(&norito::codec::Encode::encode(
-            &qc1.subject_block_hash,
-        )));
-        let qc2_hash = hex::encode(sha256(&norito::codec::Encode::encode(
-            &qc2.subject_block_hash,
-        )));
+        let key1_hash = hex::encode(sha256(&norito::codec::Encode::encode(&key1)));
+        let key2_hash = hex::encode(sha256(&norito::codec::Encode::encode(&key2)));
         let hot_hash = manifest.hot_entries[0].key_hash_hex.clone();
         assert!(
-            hot_hash == qc1_hash || hot_hash == qc2_hash,
-            "hot entry should match one of the recent QC hashes"
+            hot_hash == key1_hash || hot_hash == key2_hash,
+            "hot entry should match one of the recent state keys"
         );
-        let mutate = if hot_hash == qc1_hash { qc2 } else { qc1 };
-        let mut updated = mutate.clone();
-        updated.view = 99;
-        world.commit_qcs.insert(updated.subject_block_hash, updated);
+        let mutate_key = if hot_hash == key1_hash { key2 } else { key1 };
+        world.smart_contract_state.insert(mutate_key, vec![99; 8]);
         backend
             .record_world_snapshot(&world)
             .expect("second snapshot");
@@ -6020,10 +5984,10 @@ mod tests {
         let mut backend =
             TieredStateBackend::new(true, 2, 0, 1, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-        let qc1 = dummy_qc(1);
-        let qc2 = dummy_qc(2);
-        world.commit_qcs.insert(qc1.subject_block_hash, qc1);
-        world.commit_qcs.insert(qc2.subject_block_hash, qc2);
+        let (key1, value1) = dummy_state_entry(1);
+        let (key2, value2) = dummy_state_entry(2);
+        world.smart_contract_state.insert(key1, value1);
+        world.smart_contract_state.insert(key2, value2);
         backend
             .record_world_snapshot(&world)
             .expect("first snapshot");
@@ -6051,10 +6015,10 @@ mod tests {
         assert_eq!(backend.hot_retained_bytes(), 256);
         assert_eq!(backend.max_cold_bytes(), 512);
         let mut world = World::default();
-        let qc1 = dummy_qc(1);
-        let qc2 = dummy_qc(2);
-        world.commit_qcs.insert(qc1.subject_block_hash, qc1);
-        world.commit_qcs.insert(qc2.subject_block_hash, qc2);
+        let (key1, value1) = dummy_state_entry(1);
+        let (key2, value2) = dummy_state_entry(2);
+        world.smart_contract_state.insert(key1, value1);
+        world.smart_contract_state.insert(key2, value2);
         backend
             .record_world_snapshot(&world)
             .expect("snapshot recorded");
@@ -6074,10 +6038,10 @@ mod tests {
         let mut backend =
             TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-        let qc1 = dummy_qc(1);
-        let qc2 = dummy_qc(2);
-        world.commit_qcs.insert(qc1.subject_block_hash, qc1);
-        world.commit_qcs.insert(qc2.subject_block_hash, qc2);
+        let (key1, value1) = dummy_state_entry(1);
+        let (key2, value2) = dummy_state_entry(2);
+        world.smart_contract_state.insert(key1, value1);
+        world.smart_contract_state.insert(key2, value2);
         backend
             .record_world_snapshot(&world)
             .expect("first snapshot");
@@ -6121,10 +6085,12 @@ mod tests {
         let mut backend =
             TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 0, 1);
         let mut world = World::default();
-        let qc1 = dummy_qc(1);
-        let qc2 = dummy_qc(2);
-        world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
-        world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
+        let (key1, value1) = dummy_state_entry(1);
+        let (key2, value2) = dummy_state_entry(2);
+        world.smart_contract_state.insert(key1, value1);
+        world
+            .smart_contract_state
+            .insert(key2.clone(), value2.clone());
         backend
             .record_world_snapshot(&world)
             .expect("first snapshot");
@@ -6132,9 +6098,9 @@ mod tests {
             .last_manifest()
             .expect("manifest recorded")
             .snapshot_index;
-        let mut updated = qc2.clone();
-        updated.view = 99;
-        world.commit_qcs.insert(updated.subject_block_hash, updated);
+        world
+            .smart_contract_state
+            .insert(key2, vec![99; value2.len()]);
         backend
             .record_world_snapshot(&world)
             .expect("second snapshot");
@@ -6253,8 +6219,8 @@ mod tests {
         let mut backend =
             TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-        let qc = dummy_qc(1);
-        world.commit_qcs.insert(qc.subject_block_hash, qc);
+        let (key, value) = dummy_state_entry(1);
+        world.smart_contract_state.insert(key, value);
         backend
             .record_world_snapshot(&world)
             .expect("snapshot recorded");
@@ -6280,8 +6246,8 @@ mod tests {
         let da_root = temp.path().join("da");
         let mut backend = TieredStateBackend::new(true, 1, 0, 0, None, Some(da_root), 0, 0);
         let mut world = World::default();
-        let qc = dummy_qc(1);
-        world.commit_qcs.insert(qc.subject_block_hash, qc);
+        let (key, value) = dummy_state_entry(1);
+        world.smart_contract_state.insert(key, value);
         backend
             .record_world_snapshot(&world)
             .expect("snapshot recorded");

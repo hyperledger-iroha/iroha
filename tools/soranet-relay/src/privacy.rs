@@ -74,7 +74,7 @@ impl fmt::Write for BoundedText {
     }
 }
 fn bounded_event_queue(requested: usize) -> (usize, VecDeque<SoranetPrivacyEventV1>) {
-    let capacity = requested.max(1).min(PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1);
+    let capacity = requested.clamp(1, PRIVACY_EVENT_BUFFER_MAX_CAPACITY_V1);
     let mut events = VecDeque::new();
     if events.try_reserve_exact(capacity).is_err() {
         return (0, events);

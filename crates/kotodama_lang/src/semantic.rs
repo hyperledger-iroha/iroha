@@ -13328,6 +13328,49 @@ fn enforce_permission_requirements(
 mod tests {
     use super::*;
     use crate::parser::parse_test_fragment as parse;
+    macro_rules! analyze_ok_tests {
+        ($($name:ident: $source:expr => $parse_message:expr, $analysis_message:expr;)+) => {
+            $(#[test] fn $name() { let program = parse($source).expect($parse_message); analyze(&program).expect($analysis_message); })+
+        };
+    }
+    macro_rules! analyze_test_ok_tests {
+        ($($name:ident: $source:expr => $parse_message:expr, $analysis_message:expr;)+) => {
+            $(#[test] fn $name() { let program = parse($source).expect($parse_message); analyze_test(&program).expect($analysis_message); })+
+        };
+    }
+    macro_rules! analyze_reject_code_tests {
+        ($($name:ident: $source:expr => $parse_message:expr, $error:ident = $reject_message:expr, $code:expr;)+) => {
+            $(#[test] fn $name() { let program = parse($source).expect($parse_message); let $error = analyze(&program).expect_err($reject_message); assert_eq!($error.code, $code); })+
+        };
+    }
+    macro_rules! analyze_reject_contains_tests {
+        ($($name:ident: $source:expr => $parse_message:expr, $error:ident = $reject_message:expr, $fragment:expr;)+) => {
+            $(#[test] fn $name() { let program = parse($source).expect($parse_message); let $error = analyze(&program).expect_err($reject_message); assert!($error.message.contains($fragment)); })+
+        };
+    }
+    macro_rules! analyze_test_reject_contains_tests {
+        ($($name:ident: $source:expr => $parse_message:expr, $error:ident = $reject_message:expr, $fragment:expr;)+) => {
+            $(#[test] fn $name() { let program = parse($source).expect($parse_message); let $error = analyze_test(&program).expect_err($reject_message); assert!($error.message.contains($fragment)); })+
+        };
+    }
+    macro_rules! analyze_reject_contains_diagnostic_tests {
+        ($($name:ident: $source:expr => $parse_message:expr, $error:ident = $reject_message:expr, $fragment:expr, $diagnostic:expr;)+) => {
+            $(#[test] fn $name() { let program = parse($source).expect($parse_message); let $error = analyze(&program).expect_err($reject_message); assert!($error.message.contains($fragment), $diagnostic, $error.message); })+
+        };
+    }
+    macro_rules! analyze_error_code_message_tests {
+        ($($name:ident: $error:ident = $source:expr => $code:expr, $message:expr;)+) => {
+            $(#[test] fn $name() { let $error = analyze_error($source); assert_eq!($error.code, $code); assert_eq!($error.message, $message); })+
+        };
+    }
+    macro_rules! analyze_error_code_cases {
+        ($name:ident: $($error:ident = $source:expr => $code:expr;)+) => {
+            #[test]
+            fn $name() {
+                $(let $error = analyze_error($source); assert_eq!($error.code, $code);)+
+            }
+        };
+    }
     fn shared_struct_dag_source(levels: usize, repeated_reads: usize) -> String {
         let mut source = String::from("seiyaku SharedTypes {\n");
         for index in 0..levels {
@@ -14400,29 +14443,13 @@ mod tests {
         assert_eq!(interior.ordered.len(), 2);
         assert_eq!(interior.evaluation_order, [0, 1]);
     }
-    #[test]
-    fn privileged_and_effectful_calls_with_three_parameters_require_names() {
-        let privileged = analyze_error(
-            "kotoage fn publish(int first, string second, bool third) authorize(\"Publish\") {} fn main() { publish(1, \"two\", true); }",
-        );
-        assert_eq!(privileged.code, "E_NAMED_ARGUMENTS_REQUIRED");
-        let effectful = analyze_error(
-            "fn main(AccountId account, Name key, Json value) { ledger::account::set_detail(account, key, value); }",
-        );
-        assert_eq!(effectful.code, "E_NAMED_ARGUMENTS_REQUIRED");
-        let transitive = analyze_error(
-            "fn sink(AccountId account, Name key, Json value) { ledger::account::set_detail(account: account, key: key, value: value); } fn wrapper(AccountId account, Name key, Json value) { sink(account: account, key: key, value: value); } fn main(AccountId account, Name key, Json value) { wrapper(account, key, value); }",
-        );
-        assert_eq!(transitive.code, "E_NAMED_ARGUMENTS_REQUIRED");
+    analyze_error_code_cases! {
+        privileged_and_effectful_calls_with_three_parameters_require_names:
+        privileged = "kotoage fn publish(int first, string second, bool third) authorize(\"Publish\") {} fn main() { publish(1, \"two\", true); }" => "E_NAMED_ARGUMENTS_REQUIRED";
+        effectful = "fn main(AccountId account, Name key, Json value) { ledger::account::set_detail(account, key, value); }" => "E_NAMED_ARGUMENTS_REQUIRED";
+        transitive = "fn sink(AccountId account, Name key, Json value) { ledger::account::set_detail(account: account, key: key, value: value); } fn wrapper(AccountId account, Name key, Json value) { sink(account: account, key: key, value: value); } fn main(AccountId account, Name key, Json value) { wrapper(account, key, value); }" => "E_NAMED_ARGUMENTS_REQUIRED";
     }
-    #[test]
-    fn named_method_arguments_do_not_mix_with_the_receiver() {
-        let program = parse(
-            "fn lookup(Json object, Name key) -> Option<int> { return object.get_int(key: key); }",
-        )
-        .expect("parse named method call");
-        analyze(&program).expect("implicit receiver must not count as a positional argument");
-    }
+    analyze_ok_tests! { named_method_arguments_do_not_mix_with_the_receiver: "fn lookup(Json object, Name key) -> Option<int> { return object.get_int(key: key); }" => "parse named method call", "implicit receiver must not count as a positional argument"; }
     #[test]
     fn pagination_calls_require_offset_and_limit_names() {
         let positional =
@@ -14492,15 +14519,7 @@ mod tests {
             assert_eq!(err.message, expected);
         }
     }
-    #[test]
-    fn cross_kind_declaration_collisions_are_rejected() {
-        let err = analyze_error("struct Shared { int value; } fn Shared() {}");
-        assert_eq!(err.code, "E_DUPLICATE_DECLARATION");
-        assert_eq!(
-            err.message,
-            "declaration name `Shared` is already used by a type"
-        );
-    }
+    analyze_error_code_message_tests! { cross_kind_declaration_collisions_are_rejected: err = "struct Shared { int value; } fn Shared() {}" => "E_DUPLICATE_DECLARATION", "declaration name `Shared` is already used by a type"; }
     #[test]
     fn compiler_owned_declaration_names_are_rejected() {
         for (source, expected) in [
@@ -14653,16 +14672,10 @@ mod tests {
             unsupported.message
         );
     }
-    #[test]
-    fn forward_declared_struct_types_are_accepted() {
-        let program = parse(
-            "struct First { Second second; } \
+    #[rustfmt::skip]
+    analyze_ok_tests! { forward_declared_struct_types_are_accepted: "struct First { Second second; } \
              struct Second { int value; } \
-             fn read(First first) -> int { return first.second.value; }",
-        )
-        .expect("source should parse");
-        analyze(&program).expect("forward-declared struct references should resolve");
-    }
+             fn read(First first) -> int { return first.second.value; }" => "source should parse", "forward-declared struct references should resolve"; }
     #[test]
     fn reusable_context_clears_all_declaration_registries() {
         let context = SemanticContext::new();
@@ -14842,19 +14855,13 @@ mod tests {
         assert!(is_projection(binding("left"), None, "0"));
         assert!(is_projection(binding("right"), None, "1"));
     }
-    #[test]
-    fn state_map_iteration_accepts_pointer_keys() {
-        let program = parse(
-            "state StateMap<Name, int> Items; \
+    #[rustfmt::skip]
+    analyze_ok_tests! { state_map_iteration_accepts_pointer_keys: "state StateMap<Name, int> Items; \
              fn main() { \
                  for (k, v) in Items.take(1) { \
                      let _x = v; \
                  } \
-             }",
-        )
-        .expect("parse state map");
-        analyze(&program).expect("canonical StateMap iteration supports typed pointer keys");
-    }
+             }" => "parse state map", "canonical StateMap iteration supports typed pointer keys"; }
     #[test]
     fn static_state_map_iteration_limit_is_inclusive_and_fail_closed() {
         for iteration in ["M.take(64)", "M.range(10, 74)"] {
@@ -14902,73 +14909,29 @@ mod tests {
                 .contains("requires a non-negative int literal")
         );
     }
-    #[test]
-    fn dynamic_map_range_rejects_non_literal_bounds() {
-        let program = parse(
-            "state StateMap<int, int> M; \
+    #[rustfmt::skip]
+    analyze_reject_contains_tests! { dynamic_map_range_rejects_non_literal_bounds: "state StateMap<int, int> M; \
              fn main(int start, int end) { \
                  for (k, v) in M.range(start, end) { \
                      let _x = v; \
                  } \
-             }",
-        )
-        .expect("parse dynamic range");
-        let error = analyze(&program).expect_err("dynamic range must fail closed in V1");
-        assert!(error.message.contains("requires non-negative int literals"));
-    }
-    #[test]
-    fn state_map_alias_is_rejected() {
-        let program = parse(
-            "state StateMap<int, int> M; \
+             }" => "parse dynamic range", error = "dynamic range must fail closed in V1", "requires non-negative int literals"; }
+    #[rustfmt::skip]
+    analyze_reject_code_tests! { state_map_alias_is_rejected: "state StateMap<int, int> M; \
              fn main() { \
                  let m = M; \
-             }",
-        )
-        .expect("parse state map alias");
-        let err = analyze(&program).expect_err("aliasing a state map should error");
-        assert_eq!(err.code, "E_STATE_MAP_ALIAS");
-    }
-    #[test]
-    fn state_map_reassignment_is_rejected() {
-        let program = parse(
-            "state StateMap<int, int> M; \
+             }" => "parse state map alias", err = "aliasing a state map should error", "E_STATE_MAP_ALIAS"; }
+    #[rustfmt::skip]
+    analyze_reject_code_tests! { state_map_reassignment_is_rejected: "state StateMap<int, int> M; \
              fn main() { \
                  M = StateMap::new(); \
-             }",
-        )
-        .expect("parse state map reassignment");
-        let err = analyze(&program).expect_err("reassigning a state map should error");
-        assert_eq!(err.code, "E_STATE_MAP_ALIAS");
-    }
-    #[test]
-    fn state_map_cannot_be_passed_to_user_fn() {
-        let program = parse(
-            "state StateMap<int, int> M; \
+             }" => "parse state map reassignment", err = "reassigning a state map should error", "E_STATE_MAP_ALIAS"; }
+    #[rustfmt::skip]
+    analyze_reject_code_tests! { state_map_cannot_be_passed_to_user_fn: "state StateMap<int, int> M; \
              fn f(StateMap<int, int> m) { let _x = 0; } \
-             fn main() { f(M); }",
-        )
-        .expect("parse state map arg");
-        let err = analyze(&program).expect_err("passing state map to user fn should error");
-        assert_eq!(err.code, "E_STATE_MAP_ALIAS");
-    }
-    #[test]
-    fn scalar_state_requires_hajimari() {
-        let err = analyze_error("state int counter; fn read() -> int { return counter; }");
-        assert_eq!(err.code, "E_STATE_HAJIMARI_REQUIRED");
-        assert_eq!(
-            err.message,
-            "seiyaku scalar state requires a `hajimari()`/`始まり()` declaration"
-        );
-    }
-    #[test]
-    fn scalar_state_hajimari_reports_every_missing_write() {
-        let err = analyze_error("state int first; state int second; hajimari() { first = 0; }");
-        assert_eq!(err.code, "E_STATE_HAJIMARI_INCOMPLETE");
-        assert_eq!(
-            err.message,
-            "hajimari() must initialize every scalar state on every normal return or fallthrough path; missing: second"
-        );
-    }
+             fn main() { f(M); }" => "parse state map arg", err = "passing state map to user fn should error", "E_STATE_MAP_ALIAS"; }
+    analyze_error_code_message_tests! { scalar_state_requires_hajimari: err = "state int counter; fn read() -> int { return counter; }" => "E_STATE_HAJIMARI_REQUIRED", "seiyaku scalar state requires a `hajimari()`/`始まり()` declaration"; }
+    analyze_error_code_message_tests! { scalar_state_hajimari_reports_every_missing_write: err = "state int first; state int second; hajimari() { first = 0; }" => "E_STATE_HAJIMARI_INCOMPLETE", "hajimari() must initialize every scalar state on every normal return or fallthrough path; missing: second"; }
     #[test]
     fn scalar_state_initialization_intersects_conditional_paths() {
         let accepted = parse(
@@ -14997,68 +14960,31 @@ mod tests {
         .expect("parse initialized early return");
         analyze(&accepted).expect("every normal exit initializes scalar state");
     }
-    #[test]
-    fn scalar_state_initialization_does_not_trust_optional_execution() {
-        let loop_error = analyze_error(
-            "state int value; \
-             hajimari() { for index in range(1) { value = index; } }",
-        );
-        assert_eq!(loop_error.code, "E_STATE_HAJIMARI_INCOMPLETE");
-        let short_circuit_error = analyze_error(
-            "state int value; \
+    #[rustfmt::skip]
+    analyze_error_code_cases! {
+        scalar_state_initialization_does_not_trust_optional_execution:
+        loop_error = "state int value; \
+             hajimari() { for index in range(1) { value = index; } }" => "E_STATE_HAJIMARI_INCOMPLETE";
+        short_circuit_error = "state int value; \
              fn seed() -> bool { value = 1; return true; } \
-             hajimari() { let ignored = false && seed(); }",
-        );
-        assert_eq!(short_circuit_error.code, "E_STATE_HAJIMARI_INCOMPLETE");
+             hajimari() { let ignored = false && seed(); }" => "E_STATE_HAJIMARI_INCOMPLETE";
     }
-    #[test]
-    fn scalar_state_hajimari_accepts_transitive_complete_initialization() {
-        let program = parse(
-            "state int counter; \
+    #[rustfmt::skip]
+    analyze_ok_tests! { scalar_state_hajimari_accepts_transitive_complete_initialization: "state int counter; \
              struct Ledger { int total; } \
              state Ledger ledger; \
              fn seed() { counter = 0; ledger = Ledger { total: 0 }; } \
-             hajimari() { seed(); }",
-        )
-        .expect("parse transitive scalar hajimari");
-        analyze(&program).expect("transitive hajimari writes should initialize every scalar state");
-    }
-    #[test]
-    fn map_assignment_requires_map_target() {
-        let program = parse("fn f() { let x = 1; x[0] = 2; }").expect("parse map assignment");
-        let err = analyze(&program).expect_err("non-map assignment should error");
-        assert!(err.message.contains("map assignment expects StateMap<K,V>"));
-    }
+             hajimari() { seed(); }" => "parse transitive scalar hajimari", "transitive hajimari writes should initialize every scalar state"; }
+    analyze_reject_contains_tests! { map_assignment_requires_map_target: "fn f() { let x = 1; x[0] = 2; }" => "parse map assignment", err = "non-map assignment should error", "map assignment expects StateMap<K,V>"; }
     #[test]
     fn assignment_rejects_bool_to_int() {
         let program =
             parse("fn f() { var int x = true; x = false; }").expect("parse bool assignment");
         analyze(&program).expect_err("bool assignment must not coerce to int");
     }
-    #[test]
-    fn immutable_local_reassignment_is_rejected() {
-        let err = analyze_error("fn f() { let value = 1; value = 2; }");
-        assert_eq!(err.code, "E_IMMUTABLE_ASSIGNMENT");
-        assert_eq!(
-            err.message,
-            "cannot assign to immutable binding `value`; declare a mutable local with `var`"
-        );
-    }
-    #[test]
-    fn mutable_local_reassignment_is_accepted() {
-        let program = parse("fn f() -> int { var value = 1; value += 2; return value; }")
-            .expect("parse mutable binding");
-        analyze(&program).expect("var bindings should permit reassignment");
-    }
-    #[test]
-    fn function_parameters_are_immutable() {
-        let err = analyze_error("fn f(int value) { value = 2; }");
-        assert_eq!(err.code, "E_IMMUTABLE_ASSIGNMENT");
-        assert_eq!(
-            err.message,
-            "cannot assign to immutable binding `value`; declare a mutable local with `var`"
-        );
-    }
+    analyze_error_code_message_tests! { immutable_local_reassignment_is_rejected: err = "fn f() { let value = 1; value = 2; }" => "E_IMMUTABLE_ASSIGNMENT", "cannot assign to immutable binding `value`; declare a mutable local with `var`"; }
+    analyze_ok_tests! { mutable_local_reassignment_is_accepted: "fn f() -> int { var value = 1; value += 2; return value; }" => "parse mutable binding", "var bindings should permit reassignment"; }
+    analyze_error_code_message_tests! { function_parameters_are_immutable: err = "fn f(int value) { value = 2; }" => "E_IMMUTABLE_ASSIGNMENT", "cannot assign to immutable binding `value`; declare a mutable local with `var`"; }
     #[test]
     fn local_declarations_cannot_duplicate_or_shadow_bindings() {
         for source in [
@@ -15093,42 +15019,13 @@ mod tests {
             "{error:?}"
         );
     }
-    #[test]
-    fn break_requires_loop_context() {
-        let program = parse("fn f() { break; }").expect("parse break");
-        let err = analyze(&program).expect_err("break outside loop should error");
-        assert_eq!(err.code, "E_BREAK_OUTSIDE_LOOP");
-    }
-    #[test]
-    fn continue_requires_loop_context() {
-        let program = parse("fn f() { continue; }").expect("parse continue");
-        let err = analyze(&program).expect_err("continue outside loop should error");
-        assert_eq!(err.code, "E_CONTINUE_OUTSIDE_LOOP");
-    }
-    #[test]
-    fn state_shadowing_is_rejected_in_let() {
-        let program =
-            parse("state int counter; fn f() { let counter = 1; }").expect("parse shadowing let");
-        let err = analyze(&program).expect_err("state shadowing should error");
-        assert_eq!(err.code, "E_STATE_SHADOWED");
-    }
-    #[test]
-    fn state_shadowing_is_rejected_in_params() {
-        let program =
-            parse("state int counter; fn f(int counter) {}").expect("parse shadowing param");
-        let err = analyze(&program).expect_err("state shadowing should error");
-        assert_eq!(err.code, "E_STATE_SHADOWED");
-    }
-    #[test]
-    fn state_shadowing_is_rejected_in_map_loop_vars() {
-        let program = parse(
-            "state int counter; state StateMap<int, int> M; \
-             fn f() { for (counter, v) in M.take(1) { let _x = v; } }",
-        )
-        .expect("parse shadowing loop vars");
-        let err = analyze(&program).expect_err("state shadowing should error");
-        assert_eq!(err.code, "E_STATE_SHADOWED");
-    }
+    analyze_reject_code_tests! { break_requires_loop_context: "fn f() { break; }" => "parse break", err = "break outside loop should error", "E_BREAK_OUTSIDE_LOOP"; }
+    analyze_reject_code_tests! { continue_requires_loop_context: "fn f() { continue; }" => "parse continue", err = "continue outside loop should error", "E_CONTINUE_OUTSIDE_LOOP"; }
+    analyze_reject_code_tests! { state_shadowing_is_rejected_in_let: "state int counter; fn f() { let counter = 1; }" => "parse shadowing let", err = "state shadowing should error", "E_STATE_SHADOWED"; }
+    analyze_reject_code_tests! { state_shadowing_is_rejected_in_params: "state int counter; fn f(int counter) {}" => "parse shadowing param", err = "state shadowing should error", "E_STATE_SHADOWED"; }
+    #[rustfmt::skip]
+    analyze_reject_code_tests! { state_shadowing_is_rejected_in_map_loop_vars: "state int counter; state StateMap<int, int> M; \
+             fn f() { for (counter, v) in M.take(1) { let _x = v; } }" => "parse shadowing loop vars", err = "state shadowing should error", "E_STATE_SHADOWED"; }
     #[test]
     fn c_style_for_is_rejected_before_semantic_analysis() {
         for source in [
@@ -15190,19 +15087,8 @@ mod tests {
         let error = analyze(&program).expect_err("dynamic for AST must fail closed");
         assert_eq!(error.code, "E_UNBOUNDED_LOOP");
     }
-    #[test]
-    fn equality_rejects_tuple_types() {
-        let program = parse("fn f() { let a = (1, 2); let b = (1, 2); let _x = a == b; }")
-            .expect("parse tuple equality");
-        let err = analyze(&program).expect_err("tuple equality should error");
-        assert!(err.message.contains("equality is not supported"));
-    }
-    #[test]
-    fn pointer_constructor_accepts_string_binding() {
-        let program = parse("fn f() { let s = \"wonderland\"; let _n = Name::parse(s); }")
-            .expect("parse pointer constructor");
-        analyze(&program).expect("string binding should be allowed");
-    }
+    analyze_reject_contains_tests! { equality_rejects_tuple_types: "fn f() { let a = (1, 2); let b = (1, 2); let _x = a == b; }" => "parse tuple equality", err = "tuple equality should error", "equality is not supported"; }
+    analyze_ok_tests! { pointer_constructor_accepts_string_binding: "fn f() { let s = \"wonderland\"; let _n = Name::parse(s); }" => "parse pointer constructor", "string binding should be allowed"; }
     #[test]
     fn flat_pointer_constructor_spellings_are_rejected() {
         for (flat, canonical) in [
@@ -15255,14 +15141,7 @@ mod tests {
             assert!(error.message.contains(canonical), "{error:?}");
         }
     }
-    #[test]
-    fn japanese_branded_capability_segments_normalize_to_the_canonical_registry() {
-        let program = parse(
-            include_str!("semantic/test_sources/japanese_branded_capability_segments_normalize_to_the_canonical_registry_1.ko"),
-        )
-        .expect("parse Japanese branded capability path");
-        analyze(&program).expect("Japanese capability segments must resolve canonically");
-    }
+    analyze_ok_tests! { japanese_branded_capability_segments_normalize_to_the_canonical_registry: include_str!("semantic/test_sources/japanese_branded_capability_segments_normalize_to_the_canonical_registry_1.ko") => "parse Japanese branded capability path", "Japanese capability segments must resolve canonically"; }
     #[test]
     fn canonical_builtin_diagnostics_replace_only_identifier_tokens() {
         assert_eq!(
@@ -15282,26 +15161,14 @@ mod tests {
             "__invoke_entrypoint__run targets test::invoke_kotoage"
         );
     }
-    #[test]
-    fn for_body_bindings_do_not_escape_loop() {
-        let program = parse(
-            "fn f() { \
+    #[rustfmt::skip]
+    analyze_reject_contains_tests! { for_body_bindings_do_not_escape_loop: "fn f() { \
                 for i in range(1) { \
                     let x = 1; \
                 } \
                 let _y = x; \
-            }",
-        )
-        .expect("parse for loop");
-        let err = analyze(&program).expect_err("body bindings should not escape");
-        assert!(err.message.contains("undefined variable"));
-    }
-    #[test]
-    fn tuple_pattern_requires_tuple_type() {
-        let program = parse("fn f() { let (a, b) = 1; }").expect("parse tuple pattern");
-        let err = analyze(&program).expect_err("non-tuple destructuring should error");
-        assert!(err.message.contains("tuple destructuring expects a tuple"));
-    }
+            }" => "parse for loop", err = "body bindings should not escape", "undefined variable"; }
+    analyze_reject_contains_tests! { tuple_pattern_requires_tuple_type: "fn f() { let (a, b) = 1; }" => "parse tuple pattern", err = "non-tuple destructuring should error", "tuple destructuring expects a tuple"; }
     #[test]
     fn tuple_pattern_requires_arity_match() {
         let program = parse("fn f() { let (a, b, c) = (1, 2); }").expect("parse tuple pattern");
@@ -15351,13 +15218,7 @@ mod tests {
             err.message
         );
     }
-    #[test]
-    fn bytes_equality_is_allowed() {
-        let program =
-            parse(r#"fn f() { let bytes b = b"hi"; let bytes c = b"hi"; let _x = b == c; }"#)
-                .expect("parse bytes equality");
-        analyze(&program).expect("bytes equality should be allowed");
-    }
+    analyze_ok_tests! { bytes_equality_is_allowed: r#"fn f() { let bytes b = b"hi"; let bytes c = b"hi"; let _x = b == c; }"# => "parse bytes equality", "bytes equality should be allowed"; }
     #[test]
     fn bytes_literal_types_as_bytes() {
         let program = parse(r#"fn f() { let bytes b = b"ab"; }"#).expect("parse bytes literal");
@@ -15424,17 +15285,8 @@ mod tests {
             );
         }
     }
-    #[test]
-    fn field_assignment_is_rejected() {
-        let program = parse("fn f() { let t = (1, 2); t.0 = 3; }").expect("parse field assignment");
-        let err = analyze(&program).expect_err("field assignment should error");
-        assert!(err.message.contains("assignment target must be"));
-    }
-    #[test]
-    fn info_accepts_int() {
-        let program = parse("fn f() { debug::info(42); }").expect("parse info");
-        analyze(&program).expect("info should accept int");
-    }
+    analyze_reject_contains_tests! { field_assignment_is_rejected: "fn f() { let t = (1, 2); t.0 = 3; }" => "parse field assignment", err = "field assignment should error", "assignment target must be"; }
+    analyze_ok_tests! { info_accepts_int: "fn f() { debug::info(42); }" => "parse info", "info should accept int"; }
     #[test]
     fn view_entrypoints_reject_observable_debug_logging() {
         let program = parse("seiyaku Demo { view fn inspect() { debug::info(42); } }")
@@ -15456,84 +15308,14 @@ mod tests {
             "{error:?}"
         );
     }
-    #[test]
-    fn trigger_event_accepts_no_args() {
-        let program = parse(
-            "fn f() { let ev = context::trigger_event(); let _kind = ev.get_name(Name::parse(\"kind\")); }",
-        )
-        .expect("parse trigger_event");
-        analyze(&program).expect("trigger_event should type-check");
-    }
-    #[test]
-    fn public_entrypoints_reject_trigger_event() {
-        let program = parse(
-            "seiyaku Demo { kotoage fn f() authorize(\"InspectTrigger\") { let _ev = context::trigger_event(); } }",
-        )
-            .expect("parse public trigger_event");
-        let err = analyze(&program).expect_err("public trigger_event should fail");
-        assert!(
-            err.message
-                .contains("cannot use `context::trigger_event` here"),
-            "unexpected error message: {}",
-            err.message
-        );
-    }
-    #[test]
-    fn trigger_callbacks_accept_trigger_event_payload_helpers() {
-        let program = parse(include_str!(
-            "semantic/test_sources/trigger_callbacks_accept_trigger_event_payload_helpers_1.ko"
-        ))
-        .expect("parse trigger callback trigger_event");
-        analyze(&program).expect("trigger callback trigger_event should type-check");
-    }
-    #[test]
-    fn namespaced_trigger_callback_does_not_require_local_entrypoint() {
-        let program = parse(
-            include_str!("semantic/test_sources/namespaced_trigger_callback_does_not_require_local_entrypoint_1.ko"),
-        )
-        .expect("parse namespaced trigger callback");
-        analyze(&program).expect("namespaced trigger callback target is resolved at activation");
-    }
-    #[test]
-    fn namespaced_trigger_callback_does_not_mark_local_function_as_trigger_callback() {
-        let program = parse(
-            include_str!("semantic/test_sources/namespaced_trigger_callback_does_not_mark_local_function_as_trigger_callback_1.ko"),
-        )
-        .expect("parse namespaced trigger callback");
-        let err = analyze(&program)
-            .expect_err("remote trigger callback must not permit local trigger_event access");
-        assert!(
-            err.message
-                .contains("cannot use `context::trigger_event` here"),
-            "unexpected error message: {}",
-            err.message
-        );
-    }
-    #[test]
-    fn invoke_entrypoint_accepts_test_functions() {
-        let program = parse(include_str!(
-            "semantic/test_sources/invoke_entrypoint_accepts_test_functions_1.ko"
-        ))
-        .expect("parse invoke_entrypoint");
-        analyze_test(&program).expect("invoke_entrypoint in tests should type-check");
-    }
-    #[test]
-    fn invoke_entrypoint_rejects_non_test_functions() {
-        let program = parse(include_str!(
-            "semantic/test_sources/invoke_entrypoint_rejects_non_test_functions_1.ko"
-        ))
-        .expect("parse non-test invoke_entrypoint");
-        let err = analyze_test(&program).expect_err("non-test invoke_entrypoint should fail");
-        assert!(err.message.contains("only available inside #[test]"));
-    }
-    #[test]
-    fn invoke_entrypoint_accepts_name_literal_target() {
-        let program = parse(include_str!(
-            "semantic/test_sources/invoke_entrypoint_accepts_name_literal_target_1.ko"
-        ))
-        .expect("parse name literal invoke_entrypoint");
-        analyze_test(&program).expect("name literal invoke_entrypoint should type-check");
-    }
+    analyze_ok_tests! { trigger_event_accepts_no_args: "fn f() { let ev = context::trigger_event(); let _kind = ev.get_name(Name::parse(\"kind\")); }" => "parse trigger_event", "trigger_event should type-check"; }
+    analyze_reject_contains_diagnostic_tests! { public_entrypoints_reject_trigger_event: "seiyaku Demo { kotoage fn f() authorize(\"InspectTrigger\") { let _ev = context::trigger_event(); } }" => "parse public trigger_event", err = "public trigger_event should fail", "cannot use `context::trigger_event` here", "unexpected error message: {}"; }
+    analyze_ok_tests! { trigger_callbacks_accept_trigger_event_payload_helpers: include_str!( "semantic/test_sources/trigger_callbacks_accept_trigger_event_payload_helpers_1.ko" ) => "parse trigger callback trigger_event", "trigger callback trigger_event should type-check"; }
+    analyze_ok_tests! { namespaced_trigger_callback_does_not_require_local_entrypoint: include_str!("semantic/test_sources/namespaced_trigger_callback_does_not_require_local_entrypoint_1.ko") => "parse namespaced trigger callback", "namespaced trigger callback target is resolved at activation"; }
+    analyze_reject_contains_diagnostic_tests! { namespaced_trigger_callback_does_not_mark_local_function_as_trigger_callback: include_str!("semantic/test_sources/namespaced_trigger_callback_does_not_mark_local_function_as_trigger_callback_1.ko") => "parse namespaced trigger callback", err = "remote trigger callback must not permit local trigger_event access", "cannot use `context::trigger_event` here", "unexpected error message: {}"; }
+    analyze_test_ok_tests! { invoke_entrypoint_accepts_test_functions: include_str!( "semantic/test_sources/invoke_entrypoint_accepts_test_functions_1.ko" ) => "parse invoke_entrypoint", "invoke_entrypoint in tests should type-check"; }
+    analyze_test_reject_contains_tests! { invoke_entrypoint_rejects_non_test_functions: include_str!( "semantic/test_sources/invoke_entrypoint_rejects_non_test_functions_1.ko" ) => "parse non-test invoke_entrypoint", err = "non-test invoke_entrypoint should fail", "only available inside #[test]"; }
+    analyze_test_ok_tests! { invoke_entrypoint_accepts_name_literal_target: include_str!( "semantic/test_sources/invoke_entrypoint_accepts_name_literal_target_1.ko" ) => "parse name literal invoke_entrypoint", "name literal invoke_entrypoint should type-check"; }
     #[test]
     fn invoke_entrypoint_rejects_non_literal_target() {
         let program = parse(include_str!(
@@ -15546,15 +15328,7 @@ mod tests {
                 .contains("requires a literal public or lifecycle target")
         );
     }
-    #[test]
-    fn invoke_entrypoint_rejects_non_json_payload() {
-        let program = parse(include_str!(
-            "semantic/test_sources/invoke_entrypoint_rejects_non_json_payload_1.ko"
-        ))
-        .expect("parse non-json payload invoke_entrypoint");
-        let err = analyze_test(&program).expect_err("non-json payload should fail");
-        assert!(err.message.contains("expects a Json payload"));
-    }
+    analyze_test_reject_contains_tests! { invoke_entrypoint_rejects_non_json_payload: include_str!( "semantic/test_sources/invoke_entrypoint_rejects_non_json_payload_1.ko" ) => "parse non-json payload invoke_entrypoint", err = "non-json payload should fail", "expects a Json payload"; }
     #[test]
     fn invoke_entrypoint_rejects_internal_target() {
         let program = parse(include_str!(
@@ -15567,22 +15341,8 @@ mod tests {
                 .contains("may only target kotoage/view/hajimari/kaizen")
         );
     }
-    #[test]
-    fn invoke_entrypoint_as_and_actor_helpers_type_check_in_tests() {
-        let program = parse(include_str!(
-            "semantic/test_sources/invoke_entrypoint_as_and_actor_helpers_type_check_in_tests_1.ko"
-        ))
-        .expect("parse invoke_entrypoint_as");
-        analyze_test(&program).expect("test helpers should type-check");
-    }
-    #[test]
-    fn invoke_entrypoint_as_accepts_tuple_returning_targets() {
-        let program = parse(include_str!(
-            "semantic/test_sources/invoke_entrypoint_as_accepts_tuple_returning_targets_1.ko"
-        ))
-        .expect("parse tuple invoke_entrypoint_as");
-        analyze_test(&program).expect("tuple-returning target should type-check");
-    }
+    analyze_test_ok_tests! { invoke_entrypoint_as_and_actor_helpers_type_check_in_tests: include_str!( "semantic/test_sources/invoke_entrypoint_as_and_actor_helpers_type_check_in_tests_1.ko" ) => "parse invoke_entrypoint_as", "test helpers should type-check"; }
+    analyze_test_ok_tests! { invoke_entrypoint_as_accepts_tuple_returning_targets: include_str!( "semantic/test_sources/invoke_entrypoint_as_accepts_tuple_returning_targets_1.ko" ) => "parse tuple invoke_entrypoint_as", "tuple-returning target should type-check"; }
     #[test]
     fn standalone_test_helpers_preserve_external_entrypoint_kind() {
         let target = parse(include_str!(
@@ -15614,45 +15374,10 @@ mod tests {
             .expect_err("external entrypoints must retain the contract-call boundary");
         assert_eq!(error.code(), "K2004");
     }
-    #[test]
-    fn actor_helpers_reject_non_test_functions() {
-        let program = parse(include_str!(
-            "semantic/test_sources/actor_helpers_reject_non_test_functions_1.ko"
-        ))
-        .expect("parse non-test actor helper");
-        let err = analyze_test(&program).expect_err("actor helper outside test should fail");
-        assert!(err.message.contains("only available inside #[test]"));
-    }
-    #[test]
-    fn view_entrypoints_accept_explicit_json_getter_on_typed_json_parameter() {
-        let program = parse(
-            "seiyaku Demo { view fn f(Json ev) -> Option<int> { return ev.get_int(Name::parse(\"n\")); } }",
-        )
-        .expect("parse view get_int");
-        analyze(&program).expect("typed Json parameters may use explicit JSON getters");
-    }
-    #[test]
-    fn view_entrypoints_reject_ensure() {
-        let program = parse(
-            "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { return balances.ensure(key: 7, default: 9); } }",
-        )
-        .expect("parse ensure");
-        let err = analyze(&program).expect_err("view ensure should fail");
-        assert!(
-            err.message
-                .contains("`view fn` functions cannot use mutating map helper `ensure`"),
-            "unexpected error message: {}",
-            err.message
-        );
-    }
-    #[test]
-    fn view_entrypoints_accept_get_or() {
-        let program = parse(
-            "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { return balances.get_or(key: 7, default: 9); } }",
-        )
-        .expect("parse get_or");
-        analyze(&program).expect("view get_or should type-check");
-    }
+    analyze_test_reject_contains_tests! { actor_helpers_reject_non_test_functions: include_str!( "semantic/test_sources/actor_helpers_reject_non_test_functions_1.ko" ) => "parse non-test actor helper", err = "actor helper outside test should fail", "only available inside #[test]"; }
+    analyze_ok_tests! { view_entrypoints_accept_explicit_json_getter_on_typed_json_parameter: "seiyaku Demo { view fn f(Json ev) -> Option<int> { return ev.get_int(Name::parse(\"n\")); } }" => "parse view get_int", "typed Json parameters may use explicit JSON getters"; }
+    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_ensure: "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { return balances.ensure(key: 7, default: 9); } }" => "parse ensure", err = "view ensure should fail", "`view fn` functions cannot use mutating map helper `ensure`", "unexpected error message: {}"; }
+    analyze_ok_tests! { view_entrypoints_accept_get_or: "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { return balances.get_or(key: 7, default: 9); } }" => "parse get_or", "view get_or should type-check"; }
     #[test]
     fn state_map_get_returns_option_without_intercepting_user_get_function() {
         let program = parse(
@@ -15734,63 +15459,10 @@ mod tests {
         assert!(reads.contains("state:balances"));
         assert!(writes.contains("state:balances"));
     }
-    #[test]
-    fn view_entrypoints_reject_state_map_remove() {
-        let program = parse(
-            "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> Option<int> { return balances.remove(7); } }",
-        )
-        .expect("parse StateMap.remove in view");
-        let err = analyze(&program).expect_err("view remove must fail");
-        assert!(
-            err.message
-                .contains("view function `f` cannot perform durable state mutation"),
-            "unexpected error message: {}",
-            err.message
-        );
-    }
-    #[test]
-    fn view_entrypoints_reject_direct_durable_state_assignment() {
-        let program = parse(
-            "seiyaku Demo { state int counter; hajimari() { counter = 0; } view fn f() -> int { counter = 1; return counter; } }",
-        )
-        .expect("parse direct durable state assignment");
-        let err = analyze(&program).expect_err("view durable state assignment should fail");
-        assert!(
-            err.message
-                .contains("view function `f` cannot perform durable state mutation"),
-            "unexpected error message: {}",
-            err.message
-        );
-    }
-    #[test]
-    fn view_entrypoints_reject_state_map_mutation() {
-        let program = parse(
-            "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { balances[7] = 9; return 1; } }",
-        )
-        .expect("parse state map mutation");
-        let err = analyze(&program).expect_err("view state map mutation should fail");
-        assert!(
-            err.message
-                .contains("view function `f` cannot perform durable state mutation"),
-            "unexpected error message: {}",
-            err.message
-        );
-    }
-    #[test]
-    fn view_entrypoints_reject_transitive_durable_state_mutation() {
-        let program = parse(
-            "seiyaku Demo { state int counter; hajimari() { counter = 0; } fn helper() { counter = counter + 1; } view fn f() -> int { helper(); return counter; } }",
-        )
-        .expect("parse transitive durable state mutation");
-        let err = analyze(&program).expect_err("view transitive durable mutation should fail");
-        assert!(
-            err.message.contains(
-                "view function `f` cannot call `helper` because `helper` performs durable state mutation"
-            ),
-            "unexpected error message: {}",
-            err.message
-        );
-    }
+    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_state_map_remove: "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> Option<int> { return balances.remove(7); } }" => "parse StateMap.remove in view", err = "view remove must fail", "view function `f` cannot perform durable state mutation", "unexpected error message: {}"; }
+    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_direct_durable_state_assignment: "seiyaku Demo { state int counter; hajimari() { counter = 0; } view fn f() -> int { counter = 1; return counter; } }" => "parse direct durable state assignment", err = "view durable state assignment should fail", "view function `f` cannot perform durable state mutation", "unexpected error message: {}"; }
+    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_state_map_mutation: "seiyaku Demo { state StateMap<int, int> balances; view fn f() -> int { balances[7] = 9; return 1; } }" => "parse state map mutation", err = "view state map mutation should fail", "view function `f` cannot perform durable state mutation", "unexpected error message: {}"; }
+    analyze_reject_contains_diagnostic_tests! { view_entrypoints_reject_transitive_durable_state_mutation: "seiyaku Demo { state int counter; hajimari() { counter = 0; } fn helper() { counter = counter + 1; } view fn f() -> int { helper(); return counter; } }" => "parse transitive durable state mutation", err = "view transitive durable mutation should fail", "view function `f` cannot call `helper` because `helper` performs durable state mutation", "unexpected error message: {}"; }
     #[test]
     fn compiler_internal_builtins_are_rejected_from_source() {
         for name in [
@@ -16115,14 +15787,7 @@ mod tests {
             );
         }
     }
-    #[test]
-    fn canonical_context_and_ledger_namespaces_type_check() {
-        let program = parse(include_str!(
-            "semantic/test_sources/canonical_context_and_ledger_namespaces_type_check_1.ko"
-        ))
-        .expect("parse canonical namespaced calls");
-        analyze(&program).expect("canonical context and ledger namespaces should type-check");
-    }
+    analyze_ok_tests! { canonical_context_and_ledger_namespaces_type_check: include_str!( "semantic/test_sources/canonical_context_and_ledger_namespaces_type_check_1.ko" ) => "parse canonical namespaced calls", "canonical context and ledger namespaces should type-check"; }
     #[test]
     fn escrow_open_offer_signature_matches_the_host_abi() {
         let program = parse(include_str!(
@@ -16199,76 +15864,21 @@ mod tests {
             err.message
         );
     }
-    #[test]
-    fn resolve_account_alias_accepts_canonical_string() {
-        let program = parse(
-            "fn f() { let _acct = ledger::account::resolve_alias(\"banking@centralbank\"); }",
-        )
-        .expect("parse resolve_account_alias");
-        analyze(&program).expect("resolve_account_alias should type-check");
-    }
-    #[test]
-    fn resolve_account_alias_accepts_alias_bytes() {
-        let program = parse(
-            r#"fn f() { let alias = b"banking@centralbank"; let _acct = ledger::account::resolve_alias(alias); }"#,
-        )
-        .expect("parse resolve_account_alias blob");
-        analyze(&program).expect("resolve_account_alias blob should type-check");
-    }
-    #[test]
-    fn durable_state_maps_accept_forward_declared_struct_values() {
-        let program = parse(include_str!(
-            "semantic/test_sources/durable_state_maps_accept_forward_declared_struct_values_1.ko"
-        ))
-        .expect("parse durable struct map");
-        analyze(&program).expect("durable struct-valued state map should type-check");
-    }
-    #[test]
-    fn equality_between_event_account_and_resolved_alias_type_checks() {
-        let program = parse(
-            "fn f() { \
+    analyze_ok_tests! { resolve_account_alias_accepts_canonical_string: "fn f() { let _acct = ledger::account::resolve_alias(\"banking@centralbank\"); }" => "parse resolve_account_alias", "resolve_account_alias should type-check"; }
+    analyze_ok_tests! { resolve_account_alias_accepts_alias_bytes: r#"fn f() { let alias = b"banking@centralbank"; let _acct = ledger::account::resolve_alias(alias); }"# => "parse resolve_account_alias blob", "resolve_account_alias blob should type-check"; }
+    analyze_ok_tests! { durable_state_maps_accept_forward_declared_struct_values: include_str!( "semantic/test_sources/durable_state_maps_accept_forward_declared_struct_values_1.ko" ) => "parse durable struct map", "durable struct-valued state map should type-check"; }
+    #[rustfmt::skip]
+    analyze_ok_tests! { equality_between_event_account_and_resolved_alias_type_checks: "fn f() { \
                 let ev = context::trigger_event(); \
                 if let Option::some(dst) = ev.get_account_id(Name::parse(\"account_id\")) { \
                     let sink = ledger::account::resolve_alias(\"banking@centralbank\"); \
                     let _same = dst == sink; \
                 } \
-            }",
-        )
-        .expect("parse account equality");
-        analyze(&program).expect("account-id equality should type-check");
-    }
-    #[test]
-    fn get_asset_definition_id_accepts_trigger_payloads() {
-        let program = parse(
-            "fn f() { let ev = context::trigger_event(); let _asset = ev.get_asset_definition_id(Name::parse(\"asset_definition_id\")); }",
-        )
-        .expect("parse get_asset_definition_id");
-        analyze(&program).expect("get_asset_definition_id should type-check");
-    }
-    #[test]
-    fn get_quantity_returns_an_optional_trigger_quantity() {
-        let program = parse(
-            "fn f() { let ev = context::trigger_event(); let Option<quantity> value = ev.get_quantity(Name::parse(\"amount\")); }",
-        )
-        .expect("parse get_quantity");
-        analyze(&program).expect("get_quantity should type-check as Option<quantity>");
-    }
-    #[test]
-    fn durable_string_state_is_supported() {
-        let program = parse(include_str!(
-            "semantic/test_sources/durable_string_state_is_supported_1.ko"
-        ))
-        .expect("parse string state");
-        analyze(&program).expect("string state should be supported");
-    }
-    #[test]
-    fn durable_struct_string_field_is_supported() {
-        let program = parse(include_str!(
-            "semantic/test_sources/durable_struct_string_field_is_supported_1.ko"
-        ))
-        .expect("parse state struct");
-        analyze(&program).expect("string state field should be supported");
-    }
+            }" => "parse account equality", "account-id equality should type-check"; }
+    analyze_ok_tests! { get_asset_definition_id_accepts_trigger_payloads: "fn f() { let ev = context::trigger_event(); let _asset = ev.get_asset_definition_id(Name::parse(\"asset_definition_id\")); }" => "parse get_asset_definition_id", "get_asset_definition_id should type-check"; }
+    analyze_ok_tests! { get_quantity_returns_an_optional_trigger_quantity: "fn f() { let ev = context::trigger_event(); let Option<quantity> value = ev.get_quantity(Name::parse(\"amount\")); }" => "parse get_quantity", "get_quantity should type-check as Option<quantity>"; }
+    analyze_ok_tests! { durable_string_state_is_supported: include_str!( "semantic/test_sources/durable_string_state_is_supported_1.ko" ) => "parse string state", "string state should be supported"; }
+    analyze_ok_tests! { durable_struct_string_field_is_supported: include_str!( "semantic/test_sources/durable_struct_string_field_is_supported_1.ko" ) => "parse state struct", "string state field should be supported"; }
     #[test]
     fn nested_state_map_is_rejected() {
         let ty = Type::Struct {
@@ -16285,22 +15895,8 @@ mod tests {
             err.message
         );
     }
-    #[test]
-    fn durable_option_and_result_accept_aggregate_payloads() {
-        let program = parse(include_str!(
-            "semantic/test_sources/durable_option_and_result_accept_aggregate_payloads_1.ko"
-        ))
-        .expect("parse aggregate sum state");
-        analyze(&program).expect("aggregate Option/Result state should type-check");
-    }
-    #[test]
-    fn local_sum_annotations_resolve_aggregate_payloads_contextually() {
-        let program = parse(
-            include_str!("semantic/test_sources/local_sum_annotations_resolve_aggregate_payloads_contextually_1.ko"),
-        )
-        .expect("parse aggregate local sums");
-        analyze(&program).expect("aggregate local sum annotations should resolve nominal payloads");
-    }
+    analyze_ok_tests! { durable_option_and_result_accept_aggregate_payloads: include_str!( "semantic/test_sources/durable_option_and_result_accept_aggregate_payloads_1.ko" ) => "parse aggregate sum state", "aggregate Option/Result state should type-check"; }
+    analyze_ok_tests! { local_sum_annotations_resolve_aggregate_payloads_contextually: include_str!("semantic/test_sources/local_sum_annotations_resolve_aggregate_payloads_contextually_1.ko") => "parse aggregate local sums", "aggregate local sum annotations should resolve nominal payloads"; }
     #[test]
     fn explicit_numeric_conversions_preserve_nominal_types() {
         let program = parse(
@@ -16313,17 +15909,10 @@ mod tests {
         let TypedItem::Function(f) = &typed.items[0];
         assert_eq!(f.ret_ty, Some(Type::Decimal));
     }
-    #[test]
-    fn quantity_remains_nominal_in_mixed_numeric_operations() {
-        let program = parse(
-            "seiyaku C { fn f(quantity a, int b) { \
+    #[rustfmt::skip]
+    analyze_reject_contains_tests! { quantity_remains_nominal_in_mixed_numeric_operations: "seiyaku C { fn f(quantity a, int b) { \
                 let _x = a + b; \
-            } }",
-        )
-        .expect("parse nominal numeric types");
-        let err = analyze(&program).expect_err("mixed numeric types should error");
-        assert!(err.message.contains("not defined for quantity and int"));
-    }
+            } }" => "parse nominal numeric types", err = "mixed numeric types should error", "not defined for quantity and int"; }
     #[test]
     fn exact_literals_infer_decimal_without_runtime_conversion() {
         let constant = returned_expr("fn value() -> decimal { return 2 + 0.5; }");
@@ -16435,12 +16024,7 @@ mod tests {
         let error = analyze(&negation).expect_err("quantity negation must fail");
         assert_eq!(error.code, "E_QUANTITY_NEGATION");
     }
-    #[test]
-    fn unsuffixed_whole_literal_is_contextual_in_a_quantity_position() {
-        let program = parse("seiyaku C { fn f() -> quantity { return 1; } }")
-            .expect("parse unsuffixed literal");
-        analyze(&program).expect("whole literal must coerce exactly in a quantity context");
-    }
+    analyze_ok_tests! { unsuffixed_whole_literal_is_contextual_in_a_quantity_position: "seiyaku C { fn f() -> quantity { return 1; } }" => "parse unsuffixed literal", "whole literal must coerce exactly in a quantity context"; }
     #[test]
     fn values_wider_than_u128_are_accepted_as_int() {
         let program = parse(
@@ -16453,34 +16037,16 @@ mod tests {
         let TypedItem::Function(function) = &typed.items[0];
         assert_eq!(function.ret_ty, Some(Type::Int));
     }
-    #[test]
-    fn adaptive_int_values_use_width_independent_operators() {
-        let program =
-            parse("seiyaku C { fn f(int value) -> int { return value < 0 ? -value : value; } }")
-                .expect("parse width-independent int expression");
-        analyze(&program).expect("ordinary int operators must accept the complete V1 domain");
-    }
-    #[test]
-    fn ledger_quantity_parameters_contextually_accept_whole_literals() {
-        let program = parse(
-            "seiyaku C { fn f(AccountId account, AssetDefinitionId asset) { \
+    analyze_ok_tests! { adaptive_int_values_use_width_independent_operators: "seiyaku C { fn f(int value) -> int { return value < 0 ? -value : value; } }" => "parse width-independent int expression", "ordinary int operators must accept the complete V1 domain"; }
+    #[rustfmt::skip]
+    analyze_ok_tests! { ledger_quantity_parameters_contextually_accept_whole_literals: "seiyaku C { fn f(AccountId account, AssetDefinitionId asset) { \
                 ledger::asset::mint(account: account, asset_definition: asset, amount: 1); \
-            } }",
-        )
-        .expect("parse ledger amount call");
-        analyze(&program).expect("whole literal must coerce exactly at a quantity boundary");
-    }
-    #[test]
-    fn canonical_trigger_operations_type_check() {
-        let program = parse(
-            "fn f() { \
+            } }" => "parse ledger amount call", "whole literal must coerce exactly at a quantity boundary"; }
+    #[rustfmt::skip]
+    analyze_ok_tests! { canonical_trigger_operations_type_check: "fn f() { \
                 ledger::trigger::register(Json::parse(\"{}\")); \
                 ledger::trigger::unregister(Name::parse(\"wake\")); \
-            }",
-        )
-        .expect("parse canonical trigger operations");
-        analyze(&program).expect("analyze canonical trigger operations");
-    }
+            }" => "parse canonical trigger operations", "analyze canonical trigger operations"; }
     #[test]
     fn trigger_decl_builds_typed_metadata() {
         use iroha_data_model::account::AccountId;
@@ -16515,16 +16081,10 @@ mod tests {
         );
         assert!(!trigger.metadata.is_empty());
     }
-    #[test]
-    fn trigger_metadata_json_parse_uses_json_literal_diagnostics() {
-        let duplicate = analyze_error(include_str!(
-            "semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_1.ko"
-        ));
-        assert_eq!(duplicate.code, "E_JSON_DUPLICATE_KEY");
-        let malformed = analyze_error(include_str!(
-            "semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_2.ko"
-        ));
-        assert_eq!(malformed.code, "E_JSON_LITERAL_INVALID");
+    analyze_error_code_cases! {
+        trigger_metadata_json_parse_uses_json_literal_diagnostics:
+        duplicate = include_str!( "semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_1.ko" ) => "E_JSON_DUPLICATE_KEY";
+        malformed = include_str!( "semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_2.ko" ) => "E_JSON_LITERAL_INVALID";
     }
     #[test]
     fn trigger_metadata_json_parse_obeys_the_canonical_call_contract() {
@@ -16975,15 +16535,7 @@ mod tests {
         let err = analyze(&program).expect_err("duplicate matcher should error");
         assert!(err.message.contains("duplicate `asset_definition` matcher"));
     }
-    #[test]
-    fn trigger_decl_rejects_invalid_authority() {
-        let program = parse(include_str!(
-            "semantic/test_sources/trigger_decl_rejects_invalid_authority_1.ko"
-        ))
-        .expect("parse trigger decl");
-        let err = analyze(&program).expect_err("invalid authority should error");
-        assert!(err.message.contains("invalid trigger authority"));
-    }
+    analyze_reject_contains_tests! { trigger_decl_rejects_invalid_authority: include_str!( "semantic/test_sources/trigger_decl_rejects_invalid_authority_1.ko" ) => "parse trigger decl", err = "invalid authority should error", "invalid trigger authority"; }
     #[test]
     fn trigger_decl_accepts_canonical_domainless_authority() {
         let authority = sample_account_literal();
@@ -17009,15 +16561,7 @@ mod tests {
             authority,
         );
     }
-    #[test]
-    fn trigger_decl_requires_kotoage_entrypoint() {
-        let program = parse(include_str!(
-            "semantic/test_sources/trigger_decl_requires_kotoage_entrypoint_1.ko"
-        ))
-        .expect("parse trigger decl");
-        let err = analyze(&program).expect_err("non-kotoage target should error");
-        assert!(err.message.contains("`kotoage`/`言挙げ` function"));
-    }
+    analyze_reject_contains_tests! { trigger_decl_requires_kotoage_entrypoint: include_str!( "semantic/test_sources/trigger_decl_requires_kotoage_entrypoint_1.ko" ) => "parse trigger decl", err = "non-kotoage target should error", "`kotoage`/`言挙げ` function"; }
     #[test]
     fn trigger_decl_cannot_target_lifecycle_entrypoints_through_constructed_ast() {
         for lifecycle in ["hajimari", "kaizen"] {
@@ -17156,48 +16700,10 @@ mod tests {
         )
         .expect("an offset-plus-limit window ending at i64::MAX is valid");
     }
-    #[test]
-    fn typed_core_singular_queries_reject_raw_bytes() {
-        let program = parse("fn account(bytes raw) { let _view = ledger::query::account(raw); }")
-            .expect("parse raw-byte core query");
-        let error = analyze(&program).expect_err("core queries require their declared typed ID");
-        assert_eq!(error.code, "E_QUERY_KEY_TYPE");
-    }
-    #[test]
-    fn tail_sums_matches_if_let_and_propagation_type_check_together() {
-        let program = parse(
-            include_str!("semantic/test_sources/tail_sums_matches_if_let_and_propagation_type_check_together_1.ko"),
-        )
-        .expect("parse active-only sum program");
-        analyze(&program).expect("active-only sums and expression control flow must type-check");
-    }
-    #[test]
-    fn divergent_expression_arms_inhabit_the_sibling_value_type() {
-        let program = parse(include_str!(
-            "semantic/test_sources/divergent_expression_arms_inhabit_the_sibling_value_type_1.ko"
-        ))
-        .expect("parse divergent expression arms");
-        analyze(&program).expect("a returning arm must not synthesize a unit placeholder value");
-    }
-    #[test]
-    fn discarded_branch_tail_does_not_count_as_function_return_coverage() {
-        let program = parse(
-            include_str!("semantic/test_sources/discarded_branch_tail_does_not_count_as_function_return_coverage_1.ko"),
-        )
-        .expect("parse non-final mixed control flow");
-        let error = analyze(&program)
-            .expect_err("a discarded branch value cannot satisfy a declared return type");
-        assert_eq!(error.code, "E_MISSING_RETURN");
-    }
-    #[test]
-    fn wholly_divergent_expression_without_a_type_context_fails_closed() {
-        let program = parse(
-            include_str!("semantic/test_sources/wholly_divergent_expression_without_a_type_context_fails_closed_1.ko"),
-        )
-        .expect("parse context-free divergent expression");
-        let error =
-            analyze(&program).expect_err("bottom-like expressions require a concrete context");
-        assert_eq!(error.code, "E_DIVERGING_EXPRESSION_CONTEXT");
-    }
+    analyze_reject_code_tests! { typed_core_singular_queries_reject_raw_bytes: "fn account(bytes raw) { let _view = ledger::query::account(raw); }" => "parse raw-byte core query", error = "core queries require their declared typed ID", "E_QUERY_KEY_TYPE"; }
+    analyze_ok_tests! { tail_sums_matches_if_let_and_propagation_type_check_together: include_str!("semantic/test_sources/tail_sums_matches_if_let_and_propagation_type_check_together_1.ko") => "parse active-only sum program", "active-only sums and expression control flow must type-check"; }
+    analyze_ok_tests! { divergent_expression_arms_inhabit_the_sibling_value_type: include_str!( "semantic/test_sources/divergent_expression_arms_inhabit_the_sibling_value_type_1.ko" ) => "parse divergent expression arms", "a returning arm must not synthesize a unit placeholder value"; }
+    analyze_reject_code_tests! { discarded_branch_tail_does_not_count_as_function_return_coverage: include_str!("semantic/test_sources/discarded_branch_tail_does_not_count_as_function_return_coverage_1.ko") => "parse non-final mixed control flow", error = "a discarded branch value cannot satisfy a declared return type", "E_MISSING_RETURN"; }
+    analyze_reject_code_tests! { wholly_divergent_expression_without_a_type_context_fails_closed: include_str!("semantic/test_sources/wholly_divergent_expression_without_a_type_context_fails_closed_1.ko") => "parse context-free divergent expression", error = "bottom-like expressions require a concrete context", "E_DIVERGING_EXPRESSION_CONTEXT"; }
     include!("semantic_sum_tests.rs");
 }

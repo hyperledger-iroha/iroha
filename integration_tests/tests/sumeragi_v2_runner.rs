@@ -59,7 +59,7 @@ const STATUS_TIMEOUT: Duration = Duration::from_secs(90);
 const ACCOUNT_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(90);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const FAST_STATUS_POLL_INTERVAL: Duration = Duration::from_millis(25);
-const TAIRA_BLOCK_CADENCE: Duration = Duration::from_secs(1);
+const TAIRA_BLOCK_CADENCE: Duration = Duration::from_secs(4);
 const TAIRA_RECOVERY_BOUND: Duration = Duration::from_secs(50);
 const SIGNED_OBSERVER_COUNT: usize = 5;
 const OBSERVER_SLOW_READ_CHUNK_BYTES: usize = 1_024;
@@ -2382,7 +2382,7 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()> {
     init_instruction_registry();
-    // Taira's one-second cadence is signed into genesis. The v2 round timeout
+    // Taira's four-second cadence is signed into genesis. The v2 round timeout
     // is derived from that immutable cadence by the protocol.
     let builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
@@ -2414,7 +2414,7 @@ async fn taira_npos_leader_timeout_commits_within_rotation_bound() -> Result<()>
         )
         .await?;
         // Commit a seed transaction so the next height has just opened. The
-        // view-zero leader then has the full one-second cadence remaining,
+        // view-zero leader then has the full four-second cadence remaining,
         // which makes the leader outage deterministic rather than a race with
         // an already disseminated proposal.
         let initial = normal_statuses(&all_peers).await?;

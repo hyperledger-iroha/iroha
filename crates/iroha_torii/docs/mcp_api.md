@@ -205,11 +205,19 @@ exact method/path pair in its MCP projection for the compiled feature set:
 - format: `torii.<method>_<path...>`
 - example: `torii.get_health`
 
-Additional purpose-built tools are explicitly allowlisted under `connect.*`
-and `iroha.*`. OpenAPI presence alone never publishes a tool. Uncatalogued,
-feature-disabled, diagnostic, streaming, and non-projected operations fail
-closed. `tools/call` accepts only exact names returned by `tools/list`; Torii
-does not resolve `operationId` or retired convenience-name aliases.
+Additional purpose-built tools under `connect.*` and `iroha.*` form a separate,
+code-defined allowlist. A purpose-built alias for a catalogued route is retained
+only while that route's compiled feature gate is enabled; an uncatalogued target
+can be reachable only through an alias that is itself explicitly registered.
+The diagnostic and ledger/proof mirrors (`iroha.status`, `iroha.time.now`,
+`iroha.time.status`, `iroha.ledger.headers`, `iroha.ledger.state_root`,
+`iroha.ledger.state_proof`, `iroha.ledger.block_proof`, `iroha.proofs.get`, and
+`iroha.proofs.retention`) additionally require the exact route-catalog MCP
+projection. OpenAPI presence alone never publishes a tool. Generated tool
+candidates, projected mirrors, feature-disabled aliases, streaming operations,
+and other non-projected operations fail closed. `tools/call` accepts only exact
+names returned by `tools/list`; Torii does not resolve `operationId` or retired
+convenience-name aliases.
 
 For public Codex-facing deployments, prefer publishing only `iroha.*` tools.
 Those names are curated for live account, asset, contract, governance, and
@@ -353,8 +361,12 @@ Additional MCP-specific `error_code` values may appear in `error.data`:
 - `tool_not_allowed`
 
 Notes:
-- Tool runtime failures are returned as MCP tool results (`result.isError = true`) with
-  `result.structuredContent.error_code = "tool_execution_error"`.
+- Tool validation or execution failures that do not produce an inner HTTP
+  response are returned as MCP tool results (`result.isError = true`) with the
+  canonical error envelope
+  `result.structuredContent.code = "tool_execution_error"`. The envelope also
+  contains `message` and may contain `details`. This is distinct from the
+  status-derived `error_code` on route-dispatched HTTP failures described above.
 - `-32603/internal_error` is used for malformed internal batch-item handling fallbacks.
 
 ## Minimal Usage Flow

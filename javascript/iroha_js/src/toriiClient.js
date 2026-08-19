@@ -7753,23 +7753,6 @@ export class ToriiClient {
    */
 
   /**
-   * Fetch recent commit certificates (newest first) via `/v1/sumeragi/commit-certificates`.
-   */
-  async listSumeragiCommitCertificates() {
-    const response = await this._request("GET", "/v1/sumeragi/commit-certificates", {
-      headers: { Accept: this._acceptHeader() },
-      operatorSigningContext: requireOperatorSigningContext(
-        this._operatorSigningContext,
-        "listSumeragiCommitCertificates",
-      ),
-    });
-    if (!response) {
-      throw new Error("sumeragi commit certificates endpoint returned no payload");
-    }
-    return response;
-  }
-
-  /**
    * Fetch consensus key lifecycle records (newest first) via `/v1/sumeragi/key-lifecycle`.
    */
   async listSumeragiKeyLifecycle() {
@@ -7924,42 +7907,6 @@ export class ToriiClient {
     );
     const { parseSumeragiV2QcResponse } = await import("./sumeragiTyped.js");
     return parseSumeragiV2QcResponse(payload);
-  }
-
-  /**
-   * Fetch a commit QC record for a block hash (`GET /v1/sumeragi/commit-qcs/{block_hash}`).
-   * @param {string} blockHashHex 32-byte block hash (hex; `0x`/`blake2b32:` prefixes accepted).
-   * @param {{signal?: AbortSignal}} [options]
-   * @returns {Promise<ToriiSumeragiCommitQcRecord>}
-   */
-  async getSumeragiCommitQc(blockHashHex, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(
-      options,
-      "getSumeragiCommitQc",
-    );
-    const normalizedHash = normalizeHex32String(
-      blockHashHex,
-      "getSumeragiCommitQc.blockHashHex",
-      { allowScheme: true },
-    );
-    const response = await this._request(
-      "GET",
-      `/v1/sumeragi/commit-qcs/${normalizedHash}`,
-      {
-        headers: JSON_ACCEPT_HEADERS,
-        signal,
-        operatorSigningContext: requireOperatorSigningContext(
-          this._operatorSigningContext,
-          "getSumeragiCommitQc",
-        ),
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    if (!payload) {
-      throw new Error("sumeragi commit_qc endpoint returned no payload");
-    }
-    return normalizeSumeragiCommitQcRecord(payload, "sumeragi commit_qc response");
   }
 
   /**
@@ -14686,64 +14633,6 @@ function parseLaneGovernance(payload) {
         `status.lane_governance[${index}].privacy_commitments`,
       ),
     };
-  });
-}
-
-function normalizeSumeragiCommitQcRecord(payload, context) {
-  const record = ensureRecord(payload, context);
-  const subject_block_hash = normalizeHex32String(
-    record.subject_block_hash,
-    `${context}.subject_block_hash`,
-    { allowScheme: true },
-  );
-  if (record.commit_qc == null) {
-    return Object.freeze({ subject_block_hash, commit_qc: null });
-  }
-  return Object.freeze({
-    subject_block_hash,
-    commit_qc: normalizeSumeragiCommitQcPayload(record.commit_qc, `${context}.commit_qc`),
-  });
-}
-
-function normalizeSumeragiCommitQcPayload(payload, context) {
-  const record = ensureRecord(payload, context);
-  return Object.freeze({
-    phase: requireNonEmptyString(record.phase, `${context}.phase`),
-    parent_state_root: normalizeHex32String(
-      record.parent_state_root,
-      `${context}.parent_state_root`,
-      { allowScheme: true },
-    ),
-    post_state_root: normalizeHex32String(
-      record.post_state_root,
-      `${context}.post_state_root`,
-      { allowScheme: true },
-    ),
-    height: coerceInteger(record.height, `${context}.height`),
-    view: coerceInteger(record.view, `${context}.view`),
-    epoch: coerceInteger(record.epoch, `${context}.epoch`),
-    mode_tag: requireNonEmptyString(record.mode_tag, `${context}.mode_tag`),
-    validator_set_hash: normalizeHex32String(
-      record.validator_set_hash,
-      `${context}.validator_set_hash`,
-      { allowScheme: true },
-    ),
-    validator_set_hash_version: coerceInteger(
-      record.validator_set_hash_version,
-      `${context}.validator_set_hash_version`,
-    ),
-    validator_set: normalizeStringArray(
-      record.validator_set,
-      `${context}.validator_set`,
-    ),
-    signers_bitmap: normalizeArbitraryHex(
-      record.signers_bitmap,
-      `${context}.signers_bitmap`,
-    ),
-    bls_aggregate_signature: normalizeArbitraryHex(
-      record.bls_aggregate_signature,
-      `${context}.bls_aggregate_signature`,
-    ),
   });
 }
 

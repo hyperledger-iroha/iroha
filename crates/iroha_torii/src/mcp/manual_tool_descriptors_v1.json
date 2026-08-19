@@ -557,7 +557,7 @@
       "function": "iroha_ledger_state_root_tool",
       "name": "iroha.ledger.state_root",
       "effect": "read",
-      "description": "Fetch execution state root by height (`/v1/ledger/state/{height}`; `height`/`block_height` shortcuts supported).",
+      "description": "Fetch a State-committed execution root with its exact verified Sumeragi-v2 finality artifact (`/v1/ledger/state/{height}`; `height`/`block_height` shortcuts supported).",
       "method": "GET",
       "path_template": "/v1/ledger/state/{height}",
       "input_schema": {
@@ -600,7 +600,7 @@
       "function": "iroha_ledger_state_proof_tool",
       "name": "iroha.ledger.state_proof",
       "effect": "read",
-      "description": "Fetch execution state proof (QC) by height (`/v1/ledger/state-proof/{height}`; `height`/`block_height` shortcuts supported).",
+      "description": "Fetch exact verified Sumeragi-v2 state-finality evidence by height (`/v1/ledger/state-proof/{height}`; `height`/`block_height` shortcuts supported).",
       "method": "GET",
       "path_template": "/v1/ledger/state-proof/{height}",
       "input_schema": {

@@ -786,7 +786,7 @@ mod unix {
     mod tests {
         use super::*;
         use std::os::unix::{
-            fs::{MetadataExt as _, PermissionsExt as _, symlink},
+            fs::{PermissionsExt as _, symlink},
             net::UnixListener,
         };
         fn set_mode(path: &Path, mode: u32) {

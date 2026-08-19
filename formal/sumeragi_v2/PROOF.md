@@ -582,7 +582,7 @@ type state: fail-stop admission precedes clock arming, status projection,
 observer installation, exact ingress/status publication, and readiness release;
 CompleteTip publication consumes its retained predecessor retirement. This is
 paired with a source-sealed consuming finalization chain which closes readiness
-and both ingress gates, joins exact Kura finality to adapter closure, retains
+and durable leader-wire ingress, joins exact Kura finality to adapter closure, retains
 the safety WAL through the existing durable output handoff, retires it only
 after that handoff, then refreshes Serve state and publishes
 all-row LedgerV1 retirement through opaque coordinator-owning tokens before
@@ -1286,14 +1286,16 @@ preventing one serviced owner from hiding another. Equal-count replacement
 and count-increasing replenishment remain explicit non-progress cases and
 require a prior finite or coalesced producer argument.
 
-The production queue closes the matching final-retirement race with a one-shot
-local handoff. The last owner in a frozen Serve batch arms
-`producer_episode_due` under the same mutex that retires it; fresh Serve
-admission is `Busy` while the handoff is due or while
-`producer_episode_active` owns its bounded outer turn. The runner atomically
-consumes due into active, and the local lease clears active before admission
-reopens. Rejected replenishment cannot mint either scheduler or logical
-lifecycle ordinals. Digest-refreshed mutations bind both Busy boundaries, the
+The production lifecycle closes the matching final-retirement race through one
+coordinator-owned transaction. A current-height Serve remains in fair ingress
+until the lifecycle selector authenticates its exact carrier, and capacity
+backpressure returns `CapacityPending` without removing that occurrence. A
+successful transaction attests the complete Ready census, claims the durable
+ledger row, reserves the exact worker target, and only then commits dequeue.
+The serialized proposal runner separately claims and settles `ProducerTurn`;
+there is no queue-local Serve gate, barrier, reservation, or producer episode.
+Rejected replenishment cannot mint either scheduler or logical lifecycle
+ordinals. Digest-refreshed mutations bind the coordinator transaction, the
 high-water marks, timeout-owner ordering, strict predecessor service, and the
 real timeout-certificate/EnterView suffix. This source refinement does not
 count replenishment as progress, add fairness, or promote a ledger row.
@@ -1481,7 +1483,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable regression evidence, not independent
 proof of the promoted obligations.
 
-The current pre-network release inventory names 860 tests across forty Rust
+The current pre-network release inventory names 860 tests across forty-three Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1600,9 +1602,9 @@ canonical-carrier completion regressions produced that historical 864-test,
 yields the historical 856-test, 40-module checkpoint. The exact retired-attempt
 accessor, mixed-carrier successor, two-link cold-restart hydration, and
 noncanonical autonomous-output retirement regressions yield the
-current 860-test, 40-module inventory. The complete source-sealed
+current 860-test, 43-module inventory. The complete source-sealed
 pre-network corridor
-contains 88 legs. Six source-
+contains 91 legs. Six source-
 sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
@@ -1672,7 +1674,7 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329`.
+`b6457553bc8d41f74ebc708ea3d4e6187117f0f008da2c2dea697b0771741b44`.
 The separate source-sealed G-UNIT inventory contains 527 focused tests,
 including 321 `iroha_core` tests. Its 528-line
 canonical TSV has SHA-256
@@ -1714,7 +1716,7 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The four integration names share a module-filtered leg; the pre-network corridor
-now has 88 legs, including the governance-unlock audit module, the autonomous
+now has 91 legs, including the governance-unlock audit module, the autonomous
 lifecycle-recovery module, separate
 exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
@@ -1722,7 +1724,7 @@ geometry modules, and source-sealed command-success legs. Its finality, offline
 compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the forty-module, eighty-eight-leg corridor. It
+tests are not claimed by the forty-three-module, ninety-one-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the

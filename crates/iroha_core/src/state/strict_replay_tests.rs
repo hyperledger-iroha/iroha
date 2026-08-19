@@ -155,21 +155,16 @@ struct StateFingerprint {
     snapshot: Vec<u8>,
     height: usize,
     tip: Option<iroha_crypto::HashOf<BlockHeader>>,
-    commit_roster_handle:
-        Arc<parking_lot::RwLock<crate::commit_roster_journal::CommitRosterJournal>>,
-    commit_rosters: Vec<crate::commit_roster_journal::CommitRosterSnapshot>,
     merge_entries: Vec<iroha_data_model::merge::MergeLedgerEntry>,
 }
 #[derive(Debug, PartialEq, Eq)]
 struct RuntimeStateFingerprint {
-    commit_rosters: Vec<crate::commit_roster_journal::CommitRosterSnapshot>,
     merge_entries: Vec<iroha_data_model::merge::MergeLedgerEntry>,
     runtime_debug: String,
 }
 impl RuntimeStateFingerprint {
     fn capture(state: &State) -> Self {
         Self {
-            commit_rosters: state.commit_roster_journal.read().snapshots(),
             merge_entries: state
                 .merge_ledger
                 .snapshot()
@@ -200,8 +195,6 @@ impl StateFingerprint {
             snapshot: crate::snapshot::canonical_state_snapshot_bytes_for_tests(state),
             height: state.committed_height(),
             tip: state.latest_block_hash_fast(),
-            commit_roster_handle: Arc::clone(&state.commit_roster_journal),
-            commit_rosters: state.commit_roster_journal.read().snapshots(),
             merge_entries: state
                 .merge_ledger
                 .snapshot()
@@ -225,15 +218,6 @@ impl StateFingerprint {
             crate::snapshot::canonical_state_snapshot_bytes_for_tests(state),
             self.snapshot,
             "rejected replay changed the canonical WSV bytes"
-        );
-        assert!(
-            Arc::ptr_eq(&state.commit_roster_journal, &self.commit_roster_handle),
-            "rejected replay replaced the live commit-roster authority"
-        );
-        assert_eq!(
-            state.commit_roster_journal.read().snapshots(),
-            self.commit_rosters,
-            "rejected replay mutated the live commit-roster cache"
         );
         let merge_entries = state
             .merge_ledger
@@ -964,24 +948,6 @@ strict_replay_test!(production_replay_accepts_the_exact_durable_v2_tuple, {
             .expect("verify manifest binding"),
         CommitManifestBindingState::Bound
     );
-    assert!(
-        replay_state
-            .world_view()
-            .commit_qcs()
-            .get(&fixture.block.hash())
-            .is_none(),
-        "exact v2 replay must not populate the legacy WSV commit-QC archive"
-    );
-    assert!(
-        replay_state
-            .commit_roster_snapshot_for_block(HEIGHT, fixture.block.hash())
-            .is_none(),
-        "exact v2 replay must not populate the legacy commit-roster journal"
-    );
-    assert!(
-        fixture.kura.read_roster_metadata(HEIGHT).is_none(),
-        "exact v2 replay must not require or synthesize a legacy roster sidecar"
-    );
 });
 strict_replay_test!(
     production_replay_consumes_preinstalled_lane_manifest_snapshot,
@@ -1232,18 +1198,6 @@ strict_replay_test!(
             iroha_crypto::sm::Sm2PublicKey::default_distid(),
             sm2_distid_before,
             "replay probe construction must not change the process-wide SM2 distid"
-        );
-        assert!(
-            !Arc::ptr_eq(
-                &replay_state.commit_roster_journal,
-                &isolated_probe.commit_roster_journal,
-            ),
-            "atomic replay must not share the live commit-roster cache"
-        );
-        assert_eq!(
-            isolated_probe.commit_roster_journal.read().snapshots(),
-            replay_state.commit_roster_journal.read().snapshots(),
-            "isolated replay must start from an exact commit-roster snapshot"
         );
         assert_eq!(
             kura_tree_fingerprint(fixture.first.kura.as_ref()),

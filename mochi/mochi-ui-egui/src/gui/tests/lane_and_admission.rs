@@ -7,7 +7,6 @@ fn lane_slug_matches_supervisor_logic() {
 #[test]
 fn lane_catalog_snapshot_resolves_aliases_and_dataspaces() {
     let mut nexus = TomlTable::new();
-    nexus.insert("enabled".into(), TomlValue::Boolean(true));
     nexus.insert("lane_count".into(), TomlValue::Integer(2));
     let mut lane0 = TomlTable::new();
     lane0.insert("index".into(), TomlValue::Integer(0));
@@ -40,20 +39,8 @@ fn lane_catalog_snapshot_resolves_aliases_and_dataspaces() {
     );
 }
 #[test]
-fn lane_reset_candidates_skip_disabled_nexus() {
-    let mut nexus = TomlTable::new();
-    nexus.insert("enabled".into(), TomlValue::Boolean(false));
-    nexus.insert("lane_count".into(), TomlValue::Integer(2));
-    let candidates = MochiApp::lane_reset_candidates(Some(&nexus));
-    assert!(
-        candidates.is_empty(),
-        "disabled nexus should yield no candidates"
-    );
-}
-#[test]
 fn lane_metadata_for_id_reads_lane_fields() {
     let mut nexus = TomlTable::new();
-    nexus.insert("enabled".into(), TomlValue::Boolean(true));
     let mut lane = TomlTable::new();
     lane.insert("index".into(), TomlValue::Integer(2));
     lane.insert("alias".into(), TomlValue::String("alpha".into()));

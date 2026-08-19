@@ -174,10 +174,6 @@ impl RuntimeLifecycleOrdinalSource {
         let current = (*next).ok_or(EnqueueError::FailClosed)?;
         commit(current)
     }
-    /// Return whether two handles share the same actor-global ordinal source.
-    pub(crate) fn ptr_eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.next, &other.next)
-    }
     fn reserve_range(&self, count: usize) -> Result<(Option<u128>, Option<u128>), String> {
         let mut next = self.lock_next()?;
         let reserved = Self::prospective_range(*next, count)?;
@@ -222,13 +218,6 @@ impl RuntimeLifecycleOrdinalSource {
         }
         self.lock_next()
             .map(|next| (*next).is_some_and(|next| ordinal < next))
-    }
-    #[cfg(test)]
-    pub(crate) fn exhaust_for_test(&self) {
-        *self
-            .next
-            .lock()
-            .expect("test lifecycle ordinal source is not poisoned") = None;
     }
 }
 /// Derive the deadline for one certified view from the immutable base timeout.
@@ -1190,13 +1179,10 @@ fn runtime_ingress_causal_origin_projection_hash(
                 );
                 for carrier in carriers {
                     let mut semantic = Vec::new();
-                    match carrier.first.wire_key.origin.as_ref() {
-                        None => semantic.push(0),
-                        Some(origin) => {
-                            semantic.push(1);
-                            append_runtime_identity_field(&mut semantic, &origin.encode());
-                        }
-                    }
+                    append_runtime_identity_field(
+                        &mut semantic,
+                        &carrier.first.wire_key.origin.encode(),
+                    );
                     append_runtime_identity_field(
                         &mut semantic,
                         carrier.first.wire_key.hash.as_ref(),
@@ -1459,63 +1445,6 @@ pub(crate) struct RuntimeLifecycleOwner {
     causal_origin: RuntimeCandidateCausalOrigin,
     lifecycle_ordinal: u128,
     projection_hash: iroha_crypto::Hash,
-}
-/// Process-local evidence that one completed service result can enter runtime.
-///
-/// The production worker derives this value only from its retained completion
-/// ownership or exact local-reconstruction queue. It is neither serialized nor
-/// accepted from transport. The complemented ordinal makes accidental mutation
-/// fail closed before the evidence can affect the runnable-owner minimum.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ExactServePredecessorCompletionEvidence {
-    lifecycle_ordinal: u128,
-    lifecycle_ordinal_complement: u128,
-}
-impl ExactServePredecessorCompletionEvidence {
-    pub(crate) fn try_new(lifecycle_ordinal: u128) -> Option<Self> {
-        let evidence = Self {
-            lifecycle_ordinal,
-            lifecycle_ordinal_complement: !lifecycle_ordinal,
-        };
-        evidence.validate_exact().then_some(evidence)
-    }
-    pub(crate) const fn lifecycle_ordinal(self) -> u128 {
-        self.lifecycle_ordinal
-    }
-    pub(crate) const fn validate_exact(self) -> bool {
-        self.lifecycle_ordinal > 0 && self.lifecycle_ordinal_complement == !self.lifecycle_ordinal
-    }
-}
-
-/// Direct observation of the runnable prefix before one selected Serve target.
-///
-/// The first observation authorizes the worker's one initial checked ingress
-/// pass even when runtime has no predecessor yet. Later observations reopen
-/// that bounded admission only while an exact older owner is runnable. No
-/// episode counter or cross-component witness is retained.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ExactServePredecessorObservation {
-    first_target_observation: bool,
-    runnable_predecessor: bool,
-}
-
-impl ExactServePredecessorObservation {
-    const fn new(first_target_observation: bool, runnable_predecessor: bool) -> Self {
-        Self {
-            first_target_observation,
-            runnable_predecessor,
-        }
-    }
-
-    /// Return whether the exact worker ticket should open one bounded older-I/O admission.
-    pub(crate) const fn should_open_predecessor_admission(self) -> bool {
-        self.first_target_observation || self.runnable_predecessor
-    }
-
-    /// Return whether runtime currently retains a runnable strictly older owner.
-    pub(crate) const fn has_runnable_predecessor(self) -> bool {
-        self.runnable_predecessor
-    }
 }
 impl RuntimeLifecycleOwner {
     fn new(
@@ -2173,7 +2102,31 @@ pub(crate) struct RuntimeEffectOwnership {
     owner: RuntimeLifecycleOwner,
     causality: RuntimeEffectCausality,
     binding: Option<RuntimeEffectCandidateBinding>,
+    producer: Option<RuntimeEffectProducerBinding>,
     remote_proposal_fetch_replay: Option<RemoteProposalFetchReplayEvidenceV1>,
+}
+/// Ordinal-free effect authority minted by the current reducer producer.
+///
+/// This projection is created in the same operation as the positional runtime
+/// binding. It deliberately retains no runtime lifecycle ordinal: the
+/// lifecycle coordinator is the only allocator of canonical logical ordinals.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RuntimeEffectProducerBinding {
+    causal_lifecycle_key: iroha_crypto::Hash,
+    effect_kind: u8,
+    effect_identity: iroha_crypto::Hash,
+    candidate_kind: u8,
+    candidate_statement: Option<RuntimeCandidateSemanticStatement>,
+    candidate_semantic_identity: Option<iroha_crypto::Hash>,
+    projection_hash: iroha_crypto::Hash,
+}
+/// Sealed, move-only view of the exact producer which emitted one effect.
+///
+/// Callers cannot supply causal coordinates or an ordinal. Consuming this
+/// value is the sole ordinary-runtime mint for a pending lifecycle binding.
+#[must_use = "the current effect producer has not minted its pending binding"]
+pub(crate) struct CurrentRuntimeEffectProducer {
+    binding: RuntimeEffectProducerBinding,
 }
 /// One-shot runtime-only permit for minting authenticated remote Proposal replay evidence.
 ///
@@ -2389,7 +2342,7 @@ impl LocalProposalReadyCommandIdentity {
             && self.tag == tag
             && command.validate_exact()
             && self.command_hash == command.canonical_hash
-            && self.causal_lifecycle_key == validate_pending.causal_lifecycle_key
+            && self.causal_lifecycle_key == validate_pending.binding.causal_lifecycle_key
             && validate_pending.exactly_binds_adapter_effect(&validate_effect)
     }
     /// Match only the exact ProposalIntent successor of this queued handoff.
@@ -2419,7 +2372,7 @@ impl LocalProposalReadyCommandIdentity {
             && proposal.subject == manifest.subject
             && proposal.manifest == *manifest
             && validate_pending.exactly_binds_adapter_effect(&validate_effect)
-            && validate_pending.causal_lifecycle_key == self.causal_lifecycle_key
+            && validate_pending.binding.causal_lifecycle_key == self.causal_lifecycle_key
             && ownership.exactly_binds_adapter_effect(effect)
             && ownership.owner().causal_origin().lifecycle_key == self.causal_lifecycle_key
     }
@@ -2430,7 +2383,9 @@ impl LocalProposalEffectOwnership {
         effect: &AdapterEffect,
         manifest: &wire::PayloadManifest,
     ) -> Option<Self> {
-        let pending = ownership.pending_adapter_effect_binding(effect)?;
+        let pending = ownership
+            .current_effect_producer(effect)?
+            .mint_pending_binding();
         let replay = LocalBodyPreIntentReplaySealV1::from_exact_assemble_body(
             LocalBodyReplayMintPermit::new(),
             effect,
@@ -2469,11 +2424,11 @@ impl LocalProposalEffectOwnership {
         validate_effect: &AdapterEffect,
         validate_ownership: &RuntimeEffectOwnership,
     ) -> bool {
-        let Some(validate_pending) =
-            validate_ownership.pending_adapter_effect_binding(validate_effect)
+        let Some(validate_producer) = validate_ownership.current_effect_producer(validate_effect)
         else {
             return false;
         };
+        let validate_pending = validate_producer.mint_pending_binding();
         self.replay.exactly_projects_validate(
             store_effect,
             manifest,
@@ -2492,11 +2447,11 @@ impl LocalProposalEffectOwnership {
         validate_effect: &AdapterEffect,
         validate_ownership: &RuntimeEffectOwnership,
     ) -> Result<LocalValidateReplayEvidenceV1, Self> {
-        let Some(validate_pending) =
-            validate_ownership.pending_adapter_effect_binding(validate_effect)
+        let Some(validate_producer) = validate_ownership.current_effect_producer(validate_effect)
         else {
             return Err(self);
         };
+        let validate_pending = validate_producer.mint_pending_binding();
         let Self { ownership, replay } = self;
         match replay.bind_and_project_validate(
             store_effect,
@@ -2522,21 +2477,15 @@ impl LocalProposalEffectOwnership {
 /// Move-only, ordinal-free authority for one exact adapter effect awaiting
 /// lifecycle admission.
 ///
-/// The old runtime owner is consulted only while this sealed value is minted.
-/// Its integrity projection deliberately excludes the runtime lifecycle
-/// ordinal, allowing the coordinator to become the sole logical ordinal
-/// allocator in the production cutover. Fields and construction remain sealed
-/// in this module, so sibling modules cannot assert a causal root, physical
-/// identity, or inherited body statement.
+/// The current reducer producer mints this value directly together with its
+/// positional effect binding. Its integrity projection excludes runtime
+/// scheduling ordinals, leaving the coordinator as the sole logical ordinal
+/// allocator. Fields and construction remain sealed in this module, so sibling
+/// modules cannot assert a causal root, physical identity, or inherited body
+/// statement.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct PendingRuntimeEffectBinding {
-    causal_lifecycle_key: iroha_crypto::Hash,
-    effect_kind: u8,
-    effect_identity: iroha_crypto::Hash,
-    candidate_kind: u8,
-    candidate_statement: Option<RuntimeCandidateSemanticStatement>,
-    candidate_semantic_identity: Option<iroha_crypto::Hash>,
-    projection_hash: iroha_crypto::Hash,
+    binding: RuntimeEffectProducerBinding,
 }
 /// Move-only restart successor derived from one exact recovered WAL vote.
 ///
@@ -2878,6 +2827,74 @@ fn pending_runtime_effect_binding_projection_hash(
     append_optional_runtime_hash(&mut projection, candidate_semantic_identity);
     iroha_crypto::Hash::new(projection)
 }
+impl RuntimeEffectProducerBinding {
+    fn from_parts(
+        causal_lifecycle_key: iroha_crypto::Hash,
+        effect_kind: u8,
+        effect_identity: iroha_crypto::Hash,
+        candidate_kind: u8,
+        candidate_statement: Option<RuntimeCandidateSemanticStatement>,
+        candidate_semantic_identity: Option<iroha_crypto::Hash>,
+    ) -> Self {
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            candidate_kind,
+            candidate_statement,
+            candidate_semantic_identity.as_ref(),
+        );
+        Self {
+            causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind,
+            candidate_statement,
+            candidate_semantic_identity,
+            projection_hash,
+        }
+    }
+    fn new(
+        owner: &RuntimeLifecycleOwner,
+        binding: &RuntimeEffectCandidateBinding,
+    ) -> Result<Self, EnqueueError> {
+        if !owner.validate_exact() {
+            return Err(EnqueueError::FailClosed);
+        }
+        Ok(Self::from_parts(
+            owner.causal_origin.lifecycle_key,
+            binding.effect_kind,
+            binding.effect_identity,
+            binding.candidate_kind,
+            binding.candidate_statement,
+            binding.candidate_semantic_identity,
+        ))
+    }
+
+    fn validate_exact(
+        &self,
+        owner: &RuntimeLifecycleOwner,
+        binding: &RuntimeEffectCandidateBinding,
+    ) -> bool {
+        owner.validate_exact()
+            && self
+                == &Self::from_parts(
+                    owner.causal_origin.lifecycle_key,
+                    binding.effect_kind,
+                    binding.effect_identity,
+                    binding.candidate_kind,
+                    binding.candidate_statement,
+                    binding.candidate_semantic_identity,
+                )
+    }
+}
+impl CurrentRuntimeEffectProducer {
+    /// Consume the exact current producer into its canonical pending binding.
+    pub(crate) fn mint_pending_binding(self) -> PendingRuntimeEffectBinding {
+        let binding = self.binding;
+        PendingRuntimeEffectBinding { binding }
+    }
+}
 /// Reconstruct the exact ordinal-free Validate-to-Sign successor named by a
 /// ledger-authenticated parent and the adapter-authenticated current WAL vote.
 ///
@@ -2932,23 +2949,15 @@ pub(crate) fn reconstruct_recovered_wal_vote_successor(
         &candidate.semantic_identity,
     ));
     let causal_lifecycle_key = parent.runtime_causal_lifecycle_key();
-    let projection_hash = pending_runtime_effect_binding_projection_hash(
-        &causal_lifecycle_key,
-        effect_kind,
-        &effect_identity,
-        candidate.kind,
-        candidate.statement,
-        candidate_semantic_identity.as_ref(),
-    );
-    let pending = PendingRuntimeEffectBinding {
+    let binding = RuntimeEffectProducerBinding::from_parts(
         causal_lifecycle_key,
         effect_kind,
         effect_identity,
-        candidate_kind: candidate.kind,
-        candidate_statement: candidate.statement,
+        candidate.kind,
+        candidate.statement,
         candidate_semantic_identity,
-        projection_hash,
-    };
+    );
+    let pending = PendingRuntimeEffectBinding { binding };
     if !pending.validate_exact(&predecessor) {
         return Err(recovered);
     }
@@ -3023,23 +3032,15 @@ impl PendingRuntimeEffectBinding {
             candidate.kind,
             &candidate.semantic_identity,
         ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
-        let pending = Self {
+        let binding = RuntimeEffectProducerBinding::from_parts(
             causal_lifecycle_key,
             effect_kind,
             effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
+            candidate.kind,
+            candidate.statement,
             candidate_semantic_identity,
-            projection_hash,
-        };
+        );
+        let pending = Self { binding };
         pending.validate_exact(effect).then_some(pending)
     }
     /// Mint the unique pending owner of one exact payload-free live-WAL continuation.
@@ -3160,42 +3161,35 @@ impl PendingRuntimeEffectBinding {
         append_runtime_identity_field(&mut causal_preimage, &locator.encode());
         append_runtime_identity_field(&mut causal_preimage, &semantic_identity);
         let causal_lifecycle_key = iroha_crypto::Hash::new(causal_preimage);
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate_kind,
-            candidate_statement,
-            candidate_semantic_identity.as_ref(),
-        );
-        let pending = Self {
+        let binding = RuntimeEffectProducerBinding::from_parts(
             causal_lifecycle_key,
             effect_kind,
             effect_identity,
             candidate_kind,
             candidate_statement,
             candidate_semantic_identity,
-            projection_hash,
-        };
+        );
+        let pending = Self { binding };
         pending.validate_exact(effect).then_some(pending)
     }
     /// Borrow the immutable runtime causal-origin lifecycle key.
     pub(crate) const fn causal_lifecycle_key(&self) -> &iroha_crypto::Hash {
-        &self.causal_lifecycle_key
+        &self.binding.causal_lifecycle_key
     }
     /// Borrow the exact physical identity already bound to the complete effect.
     pub(crate) const fn exact_effect_identity(&self) -> &iroha_crypto::Hash {
-        &self.effect_identity
+        &self.binding.effect_identity
     }
     /// Return the route-neutral candidate statement retained by the runtime.
     pub(crate) const fn candidate_statement(&self) -> Option<RuntimeCandidateSemanticStatement> {
-        self.candidate_statement
+        self.binding.candidate_statement
     }
     fn validate_exact(&self, effect: &AdapterEffect) -> bool {
+        let binding = &self.binding;
         let exact_candidate = match (
-            self.candidate_kind,
-            self.candidate_statement,
-            self.candidate_semantic_identity.as_ref(),
+            binding.candidate_kind,
+            binding.candidate_statement,
+            binding.candidate_semantic_identity.as_ref(),
         ) {
             (RUNTIME_CANDIDATE_KIND_NONE, None, None) => true,
             (kind, Some(statement), Some(identity)) => {
@@ -3212,22 +3206,22 @@ impl PendingRuntimeEffectBinding {
         let effect_kind = production_adapter_effect_kind(effect);
         let expected_candidate_kind = production_adapter_effect_candidate_statement(effect)
             .map_or(RUNTIME_CANDIDATE_KIND_NONE, |(kind, _)| kind);
-        self.effect_kind == effect_kind
-            && self.candidate_kind == expected_candidate_kind
-            && self.effect_identity
+        binding.effect_kind == effect_kind
+            && binding.candidate_kind == expected_candidate_kind
+            && binding.effect_identity
                 == runtime_effect_identity_hash(
                     effect_kind,
                     &production_adapter_effect_semantic_identity(effect),
                 )
             && exact_candidate
-            && self.projection_hash
-                == pending_runtime_effect_binding_projection_hash(
-                    &self.causal_lifecycle_key,
-                    self.effect_kind,
-                    &self.effect_identity,
-                    self.candidate_kind,
-                    self.candidate_statement,
-                    self.candidate_semantic_identity.as_ref(),
+            && binding
+                == &RuntimeEffectProducerBinding::from_parts(
+                    binding.causal_lifecycle_key,
+                    binding.effect_kind,
+                    binding.effect_identity,
+                    binding.candidate_kind,
+                    binding.candidate_statement,
+                    binding.candidate_semantic_identity,
                 )
     }
     /// Return whether this sealed pending binding still names the supplied
@@ -3293,22 +3287,15 @@ impl PendingRuntimeEffectBinding {
             effect_kind,
             &production_adapter_effect_semantic_identity(successor),
         );
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            RUNTIME_CANDIDATE_KIND_NONE,
-            None,
-            None,
-        );
         let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: RUNTIME_CANDIDATE_KIND_NONE,
-            candidate_statement: None,
-            candidate_semantic_identity: None,
-            projection_hash,
+            binding: RuntimeEffectProducerBinding::from_parts(
+                self.binding.causal_lifecycle_key,
+                effect_kind,
+                effect_identity,
+                RUNTIME_CANDIDATE_KIND_NONE,
+                None,
+                None,
+            ),
         };
         successor_binding
             .validate_exact(successor)
@@ -3355,7 +3342,7 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-        let inherited = self.candidate_statement?;
+        let inherited = self.candidate_statement()?;
         let candidate =
             production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
         if candidate.statement != Some(inherited) {
@@ -3370,22 +3357,15 @@ impl PendingRuntimeEffectBinding {
             candidate.kind,
             &candidate.semantic_identity,
         ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
         let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
+            binding: RuntimeEffectProducerBinding::from_parts(
+                self.binding.causal_lifecycle_key,
+                effect_kind,
+                effect_identity,
+                candidate.kind,
+                candidate.statement,
+                candidate_semantic_identity,
+            ),
         };
         successor_binding
             .validate_exact(successor)
@@ -3428,7 +3408,7 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-        let inherited = self.candidate_statement?;
+        let inherited = self.candidate_statement()?;
         let candidate =
             production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
         if candidate.statement != Some(inherited) {
@@ -3443,22 +3423,15 @@ impl PendingRuntimeEffectBinding {
             candidate.kind,
             &candidate.semantic_identity,
         ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
         let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
+            binding: RuntimeEffectProducerBinding::from_parts(
+                self.binding.causal_lifecycle_key,
+                effect_kind,
+                effect_identity,
+                candidate.kind,
+                candidate.statement,
+                candidate_semantic_identity,
+            ),
         };
         successor_binding
             .validate_exact(successor)
@@ -3500,7 +3473,7 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-        let inherited = self.candidate_statement?;
+        let inherited = self.candidate_statement()?;
         let candidate =
             production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
         if candidate.statement != Some(inherited) {
@@ -3515,22 +3488,15 @@ impl PendingRuntimeEffectBinding {
             candidate.kind,
             &candidate.semantic_identity,
         ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
         let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
+            binding: RuntimeEffectProducerBinding::from_parts(
+                self.binding.causal_lifecycle_key,
+                effect_kind,
+                effect_identity,
+                candidate.kind,
+                candidate.statement,
+                candidate_semantic_identity,
+            ),
         };
         successor_binding
             .validate_exact(successor)
@@ -3576,7 +3542,7 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-        let inherited = self.candidate_statement?;
+        let inherited = self.candidate_statement()?;
         let candidate =
             production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
         let successor_statement = candidate.statement?;
@@ -3590,22 +3556,15 @@ impl PendingRuntimeEffectBinding {
             candidate.kind,
             &candidate.semantic_identity,
         ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
         let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
+            binding: RuntimeEffectProducerBinding::from_parts(
+                self.binding.causal_lifecycle_key,
+                effect_kind,
+                effect_identity,
+                candidate.kind,
+                candidate.statement,
+                candidate_semantic_identity,
+            ),
         };
         successor_binding
             .validate_exact(successor)
@@ -3653,7 +3612,7 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-        let inherited = self.candidate_statement?;
+        let inherited = self.candidate_statement()?;
         let candidate =
             production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
         let successor_statement = candidate.statement?;
@@ -3677,22 +3636,15 @@ impl PendingRuntimeEffectBinding {
             candidate.kind,
             &candidate.semantic_identity,
         ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
         let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
+            binding: RuntimeEffectProducerBinding::from_parts(
+                self.binding.causal_lifecycle_key,
+                effect_kind,
+                effect_identity,
+                candidate.kind,
+                candidate.statement,
+                candidate_semantic_identity,
+            ),
         };
         successor_binding
             .validate_exact(successor)
@@ -3752,7 +3704,7 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-        let inherited = self.candidate_statement?;
+        let inherited = self.candidate_statement()?;
         let candidate =
             production_adapter_effect_candidate_binding(successor, Some(&inherited)).ok()??;
         let successor_statement = candidate.statement?;
@@ -3770,22 +3722,15 @@ impl PendingRuntimeEffectBinding {
             candidate.kind,
             &candidate.semantic_identity,
         ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
         let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
+            binding: RuntimeEffectProducerBinding::from_parts(
+                self.binding.causal_lifecycle_key,
+                effect_kind,
+                effect_identity,
+                candidate.kind,
+                candidate.statement,
+                candidate_semantic_identity,
+            ),
         };
         successor_binding
             .validate_exact(successor)
@@ -3954,7 +3899,7 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-        let inherited = self.candidate_statement?;
+        let inherited = self.candidate_statement()?;
         if inherited.phase.is_some()
             || inherited.execution_commitment.is_some()
             || inherited.context_id != vote.round.context_id
@@ -3989,22 +3934,15 @@ impl PendingRuntimeEffectBinding {
             candidate.kind,
             &candidate.semantic_identity,
         ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
         let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
+            binding: RuntimeEffectProducerBinding::from_parts(
+                self.binding.causal_lifecycle_key,
+                effect_kind,
+                effect_identity,
+                candidate.kind,
+                candidate.statement,
+                candidate_semantic_identity,
+            ),
         };
         successor_binding
             .validate_exact(successor)
@@ -4054,7 +3992,7 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-        let inherited = self.candidate_statement?;
+        let inherited = self.candidate_statement()?;
         let registered_carrier = RuntimeCandidateSemanticStatement::new(
             certificate.round,
             certificate.proposal_round,
@@ -4075,22 +4013,15 @@ impl PendingRuntimeEffectBinding {
             effect_kind,
             &production_adapter_effect_semantic_identity(successor),
         );
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            RUNTIME_CANDIDATE_KIND_NONE,
-            None,
-            None,
-        );
         let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: RUNTIME_CANDIDATE_KIND_NONE,
-            candidate_statement: None,
-            candidate_semantic_identity: None,
-            projection_hash,
+            binding: RuntimeEffectProducerBinding::from_parts(
+                self.binding.causal_lifecycle_key,
+                effect_kind,
+                effect_identity,
+                RUNTIME_CANDIDATE_KIND_NONE,
+                None,
+                None,
+            ),
         };
         successor_binding
             .validate_exact(successor)
@@ -4137,7 +4068,7 @@ impl PendingRuntimeEffectBinding {
         {
             return None;
         }
-        let inherited = self.candidate_statement?;
+        let inherited = self.candidate_statement()?;
         if inherited.phase.is_some()
             || inherited.execution_commitment.is_some()
             || inherited.context_id != certificate.round.context_id
@@ -4165,22 +4096,15 @@ impl PendingRuntimeEffectBinding {
             effect_kind,
             &production_adapter_effect_semantic_identity(successor),
         );
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &self.causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            RUNTIME_CANDIDATE_KIND_NONE,
-            None,
-            None,
-        );
         let successor_binding = Self {
-            causal_lifecycle_key: self.causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: RUNTIME_CANDIDATE_KIND_NONE,
-            candidate_statement: None,
-            candidate_semantic_identity: None,
-            projection_hash,
+            binding: RuntimeEffectProducerBinding::from_parts(
+                self.binding.causal_lifecycle_key,
+                effect_kind,
+                effect_identity,
+                RUNTIME_CANDIDATE_KIND_NONE,
+                None,
+                None,
+            ),
         };
         successor_binding
             .validate_exact(successor)
@@ -9255,10 +9179,12 @@ impl BoundedIngress<AdapterCommand> {
         authenticated: AuthenticatedConsensusMessage,
     ) -> Result<EventTag, EnqueueError> {
         let message = authenticated.wire_envelope_for_test();
-        let mut admitted = super::fair_v2_ingress_admit_for_test(super::InboundBlockMessage::new(
-            super::message::BlockMessage::V2(message.clone()),
-            None,
-        ));
+        let mut admitted = super::fair_v2_ingress_admit_for_test(
+            super::InboundBlockMessage::from_authenticated_peer(
+                super::message::BlockMessage::V2(message.clone()),
+                super::authenticated_peer_for_test(),
+            ),
+        );
         let ownership = admitted
             .take_ingress_ownership()
             .expect("real test fair ingress produces exact ownership");
@@ -10575,8 +10501,9 @@ impl RuntimeDriver for SumeragiV2Adapter {
             return Err(());
         }
         let pending = ownership[index]
-            .pending_adapter_effect_binding(effect)
-            .ok_or(())?;
+            .current_effect_producer(effect)
+            .ok_or(())?
+            .mint_pending_binding();
         let replay = origin.bind_exact_fetch(effect, pending).ok_or(())?;
         ownership[index].remote_proposal_fetch_replay = Some(replay);
         Ok(())
@@ -11379,18 +11306,6 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     external_lifecycle_owner_capacity: usize,
     schedule: ScheduleState,
     last_scheduler_ownership: Option<RuntimeSchedulerOwnershipEvidence>,
-    /// Exact external Serve/response target whose older runnable prefix is
-    /// receiving one bounded opportunity in the current runner turn.
-    exact_serve_target_ordinal: Option<u128>,
-    /// An older FIFO owner hit retryable adapter pressure during that turn.
-    /// The target must then proceed; retry cannot become an unbounded barrier.
-    exact_serve_predecessor_retry_attempted: bool,
-    /// Retained certified-response target used only by the legacy boolean
-    /// predecessor probe. It must never reset selected-Serve observation state.
-    retained_response_predecessor_target_ordinal: Option<u128>,
-    /// Whether one older FIFO owner already received its bounded attempt for
-    /// the retained-response target.
-    retained_response_predecessor_retry_attempted: bool,
     fail_closed: bool,
     fail_closed_reason: Option<String>,
 }
@@ -11481,10 +11396,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             external_lifecycle_owner_capacity: MAX_EFFECTS_PER_STEP,
             schedule: ScheduleState::default(),
             last_scheduler_ownership: None,
-            exact_serve_target_ordinal: None,
-            exact_serve_predecessor_retry_attempted: false,
-            retained_response_predecessor_target_ordinal: None,
-            retained_response_predecessor_retry_attempted: false,
             fail_closed: false,
             fail_closed_reason: None,
         };
@@ -13180,75 +13091,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     fn minimum_active_lifecycle_ordinal(&self) -> Result<Option<u128>, EnqueueError> {
         self.minimum_active_lifecycle_ordinal_excluding(&[])
     }
-    /// Oldest owner which can actually consume one serialized runner turn.
-    ///
-    /// This deliberately differs from the complete active-owner inventory.
-    /// Proposal reservations, pending asynchronous tasks, reserved completion
-    /// slots, and dormant replay capacity remain exact live capabilities, but
-    /// no call to `step` can service them until their completion is admitted.
-    /// Treating those passive capabilities as Serve predecessors creates an
-    /// unbounded runner `continue` loop around a ticket that no executor turn
-    /// can discharge.
-    fn minimum_runnable_lifecycle_ordinal(
-        &self,
-        now: Instant,
-        completion_evidence: Option<ExactServePredecessorCompletionEvidence>,
-    ) -> Result<Option<u128>, EnqueueError> {
-        // First validate the complete inventory so excluding passive owners
-        // cannot conceal a forged or internally inconsistent capability.
-        let _ = self.minimum_active_lifecycle_ordinal()?;
-        let mut minimum = self.ingress.oldest_lifecycle_ordinal()?;
-        let mut observe = |owner: &RuntimeLifecycleOwner| {
-            if !owner.validate_exact() {
-                return Err(EnqueueError::FailClosed);
-            }
-            minimum = Some(minimum.map_or(owner.lifecycle_ordinal(), |ordinal| {
-                ordinal.min(owner.lifecycle_ordinal())
-            }));
-            Ok(())
-        };
-        if self.driver.deferred_work_is_serviceable() {
-            for admission_ordinal in self.eligible_deferred_admission_ordinals()? {
-                let owner = self
-                    .deferred_lifecycle_ownership
-                    .get(&admission_ordinal)
-                    .ok_or(EnqueueError::FailClosed)?;
-                observe(owner.owner())?;
-            }
-        }
-        if self.clocks_armed {
-            let timeout_due = !self.timeout_emitted
-                && now.saturating_duration_since(self.round_started_at)
-                    >= round_timeout_for_view(self.base_round_timeout, self.round_tag.view());
-            if timeout_due {
-                let owner = self
-                    .timeout_owner
-                    .as_ref()
-                    .ok_or(EnqueueError::FailClosed)?;
-                observe(owner)?;
-            } else if now.saturating_duration_since(self.retransmit_started_at)
-                >= self.retransmit_interval
-                && let Some(owner) = &self.retransmit_owner
-            {
-                observe(owner)?;
-            }
-        }
-        if let Some(evidence) = completion_evidence {
-            if !evidence.validate_exact()
-                || !self
-                    .ingress
-                    .lifecycle_ordinals
-                    .recognizes_minted(evidence.lifecycle_ordinal())
-                    .map_err(|_| EnqueueError::FailClosed)?
-            {
-                return Err(EnqueueError::FailClosed);
-            }
-            let lifecycle_ordinal = evidence.lifecycle_ordinal();
-            minimum =
-                Some(minimum.map_or(lifecycle_ordinal, |ordinal| ordinal.min(lifecycle_ordinal)));
-        }
-        Ok(minimum)
-    }
     /// Return the oldest exact active owner after removing only aliases of the
     /// supplied blocked adapter-deferred set.
     fn minimum_active_lifecycle_ordinal_excluding(
@@ -13534,164 +13376,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         Ok(false)
     }
 
-    /// Freeze every due clock and directly observe the runnable prefix before
-    /// one exact Serve ingress ticket from the shared ordinal source.
-    ///
-    /// The caller publishes executor-retained owners immediately before this
-    /// query. The result authorizes at most one worker admission in the current
-    /// outer turn; it is not a persistent episode owner. A runtime owner equal
-    /// to the external ticket is a source-uniqueness violation and latches
-    /// fail-closed.
-    pub(crate) fn exact_serve_predecessor_observation(
-        &mut self,
-        now: Instant,
-        serve_lifecycle_ordinal: u128,
-        completion_evidence: Option<ExactServePredecessorCompletionEvidence>,
-    ) -> Result<ExactServePredecessorObservation, String> {
-        if self.fail_closed {
-            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
-        }
-        let recognized = match self
-            .ingress
-            .lifecycle_ordinals
-            .recognizes_minted(serve_lifecycle_ordinal)
-        {
-            Ok(recognized) => recognized,
-            Err(reason) => {
-                self.latch_fail_closed(reason.clone());
-                return Err(reason);
-            }
-        };
-        if !recognized {
-            self.latch_fail_closed("exact Serve barrier used an unminted lifecycle ordinal");
-            return Err("Sumeragi v2 exact Serve barrier ordinal was invalid".to_owned());
-        }
-        if self.freeze_due_clock_owners(now).is_err() {
-            self.latch_fail_closed("clock lifecycle ownership could not be frozen for Serve");
-            return Err("Sumeragi v2 clock lifecycle ownership could not be frozen".to_owned());
-        }
-        let collision = match self.active_lifecycle_uses_ordinal(serve_lifecycle_ordinal) {
-            Ok(collision) => collision,
-            Err(_) => {
-                self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
-                return Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned());
-            }
-        };
-        if collision {
-            self.latch_fail_closed("runtime and Serve claimed one lifecycle ordinal");
-            return Err("Sumeragi v2 lifecycle ordinal ownership collided".to_owned());
-        }
-        if completion_evidence.is_some_and(|evidence| {
-            !evidence.validate_exact() || evidence.lifecycle_ordinal() >= serve_lifecycle_ordinal
-        }) {
-            self.latch_fail_closed(
-                "exact Serve completion evidence was invalid or did not strictly precede its target",
-            );
-            return Err("Sumeragi v2 exact Serve completion evidence was invalid".to_owned());
-        }
-        let first_target_observation =
-            self.exact_serve_target_ordinal != Some(serve_lifecycle_ordinal);
-        if first_target_observation {
-            self.exact_serve_target_ordinal = Some(serve_lifecycle_ordinal);
-            self.exact_serve_predecessor_retry_attempted = false;
-        }
-        let minimum = match self.minimum_runnable_lifecycle_ordinal(now, completion_evidence) {
-            Ok(minimum) => minimum,
-            Err(_) => {
-                self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
-                return Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned());
-            }
-        };
-        let predecessor = minimum.filter(|ordinal| *ordinal < serve_lifecycle_ordinal);
-        if self.exact_serve_predecessor_retry_attempted {
-            // The exact older owner received its bounded attempt and proved
-            // that adapter capacity, not logical order, prevents admission.
-            // Its restored FIFO occurrence remains runnable. Suppress it while
-            // present so every poll cannot become another predecessor turn.
-            if predecessor.is_none() {
-                self.exact_serve_predecessor_retry_attempted = false;
-            }
-            return Ok(ExactServePredecessorObservation::new(
-                first_target_observation,
-                false,
-            ));
-        }
-        Ok(ExactServePredecessorObservation::new(
-            first_target_observation,
-            predecessor.is_some(),
-        ))
-    }
-    /// Return whether one runnable owner belongs to the currently witnessed
-    /// strictly older prefix of an exact Serve ticket.
-    #[cfg(test)]
-    pub(crate) fn older_lifecycle_predates_exact_serve(
-        &mut self,
-        now: Instant,
-        serve_lifecycle_ordinal: u128,
-    ) -> Result<bool, String> {
-        self.exact_serve_predecessor_observation(now, serve_lifecycle_ordinal, None)
-            .map(ExactServePredecessorObservation::has_runnable_predecessor)
-    }
-    /// Return whether one runnable owner strictly predates a retained
-    /// certified-response target without mutating selected-Serve observation state.
-    pub(crate) fn older_lifecycle_predates_retained_response(
-        &mut self,
-        now: Instant,
-        serve_lifecycle_ordinal: u128,
-    ) -> Result<bool, String> {
-        if self.fail_closed {
-            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
-        }
-        let recognized = match self
-            .ingress
-            .lifecycle_ordinals
-            .recognizes_minted(serve_lifecycle_ordinal)
-        {
-            Ok(recognized) => recognized,
-            Err(reason) => {
-                self.latch_fail_closed(reason.clone());
-                return Err(reason);
-            }
-        };
-        if !recognized {
-            self.latch_fail_closed("exact Serve barrier used an unminted lifecycle ordinal");
-            return Err("Sumeragi v2 exact Serve barrier ordinal was invalid".to_owned());
-        }
-        if self.freeze_due_clock_owners(now).is_err() {
-            self.latch_fail_closed("clock lifecycle ownership could not be frozen for Serve");
-            return Err("Sumeragi v2 clock lifecycle ownership could not be frozen".to_owned());
-        }
-        let collision = match self.active_lifecycle_uses_ordinal(serve_lifecycle_ordinal) {
-            Ok(collision) => collision,
-            Err(_) => {
-                self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
-                return Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned());
-            }
-        };
-        if collision {
-            self.latch_fail_closed("runtime and Serve claimed one lifecycle ordinal");
-            return Err("Sumeragi v2 lifecycle ordinal ownership collided".to_owned());
-        }
-        if self.retained_response_predecessor_target_ordinal != Some(serve_lifecycle_ordinal) {
-            self.retained_response_predecessor_target_ordinal = Some(serve_lifecycle_ordinal);
-            self.retained_response_predecessor_retry_attempted = false;
-        }
-        let minimum = match self.minimum_runnable_lifecycle_ordinal(now, None) {
-            Ok(minimum) => minimum,
-            Err(_) => {
-                self.latch_fail_closed("runtime lifecycle ownership was invalid for Serve");
-                return Err("Sumeragi v2 runtime lifecycle ownership was invalid".to_owned());
-            }
-        };
-        let predecessor_exists = minimum.is_some_and(|ordinal| ordinal < serve_lifecycle_ordinal);
-        if self.retained_response_predecessor_retry_attempted {
-            if !predecessor_exists {
-                self.retained_response_predecessor_retry_attempted = false;
-            }
-            return Ok(false);
-        }
-        Ok(predecessor_exists)
-    }
     fn current_signature_fence_identity(
         &self,
     ) -> Result<Option<D::SignatureFenceIdentity>, EnqueueError> {
@@ -14274,18 +13958,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                         Err(error) => return Err(self.close(error)),
                     };
                 if retry_unadmitted {
-                    if self
-                        .exact_serve_target_ordinal
-                        .is_some_and(|target| owner.lifecycle_ordinal() < target)
-                    {
-                        self.exact_serve_predecessor_retry_attempted = true;
-                    }
-                    if self
-                        .retained_response_predecessor_target_ordinal
-                        .is_some_and(|target| owner.lifecycle_ordinal() < target)
-                    {
-                        self.retained_response_predecessor_retry_attempted = true;
-                    }
                     if self
                         .ingress
                         .restore_selected_command(retry_command, &candidate)
@@ -15608,11 +15280,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     pub(crate) fn remaining_completion_capacity(&self) -> usize {
         self.ingress.remaining_capacity()
     }
-    /// Whether the runtime currently charges one exact authenticated
-    /// certificate to the physical fence-escape slot.
-    pub(crate) fn has_certified_fence_escape_credit(&self) -> bool {
-        self.ingress.certified_fence_escape_credit() == 1
-    }
     /// Return whether removing this network head can be coupled to immediate
     /// runtime admission.
     ///
@@ -15644,14 +15311,6 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.clocks_armed
     }
 
-    /// Inclusive root-ordinal cut for the active post-timeout recovery
-    /// episode. Completions at or below this cut may receive one bounded turn
-    /// while a retained transport response owns ordinary service.
-    pub(crate) fn timeout_recovery_lifecycle_cut(&self) -> Result<Option<u128>, String> {
-        self.emitted_timeout_recovery_owner()
-            .map(|owner| owner.map(|owner| owner.lifecycle_ordinal()))
-            .map_err(|_| "timeout recovery episode was invalid".to_owned())
-    }
     /// Arm the live clocks after all height constructors and startup effects.
     ///
     /// This one-shot boundary prevents WAL replay, body-store recovery, worker
@@ -17114,10 +16773,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         &mut self,
         message: wire::ConsensusMessageV2,
     ) -> Result<EventTag, NetworkIngressError> {
-        let mut admitted = super::fair_v2_ingress_admit_for_test(super::InboundBlockMessage::new(
-            super::message::BlockMessage::V2(message.clone()),
-            None,
-        ));
+        let mut admitted = super::fair_v2_ingress_admit_for_test(
+            super::InboundBlockMessage::from_authenticated_peer(
+                super::message::BlockMessage::V2(message.clone()),
+                super::authenticated_peer_for_test(),
+            ),
+        );
         let ingress_ownership = admitted
             .take_ingress_ownership()
             .expect("real test fair ingress produces exact ownership");
@@ -17439,10 +17100,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     }
     #[cfg(test)]
     pub(crate) fn can_admit_network_message(&self, message: &wire::ConsensusMessageV2) -> bool {
-        let mut admitted = super::fair_v2_ingress_admit_for_test(super::InboundBlockMessage::new(
-            super::message::BlockMessage::V2(message.clone()),
-            None,
-        ));
+        let mut admitted = super::fair_v2_ingress_admit_for_test(
+            super::InboundBlockMessage::from_authenticated_peer(
+                super::message::BlockMessage::V2(message.clone()),
+                super::authenticated_peer_for_test(),
+            ),
+        );
         let ownership = admitted
             .take_ingress_ownership()
             .expect("real test fair ingress produces exact ownership");
@@ -18726,6 +18389,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         )
     }
 }
+include!("v2_runtime_body_lifecycle_adapter_bridge.rs");
 include!("v2_runtime/network_ingress_classification.rs");
 #[cfg(test)]
 mod tests {

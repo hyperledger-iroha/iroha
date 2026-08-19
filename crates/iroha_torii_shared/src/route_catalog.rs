@@ -1430,7 +1430,7 @@ pub mod core {
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
     .with_cors_options(true);
-    /// Read a ledger execution-state root.
+    /// Read a ledger execution-state root with exact Sumeragi-v2 finality.
     pub const LEDGER_STATE_ROOT: RouteDescriptor = RouteDescriptor::new(
         "ledger.state_root",
         HttpMethod::Get,
@@ -1443,7 +1443,7 @@ pub mod core {
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_implicit_head(true)
     .with_cors_options(true);
-    /// Read a ledger execution-state proof.
+    /// Read exact Sumeragi-v2 ledger execution-state finality.
     pub const LEDGER_STATE_PROOF: RouteDescriptor = RouteDescriptor::new(
         "ledger.state_proof",
         HttpMethod::Get,
@@ -2508,14 +2508,6 @@ pub mod sumeragi {
         telemetry_operator_get("sumeragi.bls_key.list", "/v1/sumeragi/bls-keys");
     /// Read highest and locked quorum-certificate snapshots as an authenticated operator.
     pub const QC: RouteDescriptor = telemetry_operator_get("sumeragi.qc.read", "/v1/sumeragi/qc");
-    /// List validator-set checkpoints as an authenticated operator.
-    pub const CHECKPOINTS: RouteDescriptor =
-        telemetry_operator_get("sumeragi.checkpoint.list", "/v1/sumeragi/checkpoints");
-    /// List recent commit certificates as an authenticated operator.
-    pub const COMMIT_CERTIFICATES: RouteDescriptor = telemetry_operator_get(
-        "sumeragi.commit_certificate.list",
-        "/v1/sumeragi/commit-certificates",
-    );
     /// Read a self-contained bridge finality proof.
     pub const BRIDGE_FINALITY: RouteDescriptor =
         public_get("bridge.finality_proof.read", "/v1/bridge/finality/{height}");
@@ -2530,14 +2522,6 @@ pub mod sumeragi {
         "bridge.finality_bundle.read",
         "/v1/bridge/finality/bundle/{height}",
     );
-    /// List retained Sumeragi validator sets as an authenticated operator.
-    pub const VALIDATOR_SETS: RouteDescriptor =
-        telemetry_operator_get("sumeragi.validator_set.list", "/v1/sumeragi/validator-sets");
-    /// Read the validator set active at one block height as an authenticated operator.
-    pub const VALIDATOR_SET_BY_HEIGHT: RouteDescriptor = telemetry_operator_get(
-        "sumeragi.validator_set.read",
-        "/v1/sumeragi/validator-sets/{height}",
-    );
     /// List registered consensus keys as an authenticated operator.
     pub const CONSENSUS_KEYS: RouteDescriptor =
         telemetry_operator_get("sumeragi.consensus_key.list", "/v1/sumeragi/consensus-keys");
@@ -2547,11 +2531,6 @@ pub mod sumeragi {
     /// Read effective Sumeragi parameters as an authenticated operator.
     pub const PARAMETERS: RouteDescriptor =
         telemetry_operator_get("sumeragi.parameter.read", "/v1/sumeragi/params");
-    /// Read one commit quorum certificate by block hash as an authenticated operator.
-    pub const COMMIT_QC: RouteDescriptor = telemetry_operator_get(
-        "sumeragi.commit_qc.read",
-        "/v1/sumeragi/commit-qcs/{block_hash}",
-    );
     /// Complete route family registered by `add_sumeragi_routes`.
     pub const ROUTES: &[RouteDescriptor] = &[
         EVIDENCE_COUNT,
@@ -2570,17 +2549,12 @@ pub mod sumeragi {
         LEADER,
         BLS_KEYS,
         QC,
-        CHECKPOINTS,
-        COMMIT_CERTIFICATES,
         BRIDGE_FINALITY,
         BRIDGE_FINALITY_ATTESTATION,
         BRIDGE_FINALITY_BUNDLE,
-        VALIDATOR_SETS,
-        VALIDATOR_SET_BY_HEIGHT,
         CONSENSUS_KEYS,
         KEY_LIFECYCLE,
         PARAMETERS,
-        COMMIT_QC,
     ];
 }
 /// Runtime, zero-knowledge, node-projection, and governance routes.
@@ -4368,7 +4342,7 @@ const fn cataloged_route_count(families: &[&[RouteDescriptor]]) -> usize {
     count
 }
 const CATALOGED_ROUTE_COUNT: usize = cataloged_route_count(CATALOGED_ROUTE_FAMILIES);
-const fn flatten_cataloged_routes() -> [RouteDescriptor; CATALOGED_ROUTE_COUNT] {
+static CATALOGED_ROUTE_STORAGE: [RouteDescriptor; CATALOGED_ROUTE_COUNT] = {
     let mut routes = [aliases::SETUP_PLAN; CATALOGED_ROUTE_COUNT];
     let mut output_index = 0;
     let mut family_index = 0;
@@ -4383,9 +4357,7 @@ const fn flatten_cataloged_routes() -> [RouteDescriptor; CATALOGED_ROUTE_COUNT] 
         family_index += 1;
     }
     routes
-}
-const CATALOGED_ROUTE_STORAGE: [RouteDescriptor; CATALOGED_ROUTE_COUNT] =
-    flatten_cataloged_routes();
+};
 /// Canonical descriptors enforced by Torii's mounted-route registry.
 ///
 /// Router assembly fails when any enabled descriptor is missing or when a

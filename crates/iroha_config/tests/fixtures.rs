@@ -283,7 +283,6 @@ fn nexus_relay_worker_requires_lane_relay_burn() {
     use iroha_config_base::util::Emitter;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
-        enabled: true,
         relay_worker: NexusRelayWorker {
             enabled: true,
             ..NexusRelayWorker::default()
@@ -301,7 +300,6 @@ fn nexus_relay_worker_parses_with_lane_relay_burn() {
     use iroha_config_base::util::Emitter;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
-        enabled: true,
         fees: NexusFees {
             settlement_mode: "lane_relay_burn".to_owned(),
             ..NexusFees::default()
@@ -409,34 +407,6 @@ fn nexus_axt_fields_load_from_fixture() {
     assert_eq!(config.nexus.axt.replay_retention_slots.get(), 256);
 }
 #[test]
-fn nexus_multilane_requires_enable_flag() {
-    let result = load_config_from_fixtures("bad.nexus_multilane_disabled.toml");
-    let err = result.expect_err("multi-lane catalogs must require nexus.enabled");
-    let debug = format!("{err:?}");
-    assert!(
-        debug.contains("nexus.enabled"),
-        "error should point at nexus.enabled being required (got {debug})"
-    );
-    assert!(
-        debug.contains("multi-lane"),
-        "error should mention multi-lane catalogs (got {debug})"
-    );
-}
-#[test]
-fn nexus_lane_overrides_rejected_when_disabled() {
-    let result = load_config_from_fixtures("bad.nexus_lane_overrides_disabled.toml");
-    let err = result.expect_err("lane overrides must be rejected when nexus is disabled");
-    let debug = format!("{err:?}");
-    assert!(
-        debug.contains("nexus.enabled"),
-        "error should point at nexus.enabled being required (got {debug})"
-    );
-    assert!(
-        debug.contains("single-lane"),
-        "error should explain that overrides are ignored in single-lane mode (got {debug})"
-    );
-}
-#[test]
 fn sumeragi_v2_rejects_unknown_v1_actor_and_global_rbc_fields() {
     let report = load_config_from_fixtures("bad.sumeragi_legacy_v1_fields.toml")
         .expect_err("retired v1 actor/global-RBC schema must be rejected");
@@ -466,36 +436,12 @@ fn retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage(
     assert_contains!(message, "unknown parameter: `queue.plan_journal_enabled`");
 }
 #[test]
-fn nexus_lane_relay_emergency_requires_nexus_enabled() {
-    use iroha_config::parameters::user::{LaneRelayEmergency, Nexus};
-    use iroha_config_base::util::Emitter;
-    let mut emitter = Emitter::<ParseError>::new();
-    let nexus = Nexus {
-        enabled: false,
-        lane_relay_emergency: LaneRelayEmergency {
-            enabled: true,
-            ..LaneRelayEmergency::default()
-        },
-        ..Nexus::default()
-    };
-    assert!(nexus.parse(&mut emitter).is_none());
-    let err = emitter
-        .into_result()
-        .expect_err("lane relay emergency should require nexus.enabled");
-    let debug = strip_ansi_codes(&format!("{err:?}"));
-    assert_contains!(
-        debug,
-        "nexus.lane_relay_emergency.enabled requires nexus.enabled = true"
-    );
-}
-#[test]
 fn nexus_lane_relay_emergency_rejects_zero_threshold() {
     use iroha_config::parameters::user::{LaneDescriptor, LaneRelayEmergency, Nexus};
     use iroha_config_base::util::Emitter;
     use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
-        enabled: true,
         lane_count: NonZeroU32::new(1).expect("nonzero"),
         lane_catalog: vec![LaneDescriptor {
             index: Some(0),
@@ -528,7 +474,6 @@ fn nexus_lane_relay_emergency_rejects_threshold_above_members() {
     use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
-        enabled: true,
         lane_count: NonZeroU32::new(1).expect("nonzero"),
         lane_catalog: vec![LaneDescriptor {
             index: Some(0),
@@ -607,6 +552,10 @@ fn nexus_storage_weights_require_positive_subsystem_shares() {
     assert_contains!(debug, "greater than zero");
 }
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the profile fixture keeps secret-file substitution and every multilane default assertion in one end-to-end contract"
+)]
 fn nexus_profile_template_enables_multilane_defaults() {
     let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -696,10 +645,6 @@ fn nexus_profile_template_enables_multilane_defaults() {
         .change_context(FixtureConfigLoadError)
         .and_then(|user| user.parse().change_context(FixtureConfigLoadError))
         .expect("Nexus profile config should parse");
-    assert!(
-        config.nexus.enabled,
-        "Nexus profile must set nexus.enabled = true"
-    );
     assert_eq!(config.nexus.lane_catalog.lane_count().get(), 3);
     assert_eq!(
         config.nexus.dataspace_catalog.entries().len(),
@@ -1184,7 +1129,6 @@ fn dataspace_fee_sponsor_program_id_parses() {
         defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID
     );
     let nexus = Nexus {
-        enabled: true,
         lane_count: NonZeroU32::new(1).expect("nonzero"),
         lane_catalog: vec![LaneDescriptor {
             index: Some(0),
@@ -1231,7 +1175,6 @@ fn dataspace_fee_sponsor_program_id_rejects_malformed_literal() {
     use std::num::NonZeroU32;
     let mut emitter = Emitter::<ParseError>::new();
     let nexus = Nexus {
-        enabled: true,
         lane_count: NonZeroU32::new(1).expect("nonzero"),
         lane_catalog: vec![LaneDescriptor {
             index: Some(0),
@@ -1261,32 +1204,6 @@ fn dataspace_fee_sponsor_program_id_rejects_malformed_literal() {
     let err = emitter.into_result().expect_err("parse error expected");
     let debug = strip_ansi_codes(&format!("{err:?}"));
     assert_contains!(debug, "fee_sponsor_program_id");
-}
-#[test]
-fn dataspace_fee_sponsor_program_id_requires_nexus_enabled() {
-    use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus};
-    use iroha_config_base::util::Emitter;
-    use iroha_data_model::nexus::DataSpaceId;
-    let mut emitter = Emitter::<ParseError>::new();
-    let nexus = Nexus {
-        enabled: false,
-        dataspace_catalog: vec![DataSpaceDescriptor {
-            alias: Some("universal".into()),
-            id: Some(DataSpaceId::UNIVERSAL.as_u64()),
-            manifest_hash: None,
-            description: None,
-            fault_tolerance: None,
-            fee_sponsor_program_id: Some(format!(
-                "{}/default",
-                defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID
-            )),
-        }],
-        ..Nexus::default()
-    };
-    assert!(nexus.parse(&mut emitter).is_none());
-    let err = emitter.into_result().expect_err("parse error expected");
-    let debug = strip_ansi_codes(&format!("{err:?}"));
-    assert_contains!(debug, "nexus.enabled");
 }
 #[test]
 fn routing_policy_unknown_dataspace_rejected() {
@@ -2004,6 +1921,7 @@ fn sumeragi_v2_explicit_schema_parses() {
     assert_eq!(cfg.sumeragi.keys.expiry_grace_blocks, 3);
     assert!(cfg.sumeragi.keys.require_hsm);
     assert_eq!(cfg.sumeragi.keys.allowed_hsm_providers.len(), 2);
+    assert_eq!(cfg.kura.lane_history_retention.get(), 8_192);
     let shared = cfg
         .sumeragi
         .v2_config(
@@ -2027,11 +1945,11 @@ fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
         ),
         (
             "bad.sumeragi_body_queue_too_small.toml",
-            "sumeragi.queues.bodies must reserve five positions for at least one validator, three per authenticated non-validator source, and two anonymous positions (minimum 13, configured 9)",
+            "sumeragi.queues.bodies must reserve five positions for at least one validator and three per authenticated non-validator source (minimum 11, configured 9)",
         ),
         (
             "bad.sumeragi_body_bytes_too_small.toml",
-            "sumeragi.queues.body_bytes must reserve one validator, every configured authenticated non-validator source, and the anonymous source partition (minimum 138412032, configured 138412031)",
+            "sumeragi.queues.body_bytes must reserve one validator and every configured authenticated non-validator source (minimum 103809024, configured 103809023)",
         ),
         (
             "bad.sumeragi_empty_hsm_provider.toml",

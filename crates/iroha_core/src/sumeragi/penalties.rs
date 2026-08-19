@@ -74,16 +74,14 @@ impl<'a> PenaltyApplier<'a> {
     }
     fn build_validator_locator_map(&self) -> BTreeMap<PublicKey, ValidatorLocator> {
         let world = self.state.world_view();
-        let nexus_enabled = self.state.nexus_snapshot().enabled;
         let mut candidates_map: BTreeMap<PublicKey, Vec<ValidatorLocator>> = BTreeMap::new();
         for (key, record) in world.public_lane_validators().iter() {
             if !public_lane_validator_record_matches_key(key, record) {
                 continue;
             }
             let (lane_id, validator_id) = key;
-            if nexus_enabled
-                && (!self.state.is_lane_active_for_authority(*lane_id)
-                    || self.state.staking_authority_lane(*lane_id) != Some(*lane_id))
+            if !self.state.is_lane_active_for_authority(*lane_id)
+                || self.state.staking_authority_lane(*lane_id) != Some(*lane_id)
             {
                 continue;
             }
@@ -529,7 +527,7 @@ fn max_slash_amount_for_validator_from_state(
     locator: &ValidatorLocator,
     max_bps: u16,
 ) -> Result<Option<Quantity>> {
-    if state.nexus_snapshot().enabled && !state.is_lane_active_for_authority(locator.lane_id) {
+    if !state.is_lane_active_for_authority(locator.lane_id) {
         return Ok(None);
     }
     let world = state.world_view();
@@ -612,7 +610,6 @@ mod tests {
         prelude::{AccountId, PeerId},
     };
     use iroha_primitives::numeric::Quantity;
-    use mv::storage::StorageReadOnly;
     use std::{
         num::{NonZeroU32, NonZeroU64},
         sync::Arc,
@@ -630,7 +627,6 @@ mod tests {
 
     fn enable_shared_public_staking_lanes(state: &mut State) {
         let mut nexus = state.nexus_snapshot();
-        nexus.enabled = true;
         nexus.lane_catalog = LaneCatalog::new(
             NonZeroU32::new(2).expect("non-zero lane count"),
             vec![

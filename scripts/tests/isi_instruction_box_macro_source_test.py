@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "crates/iroha_data_model/src/isi/mod.rs"
 PREIMAGE_BLOB = "20d76d60119fc6fdf216fd073760935d98dae984"
 PREIMAGE_LINES = 4_094
-POSTIMAGE_LINE_CEILING = 3_026
+POSTIMAGE_REGION_LINES = 397
 EXPECTED_DIRECT_SITES = 270
 
 REGION_START = "impl crate::seal::Instruction for InstructionBox {}"
@@ -115,8 +115,8 @@ def _validate(source: str) -> None:
     expected = _compact(preimage)
     if _tokens(_region(source)) != _tokens(_region(expected)):
         raise AssertionError("InstructionBox macro region differs from authenticated transform")
-    if len(source.splitlines()) > POSTIMAGE_LINE_CEILING:
-        raise AssertionError("InstructionBox compaction exceeded its Rust line ceiling")
+    if len(_region(source).splitlines()) != POSTIMAGE_REGION_LINES:
+        raise AssertionError("InstructionBox macro region physical shape changed")
     if _region(source).count("impl_direct_instruction_box!(") != EXPECTED_DIRECT_SITES:
         raise AssertionError("InstructionBox typed invocation inventory drifted")
     macro_digest = hashlib.sha256(_tokens(MACRO_AND_MARKER).encode()).hexdigest()

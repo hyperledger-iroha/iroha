@@ -1,10 +1,10 @@
 //! Consensus-related data model DTOs for on-chain persistence.
 pub use crate::block::consensus::{
-    CertPhase, Qc, QcAggregate, QcRef, QcVote, SumeragiBlockSyncRosterStatus,
-    SumeragiCommitPipelineStatus, SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus,
-    SumeragiConsensusMessageHandlingEntry, SumeragiConsensusMessageHandlingStatus,
-    SumeragiMembershipMismatchStatus, SumeragiPeerKeyPolicyStatus, SumeragiQcStatus,
-    SumeragiRoundGapStatus, SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
+    CertPhase, Qc, QcAggregate, QcRef, QcVote, SumeragiCommitPipelineStatus,
+    SumeragiCommitQuorumStatus, SumeragiConsensusCapsStatus, SumeragiConsensusMessageHandlingEntry,
+    SumeragiConsensusMessageHandlingStatus, SumeragiMembershipMismatchStatus,
+    SumeragiPeerKeyPolicyStatus, SumeragiQcStatus, SumeragiRoundGapStatus,
+    SumeragiViewChangeCauseStatus, SumeragiVoteValidationDropEntry,
     SumeragiVoteValidationDropPeerEntry, SumeragiVoteValidationDropReasonCount,
     SumeragiVoteValidationDropStatus, SumeragiWorkerLoopStatus, SumeragiWorkerQueueDepths,
     default_chain_order_hash,
@@ -126,57 +126,6 @@ impl ValidatorSetCheckpoint {
             expires_at_height,
         }
     }
-}
-/// Stake snapshot entry for a single validator in a commit roster.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct CommitStakeSnapshotEntry {
-    /// Peer identifier for the validator.
-    pub peer_id: crate::peer::PeerId,
-    /// Total stake attributed to the validator.
-    pub stake: Quantity,
-}
-/// Stake snapshot aligned to the validator set used for commit proof validation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct CommitStakeSnapshot {
-    /// Stable hash of the validator set the snapshot applies to.
-    pub validator_set_hash: HashOf<Vec<crate::peer::PeerId>>,
-    /// Stake entries aligned to validator roster order.
-    pub entries: Vec<CommitStakeSnapshotEntry>,
-}
-impl CommitStakeSnapshot {
-    /// Return `true` when this snapshot exactly and uniquely matches the roster.
-    ///
-    /// The hash is an integrity binding, not a substitute for validating the
-    /// ordered entry projection consumed by weighted quorum calculations.
-    #[must_use]
-    pub fn matches_roster(&self, roster: &[crate::peer::PeerId]) -> bool {
-        if self.validator_set_hash != HashOf::new(&roster.to_vec())
-            || self.entries.len() != roster.len()
-        {
-            return false;
-        }
-        let mut observed = std::collections::BTreeSet::new();
-        self.entries.iter().zip(roster).all(|(entry, expected)| {
-            &entry.peer_id == expected && !entry.stake.is_zero() && observed.insert(&entry.peer_id)
-        })
-    }
-}
-/// Canonical previous-height roster evidence embedded in block payloads.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct PreviousRosterEvidence {
-    /// Height of the block this evidence applies to.
-    pub height: u64,
-    /// Hash of the block this evidence applies to.
-    pub block_hash: HashOf<crate::block::BlockHeader>,
-    /// Signed validator checkpoint for the referenced block.
-    pub validator_checkpoint: ValidatorSetCheckpoint,
-    /// Optional `NPoS` stake snapshot aligned to the validator set.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub stake_snapshot: Option<CommitStakeSnapshot>,
 }
 /// Deterministic `NPoS` state effects embedded in a signed block.
 ///
@@ -663,11 +612,6 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
     #[derive(Encode)]
-    struct ForgedCommitStakeSnapshotEntry {
-        peer_id: crate::peer::PeerId,
-        stake: Numeric,
-    }
-    #[derive(Encode)]
     struct ForgedNposConsensusSlashAction {
         evidence_key: Vec<u8>,
         signer: u32,
@@ -684,62 +628,10 @@ mod tests {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("generate checked consensus DTO fixture keypair")
     }
-    fn stake_snapshot_fixture() -> (Vec<crate::peer::PeerId>, CommitStakeSnapshot) {
-        let roster = (0..3)
-            .map(|_| crate::peer::PeerId::new(checked_random_keypair().public_key().clone()))
-            .collect::<Vec<_>>();
-        let entries = roster
-            .iter()
-            .enumerate()
-            .map(|(index, peer_id)| CommitStakeSnapshotEntry {
-                peer_id: peer_id.clone(),
-                stake: u64::try_from(index + 1)
-                    .expect("small fixture index")
-                    .into(),
-            })
-            .collect();
-        let snapshot = CommitStakeSnapshot {
-            validator_set_hash: HashOf::new(&roster),
-            entries,
-        };
-        (roster, snapshot)
-    }
     #[test]
-    fn commit_stake_snapshot_requires_exact_positive_ordered_roster() {
-        let (roster, snapshot) = stake_snapshot_fixture();
-        assert!(snapshot.matches_roster(&roster));
-        let mut reordered = snapshot.clone();
-        reordered.entries.swap(0, 1);
-        assert!(!reordered.matches_roster(&roster));
-        let mut duplicate = snapshot.clone();
-        duplicate.entries[1].peer_id = duplicate.entries[0].peer_id.clone();
-        assert!(!duplicate.matches_roster(&roster));
-        let mut missing = snapshot.clone();
-        missing.entries.pop();
-        assert!(!missing.matches_roster(&roster));
-        let mut extra = snapshot.clone();
-        extra.entries.push(snapshot.entries[0].clone());
-        assert!(!extra.matches_roster(&roster));
-        let mut zero_stake = snapshot.clone();
-        zero_stake.entries[1].stake = Quantity::zero();
-        assert!(!zero_stake.matches_roster(&roster));
-        let mut wrong_hash = snapshot;
-        wrong_hash.validator_set_hash = HashOf::new(&roster[..2].to_vec());
-        assert!(!wrong_hash.matches_roster(&roster));
-    }
-    #[test]
-    fn negative_numeric_payloads_cannot_decode_as_consensus_stake_quantities() {
+    fn negative_numeric_payload_cannot_decode_as_consensus_slash_amount() {
         let key_pair = checked_random_keypair();
         let peer_id = crate::peer::PeerId::new(key_pair.public_key().clone());
-        let snapshot = ForgedCommitStakeSnapshotEntry {
-            peer_id: peer_id.clone(),
-            stake: Numeric::new(-1_i32, 0),
-        };
-        let encoded = snapshot.encode();
-        assert!(
-            CommitStakeSnapshotEntry::decode(&mut encoded.as_slice()).is_err(),
-            "a negative signed payload must not decode as a commit stake snapshot"
-        );
         let slash = ForgedNposConsensusSlashAction {
             evidence_key: vec![0xA5],
             signer: 0,

@@ -7,7 +7,7 @@ use iroha_config::parameters::actual::{
 };
 use iroha_core::{
     gas,
-    queue::{ConfigLaneRouter, LaneRouter, Queue, QueueLimits, SingleLaneRouter},
+    queue::{ConfigLaneRouter, LaneRouter, Queue, QueueLimits},
     state::{State, World},
     telemetry::StateTelemetry,
     tx::AcceptedTransaction,
@@ -107,6 +107,11 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
     let mut nexus = Nexus::default();
     nexus.fusion.exit_teu = 12_345;
     let queue_limits = QueueLimits::from_nexus(&nexus);
+    let router: Arc<dyn LaneRouter> = Arc::new(ConfigLaneRouter::new(
+        nexus.routing_policy.clone(),
+        nexus.dataspace_catalog.clone(),
+        nexus.lane_catalog.clone(),
+    ));
     let mut state_inner = State::with_telemetry(world, kura, query_store, telemetry);
     state_inner
         .set_nexus(nexus)
@@ -115,7 +120,6 @@ fn queue_teu_backlog_matches_metering() -> Result<()> {
     let network_id = *state.network_id_ref();
     let (events_sender, _) = broadcast::channel(16);
     let queue_cfg = QueueConfig::default();
-    let router: Arc<dyn LaneRouter> = Arc::new(SingleLaneRouter::new());
     let queue = Arc::new(Queue::from_config_with_router_and_limits(
         queue_cfg,
         events_sender,
@@ -272,7 +276,6 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
         }],
     };
     let nexus = Nexus {
-        enabled: true,
         lane_catalog: lane_catalog.clone(),
         dataspace_catalog: dataspace_catalog.clone(),
         routing_policy: routing_policy.clone(),
@@ -476,7 +479,6 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
         }],
     };
     let nexus = Nexus {
-        enabled: true,
         lane_catalog: lane_catalog.clone(),
         dataspace_catalog: dataspace_catalog.clone(),
         routing_policy: routing_policy.clone(),

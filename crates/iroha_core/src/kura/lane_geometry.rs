@@ -4714,7 +4714,7 @@ impl Kura {
             .map(|(record, _)| record);
         let aggregate_work_item_limit = lane_retirement_aggregate_work_item_limit(
             entries.len(),
-            self.roster_sidecar_retention().get(),
+            self.lane_history_retention().get(),
             self.native_amx_participant_evidence_retention().get(),
             self.pending_control_sidecar_limits.certified_merge_entries,
         )
@@ -9930,10 +9930,10 @@ impl Kura {
                 attempt_identities.insert((lane_block_height, proposal_height));
                 let attempts_at_height = attempts.entry(lane_block_height).or_default();
                 attempts_at_height.push((pointer, artifact, current, retired));
-                if attempts_at_height.len() > self.roster_sidecar_retention().get() {
+                if attempts_at_height.len() > self.lane_history_retention().get() {
                     return Err(self.geometry_error(
                         ErrorKind::InvalidData,
-                        "autonomous proposal-height attempts exceed the configured sidecar retention bound",
+                        "autonomous proposal-height attempts exceed the configured lane-history retention bound",
                     ));
                 }
                 continue;

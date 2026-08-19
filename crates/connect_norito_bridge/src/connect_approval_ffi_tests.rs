@@ -7,58 +7,59 @@ fn connect_open_rejects_identity_substitution_and_replayed_sequence() {
     let sid = connect_sdk::derive_session_id(&network_id, &app_pk, &nonce);
     let mut out_ptr: *mut c_uchar = ptr::null_mut();
     let mut out_len: c_ulong = 0;
-    let mut call = |candidate_sid: &[u8; 32],
-                    candidate_network: &[u8],
-                    candidate_app_pk: &[u8; 32],
-                    candidate_nonce: &[u8; 16],
-                    sequence: u64| unsafe {
-        connect_norito_encode_control_open_ext(
-            candidate_sid.as_ptr(),
-            0,
-            sequence,
-            candidate_app_pk.as_ptr(),
-            candidate_app_pk.len() as c_ulong,
-            candidate_nonce.as_ptr(),
-            candidate_nonce.len() as c_ulong,
-            ptr::null(),
-            0,
-            candidate_network.as_ptr(),
-            candidate_network.len() as c_ulong,
-            ptr::null(),
-            0,
-            &mut out_ptr,
-            &mut out_len,
-        )
-    };
-    let mut wrong_sid = sid;
-    wrong_sid[0] ^= 1;
-    assert_eq!(
-        call(&wrong_sid, network_hash.as_ref(), &app_pk, &nonce, 1),
-        ERR_CONNECT_IDENTITY
-    );
-    let substituted_network = Hash::new(b"connect-open-other-network");
-    assert_eq!(
-        call(&sid, substituted_network.as_ref(), &app_pk, &nonce, 1),
-        ERR_CONNECT_IDENTITY
-    );
-    let mut substituted_app = app_pk;
-    substituted_app[0] ^= 1;
-    assert_eq!(
-        call(&sid, network_hash.as_ref(), &substituted_app, &nonce, 1),
-        ERR_CONNECT_IDENTITY
-    );
-    let mut substituted_nonce = nonce;
-    substituted_nonce[0] ^= 1;
-    assert_eq!(
-        call(&sid, network_hash.as_ref(), &app_pk, &substituted_nonce, 1),
-        ERR_CONNECT_IDENTITY
-    );
-    assert_eq!(call(&sid, network_hash.as_ref(), &app_pk, &nonce, 2), -2);
-    assert_eq!(
-        call(&sid, &network_hash.as_ref()[..31], &app_pk, &nonce, 1),
-        -2
-    );
-    drop(call);
+    {
+        let mut call = |candidate_sid: &[u8; 32],
+                        candidate_network: &[u8],
+                        candidate_app_pk: &[u8; 32],
+                        candidate_nonce: &[u8; 16],
+                        sequence: u64| unsafe {
+            connect_norito_encode_control_open_ext(
+                candidate_sid.as_ptr(),
+                0,
+                sequence,
+                candidate_app_pk.as_ptr(),
+                candidate_app_pk.len() as c_ulong,
+                candidate_nonce.as_ptr(),
+                candidate_nonce.len() as c_ulong,
+                ptr::null(),
+                0,
+                candidate_network.as_ptr(),
+                candidate_network.len() as c_ulong,
+                ptr::null(),
+                0,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        let mut wrong_sid = sid;
+        wrong_sid[0] ^= 1;
+        assert_eq!(
+            call(&wrong_sid, network_hash.as_ref(), &app_pk, &nonce, 1),
+            ERR_CONNECT_IDENTITY
+        );
+        let substituted_network = Hash::new(b"connect-open-other-network");
+        assert_eq!(
+            call(&sid, substituted_network.as_ref(), &app_pk, &nonce, 1),
+            ERR_CONNECT_IDENTITY
+        );
+        let mut substituted_app = app_pk;
+        substituted_app[0] ^= 1;
+        assert_eq!(
+            call(&sid, network_hash.as_ref(), &substituted_app, &nonce, 1),
+            ERR_CONNECT_IDENTITY
+        );
+        let mut substituted_nonce = nonce;
+        substituted_nonce[0] ^= 1;
+        assert_eq!(
+            call(&sid, network_hash.as_ref(), &app_pk, &substituted_nonce, 1),
+            ERR_CONNECT_IDENTITY
+        );
+        assert_eq!(call(&sid, network_hash.as_ref(), &app_pk, &nonce, 2), -2);
+        assert_eq!(
+            call(&sid, &network_hash.as_ref()[..31], &app_pk, &nonce, 1),
+            -2
+        );
+    }
     let invalid_metadata = br#"{"name":" demo"}"#;
     assert_eq!(
         unsafe {

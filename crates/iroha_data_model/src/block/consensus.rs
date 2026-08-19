@@ -2727,32 +2727,6 @@ pub struct SumeragiPendingRbcStatus {
     #[norito(default)]
     pub entries: Vec<SumeragiPendingRbcEntry>,
 }
-/// Block-sync roster selection counters exposed via Sumeragi status.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-pub struct SumeragiBlockSyncRosterStatus {
-    /// Total times a commit certificate hint was used.
-    #[norito(default)]
-    pub commit_qc_hint_total: u64,
-    /// Total times a validator-checkpoint hint was used.
-    #[norito(default)]
-    pub checkpoint_hint_total: u64,
-    /// Total times commit-certificate history was used.
-    #[norito(default)]
-    pub commit_qc_history_total: u64,
-    /// Total times validator-checkpoint history was used.
-    #[norito(default)]
-    pub checkpoint_history_total: u64,
-    /// Total times a roster sidecar was used.
-    #[norito(default)]
-    pub roster_sidecar_total: u64,
-    /// Block-sync drops due to missing/invalid roster proofs.
-    #[norito(default)]
-    pub drop_missing_total: u64,
-    /// Block-sync `ShareBlocks` drops without a matching request.
-    #[norito(default)]
-    pub drop_unsolicited_share_blocks_total: u64,
-}
 /// View-change cause counters surfaced via `/v1/sumeragi/status`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]

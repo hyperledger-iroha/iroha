@@ -274,7 +274,6 @@
         "da_proof_policies_hash",
         "da_commitments_hash",
         "da_pin_intents_hash",
-        "prev_roster_evidence_hash",
         "sccp_commitment_root",
         "creation_time_ms",
         "view_change_index",
@@ -284,6 +283,40 @@
     {
       "id": "block.header.optional",
       "values": ["npos_effects_hash", "execution_context_hash"]
+    },
+    {
+      "id": "ledger.state_finality.required",
+      "values": [
+        "height",
+        "block_hash",
+        "state_root",
+        "block_header",
+        "finality_artifact"
+      ]
+    },
+    {
+      "id": "ledger.state_finality.retired",
+      "values": ["source", "commit_qc"]
+    },
+    {
+      "id": "ledger.state_finality.retired_paths",
+      "values": [
+        "/v1/sumeragi/checkpoints",
+        "/v1/sumeragi/commit-certificates",
+        "/v1/sumeragi/commit-qcs/{block_hash}",
+        "/v1/sumeragi/validator-sets",
+        "/v1/sumeragi/validator-sets/{height}"
+      ]
+    },
+    {
+      "id": "ledger.state_finality.retired_schemas",
+      "values": [
+        "QcList",
+        "ValidatorSetCheckpoint",
+        "ValidatorSetCheckpointList",
+        "ValidatorSetSnapshot",
+        "ValidatorSetSnapshotList"
+      ]
     },
     {
       "id": "bridge.components",
@@ -336,7 +369,6 @@
         "da_proof_policies_hash",
         "da_commitments_hash",
         "da_pin_intents_hash",
-        "prev_roster_evidence_hash",
         "sccp_commitment_root",
         "creation_time_ms",
         "view_change_index",
@@ -400,7 +432,6 @@
       "id": "lifecycle.required",
       "values": [
         "version",
-        "nexus_enabled",
         "lane_count",
         "lanes",
         "catalog_hash",
@@ -450,6 +481,14 @@
         "participant_settlement_hash",
         "prepare_qc",
         "commit_qc"
+      ]
+    },
+    {
+      "id": "native.proposal.required",
+      "values": [
+        "descriptor",
+        "proposal_hash",
+        "payload_block_hint"
       ]
     },
     {

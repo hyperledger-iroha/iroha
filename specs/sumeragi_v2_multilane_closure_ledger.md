@@ -50,6 +50,8 @@ statements in this document describe the mutable development checkout. They are
 inventories and source-consistency observations, not immutable-candidate
 execution or release receipts.
 
+Mutable documentation does not embed SDK suite-source digests: the executable resolver derives them during immutable-candidate freeze/replay, and the release receipt binds the result.
+
 ## 2026-08-17 mutable-development closure snapshot
 
 - The active unsigned merge is `HEAD`
@@ -58,8 +60,8 @@ execution or release receipts.
   but 784 status entries remain: 767 staged, 34 unstaged, nine untracked, and
   26 both staged and unstaged. The branch is ahead one and behind three. This
   is not an immutable candidate.
-- The bound static inventory passes with exactly 88 corridor legs, 860/860
-  production tests across 40 modules, 527/527 G-UNIT rows, and four mandatory
+- The bound static inventory passes with exactly 91 corridor legs, 860/860
+  production tests across 43 modules, 527/527 G-UNIT rows, and four mandatory
   G-4P gates. The grouped fixture pin validates. The recursive SDK resolver
   enumerates 1,398 grouped and 1,400 diagnostics paths at the exact hashes in
   the owning corpus and `G-SDK` rows below. These are source inventories, not
@@ -1729,12 +1731,10 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 63, JavaScript 61, Swift
 4, Kotlin 6, and Java 5 tests. The current recursive mutable-tree closure
-contains exactly 1,398 grouped and 1,400 diagnostics records. Its grouped and
-diagnostics
-suite-source SHA-256 values are
-`c55ce42c6167e2a0444bb5226c49c14470f602ac7be77d645ca4239f8347c653`
-and
-`0ed85a766487ffeca48235bc2f4b040f2177342cf93993c205d6806311deb71f`.
+contains exactly 1,398 grouped and 1,400 diagnostics records. The executable
+resolver derives both suite-source SHA-256 values from the frozen candidate,
+and the release receipt must reproduce them; this ledger is not a second
+digest authority.
 The checked-in grouped fixture has SHA-256
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`.
 The diagnostics closure directly includes the 48-line wire fixture whose
@@ -1873,7 +1873,7 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The mutable source inventory is internally count-consistent. The production
-inventory contains exactly 860 tests across 40 modules, including 441
+inventory contains exactly 860 tests across 43 modules, including 441
 source-sealed ownership/regression names. The duplicate inline V2 core network
 simulations are retired; the standalone `iroha_sumeragi_core` harness remains. The three Kura recovery
 regressions and governance-unlock audit are retained beside the prior source-bound closure.
@@ -2023,7 +2023,7 @@ grouped corpus. Archive the corpus hash and per-SDK results. No SDK may skip a
 negative or substitute a hand-authored fixture.
 
 The mutable grouped inventory is OpenAPI `7`, Python `63`, JavaScript `61`,
-Swift `4`, Kotlin `6`, and Java `5`, with exactly 56 grouped Native negative
+Swift `5`, Kotlin `7`, and Java `6`, with exactly 56 grouped Native negative
 controls. The diagnostics inventory is Rust `14`, Python `129`, JavaScript
 source/distribution `88`, Swift `34`, Kotlin `43`, and Java `42`. The recursive
 source-closure design covers every transitive production input, including the
@@ -2032,10 +2032,8 @@ and types, the standalone Python orderbook module, Kotlin/Java Native models,
 grouped JSON, and wire TSV. Its record totals and suite-source digests must be
 derived and receipt-bound from the exact immutable candidate. The current
 mutable-tree closure contains exactly 1,398 grouped and 1,400 diagnostics
-records, with grouped and diagnostics suite-source SHA-256 values
-`c55ce42c6167e2a0444bb5226c49c14470f602ac7be77d645ca4239f8347c653`
-and
-`0ed85a766487ffeca48235bc2f4b040f2177342cf93993c205d6806311deb71f`.
+records; their digests are deliberately derived at freeze/replay instead of
+being copied into mutable documentation.
 The current grouped JSON and wire TSV SHA-256 values are
 `e4fb62addba3c3b8aecdbff55840e21620c770ab96d346ca55b156cf0239942b`
 and
@@ -2245,10 +2243,10 @@ remain required by the mapped rows.
   Linux/macOS crash-safe storage contract. This is a declared platform
   restriction mapped to `ML-LIFE-01`, `ML-LIFE-04`, and `G-FINAL`; it must not
   be silently bypassed.
-- `ConfigError::NexusMultilaneDisabled` rejects lane catalogs, dataspaces, or
-  routing overrides when `nexus.enabled` is false. That preserves the
-  configuration-only production boundary in `ML-LIFE-01`; it is not an
-  environment-controlled autonomous-execution toggle.
+- The first-release config schema has no top-level Nexus availability switch;
+  lane catalogs, dataspaces, and routing policy are always authoritative. That
+  preserves the configuration-only production boundary in `ML-LIFE-01`; it is
+  not an environment-controlled autonomous-execution toggle.
 - Queue durability ambiguity disables admission/selection until bounded
   restart recovery, and Kura retirement rejects obsolete, unexpected,
   malformed, temporary, hardlinked, or symlinked evidence. Those rejections

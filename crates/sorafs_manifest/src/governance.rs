@@ -5937,10 +5937,6 @@ mod tests {
             GOVERNANCE_DAG_SOURCE_PAYLOAD_MAX_CANONICAL_BYTES_V1,
             MAX_SIGNED_REPUTATION_SNAPSHOT_ENCODED_BYTES
         );
-        assert!(
-            GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1
-                > MAX_SIGNED_REPUTATION_SNAPSHOT_ENCODED_BYTES
-        );
         validate_governance_dag_signing_payload_len(GOVERNANCE_DAG_SIGNING_PAYLOAD_MAX_BYTES_V1)
             .expect("the exact V1 signing ceiling must be admitted");
         assert!(

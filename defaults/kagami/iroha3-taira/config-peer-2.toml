@@ -67,7 +67,6 @@ max_sites = 1024
 
 
 [nexus]
-enabled = true
 lane_count = 7
 
 [[nexus.lane_catalog]]
@@ -306,4 +305,4 @@ submitters = []
 [genesis]
 public_key = "ed012077D8B70FE83D6E0A0FF1C100FDCD01C6A937DA0B7B1004E7C9545BB64D6639A8"
 file = "genesis.signed.nrt"
-expected_hash = "hash:68E9955B136C5B55CE232B14590629366DD20348282FDFF6FE63D1B69E03FBA7#4EC0"
+expected_hash = "hash:662CDEA6518677830868F1852CB94C5E1812D4D455FB6D628D77977DF6002ABD#956B"

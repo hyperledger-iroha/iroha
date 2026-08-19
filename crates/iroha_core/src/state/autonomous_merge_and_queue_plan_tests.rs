@@ -406,7 +406,6 @@ fn configured_two_lane_merge_state() -> (State, Vec<KeyPair>, Vec<KeyPair>, Sign
         .expect("two-lane merge fixture catalog");
     state
         .set_nexus(iroha_config::parameters::actual::Nexus {
-            enabled: true,
             lane_catalog,
             ..iroha_config::parameters::actual::Nexus::default()
         })
@@ -2521,75 +2520,6 @@ fn queue_plan_registry_presence_is_bounded_and_malformed_markers_fail_closed() {
             .is_err(),
         "an oversized pending-obligation marker must fail before bounded decode"
     );
-}
-#[test]
-fn pending_queue_plan_admission_uses_legacy_topology_when_nexus_is_disabled() {
-    let kura = Kura::blank_kura_for_testing();
-    let mut state = State::new_for_testing(
-        World::default(),
-        Arc::clone(&kura),
-        LiveQueryStore::start_test(),
-    );
-    let mut nexus = state.nexus_snapshot();
-    nexus.enabled = false;
-    state
-        .set_nexus(nexus)
-        .expect("apply disabled Nexus state for legacy QueuePlan route");
-    let validator_keypairs = configure_commit_topology(&state, 1);
-    let parent = empty_global_block_after(None);
-    kura.store_block(Arc::new(parent.clone()))
-        .expect("store legacy QueuePlan carrier parent");
-    commit_block_metadata_to_state(&state, &parent);
-    let route = crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-    assert!(
-        state
-            .authoritative_lane_peer_ids_at_height(route.lane_id, 2)
-            .is_empty(),
-        "disabled Nexus has no lane-registry authority; QueuePlan must use commit topology"
-    );
-    let routing_plan = crate::queue::RoutingPlan::single(route);
-    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
-        &state,
-        routing_plan,
-        &validator_keypairs,
-        1,
-        0x62,
-    );
-    assert_eq!(
-        state
-            .classify_pending_queue_plan_admission(&certificate, 2)
-            .expect("legacy QueuePlan certificate is classifiable")
-            .1,
-        PendingQueuePlanAdmissionDisposition::EligibleAbsent
-    );
-    let candidate = state
-        .merge_candidate_with_queue_plan_admissions(&parent.header(), 0, None, vec![certificate])
-        .expect("legacy QueuePlan candidate construction")
-        .expect("legacy QueuePlan controls produce a standalone candidate");
-    let qc = merge_qc_for_candidate(&state, &candidate, &validator_keypairs, &[0]);
-    let entry = merge_entry_from_candidate(candidate, qc);
-    let carrier = certified_merge_carrier_after(&parent, &entry);
-    let staged = state
-        .block_with_certified_merge_entry(carrier.header().clone(), &entry)
-        .expect("QueuePlan-only certified merge entry remains legal with Nexus disabled");
-    assert!(
-        staged.canonical_wsv_merge_commit_authorization.is_none()
-            && staged
-                .canonical_carrier_commit_metadata_authorization
-                .is_none(),
-        "control-only merge entries must never mint autonomous WSV or carrier metadata authority"
-    );
-    drop(staged);
-    let mut non_control_entry = entry;
-    non_control_entry.queue_plan_admissions.clear();
-    assert!(matches!(
-        state.block_with_certified_merge_entry(
-            carrier.header().clone(),
-            &non_control_entry,
-        ),
-        Err(MergeLedgerCommitError::ExecutionBatchInvalid(ref message))
-            if message.contains("requires Nexus multilane mode")
-    ));
 }
 fn assert_control_only_pending_selection_skips_execution(
     state: &State,

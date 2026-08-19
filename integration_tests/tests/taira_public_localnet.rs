@@ -68,8 +68,8 @@ const INTERIM_LAG_CHURN_BACKOFF_SECS: u64 = 30;
 const JOINER_STALL_LOG_EVERY: u64 = 5;
 const JOINER_PROGRESS_LOG_EVERY: u64 = 5;
 const JOINER_STALL_WARNING_THRESHOLD: u64 = 3;
-const LOCALNET_BLOCK_TIME_MS: u64 = 1_000;
-const LOCALNET_COMMIT_TIME_MS: u64 = 1_000;
+const LOCALNET_BLOCK_TIME_MS: u64 = 4_000;
+const LOCALNET_COMMIT_TIME_MS: u64 = 4_000;
 const LOCALNET_TRANSACTION_TTL_MS: i64 = 7_200_000;
 const MAX_TX_BURST_PER_TICK: u32 = 32;
 const TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
@@ -3014,8 +3014,6 @@ fn generate_localnet(
     let mut command = Command::new(&kagami_bin);
     command
         .arg("localnet")
-        .arg("--build-line")
-        .arg("iroha3")
         .arg("--sora-profile")
         .arg("nexus")
         .arg("--consensus-mode")

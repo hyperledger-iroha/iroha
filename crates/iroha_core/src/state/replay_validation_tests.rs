@@ -44,7 +44,7 @@ fn replay_blocks_from_kura(
         fallback_consensus_mode,
     )
 }
-/// Exercise legacy fixture blocks without weakening the production v2 replay boundary.
+/// Exercise fixture blocks without weakening the production v2 replay boundary.
 ///
 /// Historical unit fixtures predate v2 finality artifacts. Production callers resolve to the
 /// parent-module function, which never enters this test-only adapter.
@@ -80,18 +80,7 @@ pub(super) fn replay_blocks_from_kura_range(
         let checkpoint = kura
             .wsv_checkpoint(height)?
             .ok_or_else(|| eyre!("missing WSV checkpoint for full block #{height}"))?;
-        let roster_snapshot = state.commit_roster_snapshot_for_block(height, signed.hash());
-        let roster = roster_snapshot
-            .as_ref()
-            .map(|snapshot| {
-                if snapshot.commit_qc.validator_set.is_empty() {
-                    snapshot.validator_checkpoint.validator_set.clone()
-                } else {
-                    snapshot.commit_qc.validator_set.clone()
-                }
-            })
-            .filter(|roster| !roster.is_empty())
-            .unwrap_or_else(|| topology.as_ref().to_vec());
+        let roster = topology.as_ref().to_vec();
         let mut validation_topology =
             crate::sumeragi::network_topology::Topology::new(roster.clone());
         let view = signed.header().view_change_index();
@@ -135,12 +124,7 @@ pub(super) fn replay_blocks_from_kura_range(
                 )
             })?;
         state_block.replay_compatibility = true;
-        prune_restored_commit_qcs_for_replay(&mut state_block, height);
-        let _ = state_block.apply_without_execution_with_commit_qc_for_replay(
-            &committed,
-            roster,
-            roster_snapshot.as_ref().map(|snapshot| &snapshot.commit_qc),
-        );
+        let _ = state_block.apply_without_execution(&committed, roster);
         state_block.prepare_replay_checkpoint_preview();
         let actual = crate::snapshot::canonical_staged_state_snapshot_hash(&state_block);
         if actual != checkpoint.state_hash() {
@@ -222,32 +206,66 @@ fn clear_test_execution_context_and_resign(
         .replace_signatures(std::collections::BTreeSet::from([signature]))
         .expect("replace legacy replay fixture signature");
 }
-fn previous_roster_evidence_for_parent(
-    parent: &SignedBlock,
-    roster: &[PeerId],
-) -> iroha_data_model::consensus::PreviousRosterEvidence {
-    let zero_state_root = iroha_crypto::Hash::prehashed([0_u8; iroha_crypto::Hash::LENGTH]);
-    let mut signers_bitmap = vec![0_u8; roster.len().div_ceil(8)];
-    if let Some(first_byte) = signers_bitmap.first_mut() {
-        *first_byte = 1;
+fn assert_canonical_successful_fixture_results(block: &SignedBlock) {
+    assert!(block.has_results(), "committed fixture must carry results");
+    let result_count = block.results().len();
+    assert_eq!(result_count, block.entrypoint_hashes().len());
+    assert!(
+        block.results().all(|result| result.as_ref().is_ok()),
+        "committed fixture results must all succeed"
+    );
+    assert_eq!(
+        block.committed_fragment_count(),
+        Some(u64::try_from(result_count).expect("fixture result count fits u64"))
+    );
+    block
+        .validate_entrypoint_merkle_cache()
+        .expect("committed fixture entrypoint Merkle cache must be canonical");
+    block
+        .validate_result_merkle_cache()
+        .expect("committed fixture result Merkle cache must be canonical");
+    assert_eq!(
+        block.header().result_merkle_root(),
+        block
+            .result_merkle_commitment()
+            .map(|commitment| *commitment.root())
+    );
+}
+fn attach_successful_fixture_results(
+    mut block: SignedBlock,
+    signer: &iroha_crypto::KeyPair,
+) -> SignedBlock {
+    let entrypoint_hashes = block
+        .external_entrypoints_cloned()
+        .map(|entrypoint| entrypoint.hash())
+        .collect::<Vec<_>>();
+    let results = entrypoint_hashes
+        .iter()
+        .map(|_| Ok(iroha_data_model::transaction::DataTriggerSequence::default()))
+        .collect();
+    block
+        .set_transaction_results(Vec::new(), &entrypoint_hashes, results)
+        .expect("attach exact successful replay-fixture results");
+    let final_signature = iroha_data_model::block::BlockSignature::new(
+        0,
+        iroha_crypto::SignatureOf::try_from_hash(signer.private_key(), block.hash())
+            .expect("sign result-bearing replay fixture"),
+    );
+    block
+        .replace_signatures(std::collections::BTreeSet::from([final_signature]))
+        .expect("replace result-bearing replay-fixture signature");
+    assert_canonical_successful_fixture_results(&block);
+    {
+        let mut final_signatures = block.signatures();
+        let final_signature = final_signatures.next().expect("replay-fixture signature");
+        assert_eq!(final_signature.index(), 0);
+        assert!(final_signatures.next().is_none());
+        final_signature
+            .signature()
+            .verify_hash(signer.public_key(), block.hash())
+            .expect("verify result-bearing replay-fixture signature");
     }
-    iroha_data_model::consensus::PreviousRosterEvidence {
-        height: parent.header().height().get(),
-        block_hash: parent.hash(),
-        validator_checkpoint: iroha_data_model::consensus::ValidatorSetCheckpoint::new(
-            parent.header().height().get(),
-            parent.header().view_change_index(),
-            parent.hash(),
-            zero_state_root,
-            zero_state_root,
-            roster.to_vec(),
-            signers_bitmap,
-            Vec::new(),
-            iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
-            None,
-        ),
-        stake_snapshot: None,
-    }
+    block
 }
 fn commit_replay_validated_block_with_options(
     state: &State,
@@ -274,6 +292,7 @@ fn commit_replay_validated_block_with_options(
         .expect("block validates for replay fixture");
     let committed = valid_block.commit_unchecked().unpack(|_| {});
     let committed_signed = committed.as_ref().clone();
+    assert_canonical_successful_fixture_results(&committed_signed);
     state
         .kura
         .store_block(Arc::new(committed_signed.clone()))
@@ -362,7 +381,6 @@ fn configure_private_replay_route(state: &mut State, lane_id: LaneId, dataspace_
     .expect("dataspace catalog");
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.lane_catalog = lane_catalog;
         nexus.dataspace_catalog = dataspace_catalog.clone();
         nexus.routing_policy.default_lane = lane_id;
@@ -436,11 +454,14 @@ fn replay_missing_checkpoint_fixture(
     )
     .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-    let genesis = SignedBlock::genesis(
-        vec![tx],
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-        None,
-        None,
+    let genesis = attach_successful_fixture_results(
+        SignedBlock::genesis(
+            vec![tx],
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+            None,
+            None,
+        ),
+        &SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
     );
     let leader = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
     let topology = crate::sumeragi::network_topology::Topology::new(vec![PeerId::new(
@@ -454,7 +475,7 @@ fn replay_missing_checkpoint_fixture(
             .chain(0, Some(&genesis))
             .sign(leader.private_key())
             .unpack(|_| {});
-        let block2: SignedBlock = block2.into();
+        let block2: SignedBlock = attach_successful_fixture_results(block2.into(), &leader);
         kura.store_block(Arc::new(block2.clone()))
             .expect("store later block");
         kura.store_wsv_checkpoint(
@@ -519,7 +540,10 @@ fn replay_always_rejects_corrupted_genesis_signature() {
     .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
     let rogue_signer = crate::state::checked_keypair();
-    let bad_block = SignedBlock::genesis(vec![tx], rogue_signer.private_key(), None, None);
+    let bad_block = attach_successful_fixture_results(
+        SignedBlock::genesis(vec![tx], rogue_signer.private_key(), None, None),
+        &rogue_signer,
+    );
     let kura = Kura::blank_kura_for_testing();
     let block_arc = Arc::new(bad_block);
     kura.store_block(Arc::clone(&block_arc))
@@ -687,10 +711,6 @@ fn replay_from_height_catches_up_state_impl() {
     let accepted_block3 = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx_block3));
     let block3 = crate::block::BlockBuilder::new(vec![accepted_block3])
         .chain(0, Some(&signed_block2))
-        .with_previous_roster_evidence(Some(previous_roster_evidence_for_parent(
-            &signed_block2,
-            topology.as_ref(),
-        )))
         .sign(leader.private_key())
         .unpack(|_| {});
     let signed_block3: SignedBlock = block3.into();
@@ -922,235 +942,6 @@ fn replay_rotates_topology_for_npos_prf_leader_impl() {
     assert_eq!(state.view().height(), 2);
 }
 #[test]
-fn replay_uses_commit_roster_journal_for_signature_order() {
-    run_replay_validation_test_on_stack(
-        "replay_uses_commit_roster_journal_for_signature_order",
-        replay_uses_commit_roster_journal_for_signature_order_impl,
-    );
-}
-#[allow(clippy::too_many_lines)]
-fn replay_uses_commit_roster_journal_for_signature_order_impl() {
-    use iroha_config::{
-        base::WithOrigin,
-        kura::InitMode,
-        parameters::actual::{Kura as KuraConfig, LaneConfig as RuntimeLaneConfig},
-    };
-    use iroha_crypto::Algorithm;
-    use iroha_data_model::{consensus::VALIDATOR_SET_HASH_VERSION_V1, peer::PeerId};
-    use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
-    use iroha_test_samples::{
-        SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR, gen_account_in,
-    };
-    use std::borrow::Cow;
-    let chain_id = ChainId::from("iroha:test:replay-roster-journal");
-    let temp_dir = tempfile::tempdir().expect("temp dir");
-    let kura_cfg = KuraConfig {
-        init_mode: InitMode::Strict,
-        store_dir: WithOrigin::inline(temp_dir.path().join("kura")),
-        max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-        blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
-        debug_output_new_blocks: false,
-        merge_ledger_cache_capacity:
-            iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-        fsync_mode: iroha_config::kura::FsyncMode::Batched,
-        fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-        block_sync_roster_retention:
-            iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-        roster_sidecar_retention:
-            iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-        replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-    };
-    let (kura, _) = Kura::new(&kura_cfg, &RuntimeLaneConfig::default()).expect("init kura");
-    let peer_a = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let peer_b = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let roster = vec![
-        PeerId::new(peer_b.public_key().clone()),
-        PeerId::new(peer_a.public_key().clone()),
-    ];
-    let topology_entries = vec![
-        GenesisTopologyEntry::new(
-            roster[0].clone(),
-            iroha_crypto::bls_normal_pop_prove(peer_b.private_key()).expect("generate pop b"),
-        ),
-        GenesisTopologyEntry::new(
-            roster[1].clone(),
-            iroha_crypto::bls_normal_pop_prove(peer_a.private_key()).expect("generate pop a"),
-        ),
-    ];
-    let (user_id, user_keypair) = gen_account_in("wonderland");
-    let mut genesis_builder =
-        GenesisBuilder::new_without_executor(chain_id.clone(), "ivm/libs/not/installed")
-            .set_topology(topology_entries);
-    genesis_builder = genesis_builder
-        .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
-        .account(user_keypair.public_key().clone())
-        .finish_domain();
-    let genesis_block = genesis_builder
-        .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-        .expect("genesis");
-    let genesis_signed = genesis_block.0.clone();
-    let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
-    let world = World::with(
-        [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-        [new_genesis_account(&genesis_id).build(&genesis_id)],
-        [],
-    );
-    let state = State::new_with_chain(
-        world,
-        Arc::clone(&kura),
-        crate::query::store::LiveQueryStore::start_test(),
-        chain_id.clone(),
-    );
-    {
-        let mut params_block = state.world.parameters.block();
-        params_block.sumeragi.key_require_hsm = false;
-        params_block.commit();
-    }
-    let genesis_signed = commit_replay_validated_block_with_options(
-        &state,
-        &crate::sumeragi::network_topology::Topology::new(roster.clone()),
-        genesis_signed,
-        &genesis_id,
-        false,
-        true,
-    );
-    kura.store_block(Arc::new(genesis_signed.clone()))
-        .expect("store genesis");
-    configure_replay_fixture_parameters(&state);
-    let tx = TransactionBuilder::new(
-        state.network_id,
-        user_id.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Log::new(
-        iroha_logger::Level::INFO,
-        "replay roster journal".to_owned(),
-    )])
-    .sign(user_keypair.private_key());
-    let accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-    let new_block = crate::block::BlockBuilder::new(vec![accepted])
-        .chain(0, Some(&genesis_signed))
-        .sign(peer_b.private_key())
-        .unpack(|_| {});
-    let mut signed_block: SignedBlock = new_block.into();
-    let height = signed_block.header().height().get();
-    let view = signed_block.header().view_change_index();
-    let prf_seed = {
-        let view = state.view();
-        crate::sumeragi::prf_seed_for_height(&view, height)
-    };
-    // Align the block signature with replay's PRF-rotated topology.
-    let mut signature_topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
-    signature_topology.canonicalize_order();
-    signature_topology.shuffle_prf(prf_seed, height);
-    signature_topology.nth_rotation(view);
-    let signer_key = if signature_topology.leader().public_key() == peer_a.public_key() {
-        peer_a.private_key()
-    } else {
-        peer_b.private_key()
-    };
-    rebind_test_execution_context_validators_and_resign(
-        &mut signed_block,
-        &signature_topology,
-        signer_key,
-    );
-    let signed_block = commit_replay_validated_block_with_options(
-        &state,
-        &signature_topology,
-        signed_block,
-        &genesis_id,
-        false,
-        true,
-    );
-    kura.store_block(Arc::new(signed_block.clone()))
-        .expect("store block");
-    let signatures: Vec<_> = signed_block.signatures().cloned().collect();
-    let mut signers_bitmap = vec![0u8; roster.len().div_ceil(8)];
-    for signature in &signatures {
-        let idx = usize::try_from(signature.index()).unwrap_or(usize::MAX);
-        if idx < roster.len() {
-            signers_bitmap[idx / 8] |= 1u8 << (idx % 8);
-        }
-    }
-    let block_hash = signed_block.hash();
-    let validator_set_hash = HashOf::new(&roster);
-    let commit_cert = Qc {
-        phase: crate::sumeragi::consensus::Phase::Commit,
-        subject_block_hash: block_hash,
-        parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-        post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
-        height,
-        view,
-        epoch: 0,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash,
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: roster.clone(),
-        aggregate: crate::sumeragi::consensus::QcAggregate {
-            signers_bitmap: signers_bitmap.clone(),
-            bls_aggregate_signature: Vec::new(),
-        },
-    };
-    let checkpoint = ValidatorSetCheckpoint::new(
-        height,
-        view,
-        block_hash,
-        commit_cert.parent_state_root,
-        commit_cert.post_state_root,
-        roster,
-        signers_bitmap,
-        Vec::new(),
-        VALIDATOR_SET_HASH_VERSION_V1,
-        None,
-    );
-    state
-        .record_commit_roster(&commit_cert, &checkpoint, None)
-        .expect("commit-roster test setup should retain known journal durability");
-    let replay_world = World::with(
-        [Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_id)],
-        [new_genesis_account(&genesis_id).build(&genesis_id)],
-        [],
-    );
-    let mut replay_state = State::new_with_chain(
-        replay_world,
-        Arc::clone(&kura),
-        crate::query::store::LiveQueryStore::start_test(),
-        chain_id.clone(),
-    );
-    {
-        let mut params_block = replay_state.world.parameters.block();
-        params_block.sumeragi.key_require_hsm = false;
-        params_block.commit();
-    }
-    let fallback_topology = crate::sumeragi::network_topology::Topology::new(vec![
-        PeerId::new(peer_a.public_key().clone()),
-        PeerId::new(peer_b.public_key().clone()),
-    ]);
-    replay_blocks_from_kura_range(
-        &kura,
-        &mut replay_state,
-        &fallback_topology,
-        1,
-        1,
-        ConsensusMode::Permissioned,
-    )
-    .expect("replay permissioned genesis before installing test-only penalty parameters");
-    configure_replay_fixture_parameters(&replay_state);
-    replay_blocks_from_kura_range(
-        &kura,
-        &mut replay_state,
-        &fallback_topology,
-        2,
-        2,
-        ConsensusMode::Permissioned,
-    )
-    .expect("replay should honor commit roster journal ordering");
-    assert_eq!(replay_state.view().height(), 2);
-}
-#[test]
 fn replay_rejects_non_authoritative_signature_topology_rotation() {
     run_replay_validation_test_on_stack(
         "replay_rejects_non_authoritative_signature_rotation",
@@ -1168,8 +959,6 @@ fn replay_rejects_non_authoritative_signature_topology_rotation_impl() {
     let user_keypair = crate::state::checked_keypair_with_algorithm(Algorithm::Ed25519);
     let user_domain: DomainId = DomainId::try_new("users", "universal").expect("domain id");
     let user_id = AccountId::new(user_keypair.public_key().clone());
-    crate::sumeragi::status::reset_commit_certs_for_tests();
-    crate::sumeragi::status::reset_validator_checkpoints_for_tests();
     let peer_a = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let peer_b = crate::state::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let fallback_peers = vec![
@@ -1597,13 +1386,14 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
     )
     .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
     .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
-    let genesis_block = SignedBlock::genesis_with_da_proof_policies(
+    let genesis_block = SignedBlock::try_genesis_with_da_proof_policies(
         vec![tx_genesis],
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
         None,
         None,
         Some(proof_policies(1)),
-    );
+    )
+    .expect("genesis fixture should sign with explicit DA proof policies");
     let genesis_block =
         commit_replay_validated_block(&original_state, &topology, genesis_block, &genesis_id);
     kura.store_block(Arc::new(genesis_block.clone()))
@@ -1696,10 +1486,6 @@ fn replay_rejects_legacy_space_directory_checkpoint_surface_impl() {
     let block3_accepted = crate::prelude::AcceptedTransaction::new_unchecked(Cow::Owned(block3_tx));
     let block3 = crate::block::BlockBuilder::new(vec![block3_accepted])
         .chain(0, Some(&legacy_block))
-        .with_previous_roster_evidence(Some(previous_roster_evidence_for_parent(
-            &legacy_block,
-            topology.as_ref(),
-        )))
         .with_da_proof_policies(Some(proof_policies(3)))
         .sign(leader.private_key())
         .unpack(|_| {});

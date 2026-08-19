@@ -37,6 +37,10 @@ impl LifecycleWorkRegistryHolder {
             registry: ConcreteLifecycleWorkRegistry::default(),
         }
     }
+    /// Borrow the exact concrete census for a coordinator-owned scheduler cut.
+    pub(super) const fn registry(&self) -> &ConcreteLifecycleWorkRegistry {
+        &self.registry
+    }
     /// Borrow the concrete map only for one coordinator-owned composite transaction.
     pub(super) fn registry_mut(&mut self) -> &mut ConcreteLifecycleWorkRegistry {
         &mut self.registry
@@ -160,6 +164,30 @@ impl LifecycleWorkRegistryHolder {
     > {
         self.registry
             .attest_ready_recovered_decision_fetch(coordinator, ordinal)
+    }
+    /// Attest one ordinary Ready certified-Fetch completion.
+    pub(super) fn attest_ready_certified_fetch(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ordinal: u128,
+    ) -> Result<
+        super::work_registry::ReadyCertifiedFetchAttestationV1,
+        super::work_registry::ReadyCertifiedFetchAttestationErrorV1,
+    > {
+        self.registry
+            .attest_ready_certified_fetch(coordinator, ordinal)
+    }
+    /// Attest one ordinary Ready durable Store carrier.
+    pub(super) fn attest_ready_durable_store(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        ordinal: u128,
+    ) -> Result<
+        super::work_registry::ReadyDurableStoreAttestationV1,
+        super::work_registry::ReadyDurableStoreAttestationErrorV1,
+    > {
+        self.registry
+            .attest_ready_durable_store(coordinator, ordinal)
     }
     /// Bind one guarded worker completion to the exact claimed Apply carrier.
     pub(super) fn prepare_recovered_decision_apply_terminal_transition(
@@ -1122,8 +1150,9 @@ mod tests {
             .pop()
             .expect("one concrete-admission owner");
             let pending = ownership
-                .pending_adapter_effect_binding(&effect)
-                .expect("mint pending concrete-admission binding");
+                .current_effect_producer(&effect)
+                .expect("seal concrete-admission producer")
+                .mint_pending_binding();
             (effect, pending)
         }
     }

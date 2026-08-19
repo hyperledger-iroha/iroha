@@ -1,19 +1,12 @@
-use std::collections::BTreeSet;
-#[cfg(feature = "bls")]
-use std::num::NonZeroU64;
-#[cfg(feature = "bls")]
-use iroha_crypto::SignatureOf;
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-#[cfg(feature = "bls")]
-use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
-use iroha_data_model::peer::PeerId;
-use tempfile::TempDir;
 use super::super::schema::DurableContinuationEdge;
 use super::*;
 use crate::sumeragi::{
     v2::AdapterEquivocationEvidence,
     v2_certified_serve_payload_store::CertifiedServePayloadStoreV1,
     v2_core::Generation,
+    v2_lifecycle_coordinator::{
+        reviewed_lifecycle_ledger_source_for_test, reviewed_lifecycle_work_registry_source_for_test,
+    },
     v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
     v2_transport::authenticate_certified_body_request,
 };
@@ -22,6 +15,16 @@ use crate::sumeragi::{
     v2::VerifiedHeightContext, v2_body_store::V2BodyStore,
     v2_certified_serve_payload_store::CertifiedServePayloadNegativeOutcome,
 };
+#[cfg(feature = "bls")]
+use iroha_crypto::SignatureOf;
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+#[cfg(feature = "bls")]
+use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
+use iroha_data_model::peer::PeerId;
+use std::collections::BTreeSet;
+#[cfg(feature = "bls")]
+use std::num::NonZeroU64;
+use tempfile::TempDir;
 fn replay_authority_source_for_test() -> String {
     include_str!("../v2_lifecycle_replay_authority.rs").replacen(
         "include!(\"v2_lifecycle_replay_authority_certified_body.rs\");\n",
@@ -484,9 +487,11 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_pending_certified_fet
         return None;
     };
     if verified.verify_quorum_certificate(certificate).is_err()
-        || !certified_sources
+        || !certified_sources.iter().eq(verified
+            .context()
+            .roster
             .iter()
-            .eq(verified.context().roster.iter().map(|entry| &entry.validator))
+            .map(|entry| &entry.validator))
     {
         return None;
     }
@@ -715,7 +720,7 @@ impl CertifiedServeReplayFixture {
                 "certified-serve-replay-authority-test",
             ),
             protocol_version: wire::PROTOCOL_VERSION,
-            height: 2,
+            height: 1,
             epoch: 0,
             epoch_end_height: 100,
             next_epoch_snapshot: None,
@@ -1080,8 +1085,9 @@ fn pending_binding(
     .expect("bind exact direct signed replay fixture")
     .pop()
     .expect("one direct signed replay fixture owner")
-    .pending_adapter_effect_binding(effect)
-    .expect("mint exact direct signed replay pending binding")
+    .current_effect_producer(effect)
+    .expect("seal exact direct signed replay producer")
+    .mint_pending_binding()
 }
 fn signed_broadcast_effects(fixture: &Fixture) -> Vec<AdapterEffect> {
     [

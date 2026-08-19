@@ -65,10 +65,10 @@ fn sidecar_index_rejects_corrupt_base_header_checksum() {
     assert_eq!(fs::read(&index_path).expect("read index"), index_bytes);
 }
 #[test]
-fn roster_sidecars_prune_to_retention() {
+fn indexed_sidecars_prune_to_retention() {
     let temp_dir = TempDir::new().unwrap();
-    let data_path = temp_dir.path().join(ROSTER_SIDECARS_DATA_FILE);
-    let index_path = temp_dir.path().join(ROSTER_SIDECARS_INDEX_FILE);
+    let data_path = temp_dir.path().join(PIPELINE_SIDECARS_DATA_FILE);
+    let index_path = temp_dir.path().join(PIPELINE_SIDECARS_INDEX_FILE);
     let retention = NonZeroUsize::new(2).expect("non-zero retention");
     for height in 1..=4 {
         let payload = norito::to_bytes(&DummySidecar { height }).expect("encode dummy sidecar");
@@ -279,8 +279,7 @@ fn hard_fork_data_backed_count_preserves_hash_only_tail() {
 }
 #[test]
 fn zero_length_hash_metadata_is_classified_as_hash_only_body_unavailable() {
-    let kura = Kura::blank_kura_for_testing();
-    let mut blocks = DummyBlocks::new();
+    let (kura, mut blocks) = blank_kura_with_blocks();
     let first = blocks.next();
     let hash_only =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x41; Hash::LENGTH]));
@@ -524,9 +523,7 @@ fn extend_hash_only_prefix_publishes_marker_with_batched_fsync() {
 }
 #[test]
 fn durable_count_fallback_releases_store_before_snapshot_extension_resumes() {
-    let temp_dir = TempDir::new().expect("create Kura root");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
     let canonical = store_dummy_block_arcs(&kura, 1)
         .pop()
         .expect("store canonical prefix block");
@@ -590,9 +587,7 @@ fn durable_count_fallback_releases_store_before_snapshot_extension_resumes() {
 #[test]
 fn exact_durable_count_rejects_corrupt_or_non_file_marker_without_logical_fallback() {
     for mutation in ["corrupt", "non-file"] {
-        let temp_dir = TempDir::new().expect("create Kura root");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
         store_dummy_block_arcs(&kura, 1);
         assert_eq!(kura.blocks_count(), 1);
         assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
@@ -621,9 +616,7 @@ fn exact_durable_count_rejects_corrupt_or_non_file_marker_without_logical_fallba
 #[test]
 fn exact_durable_count_rejects_partial_index_and_hash_entries() {
     for journal in [INDEX_FILE_NAME, HASHES_FILE_NAME] {
-        let temp_dir = TempDir::new().expect("create Kura root");
-        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-        let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
         store_dummy_block_arcs(&kura, 1);
         let path = primary_blocks_dir(&temp_dir).join(journal);
         std::fs::OpenOptions::new()
@@ -932,26 +925,9 @@ fn strict_init_prunes_corrupted_index_end_to_end() {
     store.write_block_index(0, start, huge_len).unwrap();
     let store_dir = temp_dir.path().to_path_buf();
     drop(store);
-    let (kura, BlockCount(count)) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: iroha_config::base::WithOrigin::inline(store_dir),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let config = kura_config_for_path(&store_dir, BLOCKS_IN_MEMORY);
+    let (kura, BlockCount(count)) =
+        Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
     assert_eq!(count, 0);
     assert_eq!(kura.blocks_count(), 0);
 }
@@ -994,8 +970,7 @@ fn prune_blocks() -> eyre::Result<()> {
 }
 #[test]
 fn kura_prune_to_height_truncates_in_memory_chain() {
-    let kura = Kura::blank_kura_for_testing();
-    let mut blocks = DummyBlocks::new();
+    let (kura, mut blocks) = blank_kura_with_blocks();
     let b1 = blocks.next();
     let b2 = blocks.next();
     let b3 = blocks.next();
@@ -1614,7 +1589,7 @@ fn prune_indexed_sidecar_promotion_failures_preserve_recovery_and_reject_stale_t
     }
 }
 #[test]
-fn prune_intent_tampering_and_roster_recovery_fail_closed() {
+fn prune_intent_tampering_fails_closed() {
     let temp_dir = TempDir::new().expect("tempdir");
     let (config, blocks, merge_entries) = populate_prune_recovery_fixture(&temp_dir);
     let intent_path = Kura::prune_intent_path_for(temp_dir.path());
@@ -1627,8 +1602,8 @@ fn prune_intent_tampering_and_roster_recovery_fail_closed() {
     };
     let valid_intent = admit_prune_intent_fixture(
         &kura,
-        KuraPruneIntentV2 {
-            version: 2,
+        KuraPruneIntentV3 {
+            version: 3,
             source_height: 4,
             source_tip_hash: Some(blocks[3].hash()),
             target_height: 2,
@@ -1709,20 +1684,6 @@ fn prune_intent_tampering_and_roster_recovery_fail_closed() {
         norito::to_bytes(&valid_intent).expect("encode valid intent"),
     )
     .expect("write valid intent");
-    let roster_path = CommitRosterJournal::journal_path(temp_dir.path());
-    std::fs::write(&roster_path, b"malformed active-intent roster journal")
-        .expect("corrupt roster journal");
-    assert!(matches!(
-        Kura::new(&config, &RuntimeLaneConfig::default()),
-        Err(Error::CommitRosterJournal(
-            CommitRosterJournalError::InvalidStorage { .. }
-        ))
-    ));
-    assert!(
-        intent_path.exists(),
-        "failed roster recovery must retain intent"
-    );
-    std::fs::remove_file(&roster_path).expect("remove corrupt roster journal");
     let (recovered, BlockCount(count)) =
         Kura::new(&config, &RuntimeLaneConfig::default()).expect("retry valid prune recovery");
     assert_eq!(count, 2);
@@ -1738,8 +1699,7 @@ fn prune_intent_tampering_and_roster_recovery_fail_closed() {
 }
 #[test]
 fn concurrent_store_waits_for_prune_and_revalidates_the_tip() {
-    let temp_dir = TempDir::new().expect("tempdir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (temp_dir, config) = kura_storage_fixture("tempdir", BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
     let mut blocks = DummyBlocks::new();
     kura.store_block(blocks.next()).expect("store block 1");
@@ -1809,116 +1769,8 @@ fn prune_intent_fault_matrix_reopens_at_one_coherent_committed_boundary() {
     prune_crash_boundaries_recover_forward_and_poison_live_kura();
 }
 #[test]
-fn prune_to_height_journal_failure_occurs_after_block_boundary_and_blocks_startup() {
-    let temp_dir = TempDir::new().expect("tempdir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
-    let block_hashes = store_dummy_blocks(&kura, 2);
-    let block2_hash = block_hashes[1];
-    let keypair = checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let roster = vec![PeerId::new(keypair.public_key().clone())];
-    let zero_root = Hash::prehashed([0; Hash::LENGTH]);
-    let signers_bitmap = vec![0b0000_0001];
-    let aggregate_signature = vec![0xD2; 96];
-    let qc = Qc {
-        phase: Phase::Commit,
-        subject_block_hash: block2_hash,
-        parent_state_root: zero_root,
-        post_state_root: zero_root,
-        height: 2,
-        view: 1,
-        epoch: 0,
-        chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
-        rechain_seq: 0,
-        mode_tag: PERMISSIONED_TAG.to_string(),
-        highest_qc: None,
-        validator_set_hash: HashOf::new(&roster),
-        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
-        validator_set: roster.clone(),
-        aggregate: QcAggregate {
-            signers_bitmap: signers_bitmap.clone(),
-            bls_aggregate_signature: aggregate_signature.clone(),
-        },
-    };
-    let checkpoint = ValidatorSetCheckpoint::new(
-        2,
-        qc.view,
-        block2_hash,
-        zero_root,
-        zero_root,
-        roster,
-        signers_bitmap,
-        aggregate_signature,
-        VALIDATOR_SET_HASH_VERSION_V1,
-        None,
-    );
-    {
-        let mut journal = kura.roster_log.write();
-        assert!(journal.upsert(qc.clone(), checkpoint, None));
-        journal.persist().expect("persist height-2 roster row");
-    }
-    // Replace the published generation pointer with a directory. The
-    // content-addressed journal rejects this stable no-follow shape both
-    // in-process and after restart.
-    let journal_path = CommitRosterJournal::journal_path(temp_dir.path());
-    let blocked_current_path = journal_path.join("current");
-    fs::remove_file(&blocked_current_path).expect("remove current generation pointer");
-    fs::create_dir(&blocked_current_path).expect("block generation-pointer reads");
-    let failure =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| kura.prune_to_height(1)));
-    assert!(
-        failure.is_err(),
-        "a failure after the durable prune intent must fail-stop"
-    );
-    crate::sumeragi::status::clear_consensus_transition_poison_for_tests();
-    assert!(kura.prune_recovery_is_required());
-    assert_eq!(
-        kura.block_data.lock().len(),
-        2,
-        "failed transaction must not publish a partial boundary to process-local caches"
-    );
-    assert_eq!(kura.blocks_count(), 0);
-    assert_eq!(
-        kura.get_durable_block_hash(nonzero!(2_usize)),
-        None,
-        "finality-journal persistence is attempted only after the canonical block boundary"
-    );
-    assert!(
-        kura.roster_log
-            .read()
-            .get(qc.height, qc.subject_block_hash)
-            .is_some(),
-        "failed candidate truncation must not mutate the shared in-memory journal"
-    );
-    let prune_intent_path = Kura::prune_intent_path_for(&kura.store_root);
-    assert!(prune_intent_path.exists());
-    drop(kura);
-    let reopen_err = match Kura::new(&config, &RuntimeLaneConfig::default()) {
-        Ok(_) => panic!("unrecoverable journal blocker must prevent normal startup"),
-        Err(err) => err,
-    };
-    assert!(matches!(reopen_err, Error::CommitRosterJournal(_)));
-    assert!(
-        prune_intent_path.exists(),
-        "failed startup completion must retain the durable recovery marker"
-    );
-    fs::remove_dir(&blocked_current_path).expect("remove deterministic journal blocker");
-    let (reopened, BlockCount(block_count)) = Kura::new(&config, &RuntimeLaneConfig::default())
-        .expect("startup should complete after journal storage recovers");
-    assert_eq!(block_count, 1);
-    assert!(!prune_intent_path.exists());
-    assert!(
-        reopened
-            .roster_log
-            .read()
-            .get(qc.height, qc.subject_block_hash)
-            .is_none()
-    );
-}
-#[test]
 fn prune_unfinalized_suffix_removes_stale_sidecars_above_new_tip() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) = unwrapped_kura_storage_fixture(NonZeroUsize::new(1).expect("non-zero"));
     let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
     let blocks = store_dummy_block_arcs(&kura, 4);
     let block2_hash = blocks[1].hash();
@@ -2299,8 +2151,7 @@ fn published_commit_manifest_digest_cannot_be_erased_or_replaced() {
 #[test]
 fn kura_reopen_rejects_missing_or_corrupt_published_manifest_binding() {
     for corrupt_checkpoint in [false, true] {
-        let temp_dir = TempDir::new().expect("tempdir");
-        let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+        let (temp_dir, config) = kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
         {
             let (kura, _) =
                 Kura::new(&config, &RuntimeLaneConfig::default()).expect("initialize Kura");
@@ -2346,8 +2197,7 @@ fn kura_reopen_rejects_missing_or_corrupt_published_manifest_binding() {
 }
 #[test]
 fn commit_manifest_survives_kura_reopen_and_is_validated_on_init() {
-    let temp_dir = TempDir::new().expect("tempdir");
-    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) = kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     let blocks = {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 2);
@@ -2381,8 +2231,7 @@ fn commit_manifest_survives_kura_reopen_and_is_validated_on_init() {
 }
 #[test]
 fn kura_init_rejects_mismatched_retained_commit_manifest() {
-    let temp_dir = TempDir::new().expect("tempdir");
-    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) = kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 2);
@@ -2410,8 +2259,7 @@ fn kura_init_rejects_mismatched_retained_commit_manifest() {
 }
 #[test]
 fn kura_init_rejects_mismatched_retained_checkpoint_and_manifest() {
-    let temp_dir = TempDir::new().expect("tempdir");
-    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) = kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 1);
@@ -2439,8 +2287,7 @@ fn kura_init_rejects_mismatched_retained_checkpoint_and_manifest() {
 }
 #[test]
 fn kura_init_prunes_checkpoint_above_durable_blocks_without_manifests() {
-    let temp_dir = TempDir::new().expect("tempdir");
-    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) = kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 1);
@@ -2461,8 +2308,7 @@ fn kura_init_prunes_checkpoint_above_durable_blocks_without_manifests() {
 }
 #[test]
 fn kura_init_prunes_commit_manifests_above_recovered_tip() {
-    let temp_dir = TempDir::new().expect("tempdir");
-    let config = kura_config_for_dir(&temp_dir, NonZeroUsize::new(1).expect("non-zero"));
+    let (temp_dir, config) = kura_storage_fixture("tempdir", NonZeroUsize::new(1).expect("non-zero"));
     {
         let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("kura init");
         let blocks = store_dummy_block_arcs(&kura, 2);

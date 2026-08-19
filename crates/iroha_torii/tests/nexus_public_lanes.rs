@@ -2,7 +2,7 @@
 //! Tests for the Nexus public-lane REST endpoints.
 #![cfg(feature = "app_api")]
 use axum::{body::Body, http::Request};
-use http::{Method, StatusCode, header};
+use http::StatusCode;
 use http_body_util::BodyExt;
 use iroha_config::parameters::actual::Queue;
 use iroha_core::{
@@ -33,11 +33,9 @@ use iroha_data_model::{
     permission::Permission,
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
-use iroha_torii_shared::ErrorEnvelope;
 use norito::json::{self, Value};
 use std::{net::SocketAddr, num::NonZeroU64, str::FromStr, sync::Arc};
 use tokio::sync::broadcast;
-use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;
 fn with_loopback_connect_info(mut request: Request<Body>) -> Request<Body> {
@@ -49,14 +47,13 @@ fn with_loopback_connect_info(mut request: Request<Body>) -> Request<Body> {
         ))));
     request
 }
-fn enable_nexus(state: &mut State, escrow: &AccountId) {
+fn configure_nexus_staking(state: &mut State, escrow: &AccountId) {
     let mut nexus = state.nexus_snapshot();
-    nexus.enabled = true;
     nexus.staking.stake_escrow_account_id = escrow.to_string();
     nexus.staking.slash_sink_account_id = escrow.to_string();
     state
         .set_nexus(nexus)
-        .expect("enable Nexus for public-lane fixture");
+        .expect("configure Nexus staking for public-lane fixture");
 }
 fn relax_consensus_key_activation_for_tests(state: &mut State) {
     let mut sumeragi_params = state.view().world().parameters().sumeragi.clone();
@@ -68,7 +65,7 @@ async fn nexus_public_lane_endpoints_exist() {
     let (world, validator_keypair, validator, delegator, escrow) = sample_world();
     let kura = Kura::blank_kura_for_testing();
     let mut state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
-    enable_nexus(&mut state, &escrow);
+    configure_nexus_staking(&mut state, &escrow);
     relax_consensus_key_activation_for_tests(&mut state);
     seed_public_lane_state(&state, &validator_keypair, &validator, &delegator);
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
@@ -95,7 +92,7 @@ async fn nexus_public_lane_endpoints_list_records() {
     let (world, validator_keypair, validator, delegator, escrow) = sample_world();
     let kura = Kura::blank_kura_for_testing();
     let mut state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
-    enable_nexus(&mut state, &escrow);
+    configure_nexus_staking(&mut state, &escrow);
     relax_consensus_key_activation_for_tests(&mut state);
     seed_public_lane_state(&state, &validator_keypair, &validator, &delegator);
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
@@ -136,59 +133,6 @@ async fn nexus_public_lane_endpoints_list_records() {
     .await
     .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-}
-#[tokio::test]
-async fn nexus_public_lane_endpoints_reject_when_nexus_disabled() {
-    let (world, validator_keypair, _validator, _delegator, _escrow) = sample_world();
-    let kura = Kura::blank_kura_for_testing();
-    let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
-    let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
-    let router = build_test_router(Arc::new(state), &kura, local_peer_id);
-    let resp = fixtures::request(
-        &router,
-        with_loopback_connect_info(fixtures::get_request(
-            &("/v1/nexus/public-lanes/0/validators"),
-        )),
-    )
-    .await
-    .unwrap();
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&body).expect("decode error payload");
-    assert_eq!(payload.code, "nexus_disabled");
-    assert!(
-        payload.message.contains("nexus.enabled=true"),
-        "expected message to mention nexus.enabled: {}",
-        payload.message
-    );
-}
-#[tokio::test]
-async fn da_commitments_reject_when_nexus_disabled() {
-    let (world, validator_keypair, _validator, _delegator, _escrow) = sample_world();
-    let kura = Kura::blank_kura_for_testing();
-    let state = State::new_for_testing(world, Arc::clone(&kura), LiveQueryStore::start_test());
-    let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
-    let router = build_test_router(Arc::new(state), &kura, local_peer_id);
-    let resp = router
-        .oneshot(
-            Request::builder()
-                .method(Method::POST)
-                .uri("/v1/da/commitments")
-                .header(header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from("{}"))
-                .expect("request"),
-        )
-        .await
-        .expect("response");
-    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let payload = norito::decode_from_bytes::<ErrorEnvelope>(&body).expect("decode error payload");
-    assert_eq!(payload.code, "nexus_disabled");
-    assert!(
-        payload.message.contains("nexus.enabled=true"),
-        "expected message to mention nexus.enabled: {}",
-        payload.message
-    );
 }
 fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
     let domain_id: DomainId = DomainId::try_new("nexus", "universal").expect("domain id");

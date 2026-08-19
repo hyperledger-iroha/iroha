@@ -166,8 +166,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         merge_ledger_cache_capacity: defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
-        block_sync_roster_retention: defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-        roster_sidecar_retention: defaults::kura::ROSTER_SIDECAR_RETENTION,
+        lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, block_count) =
@@ -184,7 +183,6 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
     state.prepare_configured_primary_geometry_anchor(&lane_catalog)?;
     state.restore_kura_lane_segments_before_startup_replay()?;
     state.set_nexus_from_config(iroha_config::parameters::actual::Nexus {
-        enabled: true,
         lane_catalog: lane_catalog.clone(),
         configured_lane_catalog: lane_catalog.clone(),
         lane_config: lane_config.clone(),

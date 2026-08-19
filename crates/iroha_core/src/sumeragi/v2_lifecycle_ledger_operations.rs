@@ -166,6 +166,31 @@ impl LifecycleLedgerV1 {
     pub(super) fn records(&self) -> &[LifecycleLedgerRecordV1] {
         &self.records
     }
+    /// Rejoin one installed live candidate to its exact durable row.
+    ///
+    /// This comparison includes the immutable ordinal, complete admission
+    /// material, live terminal state, and absence of a successor edge. It is
+    /// used by concrete carriers which were published in the same transaction
+    /// as the row and must fail closed if the reopened ledger has diverged.
+    pub(in crate::sumeragi) fn exactly_matches_live_candidate(
+        &self,
+        ordinal: u128,
+        candidate: &CandidateAdmission,
+    ) -> bool {
+        let Ok(index) = self
+            .records
+            .binary_search_by_key(&ordinal, LifecycleLedgerRecordV1::ordinal)
+        else {
+            return false;
+        };
+        let record = &self.records[index];
+        record.ordinal() == ordinal
+            && record.terminal() == Some(None)
+            && record.continuation() == Some(DurableContinuation::None)
+            && candidate.initial_state == InitialLifecycleState::Ready
+            && candidate.producer_turn.is_none()
+            && record_matches_recovery_candidate(record, candidate)
+    }
     /// Classify every exact committed Broadcast-plus-next-Sign pair in this frame.
     ///
     /// Classification is purely durable and does not decode any runtime WAL or
@@ -735,6 +760,7 @@ impl LifecycleLedgerV1 {
         Some(changed)
     }
     /// Borrow the canonical Serve-to-producer debts.
+    #[cfg(test)]
     pub(super) fn producer_debts(&self) -> &[LifecycleProducerDebtV1] {
         &self.producer_debts
     }

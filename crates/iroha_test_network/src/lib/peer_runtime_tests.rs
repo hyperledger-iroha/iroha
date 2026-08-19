@@ -382,9 +382,8 @@ mod sora_profile_tests {
         assert!(!config_requires_sora_profile(&[Table::new()]));
     }
     #[test]
-    fn sora_profile_detection_allows_enabled_nexus_without_overrides() {
-        let mut nexus = toml::map::Map::new();
-        nexus.insert("enabled".into(), toml::Value::Boolean(true));
+    fn sora_profile_detection_allows_empty_nexus_table_without_overrides() {
+        let nexus = toml::map::Map::new();
         let mut table = Table::new();
         table.insert("nexus".into(), toml::Value::Table(nexus));
         assert!(!config_requires_sora_profile(&[table]));
@@ -413,7 +412,6 @@ mod sora_profile_tests {
         da.insert("per_attester_shards".into(), toml::Value::Integer(1));
         da.insert("audit".into(), toml::Value::Table(audit));
         let mut nexus = toml::map::Map::new();
-        nexus.insert("enabled".into(), toml::Value::Boolean(true));
         nexus.insert("lane_count".into(), toml::Value::Integer(1));
         nexus.insert(
             "lane_catalog".into(),

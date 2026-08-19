@@ -985,7 +985,7 @@ fn verify_payload_signature(
                 .ok_or(ExternalSoftwareSignerClientErrorV1::Rejected)?
         }
         _ => super::typed_payload::validated_typed_signing_message(binding, payload)
-            .map_err(|_| ExternalSoftwareSignerClientErrorV1::Rejected)?,
+            .map_err(|()| ExternalSoftwareSignerClientErrorV1::Rejected)?,
     };
     let signature = Signature::try_from_bytes(signature)
         .map_err(|_| ExternalSoftwareSignerClientErrorV1::Protocol)?;

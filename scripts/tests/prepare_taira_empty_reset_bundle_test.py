@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -895,12 +896,19 @@ def test_external_genesis_signer_never_receives_private_key_material(
     signer.write_text(
         "#!/usr/bin/env python3\n"
         "import json,os,resource,sys\n"
+        "from pathlib import Path\n"
         f"open({str(record)!r}, 'w').write(json.dumps({{'argv':sys.argv,'env':dict(os.environ),'fsize':resource.getrlimit(resource.RLIMIT_FSIZE)[0]}}))\n"
         "args=sys.argv\n"
         "open(args[args.index('--signed-genesis-out')+1], 'wb').write(b'signed')\n"
-        "open(args[args.index('--expected-hash-out')+1], 'w').write('"
+        "expected=Path(args[args.index('--expected-hash-out')+1])\n"
+        "expected.write_text('"
         + "00" * 31
-        + "01\\n')\n",
+        + "01\\n')\n"
+        "expected.with_suffix('.identity.toml').write_text('network_id = \""
+        + "00" * 31
+        + "01\"\\n\\n[genesis]\\nexpected_hash = \""
+        + "00" * 31
+        + "01\"\\n')\n",
         encoding="utf-8",
     )
     signer.chmod(0o700)
@@ -912,6 +920,7 @@ def test_external_genesis_signer_never_receives_private_key_material(
         rendered_genesis=genesis,
         peer_one_config=config,
         signed_genesis=signed,
+        deployment_identity=tmp_path / "genesis.identity.toml",
         temporary_root=private,
     )
 
@@ -934,6 +943,9 @@ def test_external_genesis_signer_never_receives_private_key_material(
     assert str(config) not in argv
     assert str(signed) not in argv
     assert signed.read_bytes() == b"signed"
+    assert (tmp_path / "genesis.identity.toml").read_bytes() == (
+        reset_bundle._canonical_genesis_identity("00" * 31 + "01")
+    )
     assert 0 < invocation["fsize"] <= reset_bundle.MAX_PRIVATE_FILE_BYTES
     assert {"HOME", "LANG", "LC_ALL", "PATH", "TMPDIR"} <= set(invocation["env"])
     assert not any(
@@ -980,11 +992,71 @@ def test_external_genesis_signer_digest_mismatch_fails_before_execution(
             rendered_genesis=genesis,
             peer_one_config=config,
             signed_genesis=signed,
+            deployment_identity=tmp_path / "genesis.identity.toml",
             temporary_root=private,
         )
 
     assert not marker.exists()
     assert not signed.exists()
+
+
+@pytest.mark.parametrize(
+    ("identity_payload", "error_pattern"),
+    (
+        (None, "genesis.identity.toml"),
+        (b'network_id = "wrong"\n', "noncanonical genesis identity"),
+    ),
+)
+def test_external_genesis_signer_requires_exact_paired_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    identity_payload: bytes | None,
+    error_pattern: str,
+) -> None:
+    private = tmp_path / "private"
+    _mkdir_private(private)
+    genesis = private / "genesis.json"
+    config = private / "config.toml"
+    signed = private / "genesis.signed.nrt"
+    identity = tmp_path / "genesis.identity.toml"
+    _write_private(genesis, b"{}\n")
+    _write_private(config, b"config\n")
+    signer = private / "external-genesis-signer"
+    signer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    signer.chmod(0o700)
+
+    def emit_incomplete_identity(command, _temporary_root, _controller):
+        _write_private(
+            Path(command[command.index("--signed-genesis-out") + 1]), b"signed"
+        )
+        expected_path = Path(command[command.index("--expected-hash-out") + 1])
+        _write_private(expected_path, ("00" * 31 + "01\n").encode("ascii"))
+        if identity_payload is not None:
+            _write_private(
+                expected_path.with_suffix(".identity.toml"), identity_payload
+            )
+        return 0
+
+    monkeypatch.setattr(
+        reset_bundle,
+        "_run_bounded_genesis_signer",
+        emit_incomplete_identity,
+    )
+
+    with pytest.raises(RuntimeError, match=error_pattern):
+        reset_bundle._sign_genesis(
+            external_signer=signer,
+            trusted_external_signer_sha256=reset_bundle.sha256(signer),
+            **_isolation_kwargs(private),
+            rendered_genesis=genesis,
+            peer_one_config=config,
+            signed_genesis=signed,
+            deployment_identity=identity,
+            temporary_root=private,
+        )
+
+    assert not signed.exists()
+    assert not identity.exists()
 
 
 def test_external_genesis_signer_requires_distinct_authenticated_controller(
@@ -1021,6 +1093,7 @@ def test_external_genesis_signer_requires_distinct_authenticated_controller(
             rendered_genesis=genesis,
             peer_one_config=config,
             signed_genesis=signed,
+            deployment_identity=tmp_path / "genesis.identity.toml",
             temporary_root=private,
         )
 
@@ -1038,7 +1111,7 @@ def test_genesis_signer_controller_request_closes_known_escape_classes(
     bound = private / "genesis.bound.candidate.json"
     config = private / "peer-one.config.snapshot.toml"
     signed = private / "genesis.signed.candidate.nrt"
-    expected_hash = private / "genesis.expected_hash.candidate"
+    expected_hash = private / "genesis.expected_hash"
     _write_private(signer, b"signer")
     signer.chmod(0o700)
     _write_private(controller, b"controller")
@@ -1080,12 +1153,15 @@ def test_genesis_signer_controller_request_closes_known_escape_classes(
     assert request[separator + 1 :] == signer_command
     for invariant in (
         "--use-attested-runtime-identity",
+        "--expected-runtime-uid",
+        "--expected-runtime-gid",
         "--no-new-privileges",
         "--close-inherited-fds",
         "--forward-tool-exit-status",
         "--exact-tool-stdio",
         "--deny-network",
         "--deny-tool-process-spawn",
+        "--deny-read-outside-allowlist",
         "--deny-write-outside-allowlist",
         "--deny-link-rename-unlink",
         "--deny-symlink",
@@ -1097,6 +1173,14 @@ def test_genesis_signer_controller_request_closes_known_escape_classes(
         "--combined-output-limit-bytes",
     ):
         assert invariant in request[:separator]
+    assert request[request.index("--expected-runtime-uid") + 1] == str(os.geteuid())
+    assert request[request.index("--expected-runtime-gid") + 1] == str(os.getegid())
+    readable = [
+        request[index + 1]
+        for index, value in enumerate(request[:separator])
+        if value == "--readable-file"
+    ]
+    assert readable == [str(config)]
     writable = [
         request[index + 1]
         for index, value in enumerate(request[:separator])
@@ -1106,11 +1190,13 @@ def test_genesis_signer_controller_request_closes_known_escape_classes(
         f"{bound.name}:{reset_bundle.MAX_PRIVATE_FILE_BYTES}",
         f"{signed.name}:{reset_bundle.MAX_PRIVATE_FILE_BYTES}",
         f"{expected_hash.name}:{reset_bundle.MAX_GENESIS_EXPECTED_HASH_BYTES}",
+        f"genesis.identity.toml:{reset_bundle.MAX_GENESIS_IDENTITY_BYTES}",
     ]
     aggregate_index = request.index("--cumulative-write-limit-bytes")
     assert int(request[aggregate_index + 1]) == (
         2 * reset_bundle.MAX_PRIVATE_FILE_BYTES
         + reset_bundle.MAX_GENESIS_EXPECTED_HASH_BYTES
+        + reset_bundle.MAX_GENESIS_IDENTITY_BYTES
     )
     live_index = request.index("--maximum-live-write-root-bytes")
     assert int(request[live_index + 1]) > int(request[aggregate_index + 1])
@@ -1141,6 +1227,7 @@ def test_external_genesis_signer_rejects_link_aliases(
             rendered_genesis=private / "genesis.json",
             peer_one_config=private / "config.toml",
             signed_genesis=private / "genesis.signed.nrt",
+            deployment_identity=tmp_path / "genesis.identity.toml",
             temporary_root=private,
         )
 
@@ -1186,6 +1273,7 @@ def test_external_genesis_signer_replacement_during_execution_is_rejected(
             rendered_genesis=genesis,
             peer_one_config=config,
             signed_genesis=signed,
+            deployment_identity=tmp_path / "genesis.identity.toml",
             temporary_root=private,
         )
 
@@ -1220,6 +1308,7 @@ def test_external_genesis_signer_diagnostics_cannot_inject_controller_output(
             rendered_genesis=genesis,
             peer_one_config=config,
             signed_genesis=signed,
+            deployment_identity=tmp_path / "genesis.identity.toml",
             temporary_root=private,
         )
 
@@ -1263,6 +1352,7 @@ def test_external_genesis_signer_output_limit_is_enforced_while_running(
             rendered_genesis=genesis,
             peer_one_config=config,
             signed_genesis=signed,
+            deployment_identity=tmp_path / "genesis.identity.toml",
             temporary_root=private,
         )
 
@@ -1306,6 +1396,7 @@ def test_external_genesis_signer_rejects_unexpected_live_file_and_reaps_group(
             rendered_genesis=genesis,
             peer_one_config=config,
             signed_genesis=signed,
+            deployment_identity=tmp_path / "genesis.identity.toml",
             temporary_root=private,
         )
 
@@ -1347,6 +1438,7 @@ def test_external_genesis_signer_rejects_live_expected_hash_overflow(
             rendered_genesis=genesis,
             peer_one_config=config,
             signed_genesis=signed,
+            deployment_identity=tmp_path / "genesis.identity.toml",
             temporary_root=private,
         )
 
@@ -1364,7 +1456,7 @@ def test_external_genesis_signer_rejects_live_aggregate_growth(
     bound = private / "genesis.bound.candidate.json"
     config = private / "peer-one.config.snapshot.toml"
     signed = private / "genesis.signed.candidate.nrt"
-    expected_hash = private / "genesis.expected_hash.candidate"
+    expected_hash = private / "genesis.expected_hash"
     _write_private(bound, b"{}\n")
     _write_private(config, b"config\n")
     protected = [private / f"protected-{index}" for index in range(3)]
@@ -1374,6 +1466,7 @@ def test_external_genesis_signer_rejects_live_aggregate_growth(
     signer.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     signer.chmod(0o700)
     monkeypatch.setattr(reset_bundle, "MAX_PRIVATE_FILE_BYTES", 1024)
+    monkeypatch.setattr(reset_bundle, "MAX_GENESIS_IDENTITY_BYTES", 128)
     command = [
         str(signer),
         "--unsigned-genesis",
@@ -1405,7 +1498,7 @@ def test_external_genesis_signer_inherits_exact_file_size_limit(
     bound = private / "genesis.bound.candidate.json"
     config = private / "peer-one.config.snapshot.toml"
     signed = private / "genesis.signed.candidate.nrt"
-    expected_hash = private / "genesis.expected_hash.candidate"
+    expected_hash = private / "genesis.expected_hash"
     process_id = tmp_path / "file-limit-process-id"
     _write_private(bound, b"{}\n")
     _write_private(config, b"config\n")
@@ -1471,6 +1564,7 @@ def test_external_genesis_signer_fails_closed_without_file_size_rlimit(
             rendered_genesis=genesis,
             peer_one_config=config,
             signed_genesis=signed,
+            deployment_identity=tmp_path / "genesis.identity.toml",
             temporary_root=private,
         )
 
@@ -1501,6 +1595,25 @@ def test_external_genesis_signer_timeout_kills_and_reaps_descendants(
         encoding="utf-8",
     )
     signer.chmod(0o700)
+    real_popen = reset_bundle.subprocess.Popen
+
+    def wait_for_signer_readiness(*popen_args, **popen_kwargs):
+        process = real_popen(*popen_args, **popen_kwargs)
+        command = popen_args[0] if popen_args else popen_kwargs.get("args")
+        if (
+            isinstance(command, (list, tuple))
+            and command
+            and Path(command[0]).name == "authenticated-tool-controller.snapshot"
+        ):
+            deadline = time.monotonic() + 5.0
+            while not process_ids.is_file():
+                if process.poll() is not None or time.monotonic() >= deadline:
+                    assert reset_bundle._kill_and_reap_signer(process)
+                    pytest.fail("test signer did not publish its bounded readiness signal")
+                time.sleep(0.01)
+        return process
+
+    monkeypatch.setattr(reset_bundle.subprocess, "Popen", wait_for_signer_readiness)
     monkeypatch.setattr(reset_bundle, "GENESIS_SIGNER_TIMEOUT_SECONDS", 0.5)
 
     with pytest.raises(RuntimeError, match="execution timeout"):
@@ -1511,6 +1624,7 @@ def test_external_genesis_signer_timeout_kills_and_reaps_descendants(
             rendered_genesis=genesis,
             peer_one_config=config,
             signed_genesis=signed,
+            deployment_identity=tmp_path / "genesis.identity.toml",
             temporary_root=private,
         )
 
@@ -1536,13 +1650,20 @@ def test_successful_external_genesis_signer_cannot_leave_output_descendant(
     signer.write_text(
         "#!/usr/bin/env python3\n"
         "import os,subprocess,sys\n"
+        "from pathlib import Path\n"
         "child = subprocess.Popen(['/bin/sleep', '60'])\n"
         f"open({str(process_ids)!r}, 'w').write(f'{{os.getpid()}} {{child.pid}}\\n')\n"
         "args = sys.argv\n"
         "open(args[args.index('--signed-genesis-out') + 1], 'wb').write(b'signed')\n"
-        "open(args[args.index('--expected-hash-out') + 1], 'w').write('"
+        "expected=Path(args[args.index('--expected-hash-out') + 1])\n"
+        "expected.write_text('"
         + "00" * 31
-        + "01\\n')\n",
+        + "01\\n')\n"
+        "expected.with_suffix('.identity.toml').write_text('network_id = \""
+        + "00" * 31
+        + "01\"\\n\\n[genesis]\\nexpected_hash = \""
+        + "00" * 31
+        + "01\"\\n')\n",
         encoding="utf-8",
     )
     signer.chmod(0o700)
@@ -1554,12 +1675,16 @@ def test_successful_external_genesis_signer_cannot_leave_output_descendant(
         rendered_genesis=genesis,
         peer_one_config=config,
         signed_genesis=signed,
+        deployment_identity=tmp_path / "genesis.identity.toml",
         temporary_root=private,
     )
 
     leader_pid, _child_pid = map(int, process_ids.read_text().split())
     assert expected == "00" * 31 + "01"
     assert signed.read_bytes() == b"signed"
+    assert (tmp_path / "genesis.identity.toml").read_bytes() == (
+        reset_bundle._canonical_genesis_identity(expected)
+    )
     assert not reset_bundle._signer_process_group_exists(leader_pid)
     assert not list(private.glob("*.candidate*"))
 
@@ -1611,6 +1736,10 @@ def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
         "_sign_genesis",
         lambda **kwargs: (
             _write_private(kwargs["signed_genesis"], b"new signed genesis")
+            or _write_private(
+                kwargs["deployment_identity"],
+                reset_bundle._canonical_genesis_identity("00" * 31 + "01"),
+            )
             or ("00" * 31 + "01")
         ),
     )
@@ -1642,6 +1771,9 @@ def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
     ]
     assert (output / "base-config.toml").read_bytes() == payloads["config.toml"]
     assert (output / "genesis.signed.nrt").read_bytes() == b"new signed genesis"
+    assert (output / "genesis.identity.toml").read_bytes() == (
+        reset_bundle._canonical_genesis_identity("00" * 31 + "01")
+    )
     assert not (output / "validator-secrets.toml").exists()
     assert "receipt_private" not in json.dumps(manifest).lower()
     assert manifest["chain_id"] == reset_bundle.CHAIN_ID
@@ -1669,6 +1801,9 @@ def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
     assert (
         manifest["signed_genesis_sha256"]
         == hashlib.sha256(b"new signed genesis").hexdigest()
+    )
+    assert manifest["genesis_identity_sha256"] == reset_bundle.sha256(
+        output / "genesis.identity.toml"
     )
     assert manifest["onboarding_token_hash_tool_sha256"] == reset_bundle.sha256(
         args.onboarding_token_hash_tool

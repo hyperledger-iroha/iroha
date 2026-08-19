@@ -37,7 +37,7 @@ class SourceSpec:
 SOURCES = (
     SourceSpec(
         'crates/ivm/tests/kotodama.rs',
-        '8f98112566e88e4fb879a4ee50c8ec739e8d5e1e019eae85ad1f3583cb63cfdc',
+        'a617f933ee35463d73183749471484fe1250406cde7b3bcc9c4c8784da2db3b6',
         (
             AssetSpec('001.ko', '2cd0d5b786b303f342a13799a5828a17903c4b3934b6b7332e994e080039d6ee', 225, True),
             AssetSpec('002.ko', '4b32085d63144de5a6d19634490994a0fadca60737bab8dfb5ef361d1ebd7135', 311, True),
@@ -70,7 +70,7 @@ SOURCES = (
             AssetSpec('029.ko', 'b5fed2a934b7531e36aee4926adfa6d138429bff91fede7c59222ca308d30b1f', 178, True),
             AssetSpec('030.ko', '0b659d2a00a6a674c0b1cf37a0e253f4d4ebdb2c07e61f8ef0695d693a94815a', 178, True),
             AssetSpec('031.ko', 'a737212afed59fe5a4dfb9ba3770364599efb525330e709bece80dd6d2755617', 193, True),
-            AssetSpec('032.ko', '340c6154328c35c98e38c5c8135371404f88bd24b6740aa3452ffee600006c31', 634, True),
+            AssetSpec('032.ko', '3bdeef77f6b45fe6e90498f2aea766bc10f07a5cfc9f649d0dd92d7e240a9b6c', 607, True),
             AssetSpec('033.ko', '392f3dcbdc94c293fb1e2deed6d8dfd5bfb2969b9bf70c39ba09beed5bc2aab0', 342, True),
             AssetSpec('034.ko', '6d3e76782c07431125da993926e0d0d716b9de7214e3378a118fa16b27ac6fff', 308, True),
             AssetSpec('035.ko', '3da0613849606b1cf5695ad53a441f6425a86868fe04f399df232749e49d0a52', 130, True),
@@ -207,7 +207,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_lang/tests/sugar_zero_cost.rs',
-        '93e3de91d1529afe490b177461a22d74088167f6219705e154404988effaa6ec',
+        'f32e5cd71e6ebb813853b18501695c7af5a0371373037b100011e6b7a1a89206',
         (
             AssetSpec('001.ko', 'aed6f784b9e77424a2b55d1916c62c964da34bda22dc8f6cac10f216677a7900', 230, True),
             AssetSpec('002.ko', '52c86c590def5f2ada37b4924181f2eb723fe3ac5a85032f2d75701b3c019ef2', 385, True),

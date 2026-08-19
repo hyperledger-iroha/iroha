@@ -59,6 +59,8 @@ fn authenticated_source_projection_decodes_once_and_binds_the_exact_closure() {
         closure_sha256
     );
     let source_date_epoch = AUTHORIZED_SOURCE_PARENT_EPOCH + 1;
+    let reviewed_cargo_binary_sha256 = "9".repeat(64);
+    let reviewed_rustc_binary_sha256 = "a".repeat(64);
     let projection = AuthenticatedSourceSealProjectionV1 {
         build_script_observed: SourceSealBuildScriptObservedV1 {
             debug_assertions: false,
@@ -93,6 +95,8 @@ fn authenticated_source_projection_decodes_once_and_binds_the_exact_closure() {
                     iroha_core_units: 1,
                     normalization: SOURCE_SEAL_UNIT_GRAPH_NORMALIZATION.to_owned(),
                     packages: 1,
+                    raw_sha256: "2".repeat(64),
+                    raw_size_bytes: 1,
                     sha256: "3".repeat(64),
                     size_bytes: 1,
                     units: 1,
@@ -100,6 +104,16 @@ fn authenticated_source_projection_decodes_once_and_binds_the_exact_closure() {
             },
             execution_policy_sha256: "4".repeat(64),
             schema: SOURCE_SEAL_OUTER_POLICY_SCHEMA.to_owned(),
+            toolchain: SourceSealToolchainV1 {
+                cargo: SourceSealToolIdentityV1 {
+                    binary_sha256: reviewed_cargo_binary_sha256.clone(),
+                    binary_size_bytes: 1,
+                },
+                rustc: SourceSealToolIdentityV1 {
+                    binary_sha256: reviewed_rustc_binary_sha256.clone(),
+                    binary_size_bytes: 1,
+                },
+            },
         },
         reviewed_source_closure_hex: hex::encode(&closure_bytes),
         reviewed_source_closure_sha256: closure_sha256.clone(),
@@ -133,8 +147,6 @@ fn authenticated_source_projection_decodes_once_and_binds_the_exact_closure() {
     projection_bytes.push(b'\n');
     let projection_hex = hex::encode(&projection_bytes);
     let projection_sha256 = hex::encode(Sha256::digest(&projection_bytes));
-    let reviewed_cargo_binary_sha256 = "9".repeat(64);
-    let reviewed_rustc_binary_sha256 = "a".repeat(64);
     let decoded = decode_embedded_source_seal(
         Some(&projection_hex),
         Some(&projection_sha256),
@@ -175,6 +187,18 @@ fn authenticated_source_projection_decodes_once_and_binds_the_exact_closure() {
             Some(&projection_hex),
             Some(&projection_sha256),
             Some(&"0".repeat(64)),
+            Some(&reviewed_rustc_binary_sha256),
+            Some(&commit),
+            Some(&source_tree_hex),
+            Some(&source_date_epoch.to_string()),
+        )
+        .is_err()
+    );
+    assert!(
+        decode_embedded_source_seal(
+            Some(&projection_hex),
+            Some(&projection_sha256),
+            Some(&"b".repeat(64)),
             Some(&reviewed_rustc_binary_sha256),
             Some(&commit),
             Some(&source_tree_hex),

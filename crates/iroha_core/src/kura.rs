@@ -11,13 +11,9 @@ use crate::lane_consensus::{
 };
 #[cfg(test)]
 use crate::merge::reduce_merge_hint_roots;
-use crate::sumeragi::stake_snapshot::CommitStakeSnapshot;
 use crate::telemetry::StateTelemetry;
 use crate::{
     block::CommittedBlock,
-    commit_roster_journal::{
-        CommitRosterJournal, CommitRosterJournalError, CommitRosterJournalPruneProjectionV2,
-    },
     queue::{
         AutonomousLaneCanonicalQueueTerminalEvidence, AutonomousLaneKuraActivationAuthorization,
         AutonomousLaneReleaseQueueTerminalEvidence, DurableLaneQueueReleaseBarrierAuthorization,
@@ -80,10 +76,10 @@ use iroha_config::{
         },
         defaults::{
             kura::{
-                BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, EVICTION_REQUIRED_REPLICAS,
-                FSYNC_INTERVAL, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
+                BLOCKS_IN_MEMORY, EVICTION_REQUIRED_REPLICAS, FSYNC_INTERVAL,
+                LANE_HISTORY_RETENTION, MAX_DISK_USAGE_BYTES, MERGE_LEDGER_CACHE_CAPACITY,
                 REPLICA_ADVERT_EVICTABLE_WINDOW, REPLICA_ADVERT_REFRESH_INTERVAL,
-                REPLICA_ADVERT_TTL, ROSTER_SIDECAR_RETENTION,
+                REPLICA_ADVERT_TTL,
             },
             sumeragi::{
                 V2_PENDING_CERTIFIED_MERGE_ENTRY_CAPACITY,
@@ -124,7 +120,6 @@ use iroha_data_model::{
         },
         decode_framed_signed_block,
     },
-    consensus::{Qc, ValidatorSetCheckpoint},
     isi::offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
     merge::{
         LaneDrainNativeFrontierEvidenceV1, MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES,
@@ -151,7 +146,7 @@ use norito::{
     codec::{Decode, DecodeAll, Encode},
     json::Value as JsonValue,
 };
-use parking_lot::{Condvar, Mutex, RwLock};
+use parking_lot::{Condvar, Mutex};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
     fmt::Debug,
@@ -186,12 +181,12 @@ const MAX_VERIFIED_SNAPSHOT_TAIL_MARKER_BYTES: usize = 1024;
 const STORE_ROOT_LOCK_FILE_NAME: &str = ".kura.lock";
 const VERIFIED_SNAPSHOT_TAIL_DIGEST_DOMAIN: &[u8] = b"iroha:kura:verified-snapshot-tail:v1\0";
 const ROLLBACK_INTENT_FILE_NAME: &str = "rollback-intent.norito";
-/// Hard wire-size limit for the fixed-width version-one rollback record.
+/// Hard wire-size limit for the fixed-width version-two rollback record.
 ///
 /// The record contains only four integer fields and one optional block hash.
 /// One KiB therefore leaves ample canonical-header/layout headroom while
 /// preventing a damaged startup marker from choosing the read allocation.
-const MAX_ROLLBACK_INTENT_V1_BYTES: usize = 1024;
+const MAX_ROLLBACK_INTENT_V2_BYTES: usize = 1024;
 const PIPELINE_DIR_NAME: &str = "pipeline";
 const DA_BLOCKS_DIR_NAME: &str = "da_blocks";
 const DA_BLOCK_REWRITE_STAGE_FILE_NAME: &str = "da_block_rewrite_stage.norito";
@@ -367,8 +362,6 @@ const NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_TEMP_FILE: &str =
 const NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES: usize = 4 * 1024;
 const PIPELINE_SIDECARS_DATA_FILE: &str = "sidecars.norito";
 const PIPELINE_SIDECARS_INDEX_FILE: &str = "sidecars.index";
-const ROSTER_SIDECARS_DATA_FILE: &str = "roster_sidecars.norito";
-const ROSTER_SIDECARS_INDEX_FILE: &str = "roster_sidecars.index";
 const PIPELINE_INDEX_ENTRY_SIZE: usize = core::mem::size_of::<u64>() * 2;
 const PIPELINE_INDEX_ENTRY_SIZE_U64: u64 = PIPELINE_INDEX_ENTRY_SIZE as u64;
 // Every present V1 index starts with `(MAX, MAX)` (invalid as a payload entry),
@@ -638,10 +631,8 @@ pub struct Kura {
     /// Number of most recent non-genesis blocks stored in memory.
     /// The genesis block is always retained for metrics and replay.
     blocks_in_memory: NonZeroUsize,
-    /// Number of recent commit-roster snapshots retained for block sync.
-    block_sync_roster_retention: NonZeroUsize,
-    /// Number of recent roster sidecars retained alongside the block store.
-    roster_sidecar_retention: NonZeroUsize,
+    /// Number of recent lane, autonomous, and Native AMX history entries retained.
+    lane_history_retention: NonZeroUsize,
     /// Fingerprint-bound limits shared by pre-carrier controls and historical recovery evidence.
     pending_control_sidecar_limits: PendingControlSidecarLimits,
     /// Exact maximum encoded Native AMX pair-prune journal for the configured
@@ -649,9 +640,6 @@ pub struct Kura {
     native_amx_evidence_prune_intent_max_bytes: usize,
     /// On-disk merge-ledger log and in-memory cache.
     merge_log: Mutex<MergeLedgerLog>,
-    /// Durably persisted legacy roster projection for rollback auditing only.
-    #[allow(dead_code)]
-    roster_log: Arc<RwLock<CommitRosterJournal>>,
     /// Optional telemetry sink for storage budget reporting.
     telemetry: OnceLock<StateTelemetry>,
     /// Last fatal writer fault observed by the background persistence loop.
@@ -752,9 +740,6 @@ pub struct Kura {
     pub(crate) pending_queue_plan_admission_exact_reads: AtomicUsize,
     #[cfg(test)]
     pub(crate) pending_queue_plan_admission_batch_validations: AtomicUsize,
-    /// Test hook for forcing a bounded number of roster sidecar writes to fail.
-    #[cfg(test)]
-    fail_next_roster_sidecar_writes: AtomicUsize,
     /// Test hook failing retained-rewrite stage discard after a selected removal.
     #[cfg(test)]
     fail_retained_rewrite_discard_after: AtomicUsize,
@@ -2135,6 +2120,41 @@ impl Kura {
         }
         Ok(file)
     }
+
+    fn reject_retired_commit_roster_artifacts(store_root: &Path) -> Result<()> {
+        let entries = std::fs::read_dir(store_root)
+            .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name == "commit-rosters" || name.starts_with("commit-rosters.norito") {
+                return Err(Error::RetiredKuraArtifact { path: entry.path() });
+            }
+        }
+        Ok(())
+    }
+
+    fn reject_retired_pipeline_roster_sidecars(blocks_root: &Path) -> Result<()> {
+        let pipeline_dir = blocks_root.join(PIPELINE_DIR_NAME);
+        let entries = match std::fs::read_dir(&pipeline_dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(Error::IO(error, pipeline_dir)),
+        };
+        for entry in entries {
+            let entry = entry.map_err(|error| Error::IO(error, pipeline_dir.clone()))?;
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("roster_sidecars")
+            {
+                return Err(Error::RetiredKuraArtifact { path: entry.path() });
+            }
+        }
+        Ok(())
+    }
+
     fn new_inner(
         config: &Config,
         lane_config: &LaneConfig,
@@ -2154,7 +2174,7 @@ impl Kura {
             .map_err(|error| Error::InvalidKuraReplicaAdvertConfiguration(error.to_string()))?;
         let native_amx_evidence_prune_intent_max_bytes =
             Self::native_amx_evidence_prune_intent_max_bytes_for_retention(
-                config.roster_sidecar_retention,
+                config.lane_history_retention,
                 pending_control_sidecar_limits.aggregate_bytes,
             )?;
         create_dir_all_with_context(&configured_store_dir)?;
@@ -2167,9 +2187,8 @@ impl Kura {
         #[cfg(all(unix, not(target_os = "espidf")))]
         let store_root_directory =
             Self::open_safety_wal_store_root_directory(&store_root, &store_root_lock_file)?;
-        let roster_retention = config.block_sync_roster_retention;
-        let roster_sidecar_retention = config.roster_sidecar_retention;
-        let roster_log_path = Self::roster_log_path(&store_root);
+        Self::reject_retired_commit_roster_artifacts(&store_root)?;
+        let lane_history_retention = config.lane_history_retention;
         let primary_lane = lane_config.primary();
         let authenticated_configured_catalog = configured_catalog_hash.is_some();
         let mut provisional_open = provisional_hash_only_prefix.is_some();
@@ -2245,14 +2264,7 @@ impl Kura {
         if blocks_root.as_os_str().is_empty() || merge_log_path.as_os_str().is_empty() {
             return Err(Error::EmptyStoreRoot);
         }
-        // Loading can promote a recovery temp. Keep a process-local empty
-        // handle during provisional startup and load the journal exactly once
-        // only after signed snapshot lineage authentication.
-        let mut roster_log = if provisional_open {
-            CommitRosterJournal::new(roster_log_path, roster_retention)
-        } else {
-            CommitRosterJournal::load(roster_log_path, roster_retention)?
-        };
+        Self::reject_retired_pipeline_roster_sidecars(&blocks_root)?;
         let merge_cache_capacity =
             sanitize_merge_cache_capacity(config.merge_ledger_cache_capacity);
         if let Some(preflight) = configured_primary_preflight.as_mut() {
@@ -2385,7 +2397,6 @@ impl Kura {
                 &merge_log_path,
                 merge_cache_capacity,
                 &mut block_store,
-                &mut roster_log,
                 intent,
             )?;
             if let Some(preflight) = configured_primary_preflight.as_mut() {
@@ -2593,12 +2604,10 @@ impl Kura {
             disk_usage_total_initialized: AtomicBool::new(false),
             disk_usage_total_last_refresh: AtomicU64::new(0),
             blocks_in_memory: config.blocks_in_memory,
-            block_sync_roster_retention: roster_retention,
-            roster_sidecar_retention,
+            lane_history_retention,
             pending_control_sidecar_limits,
             native_amx_evidence_prune_intent_max_bytes,
             merge_log: Mutex::new(merge_log),
-            roster_log: Arc::new(RwLock::new(roster_log)),
             telemetry: OnceLock::new(),
             writer_fault: Mutex::new(None),
             canonical_storage_poisoned: AtomicBool::new(false),
@@ -2669,7 +2678,6 @@ impl Kura {
             #[cfg(test)]
             pending_queue_plan_admission_batch_validations: AtomicUsize::new(0),
             #[cfg(test)]
-            fail_next_roster_sidecar_writes: AtomicUsize::new(0),
             #[cfg(test)]
             fail_retained_rewrite_discard_after: AtomicUsize::new(usize::MAX),
             #[cfg(test)]
@@ -2866,13 +2874,12 @@ impl Kura {
             )
             .expect("create configured test lane merge ledger");
         }
-        let roster_log_path = Self::roster_log_path(&store_root);
         #[cfg(all(unix, not(target_os = "espidf")))]
         let store_root_directory = Self::open_bound_progress_directory(&store_root, &store_root)
             .expect("bind temporary Kura store-root directory");
         let native_amx_evidence_prune_intent_max_bytes =
             Self::native_amx_evidence_prune_intent_max_bytes_for_retention(
-                ROSTER_SIDECAR_RETENTION,
+                LANE_HISTORY_RETENTION,
                 PendingControlSidecarLimits::default().aggregate_bytes,
             )
             .expect("default Native AMX prune-intent bound is valid");
@@ -2953,15 +2960,10 @@ impl Kura {
             disk_usage_total_initialized: AtomicBool::new(true),
             disk_usage_total_last_refresh: AtomicU64::new(0),
             blocks_in_memory,
-            block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+            lane_history_retention: LANE_HISTORY_RETENTION,
             pending_control_sidecar_limits: PendingControlSidecarLimits::default(),
             native_amx_evidence_prune_intent_max_bytes,
             merge_log: Mutex::new(merge_log),
-            roster_log: Arc::new(RwLock::new(CommitRosterJournal::new(
-                roster_log_path,
-                BLOCK_SYNC_ROSTER_RETENTION,
-            ))),
             telemetry: OnceLock::new(),
             writer_fault: Mutex::new(None),
             canonical_storage_poisoned: AtomicBool::new(false),
@@ -3031,7 +3033,6 @@ impl Kura {
             #[cfg(test)]
             pending_queue_plan_admission_batch_validations: AtomicUsize::new(0),
             #[cfg(test)]
-            fail_next_roster_sidecar_writes: AtomicUsize::new(0),
             #[cfg(test)]
             fail_retained_rewrite_discard_after: AtomicUsize::new(usize::MAX),
             #[cfg(test)]
@@ -3074,6 +3075,7 @@ impl Kura {
         let _ = self.telemetry.set(telemetry);
     }
     /// Return the current committed-lane status evidence revision.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn committed_lane_status_revision(&self) -> u64 {
         self.committed_lane_status_revision.load(Ordering::Acquire)
@@ -4444,11 +4446,6 @@ impl Kura {
         accounting_mutation.finish();
         Ok(freed)
     }
-    /// Retention window for commit-roster snapshots.
-    #[must_use]
-    pub fn block_sync_roster_retention(&self) -> NonZeroUsize {
-        self.block_sync_roster_retention
-    }
     /// Number of newest canonical block bodies protected from Kura eviction.
     #[must_use]
     pub(crate) fn blocks_in_memory(&self) -> NonZeroUsize {
@@ -4470,27 +4467,19 @@ impl Kura {
     pub(crate) fn replica_advert_refresh_interval(&self) -> Duration {
         self.replica_advert_refresh_interval
     }
-    /// Return the single shared owner of the structurally validated legacy archival journal.
-    ///
-    /// State and Kura pruning must never retain independent clean snapshots of the same durable
-    /// tree: a stale clone could otherwise resurrect rows removed by rollback. This journal is not
-    /// finality authority; live recovery uses Kura's verified Sumeragi-v2 finality artifacts.
-    pub(crate) fn commit_roster_journal_handle(&self) -> Arc<RwLock<CommitRosterJournal>> {
-        Arc::clone(&self.roster_log)
-    }
-    /// Retention window for roster sidecars stored alongside blocks.
+    /// Retention window for durable lane, autonomous, and Native AMX history.
     #[must_use]
-    pub fn roster_sidecar_retention(&self) -> NonZeroUsize {
-        self.roster_sidecar_retention
+    pub fn lane_history_retention(&self) -> NonZeroUsize {
+        self.lane_history_retention
     }
     /// Shared bounded-history budget for durable per-route Native AMX evidence.
     ///
-    /// Native manifests and receipts use the existing operator-configured Kura
-    /// sidecar retention rather than introducing an environment-only or
+    /// Native manifests and receipts use the operator-configured Kura lane
+    /// history retention rather than introducing an environment-only or
     /// consensus-divergent limit. One extra entry may exist transiently while
     /// a strict append is being compacted or recovered.
     fn native_amx_participant_evidence_retention(&self) -> NonZeroUsize {
-        self.roster_sidecar_retention
+        self.lane_history_retention
     }
     /// Configured stable aggregate for both Native artifact families combined.
     ///
@@ -4858,9 +4847,6 @@ impl Kura {
                         .join(format!("lane_{:03}", lane_id.as_u32())),
                 )
             })
-    }
-    fn roster_log_path(store_root: &Path) -> PathBuf {
-        CommitRosterJournal::journal_path(store_root)
     }
     fn ensure_lane_directories(
         store_dir: &Path,
@@ -13101,9 +13087,6 @@ impl Kura {
         // canonical operation can observe partially recovered state.
         let finalize_result = (|| -> Result<()> {
             let finalization_authority = SnapshotFinalizationMutationAuthority::new(self)?;
-            let roster_path = Self::roster_log_path(&self.store_root);
-            let roster = CommitRosterJournal::load(roster_path, self.block_sync_roster_retention)?;
-            *self.roster_log.write() = roster;
             let merge_path = self.active_merge_path.lock().clone();
             let merge_capacity = self.merge_log.lock().cache_capacity;
             let mut merge_log = MergeLedgerLog::open_at(&merge_path, merge_capacity)?;
@@ -16660,7 +16643,7 @@ impl Kura {
             blocks_root,
             path,
             blocks_root,
-            MAX_ROLLBACK_INTENT_V1_BYTES,
+            MAX_ROLLBACK_INTENT_V2_BYTES,
         )?
         .ok_or_else(|| {
             Error::IO(
@@ -16672,7 +16655,7 @@ impl Kura {
             )
         })?;
         let decode_limits =
-            recovery_control_decode_limits_v1(u64::try_from(MAX_ROLLBACK_INTENT_V1_BYTES)?)?;
+            recovery_control_decode_limits_v1(u64::try_from(MAX_ROLLBACK_INTENT_V2_BYTES)?)?;
         let intent =
             norito::decode_canonical_with_limits::<KuraRollbackIntent>(&bytes, decode_limits)
                 .map_err(|err| Error::RollbackIntentInvalid {
@@ -16720,7 +16703,7 @@ impl Kura {
     }
     fn validate_prune_intent_merge_prefix(
         merge_log: &mut MergeLedgerLog,
-        intent: &KuraPruneIntentV2,
+        intent: &KuraPruneIntentV3,
     ) -> Result<()> {
         let retained = usize::try_from(intent.retained_merge_entries)?;
         if retained > merge_log.total_entries {
@@ -16837,13 +16820,6 @@ impl Kura {
         }
         let path = self.active_merge_path.lock().clone();
         Self::file_len_or_zero(&path)
-    }
-    fn roster_journal_tracked_bytes(&self) -> Result<u64> {
-        if self.store_root.as_os_str().is_empty() {
-            return Ok(0);
-        }
-        let path = CommitRosterJournal::journal_path(&self.store_root);
-        Self::directory_tree_file_bytes(&path)
     }
     fn sidecar_tracked_bytes(
         data_path: &Path,
@@ -17341,8 +17317,6 @@ impl Kura {
         used = used.saturating_add(Self::directory_tree_file_bytes(
             &self.store_root.join(PENDING_QUEUE_PLAN_ADMISSIONS_DIR),
         )?);
-        let roster_journal = CommitRosterJournal::journal_path(&self.store_root);
-        used = used.saturating_add(Self::directory_tree_file_bytes(&roster_journal)?);
         for journal_name in [
             crate::query::index_status::QueryIndexJournal::JOURNAL_FILE,
             crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE,
@@ -17407,8 +17381,6 @@ impl Kura {
         used = used.saturating_add(Self::directory_tree_file_bytes(
             &self.store_root.join(PENDING_QUEUE_PLAN_ADMISSIONS_DIR),
         )?);
-        let roster_journal = CommitRosterJournal::journal_path(&self.store_root);
-        used = used.saturating_add(Self::directory_tree_file_bytes(&roster_journal)?);
         for journal_name in [
             crate::query::index_status::QueryIndexJournal::JOURNAL_FILE,
             crate::query::projection_checkpoint_journal::QueryProjectionCheckpointJournal::JOURNAL_FILE,
@@ -20199,7 +20171,7 @@ impl Kura {
         index_path: &Path,
         target_height: u64,
         kind: &'static str,
-        expected: KuraPruneSidecarPairProjectionV2,
+        expected: KuraPruneSidecarPairProjectionV3,
     ) -> Result<()> {
         self.reconcile_prune_indexed_sidecar_temps(data_path, index_path, target_height, kind)?;
         let actual =
@@ -20345,7 +20317,7 @@ impl Kura {
         )?;
         Ok(())
     }
-    fn validate_completed_prune_intent(&self, intent: &KuraPruneIntentV2) -> Result<()> {
+    fn validate_completed_prune_intent(&self, intent: &KuraPruneIntentV3) -> Result<()> {
         let target = usize::try_from(intent.target_height)?;
         let data = self.block_data.lock();
         if data.len() != target || data.last().map(|(hash, _)| *hash) != intent.target_tip_hash {
@@ -20464,15 +20436,6 @@ impl Kura {
             intent.target_height,
             "retained-block directory",
         )?;
-        if self
-            .roster_log
-            .read()
-            .has_entries_above(intent.target_height)
-        {
-            return Err(Error::PruneIntentConflict(
-                "commit-roster journal still contains a pruned height".to_owned(),
-            ));
-        }
         {
             let _guard = self.sidecar_lock.lock();
             Self::validate_no_numbered_sidecar_suffix(
@@ -20500,18 +20463,6 @@ impl Kura {
             }
             self.validate_pipeline_sidecars_for_prune(intent.target_height, true)?;
         }
-        Ok(())
-    }
-    fn truncate_roster_journal_for_rollback(
-        roster_log: &mut CommitRosterJournal,
-        target_height: u64,
-    ) -> Result<()> {
-        // Preserve the shared owner and its old in-memory fence until the replacement payload is
-        // fully durable. A failed candidate write leaves extra (safe) fences and the rollback
-        // intent for startup completion.
-        let mut candidate = roster_log.clone();
-        candidate.truncate_to_height(target_height)?;
-        *roster_log = candidate;
         Ok(())
     }
     fn directory_contains_height_above(dir: &Path, target_height: u64) -> Result<bool> {
@@ -20546,7 +20497,6 @@ impl Kura {
         store_root: &Path,
         blocks_root: &Path,
         merge_log: &MergeLedgerLog,
-        roster_log: &CommitRosterJournal,
         intent: &KuraRollbackIntent,
         intent_path: &Path,
     ) -> Result<()> {
@@ -20561,15 +20511,6 @@ impl Kura {
                 merge_log.total_entries
             )));
         }
-        if roster_log
-            .snapshots()
-            .iter()
-            .any(|snapshot| snapshot.commit_qc.height > intent.target_height)
-        {
-            return Err(invalid(
-                "commit roster journal remains above rollback target".to_owned(),
-            ));
-        }
         if Self::directory_contains_height_above(
             &store_root.join(MERGE_CARRIERS_DIR),
             intent.target_height,
@@ -20579,23 +20520,23 @@ impl Kura {
             ));
         }
         let pipeline_dir = blocks_root.join(PIPELINE_DIR_NAME);
-        let roster_index = pipeline_dir.join(ROSTER_SIDECARS_INDEX_FILE);
-        if roster_index.exists() {
-            let mut index = std::fs::File::open(&roster_index)
-                .map_err(|err| Error::IO(err, roster_index.clone()))?;
+        let pipeline_index = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+        if pipeline_index.exists() {
+            let mut index = std::fs::File::open(&pipeline_index)
+                .map_err(|err| Error::IO(err, pipeline_index.clone()))?;
             let index_len = index
                 .metadata()
-                .map_err(|err| Error::IO(err, roster_index.clone()))?
+                .map_err(|err| Error::IO(err, pipeline_index.clone()))?
                 .len();
             let layout = SidecarIndexLayout::read_from(&mut index, index_len)
-                .map_err(|reason| invalid(format!("invalid rollback roster index: {reason}")))?;
+                .map_err(|reason| invalid(format!("invalid rollback pipeline index: {reason}")))?;
             if index_len != layout.aligned_len
                 || layout
                     .height_range()
                     .is_some_and(|range| *range.end() > intent.target_height)
             {
                 return Err(invalid(format!(
-                    "roster sidecar index remains above rollback target: bytes={index_len}, target={} ",
+                    "pipeline sidecar index remains above rollback target: bytes={index_len}, target={} ",
                     intent.target_height
                 )));
             }
@@ -20644,7 +20585,6 @@ impl Kura {
         merge_log_path: &Path,
         merge_cache_capacity: usize,
         block_store: &mut BlockStore,
-        roster_log: &mut CommitRosterJournal,
         intent: &KuraRollbackIntent,
     ) -> Result<()> {
         let intent_path = Self::rollback_intent_path(blocks_root);
@@ -20681,16 +20621,13 @@ impl Kura {
             Self::prune_commit_manifests_above_in_dir(&directory, intent.target_height)?;
         }
         rollback_fault_point(RollbackFaultPoint::ManifestsPruned)?;
-        Self::truncate_roster_metadata_above_at(blocks_root, intent.target_height)?;
-        rollback_fault_point(RollbackFaultPoint::RosterSidecarsPruned)?;
-        Self::truncate_roster_journal_for_rollback(roster_log, intent.target_height)?;
-        rollback_fault_point(RollbackFaultPoint::RosterJournalPruned)?;
+        Self::truncate_pipeline_metadata_above_at(blocks_root, intent.target_height)?;
+        rollback_fault_point(RollbackFaultPoint::PipelineSidecarsPruned)?;
         block_store.verify_rollback_boundary(intent, &intent_path)?;
         Self::verify_rollback_auxiliary_artifacts(
             store_root,
             blocks_root,
             &merge_log,
-            roster_log,
             intent,
             &intent_path,
         )?;
@@ -20745,22 +20682,12 @@ impl Kura {
         if keep == usize::try_from(source_height)? && !sidecar_rewrite.has_work() {
             return Ok(());
         }
-        let roster_projection = self
-            .roster_log
-            .read()
-            .project_truncate_to_height(height)
-            .map_err(|error| {
-                Error::PruneIntentConflict(format!(
-                    "failed to project commit-roster prune publication: {error}"
-                ))
-            })?;
         let (marker_temporary_bytes, marker_stable_growth_bytes) =
             self.canonical_prune_commit_marker_projection(height)?;
         let capacity = self.canonical_prune_capacity_admission_snapshot(
             pending_canonical_bytes,
             marker_temporary_bytes,
             marker_stable_growth_bytes,
-            roster_projection,
         )?;
         let validated_carrier_records =
             self.merge_carrier_records_for_prune_under_prune_and_canonical_guards(height)?;
@@ -20809,8 +20736,8 @@ impl Kura {
             ));
         }
         let intent =
-            self.seal_and_validate_canonical_prune_capacity_admission(KuraPruneIntentV2 {
-                version: 2,
+            self.seal_and_validate_canonical_prune_capacity_admission(KuraPruneIntentV3 {
+                version: 3,
                 source_height,
                 source_tip_hash,
                 target_height: height,
@@ -20859,20 +20786,6 @@ impl Kura {
             return Err(Error::PruneIntentConflict(
                 "canonical sidecar rewrite projection changed before prune intent publication"
                     .to_owned(),
-            ));
-        }
-        let current_roster_projection = self
-            .roster_log
-            .read()
-            .project_truncate_to_height(height)
-            .map_err(|error| {
-            Error::PruneIntentConflict(format!(
-                "failed to re-project commit-roster prune publication: {error}"
-            ))
-        })?;
-        if current_roster_projection != roster_projection {
-            return Err(Error::PruneIntentConflict(
-                "commit-roster prune projection changed before prune intent publication".to_owned(),
             ));
         }
         Self::validate_no_numbered_sidecar_suffix(
@@ -20974,11 +20887,6 @@ impl Kura {
             self.truncate_merge_log_to_len(retained_merge_entries)
         );
         self.maybe_fail_prune_after_stage(PRUNE_STAGE_MERGE_LOG);
-        forward_or_stop!(
-            "commit-roster suffix",
-            self.truncate_roster_for_prune(&intent, sidecar_rewrite)
-        );
-        self.maybe_fail_prune_after_stage(PRUNE_STAGE_ROSTER);
         let wsv_dir = self.wsv_checkpoint_dir();
         forward_or_stop!(
             "WSV-checkpoint suffix",
@@ -21003,7 +20911,7 @@ impl Kura {
             );
         }
         forward_or_stop!(
-            "pipeline and roster sidecar suffixes",
+            "pipeline sidecar suffix",
             self.truncate_pipeline_sidecars_for_prune(&intent)
         );
         self.maybe_fail_prune_after_stage(PRUNE_STAGE_PIPELINE_SIDECARS);
@@ -21773,9 +21681,10 @@ fn verified_snapshot_hash_journal_digest(snapshot_hashes: &[HashOf<BlockHeader>]
 ///
 /// While this file exists, normal startup first completes the rollback. The exact merge-log
 /// boundary is recorded separately from the block height because current merge storage is sparse:
-/// not every canonical block carries a merge-ledger entry. Its fixed-width V1
-/// wire is admitted under [`MAX_ROLLBACK_INTENT_V1_BYTES`] before allocation.
+/// not every canonical block carries a merge-ledger entry. Its fixed-width V2
+/// wire is admitted under [`MAX_ROLLBACK_INTENT_V2_BYTES`] before allocation.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
 struct KuraRollbackIntent {
     version: u32,
     from_height: u64,
@@ -21785,7 +21694,7 @@ struct KuraRollbackIntent {
     target_block_hash: Option<HashOf<BlockHeader>>,
 }
 impl KuraRollbackIntent {
-    const VERSION: u32 = 1;
+    const VERSION: u32 = 2;
     #[cfg(test)]
     fn new_with_merge_entries(
         from_height: u64,
@@ -21833,8 +21742,7 @@ enum RollbackFaultPoint {
     MergePruned,
     CheckpointsPruned,
     ManifestsPruned,
-    RosterSidecarsPruned,
-    RosterJournalPruned,
+    PipelineSidecarsPruned,
     BeforeIntentRemoved,
 }
 impl BlockStoreCommitMarker {
@@ -29268,10 +29176,10 @@ impl Kura {
                 entry,
                 descriptor.lane_block_height,
             )?;
-            if inventory.attempts_at_height >= self.roster_sidecar_retention.get() {
+            if inventory.attempts_at_height >= self.lane_history_retention.get() {
                 return Err(Self::invalid_lane_artifact_error(
                     artifact_path,
-                    "autonomous proposal-height attempts exceed the configured sidecar retention bound",
+                    "autonomous proposal-height attempts exceed the configured lane-history retention bound",
                 ));
             }
             let identity = (descriptor.lane_block_height, descriptor.proposal_height);
@@ -32146,10 +32054,10 @@ impl Kura {
                     attempt_identities.insert((lane_block_height, proposal_height));
                     let attempts_at_height = attempts.entry(lane_block_height).or_default();
                     attempts_at_height.push((pointer, record));
-                    if attempts_at_height.len() > self.roster_sidecar_retention.get() {
+                    if attempts_at_height.len() > self.lane_history_retention.get() {
                         return Err(Self::invalid_lane_artifact_error(
                             path,
-                            "autonomous proposal-height attempts exceed the configured sidecar retention bound",
+                            "autonomous proposal-height attempts exceed the configured lane-history retention bound",
                         ));
                     }
                     continue;
@@ -37656,7 +37564,7 @@ impl Kura {
         self.remove_terminal_autonomous_auxiliary_files_with_budget_locked(
             entry,
             terminal_height,
-            self.roster_sidecar_retention.get(),
+            self.lane_history_retention.get(),
         )
     }
     fn remove_terminal_autonomous_auxiliary_files_with_budget_locked(

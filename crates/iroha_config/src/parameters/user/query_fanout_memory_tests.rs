@@ -67,7 +67,7 @@ fn minimum_transport_content_limit_keeps_a_complete_query_envelope() {
         .expect("torii table")
         .insert("max_content_len".into(), Value::Integer(exact));
     let root = load_root(table);
-    assert_eq!(root.torii.max_content_len.get(), exact as u64);
+    assert_eq!(root.torii.max_content_len.get(), exact.cast_unsigned());
     assert!(
         root.torii.max_content_len.get() < root.torii.query_fanout_max_retained_bytes.get(),
         "the exact transport minimum remains far below the aggregate query-memory pool"

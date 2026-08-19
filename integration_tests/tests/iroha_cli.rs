@@ -1611,7 +1611,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
     )
     .await?;
     let cli = SoracloudCli::new(dir.path(), &config);
-    let deploy = run_bounded_soracloud_success!(
+    let _deploy = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("deploy for training lifecycle");
         "service", "deploy",
@@ -1622,7 +1622,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
     let service_name = service.service_name.to_string();
     let model_name = "ops_model";
     let dataset_ref = "dataset://ops/synthetic-v1";
-    let training_start_1 = run_bounded_soracloud_success!(
+    let _training_start_1 = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("training-job-start #1");
         "model", "training-job-start",
@@ -1638,7 +1638,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--storage-budget-bytes", "8192",
         "--torii-url", network.client().torii_url.to_string(),
     );
-    let checkpoint_1a = run_bounded_soracloud_success!(
+    let _checkpoint_1a = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("training-job-checkpoint #1a");
         "model", "training-job-checkpoint",
@@ -1649,7 +1649,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--metrics-hash", Hash::new(b"metrics-job-001-step-2").to_string(),
         "--torii-url", network.client().torii_url.to_string(),
     );
-    let checkpoint_1b = run_bounded_soracloud_success!(
+    let _checkpoint_1b = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("training-job-checkpoint #1b");
         "model", "training-job-checkpoint",
@@ -1679,7 +1679,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         job_1.get("completed_steps").and_then(Value::as_u64),
         Some(4)
     );
-    let artifact_register_1 = run_bounded_soracloud_success!(
+    let _artifact_register_1 = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("model-artifact-register #1");
         "model", "artifact-register",
@@ -1693,7 +1693,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--provenance-attestation-hash", Hash::new(b"attestation-v1").to_string(),
         "--torii-url", network.client().torii_url.to_string(),
     );
-    let weight_register_1 = run_bounded_soracloud_success!(
+    let _weight_register_1 = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("model-weight-register #1");
         "model", "weight-register",
@@ -1708,7 +1708,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--provenance-attestation-hash", Hash::new(b"attestation-v1").to_string(),
         "--torii-url", network.client().torii_url.to_string(),
     );
-    let training_start_2 = run_bounded_soracloud_success!(
+    let _training_start_2 = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("training-job-start #2");
         "model", "training-job-start",
@@ -1724,7 +1724,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--storage-budget-bytes", "8192",
         "--torii-url", network.client().torii_url.to_string(),
     );
-    let checkpoint_2a = run_bounded_soracloud_success!(
+    let _checkpoint_2a = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("training-job-checkpoint #2a");
         "model", "training-job-checkpoint",
@@ -1735,7 +1735,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--metrics-hash", Hash::new(b"metrics-job-002-step-2").to_string(),
         "--torii-url", network.client().torii_url.to_string(),
     );
-    let checkpoint_2b = run_bounded_soracloud_success!(
+    let _checkpoint_2b = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("training-job-checkpoint #2b");
         "model", "training-job-checkpoint",
@@ -1746,7 +1746,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--metrics-hash", Hash::new(b"metrics-job-002-step-4").to_string(),
         "--torii-url", network.client().torii_url.to_string(),
     );
-    let artifact_register_2 = run_bounded_soracloud_success!(
+    let _artifact_register_2 = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("model-artifact-register #2");
         "model", "artifact-register",
@@ -1760,7 +1760,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--provenance-attestation-hash", Hash::new(b"attestation-v2").to_string(),
         "--torii-url", network.client().torii_url.to_string(),
     );
-    let weight_register_2 = run_bounded_soracloud_success!(
+    let _weight_register_2 = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("model-weight-register #2");
         "model", "weight-register",
@@ -1776,7 +1776,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
         "--provenance-attestation-hash", Hash::new(b"attestation-v2").to_string(),
         "--torii-url", network.client().torii_url.to_string(),
     );
-    let promote_v2 = run_bounded_soracloud_success!(
+    let _promote_v2 = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("model-weight-promote");
         "model", "weight-promote",
@@ -1813,7 +1813,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
             .and_then(Value::as_u64),
         Some(2)
     );
-    let rollback = run_bounded_soracloud_success!(
+    let _rollback = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("model-weight-rollback");
         "model", "weight-rollback",
@@ -3079,7 +3079,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
     let site_dir = dir.path().join("soracloud_site");
     let webapp_dir = dir.path().join("soracloud_webapp");
     let cli = SoracloudCli::new(dir.path(), &config);
-    let site_init = run_bounded_soracloud_success!(
+    let _site_init = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("site init");
         "service", "init",
@@ -3088,7 +3088,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         "--service-version", "1.0.0",
         "--output-dir", site_dir.to_string_lossy().into_owned(),
     );
-    let webapp_init = run_bounded_soracloud_success!(
+    let _webapp_init = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("webapp init");
         "service", "init",
@@ -3132,7 +3132,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         cli,
         SoracloudSuccessCase::new("site deploy");
         "service", "deploy",
-        "--container",  site_dir .join("container_manifest.json") .to_string_lossy() .into_owned(), ,
+        "--container", site_dir.join("container_manifest.json").to_string_lossy().into_owned(),
         "--service", site_service_path.to_string_lossy().into_owned(),
         "--torii-url", network.client().torii_url.to_string(),
     );
@@ -3148,7 +3148,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         cli,
         SoracloudSuccessCase::new("webapp deploy");
         "service", "deploy",
-        "--container",  webapp_dir .join("container_manifest.json") .to_string_lossy() .into_owned(), ,
+        "--container", webapp_dir.join("container_manifest.json").to_string_lossy().into_owned(),
         "--service", webapp_service_path.to_string_lossy().into_owned(),
         "--torii-url", network.client().torii_url.to_string(),
     );
@@ -3172,7 +3172,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         cli,
         SoracloudSuccessCase::new("site upgrade");
         "service", "upgrade",
-        "--container",  site_dir .join("container_manifest.json") .to_string_lossy() .into_owned(), ,
+        "--container", site_dir.join("container_manifest.json").to_string_lossy().into_owned(),
         "--service", site_service_v2_path.to_string_lossy().into_owned(),
         "--torii-url", network.client().torii_url.to_string(),
     );
@@ -3529,7 +3529,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
     )
     .await?;
     let cli = SoracloudCli::new(dir.path(), &config);
-    let sender_deploy = run_bounded_soracloud_success!(
+    let _sender_deploy = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("sender deploy");
         "agent", "deploy",
@@ -3537,7 +3537,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         "--lease-ticks", "1",
         "--torii-url", network.client().torii_url.to_string(),
     );
-    let recipient_deploy = run_bounded_soracloud_success!(
+    let _recipient_deploy = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("recipient deploy");
         "agent", "deploy",
@@ -3564,7 +3564,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         "unexpected lease-expiry rejection error: {}",
         String::from_utf8_lossy(&expired_wallet.stderr)
     );
-    let renew = run_bounded_soracloud_success!(
+    let _renew = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("lease renew");
         "agent", "lease-renew",
@@ -3801,7 +3801,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     let restart_peer = network.peers().first().expect("network peer").clone();
     let restart_torii_url = restart_peer.torii_url();
     let cli = SoracloudCli::new(dir.path(), &config);
-    let sender_deploy = run_bounded_soracloud_success!(
+    let _sender_deploy = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("sender deploy");
         "agent", "deploy",
@@ -3810,7 +3810,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         "--autonomy-budget-units", "500",
         "--torii-url", &restart_torii_url,
     );
-    let recipient_deploy = run_bounded_soracloud_success!(
+    let _recipient_deploy = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("recipient deploy");
         "agent", "deploy",
@@ -3819,7 +3819,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         "--autonomy-budget-units", "250",
         "--torii-url", &restart_torii_url,
     );
-    let allow = run_bounded_soracloud_success!(
+    let _allow = run_bounded_soracloud_success!(
         cli,
         SoracloudSuccessCase::new("artifact allow");
         "agent", "artifact-allow",

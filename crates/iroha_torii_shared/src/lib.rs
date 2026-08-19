@@ -198,18 +198,14 @@ pub mod uri {
     pub const READYZ: &str = "/readyz";
     /// URI used to fetch a window of block headers (newest first, optional `from`/`limit`).
     pub const LEDGER_HEADERS: &str = "/v1/ledger/headers";
-    /// URI used to fetch the execution state root for a block height.
+    /// URI used to fetch exact v2 finality carrying the post-state root for a block height.
     pub const LEDGER_STATE_ROOT: &str = "/v1/ledger/state/{height}";
-    /// URI used to fetch the execution state proof/QC for a block height.
+    /// URI used to fetch the exact v2 state-finality carrier for a block height.
     pub const LEDGER_STATE_PROOF: &str = "/v1/ledger/state-proof/{height}";
     /// URI used to fetch the exact canonical executed block wire for a finalized height.
     pub const LEDGER_EXECUTED_BLOCK_WIRE: &str = "/v1/ledger/block/{height}";
     /// URI used to fetch Merkle proofs for a transaction entrypoint within a block.
     pub const LEDGER_BLOCK_PROOF: &str = "/v1/ledger/block/{height}/proof/{entry_hash}";
-    /// URI used to list validator-set snapshots (newest first).
-    pub const SUMERAGI_VALIDATOR_SETS: &str = "/v1/sumeragi/validator-sets";
-    /// URI used to fetch a validator-set snapshot by block height.
-    pub const SUMERAGI_VALIDATOR_SET_BY_HEIGHT: &str = "/v1/sumeragi/validator-sets/{height}";
     /// Peers URI is used to find all peers in the network
     pub const PEERS: &str = "/v1/peers";
     /// The web socket uri used to subscribe to block and transactions statuses.
@@ -450,6 +446,10 @@ pub struct ErrorDetails {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub chain_discriminant: Option<u16>,
+    /// Canonical transaction-entrypoint hash involved in admission failures.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint_hash: Option<String>,
     /// Signed transaction hash involved in finality/status failures.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -485,6 +485,7 @@ impl ErrorDetails {
             && self.actual.is_none()
             && self.profile.is_none()
             && self.chain_discriminant.is_none()
+            && self.entrypoint_hash.is_none()
             && self.tx_hash.is_none()
             && self.last_status.is_none()
             && self.hint.is_none()
@@ -889,6 +890,7 @@ mod tests {
                 actual: Some("Rejected".to_owned()),
                 profile: Some(NETWORK_PROFILE_TAIRA.to_owned()),
                 chain_discriminant: Some(TAIRA_CHAIN_DISCRIMINANT),
+                entrypoint_hash: Some("cd".repeat(32)),
                 tx_hash: Some("ab".repeat(32)),
                 last_status: Some("Rejected".to_owned()),
                 hint: Some("inspect transaction rejection reason".to_owned()),
@@ -907,6 +909,11 @@ mod tests {
         assert_eq!(details.actual.as_deref(), Some("Rejected"));
         assert_eq!(details.profile.as_deref(), Some(NETWORK_PROFILE_TAIRA));
         assert_eq!(details.chain_discriminant, Some(TAIRA_CHAIN_DISCRIMINANT));
+        assert_eq!(
+            details.entrypoint_hash.as_deref(),
+            Some("cd".repeat(32).as_str())
+        );
+        assert_eq!(details.tx_hash.as_deref(), Some("ab".repeat(32).as_str()));
         assert_eq!(details.last_status.as_deref(), Some("Rejected"));
         assert_eq!(
             details.hint.as_deref(),
@@ -996,6 +1003,9 @@ mod tests {
         assert!(!details.is_empty());
         details = ErrorDetails::default();
         details.last_status = Some("Expired".to_owned());
+        assert!(!details.is_empty());
+        details = ErrorDetails::default();
+        details.entrypoint_hash = Some("cd".repeat(32));
         assert!(!details.is_empty());
         details = ErrorDetails::default();
         details.fee = Some(FeeErrorDetails {

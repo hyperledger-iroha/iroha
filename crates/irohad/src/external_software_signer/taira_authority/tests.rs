@@ -27,9 +27,10 @@ use super::{
         qualify_response_digest,
     },
     service::{
-        DeploymentFinalizationCrashPhaseV1, GenericAuthorizationCrashPhaseV1,
-        PublicSoakBindingCrashPhaseV1, TairaAuthorityErrorV1, artifact_is_authority_immutable,
-        digest_parts_sha256,
+        AuthorityProcessIdentityModeV1, DeploymentFinalizationCrashPhaseV1,
+        GenericAuthorizationCrashPhaseV1, PublicSoakBindingCrashPhaseV1,
+        PublicSoakBindingProvisioningModeV1, TairaAuthorityErrorV1,
+        artifact_is_authority_immutable, digest_parts_sha256,
     },
     store::{PersistOutcomeV1, load_canonical_records, persist_canonical_once},
     transport::serve_one_for_test,
@@ -67,6 +68,37 @@ const TEST_GOVERNANCE_PUBLIC_KEY_V1: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const TEST_GOVERNANCE_PRIVATE_KEY_V1: &str =
     "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53";
+
+impl TairaAuthorityServiceV1 {
+    /// Provision a role with a synthetic service UID for the isolated in-process test harness.
+    pub(super) fn provision_for_test(
+        state_directory: impl Into<PathBuf>,
+        provisioning: TairaAuthorityProvisioningV1,
+        wrapping_key: SoftwareSignerWrappingKeyV1,
+    ) -> Result<Self, TairaAuthorityErrorV1> {
+        Self::provision_inner(
+            state_directory.into(),
+            provisioning,
+            wrapping_key,
+            None,
+            None,
+            PublicSoakBindingProvisioningModeV1::Complete,
+            AuthorityProcessIdentityModeV1::SyntheticTest,
+        )
+    }
+
+    /// Recover synthetic-UID role state owned by the current test process.
+    pub(super) fn open_for_test(
+        state_directory: impl Into<PathBuf>,
+        wrapping_key: SoftwareSignerWrappingKeyV1,
+    ) -> Result<Self, TairaAuthorityErrorV1> {
+        Self::open_inner(
+            state_directory,
+            wrapping_key,
+            AuthorityProcessIdentityModeV1::SyntheticTest,
+        )
+    }
+}
 
 fn wrapping_key() -> SoftwareSignerWrappingKeyV1 {
     SoftwareSignerWrappingKeyV1::try_from_bytes(TEST_WRAPPING_KEY_V1).expect("fixture wrapping key")
@@ -368,7 +400,7 @@ fn read_only_descriptors(paths: &[&Path]) -> Vec<OwnedFd> {
         .map(|path| {
             let file = OpenOptions::new()
                 .read(true)
-                .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32)
+                .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed())
                 .open(path)
                 .expect("open fixture descriptor");
             OwnedFd::from(file)
@@ -669,7 +701,7 @@ fn direct_transport_round_trip(
     service: Arc<TairaAuthorityServiceV1>,
     administrator: bool,
     authenticated_uid: u32,
-    encoded_request: Vec<u8>,
+    encoded_request: &[u8],
 ) -> AuthorityFrameV1 {
     let (mut client, server) = UnixStream::pair().expect("local authority stream pair");
     client
@@ -681,7 +713,7 @@ fn direct_transport_round_trip(
     let length = u32::try_from(encoded_request.len()).expect("request frame length");
     client
         .write_all(&length.to_be_bytes())
-        .and_then(|()| client.write_all(&encoded_request))
+        .and_then(|()| client.write_all(encoded_request))
         .and_then(|()| client.flush())
         .expect("send direct authority frame");
     let mut prefix = [0_u8; 4];
@@ -1994,7 +2026,7 @@ fn local_eight_role_structural_harness_with_privileged_transport_when_supported(
             Arc::clone(service),
             false,
             binding.signer.client_uid,
-            encode_frame(
+            &encode_frame(
                 FRAME_QUALIFY_REQUEST_V1,
                 &QualifyRequestV1 {
                     binding_sha256: binding.sha256().expect("binding digest"),
@@ -2022,7 +2054,7 @@ fn local_eight_role_structural_harness_with_privileged_transport_when_supported(
             Arc::clone(service),
             true,
             binding.signer.administrator_uid,
-            encode_frame(
+            &encode_frame(
                 FRAME_ADMIN_REQUEST_V1,
                 &AuthorityAdminRequestV1 {
                     binding_sha256: binding.sha256().expect("binding digest"),
@@ -2177,17 +2209,16 @@ fn mutate_object_path(value: &mut Value, path: &[&str]) {
         .as_object_mut()
         .and_then(|object| object.get_mut(*leaf))
         .expect("mutation leaf field");
-    let replacement = if let Some(text) = value.as_str() {
-        Value::from(format!("{text}-mutated"))
-    } else if let Some(number) = value.as_u64() {
-        Value::from(number.checked_add(1).expect("fixture integer mutation"))
-    } else {
-        panic!("unsupported mutation scalar at {path:?}");
+    let replacement = match (value.as_str(), value.as_u64()) {
+        (Some(text), _) => Value::from(format!("{text}-mutated")),
+        (_, Some(number)) => Value::from(number.checked_add(1).expect("fixture integer mutation")),
+        _ => panic!("unsupported mutation scalar at {path:?}"),
     };
     *value = replacement;
 }
 
 #[test]
+#[expect(clippy::too_many_lines, reason = "signed sidecar binding regression")]
 fn native_signed_sidecars_bind_controller_claims_and_exact_generic_receipt() {
     let parent = temporary_parent();
     let native = super::native_evidence::tests::authority_service_fixture();
@@ -2307,6 +2338,10 @@ fn native_signed_sidecars_bind_controller_claims_and_exact_generic_receipt() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "descriptor integrity mutation matrix"
+)]
 fn descriptor_alias_mutability_identity_and_hash_drift_are_rejected() {
     let parent = temporary_parent();
     let service = provision(parent.path(), TairaAuthorityRoleV1::RolloutObservation);
@@ -2530,6 +2565,10 @@ fn authority_open_rejects_a_truncated_audit_record() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "rotation and recovery security regression"
+)]
 fn rotation_invalidates_old_policy_and_revocation_survives_recovery() {
     let parent = temporary_parent();
     let service = provision(parent.path(), TairaAuthorityRoleV1::RolloutObservation);

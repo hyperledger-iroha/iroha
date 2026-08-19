@@ -2,80 +2,34 @@
     ("relative", "old", "new", "expected_error"),
     (
         (
-            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
-            "        liveness_watchdog.poll(Instant::now());\n",
-            "",
-            "every ordinary serialized height-loop iteration must poll liveness",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
-            "                let _ = wake_rx.recv_timeout(IDLE_POLL);\n"
-            "                continue;\n",
-            "                continue;\n",
-            "ordinary loop's four explicit continue edges and loop tail",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
-            "                advance_executor(receiver, executor, services, control_queue_capacity)?;",
-            "                advance_executor(receiver, executor, services, 1)?;",
-            "ordinary loop must retain its configured post-ingress runtime batch",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
-            "advance_pacemaker_once(receiver, executor, services)?;",
-            "let _ = (receiver, executor, services);",
-            "retained response episode must receive exactly one direct typed pacemaker turn",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
-            "service_certified_serve_barrier_liveness_turn(false,",
-            "service_certified_serve_barrier_liveness_turn_for_test(false,",
-            "each modular selected-Serve barrier turn must dispatch its reviewed liveness suffix",
+            "crates/iroha_core/src/sumeragi/v2_runner.rs",
+            "for _ in 0..limit.max(1) {",
+            "loop {",
+            "ordinary serialized runtime service must be a finite configured turn",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "        service(CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode)?;\n",
-            "        let _ = CertifiedServeBarrierLivenessAction::TimeoutVoteEpisode;\n",
-            "selected-Serve liveness service must admit TimeoutVote, drain its retained prefix, and run the pacemaker in reviewed order",
+            "let scan_limit = lane_work.effect_count();",
+            "let scan_limit = usize::MAX;",
+            "lane service must snapshot one finite scan limit before dispatch",
         ),
         (
-            "crates/iroha_core/src/sumeragi/tests/v2_runner_unsealed_00.rs",
-            "        recovery.assert_complete();\n",
-            "        assert!(recovery.entered_view_one());\n",
-            "selected-Serve regression must drive the real ingress, worker, runtime, TC, and EnterView terminal",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "    service()\n"
-            "}\n\n"
-            "/// Execute at most one typed timeout/Progress-root transition",
-            "    if _predecessor_admission_open {\n"
-            "        service()\n"
-            "    } else {\n"
-            "        Ok(())\n"
-            "    }\n"
-            "}\n\n"
-            "/// Execute at most one typed timeout/Progress-root transition",
-            "selected-Serve pacemaker service must remain independent of the "
-            "move-only predecessor admission",
+            "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs",
+            "wake_rx.recv_timeout(IDLE_POLL)",
+            "wake_rx.recv()",
+            "ordinary lifecycle height must wait only for the finite local poll bound",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs",
-            "wake_rx.recv_timeout(remaining.min(IDLE_POLL))",
-            "wake_rx.recv_timeout(remaining)",
-            "closed pending recovery must wait only for the lesser of its remaining deadline and the finite local wake bound",
-        ),
-        (
-            "crates/iroha_core/src/sumeragi/v2_runner/outer_ingress_cursor.rs",
-            "OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,",
-            "OuterIngressTurn::Runtime => OuterIngressTurn::Completion,",
-            "dropping a borrowed turn must advance exactly one finite Completion, Runtime, or Ingress target",
+            "wake_rx.recv_timeout(IDLE_POLL)",
+            "wake_rx.recv()",
+            "pending-Kura lifecycle height must wait only for the finite local poll bound",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
-            "        while attempts < limit {\n",
-            "        loop {\n",
-            "every completion policy must retain its caller-supplied finite bound",
+            "const MAX_COMPLETION_DRAIN_BATCH: usize = 256;",
+            "const MAX_COMPLETION_DRAIN_BATCH: usize = usize::MAX;",
+            "completion service must retain a fixed finite batch bound",
         ),
     ),
 )
@@ -88,9 +42,10 @@ def test_local_runner_service_contract_rejects_production_loop_mutations(
 ) -> None:
     module = load_checker()
     formal_dir = local_runner_service_fixture(tmp_path, module)
+    copy_serve_lifecycle_production_fixture(tmp_path, module)
     path = tmp_path / relative
     source = path.read_text(encoding="utf-8")
-    assert old in source, old
+    assert source.count(old) >= 1, old
     path.write_text(source.replace(old, new, 1), encoding="utf-8")
 
     errors = module._local_runner_service_contract_source_fidelity_errors(
@@ -324,10 +279,11 @@ def test_async_source_fidelity_rejects_an_unreviewed_model_local_theorem(
         "AsyncTimeoutRecoveryDefinedVoteCandidateOwnerIsMember",
         "AsyncLeaderWireCarrierCannotBypassFrozenPrefix",
         "RetireLeaderWireLifecycleRecoveryCutPrunesOnlyDormant",
-        "AsyncServeProducerEpisodeMeasureIsFinite",
-        "AsyncServeProducerEpisodeBlocksFreshServeAdmission",
-        "AsyncServeProducerEpisodeFinalRetirementArmsOneShotDebt",
-        "AsyncServeProducerEpisodeRunnerTurnStrictlyConsumesDebt",
+        "AsyncServeProducerTurnMeasureIsFinite",
+        "AsyncServeProducerTurnBlocksFreshServeAdmission",
+        "AsyncServeCompletionArmsOneShotProducerTurn",
+        "AsyncServeProducerTurnRunnerAttemptStrictlyConsumesDebt",
+        "AsyncServeProducerTurnRestartPreservesDebt",
         "AsyncTimeoutRecoveryRetainedEpisodesContainFramedEpisode",
         "AsyncTimeoutRecoverySupersedesOnlyExactPreTimeoutRetransmit",
         "LeaderWireRecoveryCutRetainsOrdinalHighwaters",
@@ -415,8 +371,8 @@ def test_async_source_fidelity_rejects_stale_reviewed_theorem_alias(
             "AsyncCandidateServiceStageOrdinalIsBounded",
         ),
         (
-            "AsyncServeProducerEpisodeMeasureIsFinite",
-            "AsyncServeProducerEpisodeBlocksFreshServeAdmission",
+            "AsyncServeProducerTurnMeasureIsFinite",
+            "AsyncServeProducerTurnBlocksFreshServeAdmission",
         ),
     ),
 )
@@ -498,13 +454,13 @@ def test_async_source_fidelity_pins_fairness_refinement_proof_statement(
     ("old", "new"),
     (
         (
-            "  /\\ AsyncServeProducerEpisodeTransition\n",
+            "  /\\ AsyncServeProducerTurnTransition\n",
             "",
         ),
         (
             "  /\\ AsyncProducerProjectionStep\n"
-            "  /\\ AsyncServeProducerEpisodeTransition\n",
-            "  /\\ AsyncServeProducerEpisodeTransition\n"
+            "  /\\ AsyncServeProducerTurnTransition\n",
+            "  /\\ AsyncServeProducerTurnTransition\n"
             "  /\\ AsyncProducerProjectionStep\n",
         ),
     ),

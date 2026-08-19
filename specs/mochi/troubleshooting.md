@@ -189,8 +189,8 @@ peer directories and snapshot roots before restarting processes.
 If startup fails during config integrity checks, compare the rendered peer
 config with the validator-safe defaults Mochi now pins automatically:
 
-- `nexus.enabled = false` for local permissioned profiles unless you explicitly
-  enable Nexus.
+- Nexus has no availability switch; the first release has one transaction-aware
+  routing runtime for both canonical one-lane and custom multi-lane deployments.
 - `confidential.enabled = true` for validator peers.
 - Consensus mode is carried by the signed genesis/height context. Mochi does
   not emit the retired mutable `sumeragi.consensus_mode` config field; select
@@ -199,8 +199,8 @@ config with the validator-safe defaults Mochi now pins automatically:
 - `[torii.transport.norito_rpc]` should have `enabled = true`,
   `require_mtls = false`, and `stage = "ga"` for the local SDK/RPC path.
 
-When you explicitly enable Nexus, Mochi rejects permissioned profiles before
-launch and requires a profile that generates an NPoS signed genesis.
+The canonical one-lane topology is valid with permissioned consensus. Custom
+multi-lane topology requires a profile that generates an NPoS signed genesis.
 
 ### Tuning automatic restarts
 

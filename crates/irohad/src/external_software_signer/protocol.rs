@@ -23,7 +23,7 @@ const PUBLIC_KEY_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.public-key.v1
 const PUBLIC_BINDING_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.binding.v1";
 const REQUEST_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.request.v1";
 const RESPONSE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.response.v1";
-/// Exact prefix of the SoraFS V1 foundational-promotion signing payload.
+/// Exact prefix of the `SoraFS` V1 foundational-promotion signing payload.
 ///
 /// The promotion key signs the complete byte string beginning with this prefix; the signer never
 /// hashes, decodes, or reserializes the JSON suffix in place of those reviewed bytes.
@@ -106,13 +106,13 @@ pub enum SoftwareSignerRoleV1 {
     Reserve = 3,
     /// Native orderbook transaction signing.
     Orderbook = 4,
-    /// SoraFS V1 foundational promotion-envelope signing.
+    /// `SoraFS` V1 foundational promotion-envelope signing.
     Promotion = 5,
     /// Governance DAG publisher signing.
     GovernanceDag = 6,
-    /// PoTR gateway receipt signing.
+    /// `PoTR` gateway receipt signing.
     PotrGateway = 7,
-    /// PoTR provider receipt signing.
+    /// `PoTR` provider receipt signing.
     PotrProvider = 8,
     /// Governed billing-statement digest signing.
     BillingStatement = 9,
@@ -120,7 +120,7 @@ pub enum SoftwareSignerRoleV1 {
     EvidenceViewer = 10,
     /// Stream-token issuance signing.
     StreamToken = 11,
-    /// PoP credential, commitment-root, and revocation signing.
+    /// `PoP` credential, commitment-root, and revocation signing.
     PopCredentials = 12,
     /// Purpose-separated signing owned by one Taira release-authority role.
     TairaAuthority = 13,
@@ -255,12 +255,12 @@ pub enum SoftwareSignerPurposeBindingV1 {
         /// Canonical publisher peer identifier bytes.
         publisher_peer_id: Vec<u8>,
     },
-    /// Exact independently administered PoTR gateway signer identity.
+    /// Exact independently administered `PoTR` gateway signer identity.
     PotrGateway {
         /// Public gateway signer identifier.
         signer_id: [u8; 32],
     },
-    /// Exact independently administered PoTR provider signer and provider.
+    /// Exact independently administered `PoTR` provider signer and provider.
     PotrProvider {
         /// Public provider-side signer identifier.
         signer_id: [u8; 32],
@@ -276,9 +276,9 @@ pub enum SoftwareSignerPurposeBindingV1 {
     EvidenceViewer,
     /// Stream-token authority is the binding handle and Ed25519 key.
     StreamToken,
-    /// Exact governed PoP issuer identity.
+    /// Exact governed `PoP` issuer identity.
     PopCredentials {
-        /// Stable public PoP credential issuer identity.
+        /// Stable public `PoP` credential issuer identity.
         issuer_id: String,
     },
     /// Exact Taira release-authority role owned by this isolated key.
@@ -378,6 +378,10 @@ impl SoftwareSignerPublicBindingV1 {
     /// # Errors
     ///
     /// Returns `()` for malformed, substituted, test-marked, or non-software bindings.
+    #[expect(
+        clippy::result_unit_err,
+        reason = "the public binding exposes only valid versus invalid and carries no attacker-controlled detail"
+    )]
     pub fn validate(&self) -> Result<(), ()> {
         if self.magic != SIGNER_PUBLIC_BINDING_MAGIC_V1
             || self.version != SIGNER_PROTOCOL_VERSION_V1
@@ -412,6 +416,10 @@ impl SoftwareSignerPublicBindingV1 {
     /// # Errors
     ///
     /// Returns `()` when the binding is invalid or cannot be encoded.
+    #[expect(
+        clippy::result_unit_err,
+        reason = "the canonical digest contract intentionally exposes only success versus invalid binding"
+    )]
     pub fn digest(&self) -> Result<[u8; 32], ()> {
         self.validate()?;
         digest_canonical(PUBLIC_BINDING_DIGEST_DOMAIN_V1, self)
@@ -617,7 +625,7 @@ pub(super) fn public_key_digest(public_key: &PublicKey) -> Result<[u8; 32], ()> 
     let (algorithm, payload) = public_key.try_to_bytes().map_err(|_| ())?;
     Ok(digest_parts(
         PUBLIC_KEY_DIGEST_DOMAIN_V1,
-        &[&[algorithm as u8], payload.as_ref()],
+        &[&[algorithm as u8], payload],
     ))
 }
 pub(super) fn digest_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {

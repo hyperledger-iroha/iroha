@@ -377,9 +377,9 @@ impl norito::json::JsonDeserialize for MetadataEncryption {
 }
 #[cfg(feature = "json")]
 impl<'a> norito::json::FastFromJson<'a> for MetadataEncryption {
-    fn parse<'arena>(
+    fn parse(
         walker: &mut norito::json::TapeWalker<'a>,
-        _arena: &'arena mut norito::json::Arena,
+        _arena: &mut norito::json::Arena,
     ) -> Result<Self, norito::Error> {
         walker.ensure_document_depth()?;
         let mut parser = norito::json::Parser::new_at(walker.input(), walker.raw_pos());

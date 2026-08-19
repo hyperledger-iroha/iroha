@@ -573,10 +573,7 @@ mod tests {
                 let slot = request_by_first_index
                     .get_mut(usize::try_from(expected).ok()?)
                     .expect("sample index is inside fixture population");
-                match slot.replace(changed) {
-                    Some(previous) => Some((previous, candidate)),
-                    None => None,
-                }
+                slot.replace(changed).map(|previous| (previous, candidate))
             })
             .expect("pigeonhole search finds distinct nonces with the same first sample");
         let (_, replayed_items) = sample_items_for(replayed_request);

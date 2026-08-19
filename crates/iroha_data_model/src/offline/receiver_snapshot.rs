@@ -544,7 +544,7 @@ mod tests {
             device_id: device.to_owned(),
             asset_definition_id: AssetDefinitionId::derive_from_components(
                 crate::domain::DomainId::try_new("wonderland", "universal").expect("asset domain"),
-                "sbd".parse().expect("asset name"),
+                "ds".parse().expect("asset name"),
             ),
         }
     }

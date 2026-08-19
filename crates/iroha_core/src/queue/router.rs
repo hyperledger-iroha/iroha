@@ -4,6 +4,8 @@
 //! scheduler expects, based on the runtime configuration. The router abstraction keeps the queue
 //! decoupled from the exact routing policy while allowing metrics to reflect the real assignments
 //! instead of collapsing metrics to the primary lane.
+mod settlement_pair;
+
 use crate::{
     state::{State, StateReadOnly, StateView, WorldReadOnly},
     tx::AcceptedTransaction,
@@ -455,37 +457,6 @@ impl RoutingResolveError {
             Self::StaleRoutingPlan => "stale_routing_plan",
         }
     }
-}
-/// Evaluate the configured routing policy for a transaction, returning the lane and dataspace.
-///
-/// This does not validate the decision against the lane or dataspace catalogs. Use
-/// [`evaluate_policy_with_catalog`] when catalog alignment is required.
-pub fn evaluate_policy(
-    policy: &LaneRoutingPolicy,
-    tx: &dyn TransactionRoutingView,
-) -> RoutingDecision {
-    if let Some(decision) =
-        dataspace_scoped_permission_routing_decision(tx, None, None, None).unwrap_or(None)
-    {
-        return decision;
-    }
-    if let Some(decision) = settlement_routing_decision_without_catalog(tx) {
-        return decision;
-    }
-    if let Some(account_id) = account_permission_holder_routing_target(tx) {
-        return evaluate_query_policy_with_view(policy, account_id, None);
-    }
-    let target_dataspace = transaction_dataspace_routing_target(tx, None, None).unwrap_or(None);
-    let matched_rule = policy
-        .rules
-        .iter()
-        .find(|rule| rule_matches(rule, tx, None));
-    let lane_id = matched_rule.map_or(policy.default_lane, |rule| rule.lane);
-    let dataspace_id = matched_rule
-        .and_then(|rule| rule.dataspace)
-        .or(target_dataspace)
-        .unwrap_or(policy.default_dataspace);
-    RoutingDecision::new(lane_id, dataspace_id)
 }
 /// Evaluate the routing policy and resolve it against the configured catalogs.
 pub fn evaluate_policy_with_catalog(
@@ -1052,16 +1023,6 @@ fn dataspace_scoped_permission_routing_plan_with_world<W: WorldReadOnly>(
         tx,
     )
     .map(Some)
-}
-fn settlement_routing_decision_without_catalog(
-    tx: &dyn TransactionRoutingView,
-) -> Option<RoutingDecision> {
-    if transaction_contains_fx_corridor_settlement(tx) {
-        return Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
-    }
-    let dataspace_id = settlement_transaction_dataspace_target(tx, None, None).ok()??;
-    (dataspace_id == DataSpaceId::UNIVERSAL)
-        .then(|| RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
 }
 fn settlement_routing_decision(
     tx: &dyn TransactionRoutingView,
@@ -2802,10 +2763,18 @@ fn collect_top_level_instruction_native_amx_participants<W: WorldReadOnly>(
         top_level_instruction_index,
     ) && !proposal.concrete_dataspaces.is_empty()
     {
+        let has_collapsed_universal = proposal
+            .concrete_dataspaces
+            .contains(&DataSpaceId::UNIVERSAL);
         for dataspace in &proposal.concrete_dataspaces {
             insert_native_amx_participant(dataspaces, Some(*dataspace));
         }
-        return Ok(());
+        if !has_collapsed_universal {
+            return Ok(());
+        }
+        // A universal target can be the collapsed representation of a composite
+        // instruction. Reinspect the authenticated payload so its concrete legs
+        // cannot disappear from the AMX plan.
     }
     collect_instruction_native_amx_participants(
         instruction,
@@ -2889,27 +2858,6 @@ fn collect_asset_balance_native_amx_participants<I>(
     ) {
         insert_native_amx_participant(dataspaces, Some(target));
     }
-}
-fn collect_settlement_pair_native_amx_participants<W: WorldReadOnly>(
-    dataspaces: &mut std::collections::BTreeSet<DataSpaceId>,
-    first_asset_definition: &AssetDefinitionId,
-    second_asset_definition: &AssetDefinitionId,
-    dataspace_catalog: &DataSpaceCatalog,
-    world: &W,
-    ledger_time_ms: Option<u64>,
-) -> Result<(), RoutingResolveError> {
-    for asset_definition in [first_asset_definition, second_asset_definition] {
-        insert_native_amx_participant(
-            dataspaces,
-            asset_balance_definition_dataspace_target_with_world(
-                asset_definition,
-                Some(dataspace_catalog),
-                world,
-                ledger_time_ms,
-            )?,
-        );
-    }
-    Ok(())
 }
 fn collect_trigger_executable_native_amx_participants<W: WorldReadOnly>(
     executable: &Executable,
@@ -3148,42 +3096,19 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         insert_native_amx_participant(dataspaces, Some(policy.destination_dataspace));
         return Ok(());
     }
-    let settlement_pair = if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
-        Some((
-            dvp.delivery_leg().asset_definition_id(),
-            dvp.payment_leg().asset_definition_id(),
-        ))
-    } else if let Some(pvp) = any.downcast_ref::<PvpIsi>() {
-        Some((
-            pvp.primary_leg().asset_definition_id(),
-            pvp.counter_leg().asset_definition_id(),
-        ))
-    } else {
-        any.downcast_ref::<SettlementInstructionBox>()
-            .and_then(|settlement| match settlement {
-                SettlementInstructionBox::Dvp(dvp) => Some((
-                    dvp.delivery_leg().asset_definition_id(),
-                    dvp.payment_leg().asset_definition_id(),
-                )),
-                SettlementInstructionBox::Pvp(pvp) => Some((
-                    pvp.primary_leg().asset_definition_id(),
-                    pvp.counter_leg().asset_definition_id(),
-                )),
-                SettlementInstructionBox::SetFxCorridorPolicy(_)
-                | SettlementInstructionBox::FundFxCorridorEscrow(_)
-                | SettlementInstructionBox::RefundFxCorridorEscrow(_)
-                | SettlementInstructionBox::SettleFxCorridor(_) => None,
-            })
-    };
-    if let Some((first_asset_definition, second_asset_definition)) = settlement_pair {
-        collect_settlement_pair_native_amx_participants(
-            dataspaces,
-            first_asset_definition,
-            second_asset_definition,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        )?;
+    if let Some(settlement_dataspaces) =
+        settlement_pair::concrete_dataspaces(instruction, |asset_definition| {
+            asset_balance_definition_dataspace_target_with_world(
+                asset_definition,
+                Some(dataspace_catalog),
+                world,
+                ledger_time_ms,
+            )
+        })?
+    {
+        for dataspace in settlement_dataspaces {
+            insert_native_amx_participant(dataspaces, Some(dataspace));
+        }
         return Ok(());
     }
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
@@ -4391,6 +4316,17 @@ fn deferred_instruction_concrete_dataspace_targets_with_stack(
     stack: &mut MultisigProposalRoutingStack,
 ) -> Result<Option<BTreeSet<DataSpaceId>>, RoutingResolveError> {
     let any = instruction.as_any();
+    if let Some(dataspaces) =
+        settlement_pair::concrete_dataspaces(instruction, |asset_definition| {
+            asset_balance_definition_dataspace_target(
+                asset_definition,
+                dataspace_catalog,
+                state_view,
+            )
+        })?
+    {
+        return Ok(Some(dataspaces));
+    }
     if let Some(TransferBox::Asset(transfer)) = any.downcast_ref::<TransferBox>() {
         return Ok(Some(asset_balance_operation_concrete_dataspaces(
             asset_balance_definition_route_target(
@@ -4652,6 +4588,18 @@ fn deferred_instruction_concrete_dataspace_targets_with_world_and_stack<W: World
     stack: &mut MultisigProposalRoutingStack,
 ) -> Result<Option<BTreeSet<DataSpaceId>>, RoutingResolveError> {
     let any = instruction.as_any();
+    if let Some(dataspaces) =
+        settlement_pair::concrete_dataspaces(instruction, |asset_definition| {
+            asset_balance_definition_dataspace_target_with_world(
+                asset_definition,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            )
+        })?
+    {
+        return Ok(Some(dataspaces));
+    }
     if let Some(TransferBox::Asset(transfer)) = any.downcast_ref::<TransferBox>() {
         return Ok(Some(asset_balance_operation_concrete_dataspaces(
             asset_balance_definition_route_target_with_world(
@@ -5606,14 +5554,14 @@ fn instruction_transaction_target_requires_universal_coordinator(
         return Ok(true);
     }
     if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
-        return Ok(fx_corridor_policy_with_state(state_view, &fx.policy_id)
-            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace));
+        return fx_corridor_policy_with_state(state_view, &fx.policy_id)
+            .map(|policy| policy.source_dataspace != policy.destination_dataspace);
     }
     if let Some(SettlementInstructionBox::SettleFxCorridor(fx)) =
         any.downcast_ref::<SettlementInstructionBox>()
     {
-        return Ok(fx_corridor_policy_with_state(state_view, &fx.policy_id)
-            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace));
+        return fx_corridor_policy_with_state(state_view, &fx.policy_id)
+            .map(|policy| policy.source_dataspace != policy.destination_dataspace);
     }
     if let Some(transfer) = any.downcast_ref::<TransferBox>()
         && let TransferBox::Asset(transfer) = transfer
@@ -5742,14 +5690,14 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
         return Ok(true);
     }
     if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
-        return Ok(fx_corridor_policy_with_world(world, &fx.policy_id)
-            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace));
+        return fx_corridor_policy_with_world(world, &fx.policy_id)
+            .map(|policy| policy.source_dataspace != policy.destination_dataspace);
     }
     if let Some(SettlementInstructionBox::SettleFxCorridor(fx)) =
         any.downcast_ref::<SettlementInstructionBox>()
     {
-        return Ok(fx_corridor_policy_with_world(world, &fx.policy_id)
-            .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace));
+        return fx_corridor_policy_with_world(world, &fx.policy_id)
+            .map(|policy| policy.source_dataspace != policy.destination_dataspace);
     }
     if let Some(transfer) = any.downcast_ref::<TransferBox>()
         && let TransferBox::Asset(transfer) = transfer
@@ -7463,7 +7411,7 @@ impl AutoscaleElasticRange {
     fn from_nexus(nexus: &iroha_config::parameters::actual::Nexus) -> Self {
         let min_lanes = nexus.autoscale.min_lanes.get();
         let mut max_lanes = min_lanes;
-        if nexus.enabled && nexus.autoscale.enabled {
+        if nexus.autoscale.enabled {
             let configured_max_lanes = nexus.autoscale.max_lanes.get();
             let default_lane = nexus.routing_policy.default_lane.as_u32();
             let cap = iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES;
@@ -7581,9 +7529,6 @@ pub(crate) fn routable_lane_ids_for_nexus_at_height(
     block_height: u64,
 ) -> BTreeSet<LaneId> {
     let mut lane_ids = BTreeSet::new();
-    if !nexus.enabled {
-        return lane_ids;
-    }
     let policy = &nexus.routing_policy;
     let lane_catalog = &nexus.lane_catalog;
     let dataspace_catalog = &nexus.dataspace_catalog;
@@ -7825,21 +7770,6 @@ fn resolve_policy_routing_decision(
         return resolve_routing_decision(decision, lane_catalog, dataspace_catalog);
     }
     resolve_default_routing_decision(policy, lane_catalog, dataspace_catalog, tx, autoscale_range)
-}
-fn evaluate_query_policy_with_view(
-    policy: &LaneRoutingPolicy,
-    authority: &AccountId,
-    state_view: Option<&StateView<'_>>,
-) -> RoutingDecision {
-    let matched_rule = policy
-        .rules
-        .iter()
-        .find(|rule| query_rule_matches(rule, authority, state_view));
-    let lane_id = matched_rule.map_or(policy.default_lane, |rule| rule.lane);
-    let dataspace_id = matched_rule
-        .and_then(|rule| rule.dataspace)
-        .unwrap_or(policy.default_dataspace);
-    RoutingDecision::new(lane_id, dataspace_id)
 }
 /// Resolve the configured routing policy for a signed query authority.
 ///
@@ -8526,24 +8456,6 @@ pub trait LaneRouter: Send + Sync + 'static {
             .map(|route| RoutingPlan::Single(RouteLeg::new(route, RouteLegRole::Coordinator))))
     }
 }
-/// Trivial router that keeps the single-lane/universal-dataspace behaviour.
-#[derive(Copy, Clone, Debug, Default)]
-pub struct SingleLaneRouter;
-impl SingleLaneRouter {
-    /// Create a router that always selects the default single lane/universal dataspace.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self
-    }
-}
-impl LaneRouter for SingleLaneRouter {
-    fn try_route(
-        &self,
-        _tx: &dyn TransactionRoutingView,
-    ) -> Result<RoutingDecision, RoutingResolveError> {
-        Ok(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
-    }
-}
 /// Router that applies the declarative policy derived from configuration.
 #[derive(Debug, Clone)]
 pub struct ConfigLaneRouter {
@@ -9129,7 +9041,6 @@ mod tests {
     ) -> Nexus {
         let lane_config = iroha_config::parameters::actual::LaneConfig::from_catalog(&lane_catalog);
         Nexus {
-            enabled: true,
             routing_policy,
             lane_catalog,
             lane_config,
@@ -9196,6 +9107,9 @@ mod tests {
             default_dataspace: DataSpaceId::UNIVERSAL,
             rules: Vec::new(),
         }
+    }
+    fn encoded_multisig_proposal_state(proposal: &MultisigProposalState) -> Vec<u8> {
+        norito::to_bytes(proposal).expect("multisig proposal fixture must use canonical storage")
     }
     fn default_router(
         dataspace_catalog: DataSpaceCatalog,
@@ -9313,7 +9227,6 @@ mod tests {
     }
     fn install_router_nexus(state: &crate::state::State, router: &ConfigLaneRouter) {
         let mut nexus = state.nexus.write();
-        nexus.enabled = true;
         nexus.routing_policy = router.policy.as_ref().clone();
         nexus.dataspace_catalog = router.dataspace_catalog.as_ref().clone();
         nexus.lane_catalog = router.lane_catalog.as_ref().clone();
@@ -9941,7 +9854,6 @@ mod tests {
     fn nexus_world_routing_at_block_height_excludes_future_created_elastic_lane() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let mut nexus = iroha_config::parameters::actual::Nexus {
-            enabled: true,
             ..Default::default()
         };
         nexus.autoscale.enabled = true;
@@ -10324,43 +10236,6 @@ mod tests {
         }
     }
     #[test]
-    fn default_route_sharding_fails_closed_when_nexus_disabled() {
-        let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let policy = default_routing_policy();
-        let lane_catalog = lane_catalog_from_configs(vec![
-            default_lane_config(),
-            autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
-        ]);
-        let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
-        let state = blank_state();
-        install_router_nexus(&state, &router);
-        set_nexus_autoscale_range(&state, true, 1, 8);
-        state.nexus.write().enabled = false;
-        for idx in 0..64 {
-            let tx = sample_transaction(
-                &alice_id,
-                alice_keypair.private_key(),
-                vec![role_registration_instruction(
-                    &alice_id,
-                    &format!("nexusdisabledautoscale{idx}"),
-                )],
-            );
-            let with_view = router
-                .try_route_with_view(&tx, &state.view())
-                .expect("default route should resolve when nexus is disabled");
-            assert_eq!(
-                with_view,
-                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
-            );
-            assert_eq!(
-                router
-                    .try_route_plan_with_view(&tx, &state.view())
-                    .expect("default route plan should resolve when nexus is disabled"),
-                RoutingPlan::single(with_view)
-            );
-        }
-    }
-    #[test]
     fn default_route_sharding_fails_closed_when_default_lane_is_inside_autoscale_range() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let policy = LaneRoutingPolicy {
@@ -10558,12 +10433,6 @@ mod tests {
             })
         );
         assert_eq!(
-            router.try_route_with_view(&tx, &state.view()),
-            Err(RoutingResolveError::AutoscaleOwnedDefaultLane {
-                lane_id: LaneId::new(1),
-            })
-        );
-        assert_eq!(
             router.try_route_with_state(&tx, &state),
             Err(RoutingResolveError::AutoscaleOwnedDefaultLane {
                 lane_id: LaneId::new(1),
@@ -10707,12 +10576,6 @@ mod tests {
         );
         assert_eq!(
             router.try_route_plan(&tx),
-            Err(RoutingResolveError::AutoscaleOwnedRuleLane {
-                lane_id: LaneId::new(1),
-            })
-        );
-        assert_eq!(
-            router.try_route_with_view(&tx, &state.view()),
             Err(RoutingResolveError::AutoscaleOwnedRuleLane {
                 lane_id: LaneId::new(1),
             })
@@ -11280,8 +11143,21 @@ mod tests {
                     .try_route_plan_with_state(&tx, &state)
                     .unwrap_or_else(|error| panic!("{label} state plan failed: {error}")),
                 expected,
+                "{label} state-backed plan must retain both settlement legs",
             );
             let view = state.view();
+            assert_eq!(
+                deferred_instruction_concrete_dataspace_targets(
+                    &*instruction,
+                    Some(&dataspace_catalog),
+                    Some(&view),
+                ),
+                Ok(Some(BTreeSet::from([
+                    delivery_dataspace,
+                    payment_dataspace,
+                ]))),
+                "{label} must expose both concrete settlement targets",
+            );
             assert_eq!(
                 evaluate_policy_plan_with_catalog_and_world(
                     &default_routing_policy(),
@@ -11292,6 +11168,7 @@ mod tests {
                 )
                 .unwrap_or_else(|error| panic!("{label} world plan failed: {error}")),
                 expected,
+                "{label} world-backed plan must retain both settlement legs",
             );
             let mut strict_metadata = Metadata::default();
             strict_metadata.insert(
@@ -14892,7 +14769,7 @@ mod tests {
             .smart_contract_state_mut_for_testing()
             .insert(
                 multisig_proposal_state_key(&multisig_id, &proposal_hash),
-                persisted_proposal.encode(),
+                encoded_multisig_proposal_state(&persisted_proposal),
             );
         let persisted_tx = sample_transaction(
             &authority,
@@ -14922,7 +14799,7 @@ mod tests {
             .smart_contract_state_mut_for_testing()
             .insert(
                 multisig_proposal_state_key(&outer_multisig_id, &outer_proposal_hash),
-                outer_proposal.encode(),
+                encoded_multisig_proposal_state(&outer_proposal),
             );
         let nested_approval_tx = sample_transaction(
             &authority,
@@ -14966,7 +14843,7 @@ mod tests {
             .smart_contract_state_mut_for_testing()
             .insert(
                 multisig_proposal_state_key(&payload_multisig_id, &payload_proposal_hash),
-                payload_proposal.encode(),
+                encoded_multisig_proposal_state(&payload_proposal),
             );
         let nested_payload_tx = sample_transaction(
             &authority,
@@ -15001,7 +14878,7 @@ mod tests {
             .smart_contract_state_mut_for_testing()
             .insert(
                 multisig_proposal_state_key(&ordered_outer_id, &ordered_outer_hash),
-                MultisigProposalState::new(
+                encoded_multisig_proposal_state(&MultisigProposalState::new(
                     ordered_outer_id.clone(),
                     ordered_outer_hash,
                     ordered_outer_instructions,
@@ -15009,8 +14886,7 @@ mod tests {
                     10_000,
                     BTreeSet::new(),
                     None,
-                )
-                .encode(),
+                )),
             );
         let ordered_local_tx = sample_transaction(
             &authority,
@@ -15046,7 +14922,7 @@ mod tests {
             .smart_contract_state_mut_for_testing()
             .insert(
                 multisig_proposal_state_key(&reversed_outer_id, &reversed_outer_hash),
-                MultisigProposalState::new(
+                encoded_multisig_proposal_state(&MultisigProposalState::new(
                     reversed_outer_id.clone(),
                     reversed_outer_hash,
                     reversed_outer_instructions,
@@ -15054,8 +14930,7 @@ mod tests {
                     10_000,
                     BTreeSet::new(),
                     None,
-                )
-                .encode(),
+                )),
             );
         let reversed_local_tx = sample_transaction(
             &authority,
@@ -15126,7 +15001,7 @@ mod tests {
         let mut state = blank_state();
         state.world.smart_contract_state_mut_for_testing().insert(
             multisig_proposal_state_key(&multisig_id, &instructions_hash),
-            proposal.encode(),
+            encoded_multisig_proposal_state(&proposal),
         );
         let view = state.view();
         let mut fx_overlay = FxCorridorRoutingOverlay::default();
@@ -15151,7 +15026,7 @@ mod tests {
         let mut state = blank_state();
         state.world.smart_contract_state_mut_for_testing().insert(
             multisig_proposal_state_key(&cyclic_account, &cyclic_hash),
-            cyclic_proposal.encode(),
+            encoded_multisig_proposal_state(&cyclic_proposal),
         );
         let expected = RoutingResolveError::MultisigProposalCycle {
             account: cyclic_account.clone(),
@@ -15223,7 +15098,7 @@ mod tests {
         )]);
         state.world.smart_contract_state_mut_for_testing().insert(
             multisig_proposal_state_key(&leaf_account, &leaf_hash),
-            MultisigProposalState::new(
+            encoded_multisig_proposal_state(&MultisigProposalState::new(
                 leaf_account.clone(),
                 leaf_hash,
                 Vec::new(),
@@ -15231,8 +15106,7 @@ mod tests {
                 10_000,
                 BTreeSet::new(),
                 None,
-            )
-            .encode(),
+            )),
         );
         let (parent_account, _) = gen_account_in("wonderland");
         let repeated_approval = InstructionBox::from(MultisigApprove::new(leaf_account, leaf_hash));
@@ -15240,7 +15114,7 @@ mod tests {
         let parent_hash = HashOf::new(&parent_instructions);
         state.world.smart_contract_state_mut_for_testing().insert(
             multisig_proposal_state_key(&parent_account, &parent_hash),
-            MultisigProposalState::new(
+            encoded_multisig_proposal_state(&MultisigProposalState::new(
                 parent_account.clone(),
                 parent_hash,
                 parent_instructions,
@@ -15248,8 +15122,7 @@ mod tests {
                 10_000,
                 BTreeSet::new(),
                 None,
-            )
-            .encode(),
+            )),
         );
         let parent_approval =
             InstructionBox::from(MultisigApprove::new(parent_account, parent_hash));
@@ -15296,7 +15169,7 @@ mod tests {
                 .unwrap_or_default();
             state.world.smart_contract_state_mut_for_testing().insert(
                 multisig_proposal_state_key(account, instructions_hash),
-                MultisigProposalState::new(
+                encoded_multisig_proposal_state(&MultisigProposalState::new(
                     account.clone(),
                     *instructions_hash,
                     instructions,
@@ -15304,8 +15177,7 @@ mod tests {
                     10_000,
                     BTreeSet::new(),
                     None,
-                )
-                .encode(),
+                )),
             );
         }
         let root_approval =

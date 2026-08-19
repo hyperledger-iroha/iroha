@@ -23,10 +23,9 @@ fn apply_sora_profile_enables_discovery_with_parsed_admission() {
     assert_eq!(admission.envelopes_dir, PathBuf::from("admission"));
 }
 #[test]
-fn apply_sora_profile_enables_nexus_and_sets_catalogs_on_defaults() {
+fn apply_sora_profile_sets_catalogs_on_defaults() {
     let mut root = minimal_root();
     root.apply_sora_profile();
-    assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
     assert_eq!(root.nexus.lane_catalog, sora_lane_catalog());
     assert_eq!(
         root.nexus.configured_lane_catalog, root.nexus.lane_catalog,
@@ -49,7 +48,6 @@ fn apply_sora_profile_enables_nexus_and_sets_catalogs_on_defaults() {
 #[test]
 fn has_lane_overrides_detects_single_lane_changes() {
     let mut root = minimal_root();
-    root.nexus.enabled = false;
     root.nexus.lane_catalog = LaneCatalog::new(
         NonZeroU32::new(1).expect("nonzero lane count"),
         vec![LaneConfigMetadata {
@@ -69,7 +67,7 @@ fn has_lane_overrides_detects_single_lane_changes() {
     );
 }
 #[test]
-fn apply_sora_profile_preserves_custom_catalogs_but_enables_flag() {
+fn apply_sora_profile_preserves_custom_catalogs() {
     let mut root = minimal_root();
     let custom_catalog = LaneCatalog::new(
         NonZeroU32::new(2).expect("non-zero lane count"),
@@ -93,7 +91,6 @@ fn apply_sora_profile_preserves_custom_catalogs_but_enables_flag() {
     root.nexus.configured_lane_catalog = custom_catalog.clone();
     root.nexus.lane_catalog = custom_catalog.clone();
     root.apply_sora_profile();
-    assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
     assert_eq!(
         root.tiered_state
             .da_store_root
@@ -130,7 +127,6 @@ fn apply_sora_profile_preserves_explicit_single_lane_shard_policy() {
 
     root.apply_sora_profile();
 
-    assert!(root.nexus.enabled, "Sora profile must enable Nexus runtime");
     assert_eq!(root.nexus.lane_catalog, custom_catalog);
     assert_eq!(root.nexus.configured_lane_catalog, custom_catalog);
     assert_eq!(
@@ -145,7 +141,6 @@ fn apply_sora_profile_preserves_explicit_single_lane_shard_policy() {
 #[test]
 fn apply_storage_budget_clamps_component_caps() {
     let mut root = minimal_root();
-    root.nexus.enabled = true;
     root.nexus.storage.local_budget_bytes = Some(Bytes(1_000));
     root.nexus.storage.max_wsv_memory_bytes = Bytes(512);
     root.nexus.storage.disk_budget_weights = NexusStorageWeights {
@@ -191,7 +186,6 @@ fn apply_storage_budget_clamps_component_caps() {
 #[test]
 fn apply_derived_storage_budget_uses_filesystem_group_caps() {
     let mut root = minimal_root();
-    root.nexus.enabled = true;
     let filesystem_budgets = vec![
         NexusStorageFilesystemBudget {
             budget_bytes: NonZeroU64::new(800).expect("non-zero budget"),
@@ -247,7 +241,6 @@ fn apply_derived_storage_budget_uses_filesystem_group_caps() {
 #[test]
 fn runtime_storage_budget_reconciliation_is_not_ratchet_bound() {
     let mut root = minimal_root();
-    root.nexus.enabled = true;
     root.nexus.storage.local_budget_bytes = None;
     root.nexus.storage.disk_budget_weights = NexusStorageWeights::default();
     root.kura.max_disk_usage_bytes = Bytes(1_000);
@@ -286,7 +279,6 @@ fn runtime_storage_budget_reconciliation_is_not_ratchet_bound() {
 #[test]
 fn derived_storage_budget_rejects_an_overflowing_internal_aggregate() {
     let mut root = minimal_root();
-    root.nexus.enabled = true;
     let filesystem_budgets = [
         NexusStorageFilesystemBudget {
             budget_bytes: NonZeroU64::new(u64::MAX).expect("non-zero budget"),
@@ -309,7 +301,6 @@ fn derived_storage_budget_rejects_an_overflowing_internal_aggregate() {
 #[test]
 fn derived_storage_budget_rejects_inconsistent_component_metadata_before_mutation() {
     let mut root = minimal_root();
-    root.nexus.enabled = true;
     let empty = NexusStorageFilesystemBudget {
         budget_bytes: NonZeroU64::new(100).expect("non-zero budget"),
         components: Vec::new(),
@@ -369,7 +360,6 @@ fn derived_storage_budget_rejects_inconsistent_component_metadata_before_mutatio
 #[test]
 fn derived_storage_budget_rejects_zero_component_caps() {
     let mut root = minimal_root();
-    root.nexus.enabled = true;
     let budget = NexusStorageFilesystemBudget {
         budget_bytes: NonZeroU64::new(1).expect("non-zero budget"),
         components: vec![

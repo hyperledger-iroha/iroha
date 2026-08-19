@@ -433,140 +433,6 @@ impl Kura {
             FastpqProofWriteResult::Retry
         }
     }
-    /// Write safety-critical per-block roster metadata alongside the block store.
-    ///
-    /// The prune fence excludes canonical truncation while the payload, index,
-    /// and containing directory are fsynced. The return value is true only when
-    /// the strict write completed.
-    pub fn write_roster_metadata(&self, sidecar: &RosterSidecar) -> bool {
-        let _prune_guard = self.prune_lock.lock();
-        if self.prune_recovery_is_required() {
-            warn!(
-                height = sidecar.height,
-                "refusing roster sidecar write until prune recovery completes after restart"
-            );
-            return false;
-        }
-        if let Err(error) = self.durable_mutation_authorized() {
-            warn!(
-                ?error,
-                height = sidecar.height,
-                "refusing roster sidecar mutation while Kura output is unauthorized"
-            );
-            return false;
-        }
-        #[cfg(test)]
-        if self
-            .fail_next_roster_sidecar_writes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .is_ok()
-        {
-            iroha_logger::warn!(
-                height = sidecar.height,
-                "injected roster sidecar write failure"
-            );
-            return false;
-        }
-        let Some(mut dir) = self.store_dir() else {
-            return false;
-        };
-        let _guard = self.sidecar_lock.lock();
-        if self.prune_recovery_is_required() {
-            return false;
-        }
-        dir.push(PIPELINE_DIR_NAME);
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            iroha_logger::warn!(
-                ?e,
-                ?dir,
-                "failed to create pipeline dir for roster sidecars"
-            );
-            return false;
-        }
-        let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
-        let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
-        let before_bytes = match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
-            Ok(bytes) => Some(bytes),
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    ?dir,
-                    "failed to measure roster sidecar bytes before write"
-                );
-                None
-            }
-        };
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let wrote_norito = match sidecar.encode_framed() {
-            Ok(buf) => Self::append_indexed_sidecar_with_pinned_height(
-                &data_path,
-                &index_path,
-                sidecar.height,
-                &buf,
-                "roster sidecar",
-                FsyncMode::Always,
-                Some(self.roster_sidecar_retention),
-                Some(1),
-                None,
-            ),
-            Err(err) => {
-                iroha_logger::warn!(
-                    ?err,
-                    height = sidecar.height,
-                    "failed to encode roster metadata"
-                );
-                false
-            }
-        };
-        if !wrote_norito {
-            iroha_logger::warn!(
-                height = sidecar.height,
-                "failed to persist roster metadata sidecar"
-            );
-        }
-        let mut accounting_complete = before_bytes.is_some();
-        if let Some(before_bytes) = before_bytes {
-            match Self::sidecar_tracked_bytes(&data_path, &index_path, None) {
-                Ok(after_bytes) => self.update_disk_usage_delta(before_bytes, after_bytes),
-                Err(err) => {
-                    accounting_complete = false;
-                    iroha_logger::warn!(
-                        ?err,
-                        ?dir,
-                        "failed to measure roster sidecar bytes after write"
-                    );
-                }
-            }
-        }
-        if accounting_complete {
-            accounting_mutation.finish();
-        }
-        wrote_norito
-    }
-    fn truncate_roster_metadata_above_at(blocks_dir: &Path, height: u64) -> Result<()> {
-        if blocks_dir.as_os_str().is_empty() {
-            return Err(Error::EmptyStoreRoot);
-        }
-        let dir = blocks_dir.join(PIPELINE_DIR_NAME);
-        let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
-        let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
-        if !Self::truncate_indexed_sidecars_to_height(
-            &data_path,
-            &index_path,
-            height,
-            "roster sidecar",
-        ) {
-            return Err(Error::IO(
-                std::io::Error::other(format!(
-                    "failed to truncate roster sidecars to canonical height {height}"
-                )),
-                index_path,
-            ));
-        }
-        Ok(())
-    }
     /// Decode pipeline recovery metadata without assigning it canonical block authority.
     ///
     /// Callers must validate the returned sidecar against either Kura's canonical block hash or
@@ -651,109 +517,34 @@ impl Kura {
         }
         Some(sidecar)
     }
+    fn truncate_pipeline_metadata_above_at(blocks_dir: &Path, height: u64) -> Result<()> {
+        if blocks_dir.as_os_str().is_empty() {
+            return Err(Error::EmptyStoreRoot);
+        }
+        let dir = blocks_dir.join(PIPELINE_DIR_NAME);
+        let data_path = dir.join(PIPELINE_SIDECARS_DATA_FILE);
+        let index_path = dir.join(PIPELINE_SIDECARS_INDEX_FILE);
+        if !Self::truncate_indexed_sidecars_to_height(
+            &data_path,
+            &index_path,
+            height,
+            "pipeline recovery sidecar",
+        ) {
+            return Err(Error::IO(
+                std::io::Error::other(format!(
+                    "failed to truncate pipeline sidecars to canonical height {height}"
+                )),
+                index_path,
+            ));
+        }
+        Ok(())
+    }
     /// Read persisted FASTPQ proof snapshots for a committed block.
     #[must_use]
     pub fn fastpq_proofs_for_block(&self, height: u64) -> Vec<FastpqProofSnapshot> {
         self.read_pipeline_metadata(height)
             .map(|sidecar| sidecar.fastpq_proofs)
             .unwrap_or_default()
-    }
-    /// Read roster metadata sidecar for `height` if present. Returns `None` on errors or missing
-    /// entries. Valid roster metadata is exposed only after reissuing the ordered data, index, and
-    /// parent-directory durability barriers. This prevents readable page-cache state left by a
-    /// failed strict write from being mistaken for durable recovery authority.
-    pub fn read_roster_metadata(&self, height: u64) -> Option<RosterSidecar> {
-        if self.prune_recovery_is_required() {
-            return None;
-        }
-        let sidecar = {
-            let _guard = self.sidecar_lock.lock();
-            if self.prune_recovery_is_required() {
-                return None;
-            }
-            let mut dir = self.store_dir()?;
-            dir.push(PIPELINE_DIR_NAME);
-            let data_path = dir.join(ROSTER_SIDECARS_DATA_FILE);
-            let index_path = dir.join(ROSTER_SIDECARS_INDEX_FILE);
-            let sidecar = Self::read_indexed_sidecar_from_paths(
-                height,
-                &data_path,
-                &index_path,
-                norito::decode_canonical::<RosterSidecar>,
-                "roster sidecar",
-            )?;
-            if sidecar.height != height {
-                iroha_logger::warn!(
-                    height,
-                    sidecar_height = sidecar.height,
-                    "roster sidecar height mismatch"
-                );
-                return None;
-            }
-            let Some(canonical_height) = usize::try_from(height).ok().and_then(NonZeroUsize::new)
-            else {
-                iroha_logger::warn!(height, "roster sidecar has no canonical Kura height");
-                return None;
-            };
-            let Some(expected) = self
-                .get_block_hash(canonical_height)
-                .or_else(|| self.get_durable_block_hash(canonical_height))
-            else {
-                iroha_logger::warn!(
-                    height,
-                    actual = %sidecar.block_hash,
-                    "roster sidecar has no canonical Kura block hash"
-                );
-                return None;
-            };
-            if expected != sidecar.block_hash {
-                iroha_logger::warn!(
-                    height,
-                    expected = %expected,
-                    actual = %sidecar.block_hash,
-                    "roster sidecar block hash mismatch"
-                );
-                return None;
-            }
-            if let Some(cert) = sidecar.commit_qc.as_ref() {
-                let cert_block_hash = cert.subject_block_hash;
-                if cert.height != sidecar.height || cert_block_hash != sidecar.block_hash {
-                    iroha_logger::warn!(
-                        height,
-                        sidecar_height = sidecar.height,
-                        sidecar_hash = %sidecar.block_hash,
-                        cert_height = cert.height,
-                        cert_hash = %cert_block_hash,
-                        "roster sidecar commit certificate metadata mismatch"
-                    );
-                    return None;
-                }
-            }
-            if let Some(checkpoint) = sidecar.validator_checkpoint.as_ref() {
-                if checkpoint.height != sidecar.height
-                    || checkpoint.block_hash != sidecar.block_hash
-                {
-                    iroha_logger::warn!(
-                        height,
-                        sidecar_height = sidecar.height,
-                        sidecar_hash = %sidecar.block_hash,
-                        checkpoint_height = checkpoint.height,
-                        checkpoint_hash = %checkpoint.block_hash,
-                        "roster sidecar checkpoint metadata mismatch"
-                    );
-                    return None;
-                }
-            }
-            if !Self::sync_indexed_sidecar_barriers(&data_path, &index_path, "roster sidecar") {
-                return None;
-            }
-            sidecar
-        };
-        if self.prune_recovery_is_required() {
-            None
-        } else {
-            Some(sidecar)
-        }
     }
     fn bound_progress_index_layout_classified(
         index: &mut std::fs::File,
@@ -4136,6 +3927,7 @@ impl Kura {
             entry_byte_limit,
         )
     }
+    #[cfg(test)]
     #[allow(clippy::too_many_lines)]
     fn read_indexed_sidecar_from_paths<T, F>(
         height: u64,

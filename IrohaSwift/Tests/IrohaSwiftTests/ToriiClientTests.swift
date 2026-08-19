@@ -214,7 +214,6 @@ private func nativeAmxDiagnosticsPayload(
             "da_proof_policies_hash": NSNull(),
             "da_commitments_hash": NSNull(),
             "da_pin_intents_hash": NSNull(),
-            "prev_roster_evidence_hash": NSNull(),
             "sccp_commitment_root": NSNull(),
             "creation_time_ms": 1_700_000_000_000,
             "view_change_index": 9,
@@ -16543,46 +16542,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
                 )
             )
         )
-    }
-
-    @available(iOS 15.0, macOS 12.0, *)
-    func testGetSumeragiCommitQcParsesRecordAsync() async throws {
-        let blockHash = String(repeating: "a", count: 64)
-        let payload = """
-        {
-            "subject_block_hash": "\(blockHash)",
-            "commit_qc": {
-                "phase": "Commit",
-                "parent_state_root": "\(String(repeating: "b", count: 64))",
-                "post_state_root": "\(String(repeating: "c", count: 64))",
-                "height": 12,
-                "view": 3,
-                "epoch": 4,
-                "mode_tag": "iroha2-consensus::permissioned-sumeragi@v2",
-                "validator_set_hash": "\(String(repeating: "d", count: 64))",
-                "validator_set_hash_version": 1,
-                "validator_set": ["sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D"],
-                "signers_bitmap": "0a",
-                "bls_aggregate_signature": "ff"
-            }
-        }
-        """.data(using: .utf8)!
-
-        StubURLProtocol.handler = { request in
-            XCTAssertEqual(request.url?.path, "/v1/sumeragi/commit-qcs/\(blockHash)")
-            XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
-            self.assertOperatorAuthentication(request)
-            let response = HTTPURLResponse(url: request.url!,
-                                           statusCode: 200,
-                                           httpVersion: nil,
-                                           headerFields: ["Content-Type": "application/json"])!
-            return (response, payload)
-        }
-
-        let record = try await makeClient().getSumeragiCommitQc(blockHashHex: "0x\(blockHash)")
-        XCTAssertEqual(record.subjectBlockHash, blockHash)
-        XCTAssertEqual(record.commitQc?.postStateRoot, String(repeating: "c", count: 64))
-        XCTAssertEqual(record.commitQc?.validatorSet.count, 2)
     }
 
     func testPipelineTransactionEventDecodesNumericDataspaceId() throws {

@@ -5206,6 +5206,7 @@ impl HedgingBillingService {
             &mut allow_commit,
         )
     }
+    #[expect(clippy::too_many_arguments, reason = "pre-commit test seam")]
     fn acknowledge_statement_at_fingerprint_with_precommit_fence(
         &self,
         statement_id: [u8; 32],
@@ -5219,8 +5220,7 @@ impl HedgingBillingService {
         if validate_canonical_account_id_bytes(account_id).is_err()
             || statement_id == [0; 32]
             || request_binding_digest == [0; 32]
-            || acknowledged_at_unix == 0
-            || acknowledged_at_unix == u64::MAX
+            || matches!(acknowledged_at_unix, 0 | u64::MAX)
             || authentication_proof.is_empty()
             || authentication_proof.len() > BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1
         {

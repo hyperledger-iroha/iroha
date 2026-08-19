@@ -36,15 +36,31 @@ KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/file_error_support.rs"),
 )
 REVIEWED_RUST_INCLUDE_MANIFESTS = {
+    Path('crates/iroha_core/src/block.rs'): (
+        Path('block/autonomous_merge_carrier_content_tests.rs'),
+        Path('block/exact_quorum_cardinality_tests.rs'),
+        Path('block/autonomous_anchor_network_tests.rs'),
+        Path('block/canonical_genesis_validation_tests.rs'),
+        Path('block/scheduler_variant_tests.rs'),
+        Path('block/native_amx_exact_quorum_cardinality_tests.rs'),
+        Path('block/native_amx_and_dag_tests.rs'),
+        Path('block/sequential_rejected_pipeline_trigger_tests.rs'),
+        Path('block/rejected_live_batch_fee_tests.rs'),
+        Path('block/fee_admission_tests.rs'),
+        Path('block/bootstrap_and_genesis_tests.rs'),
+    ),
     Path('crates/iroha_core/src/commit_roster_journal.rs'): (
         Path('commit_roster_journal/tests.rs'),
     ),
     Path('crates/iroha_config/src/parameters/actual.rs'): (
-        Path('actual/sora_profile_discovery_disabled_test.rs'), Path('actual/sora_profile_runtime_tests.rs'),
         Path('actual/torii_tx_history.rs'),
         Path('actual/torii_http_transport.rs'),
         Path('actual/torii_mcp_profile.rs'),
         Path('actual/tests.rs'),
+    ),
+    Path('crates/iroha_config/src/parameters/actual/tests.rs'): (
+        Path('sora_profile_discovery_disabled_test.rs'),
+        Path('sora_profile_runtime_tests.rs'),
     ),
     Path('crates/iroha_config/src/parameters/user.rs'): (
         Path('user/kura.rs'),
@@ -169,6 +185,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('queue/nexus_reconfigure_manifest_reload_tests.rs'),
         Path('queue/plan_journal_startup_atomicity_tests.rs'),
         Path('queue/global_guard_claim_conflict_tests.rs'),
+        Path('queue/transaction_guard_return_tests.rs'),
         Path('queue/queue_metadata_and_admission_tests.rs'),
         Path('queue/instruction_and_state_routing_tests.rs'),
         Path('queue/routing_batch_admission_tests.rs'),
@@ -210,8 +227,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/sumeragi/evidence.rs'): (
         Path('evidence/missing_signer_pop_test.rs'),
-        Path('evidence/signature_missing_test.rs'),
-        Path('evidence/roundtrip_matrix_test.rs'),
     ),
     Path('crates/iroha_p2p/src/network.rs'): (
         Path('network/handle_update_tests.rs'),
@@ -228,6 +243,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('main/runtime_deps.rs'),
         Path('sumeragi_lane_relay_item.rs'),
         Path('main/online_peers_provider.rs'),
+        Path('main/resolved_genesis_trust_anchor_wrong_hash_test.rs'),
         Path('main_tests/governance_dag_publisher_binding_signer.rs'),
         Path('main/governance_dag_launcher_tests.rs'),
         Path('main/runtime_budget_and_config_tests.rs'),
@@ -278,6 +294,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs'): (
         Path('tests/v2_lifecycle_projection_cases.rs'),
+    ),
+    Path('crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs'): (
+        Path('tests/v2_lifecycle_scheduler_certified_serve_cases.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs'): (
         Path('v2_lifecycle_replay_authority_certified_serve.rs'),
@@ -333,17 +352,15 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_worker_main_00.rs'),
         Path('tests/v2_worker_main_01.rs'),
         Path('tests/v2_worker_lifecycle_capacity_cases.rs'),
-        Path('tests/v2_worker_equivocation_and_selected_serve_fixture.rs'),
+        Path('tests/v2_worker_equivocation_fixture.rs'),
         Path('v2_worker/applied_height_handoff_tests.rs'),
         Path('v2_worker/queue_plan_admission_handoff_tests.rs'),
         Path('v2_worker/upstream_reply_route_test.rs'),
         Path('tests/v2_worker_main_02.rs'),
-        Path('tests/v2_worker_main_03.rs'),
         Path('tests/v2_worker_main_04.rs'),
         Path('tests/v2_worker_main_05.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_runner.rs'): (
-        Path('v2_runner/height_ingress_bindings.rs'),
         Path('v2_runner/lifecycle_terminal_recovery.rs'),
         Path('v2_runner/decided_lane_recovery.rs'),
         Path('v2_runner/outer_ingress_cursor.rs'),
@@ -396,7 +413,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_effects_main_03.rs'),
         Path('tests/v2_effects_main_04.rs'),
         Path('tests/v2_effects_main_05.rs'),
-        Path('tests/v2_effects_lifecycle_predecessor.rs'),
         Path('tests/v2_effects_03_locked_body_and_sidecar.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lane_work.rs'): (
@@ -404,6 +420,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lane_work/queue_plan_admission_handoff.rs'),
         Path('v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs'),
         Path('v2_lane_work/typed_finality_handoff_tests.rs'),
+        Path('v2_lane_work/terminal_retirement_journal_failure_test.rs'),
         Path('tests/v2_lane_work_native_signing_guard.rs'),
         Path('v2_lane_work/native_amx_route_and_receipt_tests.rs'),
         Path('tests/v2_lane_work_observer_role.rs'),
@@ -445,11 +462,6 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_worker_recovered_lifecycle_output_cases.rs'),
         Path('v2_worker_nonzero_view_restart.rs'),
     ),
-    Path('crates/iroha_core/src/sumeragi/tests/v2_worker_main_04.rs'): (
-        Path('v2_worker_serve_unsealed_cases.rs'),
-        Path('v2_worker_serve_decision_restart_cases.rs'),
-        Path('v2_worker_certified_serve_budget_cases.rs'),
-    ),
     Path('crates/iroha_core/src/sumeragi/tests/v2_effects_main_05.rs'): (
         Path('v2_effects_kura_tip_replay.rs'),
         Path('v2_effects_01_view_churn_and_runtime_steps.rs'),
@@ -458,6 +470,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
 }
 
 REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
+    Path("crates/iroha_config/src/parameters/actual.rs"): (
+        Path("crates/iroha_config/src/parameters/actual/tests.rs"),
+    ),
     Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
         Path("crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs"),
     ),
@@ -485,10 +500,10 @@ REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 50
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 6
-assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 6
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 44
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 52
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 7
+assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 7
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 45
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(
     REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
@@ -504,7 +519,6 @@ assert set(REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS).issubset(
 
 def copy_merge_runtime_config_fixture(tmp_path: Path) -> Path:
     """Copy only the config-v6 merge/pending projection and its live consumers."""
-
     for relative in (
         Path("crates/iroha_config/src/parameters/defaults.rs"),
         Path("crates/iroha_config/src/parameters/actual.rs"),
@@ -630,7 +644,6 @@ fn production_startup() {
 
 def merge_runtime_config_errors(repo_root: Path) -> list[str]:
     """Run one mutation check in a fresh process so large Rust tokens are released."""
-
     probe = subprocess.run(
         [
             sys.executable,
@@ -668,13 +681,11 @@ def test_ledger_is_canonical_json() -> None:
     module = load_checker()
     source = module.LEDGER_PATH.read_text(encoding="utf-8")
     parsed = json.loads(source)
-
     assert source == json.dumps(parsed, indent=2, ensure_ascii=False) + "\n"
 
 
 def test_revision4_model_contract_is_registered() -> None:
     module = load_checker()
-
     assert "SumeragiV2Revision4" in module.REQUIRED_MODEL_MODULES
     assert (
         "SumeragiV2Revision4AdversarialSafety"
@@ -717,7 +728,6 @@ def test_revision4_adversarial_model_rejects_first_qc_global_stop(
         1,
     )
     model.write_text(source, encoding="utf-8")
-
     errors = module._revision4_adversarial_safety_contract_errors(formal_dir)
     assert any(
         "FormCommitQC must remain enabled after the first QC or decision"
@@ -740,7 +750,6 @@ def test_revision4_adversarial_model_rejects_byzantine_sign_once_guard(
         1,
     )
     model.write_text(source, encoding="utf-8")
-
     errors = module._revision4_adversarial_safety_contract_errors(formal_dir)
     assert any(
         "must permit the faulty validator to vote for both bodies" in error
@@ -769,7 +778,6 @@ def test_revision4_model_contract_rejects_output_repair_as_progress_fairness(
         1,
     )
     model.write_text(source, encoding="utf-8")
-
     errors = module._revision4_model_contract_errors(formal_dir)
     assert any(
         "finalized-output repair may not be" in error for error in errors
@@ -778,9 +786,7 @@ def test_revision4_model_contract_rejects_output_repair_as_progress_fairness(
 
 def copy_audited_rank_leaf_contract_fixture(tmp_path: Path, module) -> Path:
     """Install the reviewed Stage-4/5 contracts around the current proof source."""
-
     formal_dir = copy_flat_async_architecture_fixture(tmp_path, module)
-
     vocabulary = formal_dir / "SumeragiV2LivenessProofs.tla"
     vocabulary_source = vocabulary.read_text(encoding="utf-8")
     property_block = r'''
@@ -811,7 +817,6 @@ ProtectedStage5RankProgressProperty(specification) ==
             1,
         )
         vocabulary.write_text(vocabulary_source, encoding="utf-8")
-
     proof = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
     proof_source = proof.read_text(encoding="utf-8")
     wrapper_block = r'''
@@ -839,7 +844,6 @@ BY FairProtectedStage5RankDescent
 
 def audited_rank_leaf_contract_errors(module, formal_dir: Path) -> list[str]:
     """Run both source and ledger-target guards for the audited rank leaves."""
-
     proof_source = (
         formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
     ).read_text(encoding="utf-8")
@@ -856,7 +860,6 @@ def audited_rank_leaf_contract_errors(module, formal_dir: Path) -> list[str]:
 def test_audited_rank_leaf_synthetic_contract_is_green(tmp_path: Path) -> None:
     module = load_checker()
     formal_dir = copy_audited_rank_leaf_contract_fixture(tmp_path, module)
-
     assert audited_rank_leaf_contract_errors(module, formal_dir) == []
 
 
@@ -944,7 +947,6 @@ def test_audited_rank_leaf_source_mutations_fail_closed(
     source = path.read_text(encoding="utf-8")
     mutator = mutate_tla_operator if kind == "operator" else mutate_tla_theorem
     path.write_text(mutator(source, symbol, old, new), encoding="utf-8")
-
     errors = audited_rank_leaf_contract_errors(module, formal_dir)
     assert any(
         expected_error in error and symbol in error
@@ -988,9 +990,7 @@ def test_protected_serve_fifo_proof_dependency_mutations_fail_closed(
 ) -> None:
     module = load_checker()
     formal_dir = copy_flat_async_architecture_fixture(tmp_path, module)
-
     assert module._async_proof_architecture_errors(formal_dir) == []
-
     proof = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
     proof.write_text(
         delete_tla_theorem_token(
@@ -1000,7 +1000,6 @@ def test_protected_serve_fifo_proof_dependency_mutations_fail_closed(
         ),
         encoding="utf-8",
     )
-
     errors = module._async_proof_architecture_errors(formal_dir)
     assert any(
         symbol in error

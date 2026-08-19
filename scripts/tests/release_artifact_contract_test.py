@@ -151,11 +151,11 @@ def test_release_manifest_reader_requires_exact_canonical_bytes() -> None:
         "arch": "x86_64",
         "artifacts": [
             {
-                "profile": "iroha2",
+                "profile": "iroha3",
                 "target": "x86_64-unknown-linux-gnu",
                 "kind": "bundle",
                 "format": "tar.zst",
-                "path": "iroha2.tar.zst",
+                "path": "iroha3.tar.zst",
                 "sha256": "b" * 64,
                 "size": 1,
             }

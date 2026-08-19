@@ -4176,7 +4176,7 @@ fn enforce_lane_policies(
     if !runtime_upgrade_present {
         runtime_upgrade_present = contains_runtime_upgrade_instruction(tx);
     }
-    if runtime_upgrade_present && state_transaction.nexus.enabled {
+    if runtime_upgrade_present {
         let module_name = manifest_status
             .as_ref()
             .and_then(|status| status.governance.as_deref());
@@ -5175,7 +5175,6 @@ pub mod tests {
             })
             .collect();
         let mut nexus = state.nexus.write();
-        nexus.enabled = true;
         nexus.autoscale.enabled = false;
         nexus.lane_catalog =
             LaneCatalog::new(lane_count, lanes).expect("same-dataspace lane catalog");
@@ -5200,7 +5199,6 @@ pub mod tests {
         crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
 
         let mut nexus = state.nexus.write();
-        nexus.enabled = true;
         nexus.autoscale.enabled = true;
         nexus.autoscale.min_lanes = nonzero!(1_u32);
         nexus.autoscale.max_lanes = nonzero!(2_u32);
@@ -8521,55 +8519,68 @@ pub mod tests {
     fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
         FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
     }
+    struct IvmAdmissionFixture {
+        state: State,
+        authority_id: AccountId,
+        keypair: KeyPair,
+    }
+    impl IvmAdmissionFixture {
+        fn new() -> Self {
+            let (world, authority_id, keypair) = world_with_authority("wonderland");
+            let state = State::new_with_chain(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+                "chain".parse().expect("chain id"),
+            );
+            Self {
+                state,
+                authority_id,
+                keypair,
+            }
+        }
+        fn validate_program(&self, program: Vec<u8>) -> Result<(), TransactionRejectionReason> {
+            self.validate_program_with(program, None, |_| {})
+        }
+        fn validate_program_with(
+            &self,
+            program: Vec<u8>,
+            metadata: Option<Metadata>,
+            prepare_block: impl FnOnce(&mut StateBlock<'_>),
+        ) -> Result<(), TransactionRejectionReason> {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = self.state.block(header);
+            prepare_block(&mut block);
+            let builder = TransactionBuilder::new(
+                test_network_id(),
+                self.authority_id.clone(),
+                fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+            );
+            let builder = match metadata {
+                Some(metadata) => builder.with_metadata(metadata),
+                None => builder,
+            };
+            let transaction = builder
+                .with_executable(iroha_data_model::transaction::Executable::Ivm(
+                    IvmBytecode::from_compiled(program),
+                ))
+                .sign(self.keypair.private_key());
+            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+            let mut ivm_cache = IvmCache::new();
+            block
+                .validate_transaction(accepted, &mut ivm_cache)
+                .1
+                .map(|_| ())
+        }
+    }
     #[test]
     fn validate_ivm_header_accepts_supported_versions() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
-        use nonzero_ext::nonzero;
-        // World with a single domain and account as authority
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let prog = minimal_ivm_program(1);
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let result = IvmAdmissionFixture::new().validate_program(minimal_ivm_program(1));
         assert!(result.is_ok(), "valid header should pass: {result:?}");
     }
     #[test]
     fn validate_ivm_header_rejects_unknown_abi() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
-        use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let prog = minimal_ivm_program(3); // unsupported abi_version
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let result = IvmAdmissionFixture::new().validate_program(minimal_ivm_program(3));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::UnsupportedAbiVersion(3),
@@ -8579,28 +8590,8 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_header_rejects_abi_zero() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
-        use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
         // abi_version=0 must be rejected in v1-only release
-        let prog = minimal_ivm_program(0);
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let result = IvmAdmissionFixture::new().validate_program(minimal_ivm_program(0));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::UnsupportedAbiVersion(0),
@@ -8610,34 +8601,16 @@ pub mod tests {
     }
     #[test]
     fn validate_generic_ivm_rejects_reserved_manifest_metadata_before_decode() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
-        use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
         let mut metadata = Metadata::default();
         metadata.insert(
             (*CONTRACT_MANIFEST_METADATA_NAME).clone(),
             Json::from("not-a-contract-manifest"),
         );
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id,
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_metadata(metadata)
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+        let result = IvmAdmissionFixture::new().validate_program_with(
             minimal_ivm_program(1),
-        )))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+            Some(metadata),
+            |_| {},
+        );
         assert!(matches!(
             result,
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
@@ -8647,16 +8620,6 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_rejects_stale_authenticated_cntr_abi_hash() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
-        use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
         let (artifact, _) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(
                 "seiyaku StaleAbi { view fn inspect() -> int { return 1; } }",
@@ -8677,16 +8640,7 @@ pub mod tests {
                 .get(parsed.header_len + original_section_len..)
                 .expect("post-CNTR artifact suffix is in bounds"),
         );
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id,
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(stale)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let result = IvmAdmissionFixture::new().validate_program(stale);
         assert!(matches!(
             result,
             Err(TransactionRejectionReason::Validation(
@@ -8704,15 +8658,11 @@ pub mod tests {
             transaction::{Executable, TransactionBuilder},
         };
         use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let fixture = IvmAdmissionFixture::new();
         // Seed block 1 with a correct manifest for the program.
         let header1 =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block1 = state.block(header1);
+        let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
         let prog = minimal_ivm_contract_program();
         let code_hash = ivm::contract_code_hash(&prog);
@@ -8732,7 +8682,7 @@ pub mod tests {
                 error_codes: None,
                 provenance: None,
             }
-            .signed(&kp),
+            .signed(&fixture.keypair),
         );
         tx1.apply();
         let _ = block1.commit();
@@ -8740,7 +8690,7 @@ pub mod tests {
         // though the stored manifest matches.
         let header2 =
             iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let mut block2 = state.block(header2);
+        let mut block2 = fixture.state.block(header2);
         let mut wrong_abi = abi_hash;
         wrong_abi[0] ^= 0x55;
         let manifest = ContractManifest {
@@ -8756,7 +8706,7 @@ pub mod tests {
             error_codes: None,
             provenance: None,
         }
-        .signed(&kp);
+        .signed(&fixture.keypair);
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
@@ -8764,12 +8714,12 @@ pub mod tests {
         );
         let tx = TransactionBuilder::new(
             test_network_id(),
-            authority_id.clone(),
+            fixture.authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
         .with_metadata(md)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
+        .sign(fixture.keypair.private_key());
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
@@ -8789,14 +8739,10 @@ pub mod tests {
     fn validate_ivm_manifest_abi_and_code_hash_match() {
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let fixture = IvmAdmissionFixture::new();
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
+        let mut block = fixture.state.block(header);
         let mut state_tx = block.transaction();
         // Build minimal program with abi_version=1 (current baseline)
         let prog = minimal_ivm_contract_program();
@@ -8818,7 +8764,7 @@ pub mod tests {
             error_codes: None,
             provenance: None,
         }
-        .signed(&kp);
+        .signed(&fixture.keypair);
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
@@ -8826,7 +8772,7 @@ pub mod tests {
         );
         let mut ivm_cache = IvmCache::new();
         let result = StateBlock::validate_ivm(
-            authority_id,
+            fixture.authority_id.clone(),
             &mut state_tx,
             IvmBytecode::from_compiled(prog),
             Some(&md),
@@ -8837,19 +8783,8 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_manifest_rejects_mismatched_hashes() {
-        use iroha_data_model::{
-            smart_contract::manifest::ContractManifest,
-            transaction::{Executable, TransactionBuilder},
-        };
-        use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
+        use iroha_data_model::smart_contract::manifest::ContractManifest;
+        let fixture = IvmAdmissionFixture::new();
         let prog = minimal_ivm_contract_program();
         // Compute real code hash; then corrupt expected
         let code_hash = ivm::contract_code_hash(&prog);
@@ -8869,23 +8804,13 @@ pub mod tests {
             error_codes: None,
             provenance: None,
         }
-        .signed(&kp);
+        .signed(&fixture.keypair);
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
             Json::new(manifest),
         );
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_metadata(md)
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let result = fixture.validate_program_with(prog, Some(md), |_| {});
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::ManifestAbiHashMismatch(..),
@@ -8897,19 +8822,8 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_manifest_rejects_mismatched_code_hash() {
-        use iroha_data_model::{
-            smart_contract::manifest::ContractManifest,
-            transaction::{Executable, TransactionBuilder},
-        };
-        use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
+        use iroha_data_model::smart_contract::manifest::ContractManifest;
+        let fixture = IvmAdmissionFixture::new();
         let prog = minimal_ivm_contract_program();
         let mut wrong_bytes = [0u8; 32];
         wrong_bytes[0] = 0xFF;
@@ -8929,23 +8843,13 @@ pub mod tests {
             error_codes: None,
             provenance: None,
         }
-        .signed(&kp);
+        .signed(&fixture.keypair);
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
             Json::new(manifest),
         );
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_metadata(md)
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let result = fixture.validate_program_with(prog, Some(md), |_| {});
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::ManifestCodeHashMismatch(..),
@@ -8962,15 +8866,11 @@ pub mod tests {
             transaction::{Executable, TransactionBuilder},
         };
         use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let fixture = IvmAdmissionFixture::new();
         // Seed block 1 with a manifest that has the right code_hash but wrong abi_hash.
         let header1 =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block1 = state.block(header1);
+        let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
         let prog = minimal_ivm_contract_program();
         let code_hash = ivm::contract_code_hash(&prog);
@@ -8992,7 +8892,7 @@ pub mod tests {
                 error_codes: None,
                 provenance: None,
             }
-            .signed(&kp),
+            .signed(&fixture.keypair),
         );
         tx1.apply();
         let _ = block1.commit();
@@ -9000,7 +8900,7 @@ pub mod tests {
         // because the stored manifest ABI hash mismatches the computed one.
         let header2 =
             iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let mut block2 = state.block(header2);
+        let mut block2 = fixture.state.block(header2);
         let manifest = ContractManifest {
             seiyaku_name: None,
             code_hash: Some(code_hash),
@@ -9014,7 +8914,7 @@ pub mod tests {
             error_codes: None,
             provenance: None,
         }
-        .signed(&kp);
+        .signed(&fixture.keypair);
         let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
@@ -9022,12 +8922,12 @@ pub mod tests {
         );
         let tx = TransactionBuilder::new(
             test_network_id(),
-            authority_id.clone(),
+            fixture.authority_id.clone(),
             fee_payment_with_gas_limit(TEST_GAS_LIMIT),
         )
         .with_metadata(md)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
+        .sign(fixture.keypair.private_key());
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
@@ -9045,28 +8945,9 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_max_cycles_structured_error() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
-        use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
         // Program with max_cycles above default config bound; expect structured error
-        let prog = minimal_ivm_program_with_max_cycles(1, 9_999_999);
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let result = IvmAdmissionFixture::new()
+            .validate_program(minimal_ivm_program_with_max_cycles(1, 9_999_999));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsUpperBound(..),
@@ -9076,27 +8957,8 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_missing_max_cycles_rejected() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
-        use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let prog = minimal_ivm_program_with_max_cycles(1, 0);
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let result =
+            IvmAdmissionFixture::new().validate_program(minimal_ivm_program_with_max_cycles(1, 0));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::MissingMaxCycles,
@@ -9106,33 +8968,22 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_max_cycles_exceeds_fuel_rejected() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
-        use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let mut fixture = IvmAdmissionFixture::new();
         // Raise pipeline upper bound above fuel limit so the fuel check triggers first.
-        let mut pipeline = state.pipeline.clone();
-        let fuel_limit = state.world.parameters.view().smart_contract().fuel().get();
+        let mut pipeline = fixture.state.pipeline.clone();
+        let fuel_limit = fixture
+            .state
+            .world
+            .parameters
+            .view()
+            .smart_contract()
+            .fuel()
+            .get();
         pipeline.ivm_max_cycles_upper_bound =
             std::num::NonZeroU64::new(fuel_limit + 10).expect("fuel limit plus ten is non-zero");
-        state.set_pipeline(pipeline);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let prog = minimal_ivm_program_with_max_cycles(1, fuel_limit + 1);
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        fixture.state.set_pipeline(pipeline);
+        let result =
+            fixture.validate_program(minimal_ivm_program_with_max_cycles(1, fuel_limit + 1));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsFuel(info),
@@ -9145,32 +8996,14 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_instruction_limit_enforced() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
-        use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let mut pipeline = state.pipeline.clone();
+        let mut fixture = IvmAdmissionFixture::new();
+        let mut pipeline = fixture.state.pipeline.clone();
         pipeline.ivm_max_decoded_instructions = 2;
         pipeline.ivm_max_decoded_bytes =
             iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_BYTES;
-        state.set_pipeline(pipeline);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let prog = minimal_ivm_program_with_instruction_count(1, 1_000, 4);
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        fixture.state.set_pipeline(pipeline);
+        let result =
+            fixture.validate_program(minimal_ivm_program_with_instruction_count(1, 1_000, 4));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::DecodedInstructionCountExceeded(
@@ -9185,31 +9018,13 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_decoded_byte_limit_enforced() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
-        use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let mut pipeline = state.pipeline.clone();
+        let mut fixture = IvmAdmissionFixture::new();
+        let mut pipeline = fixture.state.pipeline.clone();
         pipeline.ivm_max_decoded_instructions = 0;
         pipeline.ivm_max_decoded_bytes = 8; // allow only two 4-byte instructions
-        state.set_pipeline(pipeline);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let prog = minimal_ivm_program_with_instruction_count(1, 1_000, 4);
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        fixture.state.set_pipeline(pipeline);
+        let result =
+            fixture.validate_program(minimal_ivm_program_with_instruction_count(1, 1_000, 4));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::DecodedCodeSizeExceeded(info),
@@ -9224,15 +9039,11 @@ pub mod tests {
     fn validate_ivm_manifest_lookup_in_state() {
         use iroha_data_model::smart_contract::manifest::ContractManifest;
         use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
+        let fixture = IvmAdmissionFixture::new();
         // Seed block 1: insert a manifest into WSV directly via state tx
         let header1 =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block1 = state.block(header1);
+        let mut block1 = fixture.state.block(header1);
         let mut tx1 = block1.transaction();
         // Build a minimal program to compute its code_hash/abi_hash
         let prog = minimal_ivm_contract_program();
@@ -9251,7 +9062,7 @@ pub mod tests {
             error_codes: None,
             provenance: None,
         }
-        .signed(&kp);
+        .signed(&fixture.keypair);
         tx1.world
             .contract_manifests
             .insert(code_hash, manifest.clone());
@@ -9260,11 +9071,11 @@ pub mod tests {
         // Block 2: submit the IVM program; validation should find the manifest in WSV and accept
         let header2 =
             iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let mut block2 = state.block(header2);
+        let mut block2 = fixture.state.block(header2);
         let mut state_tx = block2.transaction();
         let mut ivm_cache = IvmCache::new();
         let result = StateBlock::validate_ivm(
-            authority_id,
+            fixture.authority_id.clone(),
             &mut state_tx,
             IvmBytecode::from_compiled(prog),
             None,
@@ -9275,33 +9086,14 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_unknown_syscall_rejected_at_admission() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
-        use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
         let syscall = (0u8..=u8::MAX)
             .find(|number| {
                 !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, u32::from(*number))
             })
             .expect("ABI v1 should leave at least one u8 syscall number unmapped");
         // Program issues an unmapped SCALL then HALT; admission should reject before the VM runs.
-        let prog = minimal_ivm_program_with_syscall(1, syscall);
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let result = IvmAdmissionFixture::new()
+            .validate_program(minimal_ivm_program_with_syscall(1, syscall));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
                 let expected = format!("unknown syscall number 0x{syscall:02x}");
@@ -9315,32 +9107,13 @@ pub mod tests {
     }
     #[test]
     fn validate_ivm_unknown_scallx_rejected_at_admission() {
-        use iroha_data_model::transaction::{Executable, TransactionBuilder};
-        use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
         let syscall = 0x02_0000;
         assert!(!ivm::syscalls::is_syscall_allowed(
             ivm::SyscallPolicy::AbiV1,
             syscall
         ));
-        let prog = minimal_ivm_program_with_syscallx(1, syscall);
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let result = IvmAdmissionFixture::new()
+            .validate_program(minimal_ivm_program_with_syscallx(1, syscall));
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
                 let expected = format!("unknown syscall number 0x{syscall:02x}");
@@ -10349,43 +10122,29 @@ pub mod tests {
                 custom::{CustomParameter, CustomParameterId},
             },
             prelude::Name,
-            transaction::{Executable, TransactionBuilder},
         };
         use iroha_primitives::json::Json;
-        use nonzero_ext::nonzero;
-        let (world, authority_id, kp) = world_with_authority("wonderland");
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query_handle = crate::query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "chain".parse().unwrap();
-        let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        let mut pipeline = state.pipeline.clone();
+        let mut fixture = IvmAdmissionFixture::new();
+        let mut pipeline = fixture.state.pipeline.clone();
         pipeline.ivm_max_cycles_upper_bound =
             std::num::NonZeroU64::new(1_000).expect("test ceiling is non-zero");
-        state.set_pipeline(pipeline);
-        let header =
-            iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
+        fixture.state.set_pipeline(pipeline);
         // A consensus custom parameter with the retired name must not disable
         // or override the node's configured production admission policy.
         let id = CustomParameterId::new(Name::from_str("max_ivm_cycles_upper_bound").unwrap());
         let custom = CustomParameter::new(id, Json::new(0_u64));
-        block
-            .world
-            .parameters
-            .get_mut()
-            .set_parameter(Parameter::Custom(custom));
         // Build program with max_cycles = 2000
-        let prog = minimal_ivm_program_with_max_cycles(1, 2_000);
-        let tx = TransactionBuilder::new(
-            test_network_id(),
-            authority_id.clone(),
-            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-        )
-        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-        .sign(kp.private_key());
-        let mut ivm_cache = IvmCache::new();
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
+        let result = fixture.validate_program_with(
+            minimal_ivm_program_with_max_cycles(1, 2_000),
+            None,
+            |block| {
+                block
+                    .world
+                    .parameters
+                    .get_mut()
+                    .set_parameter(Parameter::Custom(custom));
+            },
+        );
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(
                 iroha_data_model::executor::IvmAdmissionError::MaxCyclesExceedsUpperBound(info),
@@ -11520,7 +11279,6 @@ pub mod tests {
                 .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
             crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
             let mut nexus = state.nexus.write();
-            nexus.enabled = true;
             nexus.autoscale.enabled = true;
             nexus.autoscale.min_lanes = nonzero!(1_u32);
             nexus.autoscale.max_lanes = nonzero!(8_u32);
@@ -11616,147 +11374,6 @@ pub mod tests {
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         result.expect("live autoscale-routed transaction should bypass blocked base lane");
-    }
-    #[test]
-    fn validate_transaction_without_context_ignores_autoscale_when_nexus_disabled() {
-        use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
-        let chain: ChainId = "tx-disabled-nexus-autoscale-route".parse().unwrap();
-        let (world, authority, keypair) = world_with_authority("wonderland");
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-        {
-            let mut elastic_lane = LaneConfig {
-                id: TestLaneId::new(1),
-                alias: "elastic-lane-1".to_string(),
-                dataspace_id: TestDataSpaceId::UNIVERSAL,
-                visibility: LaneVisibility::Public,
-                ..LaneConfig::default()
-            };
-            elastic_lane
-                .metadata
-                .insert(AUTOSCALE_META_MANAGED.to_string(), "true".to_string());
-            elastic_lane
-                .metadata
-                .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
-            crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
-            let mut nexus = state.nexus.write();
-            nexus.enabled = true;
-            nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = nonzero!(1_u32);
-            nexus.autoscale.max_lanes = nonzero!(8_u32);
-            nexus.lane_catalog =
-                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
-                    .expect("autoscale lane catalog");
-            nexus.lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-        }
-        let mut statuses = BTreeMap::new();
-        statuses.insert(
-            TestLaneId::SINGLE,
-            LaneManifestStatus {
-                lane: TestLaneId::SINGLE,
-                alias: "base-lane".to_string(),
-                dataspace: TestDataSpaceId::UNIVERSAL,
-                visibility: LaneVisibility::Public,
-                storage: LaneStorageProfile::FullReplica,
-                governance: Some("base-governance".to_string()),
-                manifest_path: None,
-                governance_rules: None,
-                privacy_commitments: Vec::new(),
-            },
-        );
-        statuses.insert(
-            TestLaneId::new(1),
-            LaneManifestStatus {
-                lane: TestLaneId::new(1),
-                alias: "elastic-lane-1".to_string(),
-                dataspace: TestDataSpaceId::UNIVERSAL,
-                visibility: LaneVisibility::Public,
-                storage: LaneStorageProfile::FullReplica,
-                governance: None,
-                manifest_path: None,
-                governance_rules: None,
-                privacy_commitments: Vec::new(),
-            },
-        );
-        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        state.install_lane_manifests(&manifests);
-        let mut selected = None;
-        for attempt in 0_u64..256 {
-            let mut metadata = Metadata::default();
-            metadata.insert(
-                Name::from_str("route_attempt").expect("static metadata key"),
-                Json::new(attempt),
-            );
-            let tx = TransactionBuilder::new(
-                test_network_id(),
-                authority.clone(),
-                fee_payment_with_gas_limit(TEST_GAS_LIMIT),
-            )
-            .with_metadata(metadata)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
-                minimal_ivm_program(1),
-            )))
-            .sign(keypair.private_key());
-            let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
-            let (enabled_plan, disabled_plan) = {
-                let mut nexus = state.nexus.write();
-                nexus.enabled = true;
-                drop(nexus);
-                let enabled_plan = {
-                    let view = state.view();
-                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
-                        &view.nexus,
-                        &accepted,
-                        view.world(),
-                        0,
-                        1,
-                    )
-                    .expect("enabled Nexus autoscale route resolves")
-                };
-                let mut nexus = state.nexus.write();
-                nexus.enabled = false;
-                drop(nexus);
-                let disabled_plan = {
-                    let view = state.view();
-                    crate::queue::evaluate_policy_plan_with_nexus_and_world_at_block_height(
-                        &view.nexus,
-                        &accepted,
-                        view.world(),
-                        0,
-                        1,
-                    )
-                    .expect("disabled Nexus default route resolves")
-                };
-                (enabled_plan, disabled_plan)
-            };
-            if enabled_plan.coordinator_route().lane_id == TestLaneId::new(1)
-                && disabled_plan.coordinator_route().lane_id == TestLaneId::SINGLE
-            {
-                selected = Some(tx);
-                break;
-            }
-        }
-        let tx =
-            selected.expect("fixture should find a tx that would route to elastic when enabled");
-        let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-        state.nexus.write().enabled = false;
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut ivm_cache = IvmCache::new();
-        let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-        match result.expect_err("disabled Nexus must keep autoscale traffic on blocked base lane") {
-            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message)) => {
-                assert!(
-                    message.contains("governance")
-                        || message.contains("base-governance")
-                        || message.contains("lane"),
-                    "expected blocked base-lane policy rejection, got {message}"
-                );
-            }
-            other => panic!("expected base-lane NotPermitted rejection, got {other:?}"),
-        }
     }
     fn lane_execution_input_artifact(
         lane_id: TestLaneId,
@@ -11892,7 +11509,6 @@ pub mod tests {
         crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
         {
             let mut nexus = state.nexus.write();
-            nexus.enabled = true;
             nexus.autoscale.enabled = true;
             nexus.autoscale.min_lanes = nonzero!(1_u32);
             nexus.autoscale.max_lanes = nonzero!(8_u32);

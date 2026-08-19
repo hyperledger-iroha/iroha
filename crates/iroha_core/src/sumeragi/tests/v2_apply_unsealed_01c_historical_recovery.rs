@@ -521,11 +521,11 @@ v2_apply_test!(
         };
         assert_eq!(
             lane_work.accept_lane_message(
-                crate::sumeragi::InboundBlockMessage::new(
+                crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
                     crate::sumeragi::message::BlockMessage::LaneBlockCertificate(Box::new(
                         certificate,
                     )),
-                    Some(PeerId::new(validator_keys[0].public_key().clone())),
+                    PeerId::new(validator_keys[0].public_key().clone()),
                 ),
                 0,
             ),

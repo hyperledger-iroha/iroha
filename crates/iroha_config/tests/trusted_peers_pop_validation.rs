@@ -88,7 +88,7 @@ pop_hex = "{base_pop_hex}"
     );
 }
 #[test]
-fn trusted_peers_pop_empty_keeps_bls_trusted_peer_roster() {
+fn trusted_peers_pop_empty_parses_as_no_validator_credentials() {
     let base = base_keypair();
     let inline = format!(
         r#"
@@ -102,7 +102,7 @@ trusted_peers_pop = []
     let user_cfg = build_user_config(&inline);
     let actual = user_cfg
         .parse()
-        .expect("empty PoP map should keep the BLS trusted-peer roster");
+        .expect("empty PoP map is valid configuration with no validator credentials");
     assert!(actual.common.trusted_peers.value().pops.is_empty());
 }
 #[test]

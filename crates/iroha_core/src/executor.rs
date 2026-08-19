@@ -1204,13 +1204,10 @@ fn metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
 }
 fn should_charge_pipeline_gas_asset(
     skip_nexus_fee: bool,
-    nexus_enabled: bool,
     nexus_fees: &NexusFees,
     gas_asset_opt: &Option<String>,
 ) -> bool {
-    !skip_nexus_fee
-        && gas_asset_opt.is_some()
-        && (!nexus_enabled || nexus_fees.per_gas_unit_fee.is_zero())
+    !skip_nexus_fee && gas_asset_opt.is_some() && nexus_fees.per_gas_unit_fee.is_zero()
 }
 fn is_sora_v2_tx_hash_literal(value: &str) -> bool {
     let hex = value.strip_prefix("0x").unwrap_or(value);
@@ -3756,8 +3753,7 @@ fn pipeline_gas_component_enabled(
     nexus: &iroha_config::parameters::actual::Nexus,
     pipeline: &Pipeline,
 ) -> bool {
-    !pipeline.gas.accepted_assets.is_empty()
-        && (!nexus.enabled || nexus.fees.per_gas_unit_fee.is_zero())
+    !pipeline.gas.accepted_assets.is_empty() && nexus.fees.per_gas_unit_fee.is_zero()
 }
 fn resolve_pipeline_gas_quote_asset(
     world: &impl WorldReadOnly,
@@ -3912,34 +3908,31 @@ fn evaluate_nexus_fee_admission_payload(
 ) -> Result<FeeAdmissionQuote, NexusFeeAdmissionError> {
     let (tx_bytes_len, instruction_count, gas_used) = fee_bound_for_admission_payload(payload)?;
     let mut charges = Vec::with_capacity(2);
-    if nexus.enabled {
-        let fee = compute_nexus_fee_amount(&nexus.fees, tx_bytes_len, instruction_count, gas_used)
-            .map_err(validation_fail_to_nexus_fee_admission_error)?;
-        if !fee.is_zero()
-            && nexus.fees.settlement_mode
-                == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
-            && payload.fee_payment.sponsor_program().is_none()
-        {
-            reject_authority_lane_relay_burn_fee(&payload.authority)?;
-        }
-        let asset_definition_id = crate::block::parse_asset_definition_literal_with_world(
-            world,
-            &nexus.fees.fee_asset_id,
-            observation_time_ms,
+    let fee = compute_nexus_fee_amount(&nexus.fees, tx_bytes_len, instruction_count, gas_used)
+        .map_err(validation_fail_to_nexus_fee_admission_error)?;
+    if !fee.is_zero()
+        && nexus.fees.settlement_mode
+            == iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
+        && payload.fee_payment.sponsor_program().is_none()
+    {
+        reject_authority_lane_relay_burn_fee(&payload.authority)?;
+    }
+    let asset_definition_id = crate::block::parse_asset_definition_literal_with_world(
+        world,
+        &nexus.fees.fee_asset_id,
+        observation_time_ms,
+    )
+    .ok_or_else(|| {
+        NexusFeeAdmissionError::ConfigInvalid(
+            "invalid Nexus fee asset; expected a registered canonical asset definition".to_owned(),
         )
-        .ok_or_else(|| {
-            NexusFeeAdmissionError::ConfigInvalid(
-                "invalid Nexus fee asset; expected a registered canonical asset definition"
-                    .to_owned(),
-            )
-        })?;
-        if !fee.is_zero() {
-            charges.push(FeeChargeBound {
-                kind: FeeChargeKind::Nexus,
-                asset_definition_id,
-                max_bound: fee,
-            });
-        }
+    })?;
+    if !fee.is_zero() {
+        charges.push(FeeChargeBound {
+            kind: FeeChargeKind::Nexus,
+            asset_definition_id,
+            max_bound: fee,
+        });
     }
     if pipeline_gas_component_enabled(nexus, pipeline) && gas_used > 0 {
         let (asset_definition_id, _definition, units_per_gas) =
@@ -4254,20 +4247,16 @@ pub(crate) fn validate_transaction_fee_admission(
         return Ok(());
     }
     Executor::refresh_gas_from_parameters(state_transaction)?;
-    if state_transaction.nexus.enabled
-        || pipeline_gas_component_enabled(&state_transaction.nexus, &state_transaction.pipeline)
-    {
-        quote_nexus_fee_admission(
-            &state_transaction.world,
-            &state_transaction.nexus,
-            &state_transaction.pipeline,
-            transaction,
-            state_transaction.block_unix_timestamp_ms(),
-            state_transaction.block_height(),
-            state_transaction.current_dataspace_id,
-        )
-        .map_err(nexus_fee_admission_error_to_validation_fail)?;
-    }
+    quote_nexus_fee_admission(
+        &state_transaction.world,
+        &state_transaction.nexus,
+        &state_transaction.pipeline,
+        transaction,
+        state_transaction.block_unix_timestamp_ms(),
+        state_transaction.block_height(),
+        state_transaction.current_dataspace_id,
+    )
+    .map_err(nexus_fee_admission_error_to_validation_fail)?;
     Ok(())
 }
 /// Charge gas and Nexus fees for a transaction that was applied via overlay execution paths.
@@ -4423,7 +4412,6 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
     };
     if should_charge_pipeline_gas_asset(
         skip_nexus_fee,
-        state_transaction.nexus.enabled,
         &state_transaction.nexus.fees,
         &gas_asset_opt,
     ) && let Some(gas_asset_id_str) = gas_asset_opt
@@ -5032,9 +5020,6 @@ impl Executor {
         instruction_count: usize,
         gas_used: u64,
     ) -> Result<(), ValidationFail> {
-        if !state_transaction.nexus.enabled {
-            return Ok(());
-        }
         let cfg = state_transaction.nexus.fees.clone();
         let fee = compute_nexus_fee_amount(&cfg, tx_bytes_len, instruction_count, gas_used)?;
         if fee.is_zero() {
@@ -5627,7 +5612,6 @@ impl Executor {
         // 5) Charge gas fees when configured and the transaction specified a gas asset.
         if should_charge_pipeline_gas_asset(
             skip_nexus_fee,
-            state_transaction.nexus.enabled,
             &state_transaction.nexus.fees,
             &gas_asset_opt,
         ) && let Some(gas_asset_id_str) = gas_asset_opt
@@ -5951,7 +5935,6 @@ impl Executor {
         Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
         if should_charge_pipeline_gas_asset(
             skip_nexus_fee,
-            state_transaction.nexus.enabled,
             &state_transaction.nexus.fees,
             &gas_asset_opt,
         ) && let Some(gas_asset_id_str) = gas_asset_opt
@@ -6027,13 +6010,7 @@ impl Executor {
             );
         // Quote against the exact governed gas snapshot execution will charge.
         Self::refresh_gas_from_parameters(state_transaction)?;
-        if !skip_nexus_fee
-            && (state_transaction.nexus.enabled
-                || pipeline_gas_component_enabled(
-                    &state_transaction.nexus,
-                    &state_transaction.pipeline,
-                ))
-        {
+        if !skip_nexus_fee {
             quote_nexus_fee_admission(
                 &state_transaction.world,
                 &state_transaction.nexus,
@@ -6713,7 +6690,6 @@ impl Executor {
                         Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
                         if should_charge_pipeline_gas_asset(
                             skip_nexus_fee,
-                            state_transaction.nexus.enabled,
                             &state_transaction.nexus.fees,
                             &gas_asset_opt,
                         ) && let Some(gas_asset_id_str) = gas_asset_opt
@@ -6892,7 +6868,6 @@ impl Executor {
                 // Charge gas fees: if a gas asset was provided and accepted by policy.
                 if should_charge_pipeline_gas_asset(
                     skip_nexus_fee,
-                    state_transaction.nexus.enabled,
                     &state_transaction.nexus.fees,
                     &gas_asset_opt,
                 ) && let Some(gas_asset_id_str) = gas_asset_opt
@@ -10958,6 +10933,25 @@ mod tests {
             seed,
         )))
     }
+    fn state_for_testing(world: World) -> State {
+        State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        )
+    }
+    fn state_after_genesis(world: World) -> State {
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        state
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .commit()
+            .expect("commit bootstrap block");
+        state
+    }
     fn seed_test_asset_supply(world: &mut World, asset_definition_id: &AssetDefinitionId) {
         let total = world
             .assets
@@ -11618,11 +11612,7 @@ mod tests {
                 Json::from(norito::json!({ "unexpected": true })),
             )]),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let proposal_id = [0xA6; 32];
@@ -11693,11 +11683,7 @@ mod tests {
             ],
             [],
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let custom_id: CustomParameterId = "attacker_parameter".parse().expect("parameter id");
@@ -11871,11 +11857,7 @@ mod tests {
                 restitute_permission.clone(),
             ]),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         Register::trigger(Trigger::new(
@@ -12416,11 +12398,7 @@ mod tests {
             authority.clone(),
             invalid_permissions.iter().cloned().collect(),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let role_id: RoleId = "governance_selector_sink".parse().expect("role id");
@@ -12494,11 +12472,7 @@ mod tests {
         world
             .account_permissions
             .insert(issuer.clone(), BTreeSet::from([issuer_permission.clone()]));
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         assert!(
@@ -12599,11 +12573,7 @@ mod tests {
             asset_owner.clone(),
             BTreeSet::from([account_alias_permission]),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(
             nonzero!(2_u64),
             None,
@@ -12800,11 +12770,7 @@ mod tests {
             administrator.clone(),
             BTreeSet::from([ordinary_permission.clone(), offline_permission.clone()]),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let ordinary_role: RoleId = "initial_executor_ordinary_role".parse().expect("role id");
@@ -12907,11 +12873,7 @@ mod tests {
             holder.clone(),
             BTreeSet::from([exact.clone(), can_manage_roles]),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let reader_role: RoleId = "restricted_reader_role".parse().expect("role id");
@@ -13120,11 +13082,7 @@ mod tests {
             ],
             [],
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         state_transaction.tx_call_hash = Some(Hash::prehashed([0xD8; Hash::LENGTH]));
@@ -13375,11 +13333,7 @@ mod tests {
         world
             .contract_instances
             .insert(contract_address.clone(), code_hash);
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let tx = TransactionBuilder::new(
             state.network_id,
             authority.clone(),
@@ -13691,11 +13645,7 @@ mod tests {
             authority.clone(),
             BTreeSet::from([executor_permission::parameter::CanSetParameters.into()]),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         (
             state,
             authority_keypair,
@@ -13850,11 +13800,7 @@ mod tests {
                 ),
             );
         }
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let transaction = TransactionBuilder::new(
             state.network_id,
             beneficiary.clone(),
@@ -13891,7 +13837,6 @@ mod tests {
     ) {
         state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         state_transaction.tx_call_hash = Some(Hash::new(b"sponsored-pipeline-fee-call"));
-        state_transaction.nexus.enabled = true;
         state_transaction.nexus.fees.per_gas_unit_fee = Quantity::zero();
         state_transaction
             .nexus
@@ -13904,7 +13849,6 @@ mod tests {
         state_transaction: &mut StateTransaction<'_, '_>,
         fee_asset: &AssetDefinitionId,
     ) {
-        state_transaction.nexus.enabled = true;
         state_transaction.nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
         state_transaction.nexus.fees.fee_asset_id = fee_asset.canonical_address();
@@ -14789,35 +14733,21 @@ mod tests {
         nexus_fees.per_gas_unit_fee = Quantity::zero();
         assert!(should_charge_pipeline_gas_asset(
             false,
-            true,
             &nexus_fees,
             &gas_asset
         ));
         nexus_fees.per_gas_unit_fee = "0.001".parse().expect("valid gas fee");
         assert!(!should_charge_pipeline_gas_asset(
             false,
-            true,
-            &nexus_fees,
-            &gas_asset
-        ));
-        assert!(should_charge_pipeline_gas_asset(
-            false,
-            false,
             &nexus_fees,
             &gas_asset
         ));
         assert!(!should_charge_pipeline_gas_asset(
             true,
-            true,
             &nexus_fees,
             &gas_asset
         ));
-        assert!(!should_charge_pipeline_gas_asset(
-            false,
-            false,
-            &nexus_fees,
-            &None
-        ));
+        assert!(!should_charge_pipeline_gas_asset(false, &nexus_fees, &None));
     }
     fn multi_component_fee_quote_fixture() -> (
         World,
@@ -14873,7 +14803,6 @@ mod tests {
         seed_test_asset_supply(&mut world, &nexus_asset);
         seed_test_asset_supply(&mut world, &gas_asset);
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(2_u32);
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();
@@ -15119,11 +15048,7 @@ mod tests {
             [],
         );
         seed_test_asset_supply(&mut world, &fee_asset);
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let transaction = TransactionBuilder::new(
             state.network_id,
             authority.clone(),
@@ -15134,7 +15059,6 @@ mod tests {
         let tx_hash = transaction.hash();
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_tx = block.transaction();
-        state_tx.nexus.enabled = true;
         state_tx.nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
         state_tx.nexus.fees.fee_asset_id = fee_asset.canonical_address();
@@ -15200,11 +15124,7 @@ mod tests {
             [],
         );
         seed_test_asset_supply(&mut world, &fee_asset);
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let transaction = TransactionBuilder::new(
             state.network_id,
             authority.clone(),
@@ -15222,7 +15142,6 @@ mod tests {
         let tx_hash = transaction.hash();
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
-        state_transaction.nexus.enabled = true;
         state_transaction.nexus.fees.fee_asset_id = fee_asset.canonical_address();
         state_transaction.nexus.fees.base_fee = Quantity::from(2_u32);
         state_transaction.nexus.fees.per_byte_fee = Quantity::zero();
@@ -15666,11 +15585,7 @@ mod tests {
                 lease_id,
             ),
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -16551,15 +16466,7 @@ mod tests {
             [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
             [],
         );
-        let state = State::new(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
-        state
-            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let registration = Register::asset_definition(AssetDefinition::numeric(
             projected_id,
             "coin".to_owned(),
@@ -16610,15 +16517,7 @@ mod tests {
             )
             .build(&owner)],
         );
-        let state = State::new(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
-        state
-            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut stx = block.transaction();
         let executor = super::Executor::Initial;
@@ -16785,14 +16684,7 @@ mod tests {
             [alice_account, user1_account, user2_account],
             [],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -16865,14 +16757,7 @@ mod tests {
             [source_balance],
             [],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let instruction = InstructionBox::from(Transfer::asset_quantity(
@@ -16974,11 +16859,7 @@ mod tests {
                 .expect("active alias-domain ownership check"),
             "fixture must prove that the attacker owns an active alias domain for the source"
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 50, 0));
         let mut transaction = block.transaction();
         let transfer = Transfer::asset_quantity(source_asset_id, 1_u32, destination.clone());
@@ -17024,14 +16905,7 @@ mod tests {
             [alice_account, user1_account, user2_account],
             [],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -17128,11 +17002,7 @@ mod tests {
                     .account_permissions
                     .insert(authority.clone(), BTreeSet::from([permission]));
             }
-            let state = State::new_for_testing(
-                world,
-                Kura::blank_kura_for_testing(),
-                query::store::LiveQueryStore::start_test(),
-            );
+            let state = state_for_testing(world);
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
             let mut transaction = block.transaction();
             transaction.tx_call_hash = Some(Hash::new(case.as_bytes()));
@@ -17196,11 +17066,7 @@ mod tests {
         world
             .contract_subject_addresses
             .insert(contract_subject.clone(), contract_address.clone());
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
+        let state = state_for_testing(world);
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut transaction = block.transaction();
         transaction.tx_call_hash = Some(Hash::new(b"contract-transfer-test"));
@@ -17320,14 +17186,7 @@ mod tests {
             [source_balance],
             [],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -17405,14 +17264,7 @@ mod tests {
             [source_balance],
             [],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -17462,14 +17314,7 @@ mod tests {
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let beneficiary_account = Account::new(beneficiary.clone()).build(&beneficiary);
         let world = World::with([domain], [alice_account, beneficiary_account], []);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(
@@ -17534,15 +17379,7 @@ mod tests {
                 ],
                 [],
             );
-            let state = State::new(
-                world,
-                Kura::blank_kura_for_testing(),
-                query::store::LiveQueryStore::start_test(),
-            );
-            state
-                .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
-                .commit()
-                .expect("commit bootstrap block");
+            let state = state_after_genesis(world);
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
             let contract_address = ContractAddress::derive(
                 &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -17638,15 +17475,7 @@ mod tests {
                 )
                 .build(&owner)],
             );
-            let state = State::new(
-                world,
-                Kura::blank_kura_for_testing(),
-                query::store::LiveQueryStore::start_test(),
-            );
-            state
-                .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
-                .commit()
-                .expect("commit bootstrap block");
+            let state = state_after_genesis(world);
             let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
             let instruction = match instruction_kind {
                 "availability" => InstructionBox::from(SetAssetTransferAvailability::new(
@@ -17778,14 +17607,7 @@ mod tests {
             [alice_account, user1_account, user2_account],
             [asset_definition],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -17847,14 +17669,7 @@ mod tests {
             [alice_account, user1_account, user2_account],
             [asset_definition],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let instruction = InstructionBox::from(Transfer::asset_definition(
@@ -17905,14 +17720,7 @@ mod tests {
             [],
             [nft],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let executor = super::Executor::Initial;
@@ -17961,14 +17769,7 @@ mod tests {
             [],
             [nft],
         );
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let state = State::new(world, kura, query_handle);
-        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-        state
-            .block(genesis_header)
-            .commit()
-            .expect("commit bootstrap block");
+        let state = state_after_genesis(world);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let instruction =

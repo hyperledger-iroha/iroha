@@ -541,7 +541,6 @@ def test_operator_signature_headers_accept_raw_private_key_inputs() -> None:
 def lifecycle_status() -> dict[str, object]:
     return {
         "version": 1,
-        "nexus_enabled": True,
         "lane_count": 1,
         "lanes": [lane_config()],
         "catalog_hash": canonical_hash(0xA1),
@@ -560,6 +559,19 @@ def test_nexus_lane_lifecycle_status_fetches_exact_json_snapshot() -> None:
     assert session.calls[0]["method"] == "GET"
     assert session.calls[0]["path"] == "/v1/nexus/lifecycle"
     assert session.calls[0]["headers"]["Accept"] == "application/json"
+
+
+def test_nexus_lane_lifecycle_status_rejects_removed_enablement_field() -> None:
+    status = lifecycle_status()
+    status["nexus_enabled"] = True
+    client = ToriiClient(
+        "http://torii.example",
+        session=FakeSession([response(200, status)]),
+        max_retries=0,
+    )
+
+    with pytest.raises(ValueError, match="unknown field `nexus_enabled`"):
+        client.nexus_lane_lifecycle_status()
 
 
 def test_nexus_lane_lifecycle_submits_native_signed_set_parameter(monkeypatch: pytest.MonkeyPatch) -> None:

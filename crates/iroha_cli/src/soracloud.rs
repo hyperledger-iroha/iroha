@@ -16011,7 +16011,7 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
             assert_eq!(output_name, name, "manifest function order");
             assert_eq!(output.len(), expected_len, "{name} byte length");
             assert_eq!(
-                hex::encode(Sha256::digest(output.as_bytes())),
+                hex::encode(<sha2::Sha256 as sha2::Digest>::digest(output.as_bytes())),
                 expected_digest,
                 "{name} digest"
             );
@@ -22025,14 +22025,8 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     fn app_init_split_app_existing_repo_template_omits_starter_sources() {
         let dir = temp_dir("split_app_existing_repo_template");
         let output = AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
             existing_repo: true,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
+            ..app_scaffold_args(dir.clone(), "travel_ops", AppInitTemplate::SplitApp)
         }
         .run()
         .expect("split-app existing-repo init should succeed");
@@ -22096,14 +22090,8 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     fn app_init_existing_repo_rejects_non_split_templates() {
         let dir = temp_dir("single_api_existing_repo_template");
         let err = AppInitArgs {
-            output_dir: dir,
-            app_name: "travel_ops".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SingleApi,
             existing_repo: true,
-            public_host: None,
-            static_site_dist_dir: None,
-            overwrite: false,
+            ..app_scaffold_args(dir, "travel_ops", AppInitTemplate::SingleApi)
         }
         .run()
         .expect_err("existing-repo should be rejected for single-api");
@@ -22116,14 +22104,9 @@ hayahi_app_readme 2257 2962d478060125f56ace0327c1b4b2c69d48b479f4cbce94f6e8f4532
     fn app_init_split_app_template_accepts_public_host_and_dist_dir_overrides() {
         let dir = temp_dir("split_app_template_overrides");
         let output = AppInitArgs {
-            output_dir: dir.clone(),
-            app_name: "hayahi".to_owned(),
-            app_version: "1.0.0".to_owned(),
-            template: AppInitTemplate::SplitApp,
-            existing_repo: false,
             public_host: Some("taira.sora.org".to_owned()),
             static_site_dist_dir: Some("../../apps/web/dist".to_owned()),
-            overwrite: false,
+            ..app_scaffold_args(dir.clone(), "hayahi", AppInitTemplate::SplitApp)
         }
         .run()
         .expect("split-app init with overrides should succeed");

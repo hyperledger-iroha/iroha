@@ -1,9 +1,6 @@
 use crate::{
     Outcome, RunArgs,
-    genesis::{
-        ConsensusPolicy, build_line_from_env, ensure_npos_parameters,
-        validate_consensus_mode_for_line,
-    },
+    genesis::{ConsensusPolicy, ensure_npos_parameters, validate_consensus_mode},
     tui,
 };
 use clap::Args as ClapArgs;
@@ -32,10 +29,9 @@ use iroha_genesis::{
     ValidatedGenesisBundle,
 };
 use iroha_swarm::{
-    PeerOverride, PreparedBuildLine, PreparedGenesisArtifacts, PreparedRuntimeFile,
-    PreparedSecretFile, PreparedValidator,
+    PeerOverride, PreparedGenesisArtifacts, PreparedRuntimeFile, PreparedSecretFile,
+    PreparedValidator,
 };
-use iroha_version::BuildLine;
 use std::{
     collections::BTreeSet,
     fs,
@@ -491,6 +487,10 @@ fn rewrite_container_network(
     );
     Ok(())
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "network projection admission keeps every topology and trust-boundary rejection in one ordered audit surface"
+)]
 fn validate_prepared_network_projection(
     config: &actual::Root,
     path: &Path,
@@ -701,6 +701,52 @@ fn read_runtime_file_bounded(
     );
     Ok(raw)
 }
+fn collect_runtime_projection_entries(
+    root: &Path,
+    directory: &Path,
+    relative_prefix: &str,
+    files: &mut BTreeSet<String>,
+    directories: &mut BTreeSet<String>,
+) -> color_eyre::Result<()> {
+    let entries = fs::read_dir(directory)
+        .wrap_err_with(|| format!("verify prepared runtime projection {}", root.display()))?;
+    for entry in entries {
+        let entry = entry.wrap_err("enumerate prepared runtime projection")?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| eyre!("prepared runtime projection filename is not UTF-8"))?;
+        let relative = if relative_prefix.is_empty() {
+            name
+        } else {
+            format!("{relative_prefix}/{name}")
+        };
+        let file_type = entry
+            .file_type()
+            .wrap_err("inspect prepared runtime projection entry")?;
+        ensure!(
+            !file_type.is_symlink(),
+            "prepared runtime projection {} contains a symbolic link",
+            entry.path().display()
+        );
+        if file_type.is_dir() {
+            directories.insert(relative.clone());
+            collect_runtime_projection_entries(root, &entry.path(), &relative, files, directories)?;
+        } else {
+            ensure!(
+                file_type.is_file(),
+                "prepared runtime projection {} contains a special file",
+                entry.path().display()
+            );
+            files.insert(relative);
+        }
+    }
+    Ok(())
+}
+#[expect(
+    clippy::too_many_lines,
+    reason = "directory capture keeps bounded traversal, content addressing, materialization, and exact inventory verification together"
+)]
 fn collect_runtime_directory(
     source: &Path,
     projection_root: &Path,
@@ -712,6 +758,10 @@ fn collect_runtime_directory(
     const MAX_ENTRIES: usize = 256;
     const MAX_DEPTH: usize = 8;
     const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024;
+    #[expect(
+        clippy::too_many_lines,
+        reason = "recursive capture applies every depth, custody, entry-count, byte-count, and identity check before returning"
+    )]
     fn collect_entries(
         directory: &Path,
         relative_prefix: &str,
@@ -954,51 +1004,9 @@ fn collect_runtime_directory(
             content,
         });
     }
-    fn collect_projection_entries(
-        root: &Path,
-        directory: &Path,
-        relative_prefix: &str,
-        files: &mut BTreeSet<String>,
-        directories: &mut BTreeSet<String>,
-    ) -> color_eyre::Result<()> {
-        let entries = fs::read_dir(directory)
-            .wrap_err_with(|| format!("verify prepared runtime projection {}", root.display()))?;
-        for entry in entries {
-            let entry = entry.wrap_err("enumerate prepared runtime projection")?;
-            let name = entry
-                .file_name()
-                .into_string()
-                .map_err(|_| eyre!("prepared runtime projection filename is not UTF-8"))?;
-            let relative = if relative_prefix.is_empty() {
-                name
-            } else {
-                format!("{relative_prefix}/{name}")
-            };
-            let file_type = entry
-                .file_type()
-                .wrap_err("inspect prepared runtime projection entry")?;
-            ensure!(
-                !file_type.is_symlink(),
-                "prepared runtime projection {} contains a symbolic link",
-                entry.path().display()
-            );
-            if file_type.is_dir() {
-                directories.insert(relative.clone());
-                collect_projection_entries(root, &entry.path(), &relative, files, directories)?;
-            } else {
-                ensure!(
-                    file_type.is_file(),
-                    "prepared runtime projection {} contains a special file",
-                    entry.path().display()
-                );
-                files.insert(relative);
-            }
-        }
-        Ok(())
-    }
     let mut projected_files = BTreeSet::new();
     let mut projected_directories = BTreeSet::new();
-    collect_projection_entries(
+    collect_runtime_projection_entries(
         &validation_dir,
         &validation_dir,
         "",
@@ -1092,6 +1100,10 @@ fn validate_runtime_projection_policy(
     );
     Ok(())
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "directory admission and hardening deliberately retain their descriptor and path identity checks in one sequence"
+)]
 fn ensure_container_projection_directory(directory: &Path) -> color_eyre::Result<()> {
     match fs::symlink_metadata(directory) {
         Ok(metadata) => ensure!(
@@ -1201,6 +1213,10 @@ fn ensure_container_projection_directory(directory: &Path) -> color_eyre::Result
     }
     Ok(())
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "content-addressed materialization keeps no-follow opening, byte verification, hardening, and path revalidation together"
+)]
 fn materialize_read_only_file_at(
     projection_dir: &Path,
     name: &str,
@@ -1510,6 +1526,10 @@ fn ensure_fresh_state_file(path: &Path, label: &str, config_path: &Path) -> colo
     }
     Ok(())
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "fresh-state admission enumerates every persisted subsystem path in one reviewable policy"
+)]
 fn ensure_fresh_prepared_state(
     config: &actual::Root,
     config_path: &Path,
@@ -1646,6 +1666,18 @@ fn ensure_fresh_prepared_state(
     }
     Ok(())
 }
+type PreparedRuntimeProjection = (
+    PathBuf,
+    [u8; 32],
+    Vec<PreparedRuntimeFile>,
+    Vec<PreparedSecretFile>,
+    bool,
+    actual::Root,
+);
+#[expect(
+    clippy::too_many_lines,
+    reason = "runtime projection is one ordered security transformation from admitted host config to byte-exact container inputs"
+)]
 fn project_prepared_runtime_config(
     config_dir: &Path,
     projection_root: &Path,
@@ -1654,14 +1686,7 @@ fn project_prepared_runtime_config(
     source: &actual::Root,
     metadata: &ConsensusHandshakeMetadata,
     peers: &[PreparedRuntimePeer],
-) -> color_eyre::Result<(
-    PathBuf,
-    [u8; 32],
-    Vec<PreparedRuntimeFile>,
-    Vec<PreparedSecretFile>,
-    bool,
-    actual::Root,
-)> {
+) -> color_eyre::Result<PreparedRuntimeProjection> {
     const RANS_TABLE_MAX_BYTES: u64 = 4 * 1024 * 1024;
     const SITE_BINDINGS_MAX_BYTES: u64 = 4 * 1024 * 1024;
     const RANS_TARGET: &str = "/config/runtime/rans_seed0.toml";
@@ -2000,55 +2025,66 @@ fn project_prepared_runtime_config(
         );
         streaming.insert("soravpn".into(), toml::Value::Table(soravpn));
     }
-    let mut captured_onboarding_private_key = None;
-    if let Some(onboarding) = source.torii.account_onboarding.as_ref() {
-        let content = read_runtime_file_bounded(
-            &onboarding.private_key_file,
-            "account-onboarding private key",
-            64 * 1024,
-        )?;
-        let captured = materialize_container_readable_file(
-            projection_root,
-            &format!("peer{index}-onboarding-secret"),
-            "private.key",
-            &content,
-        )?;
-        let target = format!("/run/secrets/iroha_peer{index}_onboarding_private_key");
-        set_toml_string(
-            &mut table,
-            &["torii", "account_onboarding"],
-            "private_key_file",
-            &target,
-        )?;
-        secret_files.push(PreparedSecretFile {
-            target,
-            source_path: captured.clone(),
-        });
-        captured_onboarding_private_key = Some(captured);
-    }
-    let mut captured_faucet_private_key = None;
-    if let Some(faucet) = source.torii.faucet.as_ref() {
-        let content =
-            read_runtime_file_bounded(&faucet.private_key_file, "faucet private key", 64 * 1024)?;
-        let captured = materialize_container_readable_file(
-            projection_root,
-            &format!("peer{index}-faucet-secret"),
-            "private.key",
-            &content,
-        )?;
-        let target = format!("/run/secrets/iroha_peer{index}_faucet_private_key");
-        set_toml_string(
-            &mut table,
-            &["torii", "faucet"],
-            "private_key_file",
-            &target,
-        )?;
-        secret_files.push(PreparedSecretFile {
-            target,
-            source_path: captured.clone(),
-        });
-        captured_faucet_private_key = Some(captured);
-    }
+    let captured_onboarding_private_key = source
+        .torii
+        .account_onboarding
+        .as_ref()
+        .map(|onboarding| -> color_eyre::Result<_> {
+            let content = read_runtime_file_bounded(
+                &onboarding.private_key_file,
+                "account-onboarding private key",
+                64 * 1024,
+            )?;
+            let captured = materialize_container_readable_file(
+                projection_root,
+                &format!("peer{index}-onboarding-secret"),
+                "private.key",
+                &content,
+            )?;
+            let target = format!("/run/secrets/iroha_peer{index}_onboarding_private_key");
+            set_toml_string(
+                &mut table,
+                &["torii", "account_onboarding"],
+                "private_key_file",
+                &target,
+            )?;
+            secret_files.push(PreparedSecretFile {
+                target,
+                source_path: captured.clone(),
+            });
+            Ok(captured)
+        })
+        .transpose()?;
+    let captured_faucet_private_key = source
+        .torii
+        .faucet
+        .as_ref()
+        .map(|faucet| -> color_eyre::Result<_> {
+            let content = read_runtime_file_bounded(
+                &faucet.private_key_file,
+                "faucet private key",
+                64 * 1024,
+            )?;
+            let captured = materialize_container_readable_file(
+                projection_root,
+                &format!("peer{index}-faucet-secret"),
+                "private.key",
+                &content,
+            )?;
+            let target = format!("/run/secrets/iroha_peer{index}_faucet_private_key");
+            set_toml_string(
+                &mut table,
+                &["torii", "faucet"],
+                "private_key_file",
+                &target,
+            )?;
+            secret_files.push(PreparedSecretFile {
+                target,
+                source_path: captured.clone(),
+            });
+            Ok(captured)
+        })
+        .transpose()?;
     if let Some((path, maximum)) =
         tx_history_mandatory_alias_source(source.torii.tx_history.as_ref())
     {
@@ -2237,7 +2273,7 @@ fn project_prepared_runtime_config(
         runtime_files.push(file);
         captured_validation_paths.push(captured);
     }
-    let captured_manifest_directory = if source.nexus.enabled {
+    let captured_manifest_directory =
         if let Some(manifest_directory) = source.nexus.registry.manifest_directory.as_deref() {
             let (files, validation_directory) = collect_runtime_directory(
                 manifest_directory,
@@ -2256,12 +2292,8 @@ fn project_prepared_runtime_config(
             Some(validation_directory)
         } else {
             None
-        }
-    } else {
-        remove_toml_key(&mut table, &["nexus", "registry"], "manifest_directory")?;
-        None
-    };
-    let captured_manifest_cache_directory = if source.nexus.enabled {
+        };
+    let captured_manifest_cache_directory =
         if let Some(cache_directory) = source.nexus.registry.cache_directory.as_deref() {
             let (files, validation_directory) = collect_runtime_directory(
                 cache_directory,
@@ -2280,11 +2312,7 @@ fn project_prepared_runtime_config(
             Some(validation_directory)
         } else {
             None
-        }
-    } else {
-        remove_toml_key(&mut table, &["nexus", "registry"], "cache_directory")?;
-        None
-    };
+        };
     let captured_compliance_policy_directory = if source.nexus.compliance.enabled {
         if let Some(policy_directory) = source.nexus.compliance.policy_dir.as_deref() {
             let (files, validation_directory) = collect_runtime_directory(
@@ -2511,12 +2539,15 @@ fn tx_history_mandatory_alias_source(
         })
     })
 }
+#[expect(
+    clippy::too_many_lines,
+    reason = "prepared-bundle admission keeps signed genesis, every validator config, projections, and committee equality in one fail-closed pass"
+)]
 fn load_prepared_bundle(
     config_dir: &Path,
     projection_root: &Path,
     count: std::num::NonZeroU16,
     manifest: &RawGenesisTransaction,
-    build_line: PreparedBuildLine,
 ) -> color_eyre::Result<PreparedBundle> {
     let signed_block = config_dir.join("genesis.signed.nrt");
     let public_key_path = config_dir.join(crate::localnet::GENESIS_PUBLIC_KEY_FILE);
@@ -2831,7 +2862,6 @@ fn load_prepared_bundle(
             key_pair: admitted.key_pair,
             pop: admitted.pop,
             requires_sora_profile,
-            build_line,
             runtime_config_path,
             runtime_config_blake3,
             runtime_files,
@@ -2880,7 +2910,6 @@ impl<T: Write> RunArgs<T> for Args {
         if !args.print && !args.user_allows_overwrite()? {
             return Ok(());
         }
-        let build_line = build_line_from_env();
         let genesis_path = args.config_dir.join("genesis.json");
         let manifest_raw = read_runtime_file_bounded(
             &genesis_path,
@@ -2897,14 +2926,10 @@ impl<T: Write> RunArgs<T> for Args {
             })?;
         drop(manifest_raw);
         let manifest_mode = manifest.consensus_mode();
-        validate_consensus_mode_for_line(build_line, manifest_mode, ConsensusPolicy::Any)?;
+        validate_consensus_mode(manifest_mode, ConsensusPolicy::Any)?;
         if matches!(manifest_mode, SumeragiConsensusMode::Npos) {
             ensure_npos_parameters(&manifest)?;
         }
-        let prepared_build_line = match build_line {
-            BuildLine::Iroha2 => PreparedBuildLine::Iroha2,
-            BuildLine::Iroha3 => PreparedBuildLine::Iroha3,
-        };
         let peer_overrides = match &args.peer_config {
             Some(path) => Some(load_peer_overrides(path)?),
             None => None,
@@ -2936,13 +2961,7 @@ impl<T: Write> RunArgs<T> for Args {
                 signed_block,
                 public_key,
                 expected_hash,
-            } = load_prepared_bundle(
-                &args.config_dir,
-                &projection_root,
-                args.peers,
-                &manifest,
-                prepared_build_line,
-            )?;
+            } = load_prepared_bundle(&args.config_dir, &projection_root, args.peers, &manifest)?;
             let artifacts = PreparedGenesisArtifacts {
                 signed_block: &signed_block,
                 public_key: &public_key,
@@ -3106,8 +3125,6 @@ mod tests {
         peer::PeerId,
     };
     use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
-    use iroha_swarm::PreparedBuildLine;
-    use iroha_version::BuildLine;
     use std::{
         fs,
         io::{BufWriter, Write},
@@ -3147,7 +3164,6 @@ mod tests {
     fn generate_prepared_bundle(root: &Path) -> PathBuf {
         let bundle = root.join("prepared-bundle");
         let options = LocalnetOptions {
-            build_line: BuildLine::Iroha3,
             sora_profile: None,
             perf_profile: None,
             peers: NonZeroU16::new(4).expect("non-zero"),
@@ -3173,13 +3189,7 @@ mod tests {
     ) -> color_eyre::Result<super::PreparedBundle> {
         let manifest =
             iroha_genesis::RawGenesisTransaction::from_path(config_dir.join("genesis.json"))?;
-        load_prepared_bundle(
-            config_dir,
-            projection_root,
-            count,
-            &manifest,
-            PreparedBuildLine::Iroha3,
-        )
+        load_prepared_bundle(config_dir, projection_root, count, &manifest)
     }
     #[test]
     fn run_succeeds_without_banner() {
@@ -3246,6 +3256,10 @@ mod tests {
         assert!(output.contains("next: docker compose"));
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the integration-style assertion audits every rendered runtime mount, secret, policy rewrite, and read-only marker"
+    )]
     fn prepared_bundle_renders_exact_read_only_runtime_inputs() {
         let temp_dir = tempfile::tempdir().expect("prepared bundle temp dir");
         let config_dir = generate_prepared_bundle(temp_dir.path());
@@ -3274,7 +3288,6 @@ mod tests {
         let output = String::from_utf8(output).expect("Compose output is UTF-8");
         assert_eq!(output.matches("--config /config/peer.toml").count(), 4);
         assert_eq!(output.matches("exec env -i").count(), 4);
-        assert_eq!(output.matches("IROHA_BUILD_LINE=iroha3").count(), 4);
         assert_eq!(output.matches("--config-blake3 ").count(), 4);
         assert_eq!(output.matches("read_only: true").count(), 4);
         assert_eq!(output.matches("target: /config/peer.toml").count(), 4);
@@ -3559,6 +3572,10 @@ mod tests {
         );
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the mutation test keeps signer, hash, roster, PoP, and runtime-policy mismatch cases beside one admitted baseline"
+    )]
     fn prepared_bundle_rejects_signer_hash_roster_and_pop_mismatches() {
         let temp_dir = tempfile::tempdir().expect("prepared mismatch temp dir");
         let config_dir = generate_prepared_bundle(temp_dir.path());
@@ -3761,11 +3778,16 @@ mod tests {
         .with_consensus_mode(SumeragiConsensusMode::Permissioned)
         .with_consensus_meta();
         let genesis_key = KeyPair::random();
-        let signed = manifest
-            .clone()
-            .build_and_sign(&genesis_key)
-            .expect("sign resultless prepared fixture")
-            .0;
+        let (manifest, signed) = crate::genesis::bind_and_sign_staged_sumeragi_v2_context(
+            manifest,
+            &genesis_key,
+            None,
+            None,
+            iroha_core::state::default_genesis_confidential_policy_hash(),
+            None,
+        )
+        .expect("bind and execute prepared genesis fixture");
+        let signed = signed.0;
         iroha_core::validate_genesis_block(
             &signed,
             &iroha_data_model::account::AccountId::new(genesis_key.public_key().clone()),
@@ -3792,8 +3814,7 @@ mod tests {
         )
         .expect("write resultless prepared block");
         let error = validate_prepared_genesis(&signed_path, &public_path, &hash_path, &manifest)
-            .err()
-            .expect("resultless prepared genesis must fail full core validation");
+            .expect_err("resultless prepared genesis must fail full core validation");
         assert!(
             error.to_string().contains("full core validation"),
             "unexpected resultless-genesis rejection: {error:#}"

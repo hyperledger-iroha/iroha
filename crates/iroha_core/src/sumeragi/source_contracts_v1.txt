@@ -1845,7 +1845,8 @@ region|publication|registry_recovery_impl|after|pub(super) fn publish_recovered_
 region|adapter_preview|adapter|after|pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(|before|pub(crate) fn preflight_runtime_command_admission(
 region|runtime|runtime|begin|-|end|-
 region|executor|effects|begin|-|end|-
-region|settlement|launch|after|pub(in crate::sumeragi) fn settle_recovered_decision_apply_completion(|before|/// Fail-stop failure while consuming the recovered lifecycle owner
+region|settlement|launch|after|fn settle_recovered_decision_apply_completion_owner(|before|/// Fail-stop failure while consuming the recovered lifecycle owner
+region|completion_dispatch|turn_driver|after|if self.recovered_decision_fetch_body_completion.is_some() {|before|let selected = match self.owner.classify_completion_ready_work() {
 region|deferred_retry|launch|after|impl RetainedRecoveredDecisionApplyDeferredV1|before|/// Fail-stop class while durably terminalizing
 region|drive|launch|after|fn drive_recovered_decision_apply_deferred(|before|/// Exercise recovered Apply dispatch
 region|exact_request|lane_work|after|fn dispatch_next_recovered_apply_sidecar_request(|before|#[cfg(test)]
@@ -1891,7 +1892,7 @@ required|adapter_preview|self.last_progress = prior_last_progress|adapter previe
 forbidden|adapter_preview|self.step(|adapter preview reopened direct reducer stepping
 required|runtime|fn prepare_recovered_decision_apply_completion(|runtime lost recovered Decision Apply completion preparation
 required|executor|fn commit_recovered_decision_apply_finality(|executor lost recovered Decision Apply finality commit
-required|settlement|drain_recovered_decision_apply_completion()|settlement omitted drain_recovered_decision_apply_completion()
+order|completion_dispatch|3|self.services.take_next_recovered_lifecycle_completion()|RecoveredLifecycleCompletionTakeV1::Apply(completion)|settle_recovered_decision_apply_completion_owner(completion, lane_work)|unified completion classification must transfer recovered Apply ownership directly to settlement
 required|settlement|RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference }|settlement omitted RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference }
 required|settlement|completion.authorizes_sidecar_owner(services, lane_work)|settlement omitted completion.authorizes_sidecar_owner(services, lane_work)
 required|settlement|sidecar.register(lane_work)|settlement omitted sidecar.register(lane_work)
@@ -2026,22 +2027,29 @@ region|enqueue|worker|after|fn try_send_as(|before|fn cancel(
 region|reservation|worker|after|impl RecoveredDecisionApplyCapacityReservationV1<'_>|before|impl Drop for RecoveredDecisionApplyCapacityReservationV1
 region|completion|worker|after|struct RecoveredDecisionApplyWorkAckV1|before|enum V2IoCompletion
 region|retry|worker|after|fn retry_recovered_decision_apply<|before|fn acknowledge_completion(
-region|generic_take|worker|after|fn take_io_completion(|before|fn take_recovered_decision_apply_completion(
+region|generic_take|worker|after|fn take_io_completion(|before|fn take_recovered_lifecycle_sign_completion(
+region|census|worker|after|impl<'service> RecoveredCompletionCapacityCensusV1<'service>|before|impl Drop for RecoveredCompletionCapacityCensusV1<'_>
+region|unified_take|worker|after|pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(|before|/// Drain only the oldest recovered-Sign guard
 region|runtime_capacity|worker|after|const fn requires_runtime_capacity(&self) -> bool|before|fn acknowledgement(&self)
 required|enqueue|UnreservedRecoveredDecisionApply|generic queue lost the unreserved recovered Apply classification
-required|reservation|authenticated_predecessor_debt|recovered Apply reservation lost authenticated predecessor debt
 required|reservation|prepared.commit_for_worker()|recovered Apply reservation lost its worker commit
 required|reservation|V2IoCommand::RecoveredDecisionApply(task)|recovered Apply reservation lost its dedicated command
+required|census|fn authenticated_capacity(|recovered Completion census lost authenticated capacity projection
+required|census|self.worker_predecessor_debt|recovered Completion census lost frozen worker predecessor debt
+required|census|fn select_apply(|recovered Completion census lost exact Apply selection
 required|completion|acknowledge_recovered_decision_apply|recovered Apply acknowledgement is missing
 required|completion|fn acknowledge_retry_publication|recovered Apply retry acknowledgement is missing
 required|completion|fn retry_deferred(|recovered Apply deferred retry is missing
 required|completion|retry_recovered_decision_apply(task)|recovered Apply acknowledgement no longer retries the retained task
 required|completion|acknowledge_recovered_decision_apply_completion(self.key)|recovered Apply completion acknowledgement is missing
-order|retry|6|V2IoWorkState::CompletionPending|exact_target_active|try_reserve(V2IoAdmissionClass::Consensus)|transfer_recovered_decision_apply_completion(key)|V2IoWorkState::Queued|task.into_command()|deferred retry must rejoin the Serve barrier and transfer completion ownership before publication
+order|retry|5|V2IoWorkState::CompletionPending|try_reserve(V2IoAdmissionClass::Consensus)|transfer_recovered_decision_apply_completion(key)|V2IoWorkState::Queued|task.into_command()|deferred retry must transfer completion ownership before queue publication
 required|generic_take|V2IoCompletion::RecoveredDecisionApply(_)|generic completion take lost recovered Apply retention
 required|generic_take|IoCompletionTake::retained_runtime()|generic completion take must retain recovered Apply runtime ownership
 required|runtime_capacity|Self::RecoveredDecisionApply(_)|recovered Apply completion lost runtime capacity classification
-required|whole|fn drain_recovered_decision_apply_completion(|dedicated recovered Apply completion drain is missing
+required|unified_take|V2IoCompletion::RecoveredDecisionApply(guarded)|unified completion classifier lost recovered Apply ownership
+required|unified_take|prepare_recovered_decision_apply_ack|unified completion classifier lost recovered Apply acknowledgement preparation
+required|unified_take|RecoveredLifecycleCompletionTakeV1::Apply(|unified completion classifier lost its typed Apply result
+required|unified_take|PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack }|unified completion classifier lost its guarded Apply handoff
 required|whole|fn authorizes_sidecar_owner(|recovered Apply sidecar owner oracle is missing
 forbidden|whole|_services: &'services mut ProductionV2Services|worker recovered Apply corridor must not borrow production services
 forbidden|whole|complete_application(*guarded|worker recovered Apply corridor must not call the legacy guarded completion
@@ -2149,7 +2157,7 @@ count|sign_dispatch|DurableRecoveredLifecycleNextWalVoteSign|2|recovered Sign at
 required|sign_dispatch|PreparedRecoveredLifecycleSignCarrier::NextWalVote|recovered Sign attestation lost its next-WAL Vote carrier
 required|sign_dispatch|.project_task(identity)|recovered Sign attestation lost its typed task projection
 end
-case|transition_surface_is_ordered_borrow_bound_and_inert
+case|transition_surface_is_ordered_borrow_bound_and_published
 region|production|body_pipeline|begin|-|before|include!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
 region|authorized|body_pipeline|after|fn stage_body_stage_transition|before|/// Fully reduced coordinator copy
 region|fetch|body_pipeline|after|pub(super) fn prepare_sealed_fetch_store_transition|before|/// Stage one sealed Store retirement and exact Validate admission
@@ -2164,6 +2172,10 @@ region|callers|runner|begin|-|end|-
 region|callers|worker|begin|-|end|-
 region|callers|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|callers|coordinator|begin|-|before|\n#[cfg(test)]\nmod tests {
+region|ordinary_publication|body_pipeline|after|impl PreparedSealedBodyStageTransition<'_, '_>|before|/// Fully staged recovered WAL Fetch-to-Store publication.
+region|ordinary_driver|turn_driver|after|fn advance_certified_body_pipeline(&mut self)|before|fn drive_recovered_ingress_selector
+region|fetch_commit|registry_recovery|after|impl PreparedCertifiedFetchStoreSuccessor<'_>|before|impl PreparedDurableStoreValidateSuccessor<'_>
+region|store_commit|registry_recovery|after|impl PreparedDurableStoreValidateSuccessor<'_>|before|// READY_DURABLE_VALIDATE_ADAPTER_JOIN_BEGIN
 region|publication|body_pipeline|after|pub(super) fn persist_and_publish(|before|\n}\ninclude!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
 region|post_fsync|body_pipeline|last|*coordinator = staged|before|\n}\ninclude!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
 region|exact_fsync|body_pipeline|after|pub(super) fn persist_and_publish(|before|\n}\ninclude!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
@@ -2247,7 +2259,7 @@ forbidden|bls_tests|.prepare_body_stage_transition(|BLS transition fixture reope
 required|bls_tests|prepare_authorized_body_transition(|BLS transition fixture lost its authorized transition
 required|bls_tests|exact_live_wal_body_successor_candidate_for_test(|BLS transition fixture lost its exact live-WAL successor
 required|production|PreparedSealedBodyStageTransition<'coordinator, 'registry>|sealed transition carrier is missing
-required|production|_successor: SealedBodyStageSuccessor<'registry>|sealed transition lost successor ownership
+required|production|successor: SealedBodyStageSuccessor<'registry>|sealed transition lost successor ownership
 required|production|&'a mut LifecycleCoordinator|sealed transition lost its coordinator borrow
 required|production|DurableContinuationEdge::FetchToStore|Fetch-to-Store continuation edge is missing
 required|production|DurableContinuationEdge::StoreToValidate|Store-to-Validate continuation edge is missing
@@ -2286,10 +2298,16 @@ forbidden|production|fn staged(|inert transition acquired forbidden authority: {
 forbidden|production|ConcreteLifecycleWorkRegistry|inert transition acquired forbidden authority: {forbidden}
 forbidden|production|RuntimeEffectOwnership|inert transition acquired forbidden authority: {forbidden}
 forbidden|production|legacy_ordinal|inert transition acquired forbidden authority: {forbidden}
-forbidden|callers|prepare_sealed_fetch_store_transition|body-frame transition became production-wired through {unwired}
-forbidden|callers|prepare_sealed_store_validate_transition|body-frame transition became production-wired through {unwired}
 forbidden|callers|prepare_sealed_validate_no_successor_transition|body-frame transition became production-wired through {unwired}
 forbidden|callers|prepare_sealed_validate_report_transition|body-frame transition became production-wired through {unwired}
+order|ordinary_publication|3|persist_exact_staged_successor(&self.staged)|successor.commit_after_publication(address)|*coordinator = staged|ordinary body publication must expose fsync before registry and coordinator commit
+order|ordinary_driver|3|.persist_exact_successor()|.commit_after_publication()|adapter.commit_after_durable_settlement()|ordinary body publication must fsync, install registry/coordinator, then install the reducer cut
+count|ordinary_driver|.persist_exact_successor()|2|Fetch-to-Store and Store-to-Validate must each fsync exactly once
+count|ordinary_driver|.commit_after_publication()|2|Fetch-to-Store and Store-to-Validate must each publish exactly once
+required|fetch_commit|.remove(&completion_address)|Fetch-to-Store publication did not consume its exact parent
+required|fetch_commit|.insert(store_address, child)|Fetch-to-Store publication did not install its exact child
+required|store_commit|.remove(&store_address)|Store-to-Validate publication did not consume its exact parent
+required|store_commit|.insert(validate_address, child)|Store-to-Validate publication did not install its exact child
 order|publication|4|prepare_registry_publication(|persist_exact_staged_successor(&staged)|*coordinator = staged|registry.publish_after_ledger_fsync()|live Validate-to-Sign publication order drifted
 forbidden|post_fsync|?|post-fsync publication acquired fallible work through {forbidden}
 forbidden|post_fsync|return Err|post-fsync publication acquired fallible work through {forbidden}
@@ -2417,7 +2435,7 @@ count|production|assemble_storage_only_with_body_validation_outcomes(|1|terminal
 end
 case|certified_fetch_completion_source_keeps_the_durable_cut_ordered
 region|transaction|selector|after|pub(crate) fn complete_certified_fetch_body_persistence(|before|fn publish_certified_fetch_ready_authority(
-order|transaction|18|prepare_lifecycle_ingress_selector(|certified_fetch_current_location(|prepare_selected_certified_fetch_completion(|bind_durable_body_receipt(receipt)|prepare_certified_fetch_ready_projection(|prepare_lifecycle_certified_fetch_completion(|prepare_certified_body_fetch_owner_removal(|matches_selected_response(|into_exact_certified_fetch_dequeue(|begin_fail_stop_operation()|persist_exact_staged_successor()|exact_dequeue.commit(ingress)|commit_after_exact_dequeue(dequeued)|ready.commit()|commit_lifecycle_certified_fetch_completion|service_prepared.commit(operation.permit())|work_ack.commit()|operation.complete()|completion transaction omitted {required}
+order|transaction|19|prepare_lifecycle_ingress_selector(|certified_fetch_current_location(|prepare_selected_certified_fetch_completion(|bind_durable_body_receipt(receipt)|prepare_certified_fetch_ready_projection(|prepare_lifecycle_certified_fetch_completion(|prepare_certified_body_fetch_owner_removal(|matches_selected_response(|into_exact_certified_fetch_dequeue(|begin_fail_stop_operation()|persist_exact_staged_successor()|exact_dequeue.commit(ingress)|commit_after_exact_dequeue(dequeued)|ready.commit()|commit_lifecycle_certified_fetch_completion|service_prepared.commit(operation.permit())|work_ack.commit()|mark_leader_wire_durable_body_terminal(&runtime_receipt, &durable_body)|operation.complete()|completion transaction omitted {required}
 forbidden|transaction|runtime_lifecycle_ordinal|certified Fetch completion must not use a runtime lifecycle ordinal
 forbidden|transaction|BodyAvailableReservation|certified Fetch completion must not reopen body-available reservation
 end
@@ -2428,4 +2446,49 @@ forbidden|whole|LifecycleRunnerRankSnapshot|turn outcome must not retain a rank 
 forbidden|whole|into_parts|turn outcome must not expose cursor constituents
 forbidden|whole|pub executor:|turn outcome must not expose an executor
 forbidden|whole|pub services:|turn outcome must not expose services
+end
+case|ordinary_certified_body_pipeline_reserves_executes_and_publishes_ready_validate
+region|classifier|scheduler_inputs|after|pub(crate) fn classify_completion_ready_work(|before|/// Plan one turn from the complete directly-owned production Ready census.
+region|completion|turn_driver|after|fn settle_parked_lifecycle_durable_validate_completion(|before|fn publish_ready_durable_validate(
+region|publication|turn_driver|after|fn publish_ready_durable_validate(|before|fn advance_certified_body_pipeline(&mut self)
+region|dispatch|turn_driver|after|fn advance_certified_body_pipeline(&mut self)|before|fn drive_recovered_ingress_selector
+region|worker|worker|begin|-|end|-
+region|sealed_publication|body_pipeline|at|impl<'coordinator, 'registry, 'adapter>\n    PreparedSealedValidateSignTransition|before|include!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
+region|body_pipeline|body_pipeline|begin|-|end|-
+region|effects|effects|begin|-|end|-
+region|runtime|runtime|begin|-|end|-
+required|classifier|LifecycleWorkClass::Validate => self|ordinary Validate classification lost its exact carrier branch
+required|classifier|.attest_ready_validate_demand(&self.registry, *ordinal)|ordinary Validate classification lost exact coordinator/registry attestation
+required|classifier|return ProductionCompletionReadyWorkV1::CertifiedBodyPipeline;|authenticated ordinary Validate no longer enters the canonical body scheduler
+order|dispatch|4|LifecycleDurableValidateDispatchKeyV1::from_claimed(|capture_lifecycle_durable_validate_capacity(key)|begin_durable_validate_dispatch(|reservation.commit(dispatch)|Ready Validate must reserve its exact worker position before the Waiting mutation and command publication
+required|dispatch|rollback_unpublished_body_claim|backpressure or pre-publication failure lost exact claim rollback
+required|completion|LifecycleDurableValidateCompletionKindV1::Retry|durable Validate completion lost its typed retry branch
+required|completion|LifecycleDurableValidateRetryV1::Unavailable(completion)|backpressured retry no longer retains the exact completion owner
+required|completion|LifecycleDurableValidateRetryV1::RestartRequired|invalid or disconnected retry ownership no longer fails closed
+required|completion|complete_durable_validate_dispatch(|executed Validate completion no longer returns Waiting to one authenticated Ready carrier
+required|completion|close_output_for_restart()|failed Validate completion publication no longer closes output for restart
+required|worker|LifecycleDurableValidateDispatchKeyV1|the dedicated Validate owner lost its address-keyed identity
+required|worker|BTreeMap<LifecycleDurableValidateDispatchKeyV1, V2IoTrackedLifecycleDurableValidateV1>|the dedicated Validate queue lost its exact keyed ownership index
+required|worker|LifecycleDurableValidateCapacityReservationV1|Ready Validate lost its pre-Wait capacity reservation
+required|worker|LifecycleDurableValidateWorkerResultV1|the worker lost its typed Validate completion owner
+required|worker|retry_lifecycle_durable_validate(dispatch)|the retained Validate command lost exact-key retry
+required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedInactive|validated inactive outcome lost terminal publication
+required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedNoEffect|validated no-effect outcome lost terminal publication
+required|publication|ReadyDurableValidateAdapterPublicationKind::RejectedInactive|rejected inactive outcome lost terminal publication
+required|publication|ReadyDurableValidateAdapterPublicationKind::RejectedNoEffect|rejected no-effect outcome lost terminal publication
+required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedApply|validated Apply outcome lost successor publication
+required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedPersist|validated Persist outcome lost Sign successor publication
+required|publication|ReadyDurableValidateAdapterPublicationKind::RejectedReport|rejected report outcome lost invalid-body successor publication
+required|publication|ReadyDurableValidateAdapterPublicationKind::ValidatedBusy|validated Busy outcome lost its reducer-fence settlement
+required|publication|ReadyDurableValidateAdapterPublicationKind::RejectedBusy|rejected Busy outcome lost its reducer-fence settlement
+count|publication|.persist_and_publish()|4|each non-Busy Validate outcome family must use one sealed persistence/publication transaction
+required|publication|settle_sealed_validate_busy(lease, wait)|Busy Validate must remain durably recoverable and retry only after its exact reducer fence
+count|sealed_publication|pub(super) fn persist_and_publish(|4|Validate terminal, report, Apply, and Sign each require one consuming sealed transaction
+count|sealed_publication|persist_exact_staged_successor(&staged)|4|every Validate publication family must fsync its exact staged LedgerV1 successor
+forbidden|body_pipeline|atomic-publication gap|completed Validate branches must not retain the former publication blocker
+forbidden|effects|RetainedCertifiedBodyResponse|the retired ordinary response carrier returned
+forbidden|effects|retained_certified_body_response|the retired ordinary response slot returned
+forbidden|effects|accept_certified_body_response_with_ingress_ownership|the legacy ordinary response admission path returned
+forbidden|runtime|retained_response_predecessor_target_ordinal|the legacy predecessor ordinal returned
+forbidden|runtime|retained_response_predecessor_retry_attempted|the legacy predecessor retry latch returned
 end

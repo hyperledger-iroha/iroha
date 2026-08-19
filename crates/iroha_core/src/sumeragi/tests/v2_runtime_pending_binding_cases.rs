@@ -1,10 +1,5 @@
-use std::collections::VecDeque;
-use crate::sumeragi::v2_core::Generation;
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
-use iroha_data_model::peer::PeerId;
-use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteTestFixture};
-use tempfile::TempDir;
 use super::*;
+use crate::sumeragi::v2_core::Generation;
 use crate::sumeragi::{
     InboundBlockMessage,
     message::BlockMessage,
@@ -13,6 +8,11 @@ use crate::sumeragi::{
     },
     v2_chunks::encode_payload,
 };
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+use iroha_data_model::peer::PeerId;
+use iroha_p2p::network::{NetworkReplyRoute, NetworkReplyRouteError, NetworkReplyRouteTestFixture};
+use std::collections::VecDeque;
+use tempfile::TempDir;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct FakeCommand {
     record: Option<u8>,
@@ -641,8 +641,9 @@ fn pending_validate_binding_for_test(
         .expect("bind one certified Fetch fixture")
         .pop()
         .expect("one certified Fetch fixture owner")
-        .pending_adapter_effect_binding(&fetch)
-        .expect("certified Fetch fixture mints one pending binding");
+        .current_effect_producer(&fetch)
+        .expect("certified Fetch fixture seals one producer")
+        .mint_pending_binding();
         fetch_binding
             .project_certified_fetch_store_successor(&fetch, &store)
             .expect("certified Fetch fixture derives Store")
@@ -654,8 +655,9 @@ fn pending_validate_binding_for_test(
         .expect("bind one ordinary Store fixture")
         .pop()
         .expect("one ordinary Store fixture owner")
-        .pending_adapter_effect_binding(&store)
-        .expect("ordinary Store fixture mints one pending binding")
+        .current_effect_producer(&store)
+        .expect("ordinary Store fixture seals one producer")
+        .mint_pending_binding()
     };
     let validate_binding = store_binding
         .project_store_validate_successor(&store, &validate)
@@ -844,7 +846,9 @@ fn recovered_next_wal_vote_projection_is_exact_and_fail_closed() {
         "a substituted Sign effect cannot reuse the retained replay evidence"
     );
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(recovered_next_wal_vote_projection_surface_is_affine_and_closed);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    recovered_next_wal_vote_projection_surface_is_affine_and_closed
+);
 #[test]
 fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
     let (context, keys) = authenticated_runtime_context();
@@ -904,8 +908,9 @@ fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
     )
     .expect("bind one exact certified Fetch");
     let pending = bound[0]
-        .pending_adapter_effect_binding(&fetch)
-        .expect("certified Fetch mints one pending binding");
+        .current_effect_producer(&fetch)
+        .expect("certified Fetch seals one producer")
+        .mint_pending_binding();
     let store = AdapterEffect::StoreBody {
         tag,
         round: manifest.round,
@@ -952,7 +957,7 @@ fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
         successor.exact_effect_identity()
     );
     assert_ne!(
-        validate_successor.projection_hash, successor.projection_hash,
+        validate_successor.binding.projection_hash, successor.binding.projection_hash,
         "the concrete successor receives a new integrity projection",
     );
     assert!(!successor.exactly_binds_adapter_effect(&validate));
@@ -1036,8 +1041,9 @@ fn pending_validate_projects_only_the_exact_commit_authorized_apply_successor() 
     .expect("bind one ordinary Store")
     .pop()
     .expect("one ordinary Store owner")
-    .pending_adapter_effect_binding(&store)
-    .expect("ordinary Store mints one pending binding");
+    .current_effect_producer(&store)
+    .expect("ordinary Store seals one producer")
+    .mint_pending_binding();
     let local_validate = local_store
         .project_store_validate_successor(&store, &validate)
         .expect("ordinary Store derives one Validate successor");
@@ -1081,8 +1087,9 @@ fn pending_validate_projects_only_the_exact_commit_authorized_apply_successor() 
     .expect("bind one Prepare-certified Fetch")
     .pop()
     .expect("one Prepare-certified Fetch owner")
-    .pending_adapter_effect_binding(&fetch)
-    .expect("Prepare-certified Fetch mints one pending binding");
+    .current_effect_producer(&fetch)
+    .expect("Prepare-certified Fetch seals one producer")
+    .mint_pending_binding();
     let prepare_store = prepare_fetch
         .project_certified_fetch_store_successor(&fetch, &store)
         .expect("Prepare-certified Fetch derives Store");

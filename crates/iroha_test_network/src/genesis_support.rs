@@ -171,7 +171,7 @@ pub fn sign_prepared_genesis_from_config(
 ) -> Result<SignedBlock> {
     iroha_genesis::init_instruction_registry();
     let (parsed_config, unresolved_hash_replaced) = load_node_config(config_path, true)?;
-    let config = ManagedNodeConfig::from_root(parsed_config)?;
+    let config = ManagedNodeConfig::from_root(parsed_config.clone())?;
     let selected_manifest = config
         .genesis_manifest_path
         .canonicalize()
@@ -231,14 +231,27 @@ pub fn sign_prepared_genesis_from_config(
             expected_mode
         ));
     }
-    let block = manifest
+    let proposal = manifest
         .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
             key_pair,
             Some(config.da_proof_policies),
             Some(config.genesis_confidential_policy_hash),
         )
-        .map(|block| block.0)
         .wrap_err("build and sign canonical prepared genesis")?;
+    let topology = iroha_core::sumeragi::signed_genesis_voting_peers(&proposal)
+        .map_err(|error| eyre!("derive prepared genesis voting roster: {error}"))?;
+    let genesis_account = AccountId::new(key_pair.public_key().clone());
+    let (block, _) = crate::config::preexecute_genesis_with_runtime_config(
+        &proposal,
+        &genesis_account,
+        &topology,
+        key_pair,
+        None,
+        None,
+        None,
+        Some(&parsed_config),
+    )
+    .wrap_err("pre-execute canonical prepared genesis")?;
     if !unresolved_hash_replaced && block.hash() != config.genesis_expected_hash {
         return Err(eyre!(
             "prepared genesis hashes to {}, but configuration requires {}",

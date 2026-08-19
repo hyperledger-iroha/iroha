@@ -74,6 +74,7 @@ impl LifecycleCurrentRunnerTurn<'_> {
         0
     }
 
+    #[cfg(test)]
     const fn turn(&self) -> OuterIngressTurn {
         self.turn
     }

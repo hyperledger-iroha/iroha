@@ -1101,7 +1101,6 @@ profile = { peer_count = 7, consensus_mode = "npos", genesis_profile = "iroha3-d
         let (_dir, path) = temp_file(
             r#"
 [nexus]
-enabled = true
 lane_count = 2
 
 [[nexus.lane_catalog]]
@@ -1121,7 +1120,7 @@ commands = 1024
         let config =
             parse_bundle_config(&path, &fs::read_to_string(&path).unwrap()).expect("config parsed");
         let nexus = config.nexus.expect("nexus config");
-        assert!(matches!(nexus.get("enabled"), Some(Value::Boolean(true))));
+        assert!(!nexus.contains_key("enabled"));
         assert_eq!(nexus.get("lane_count").and_then(Value::as_integer), Some(2));
         let sumeragi = config.sumeragi.expect("sumeragi config");
         assert_eq!(
@@ -1250,7 +1249,6 @@ data_root = "./env-data"
         config.binaries.kagami = Some(temp.path().join("bin/kagami"));
         config.binaries.iroha_cli = Some(temp.path().join("bin/iroha_cli"));
         let mut nexus = Map::new();
-        nexus.insert("enabled".into(), Value::Boolean(true));
         nexus.insert("lane_count".into(), Value::Integer(2));
         let mut lane = Map::new();
         lane.insert("alias".into(), Value::String("core".into()));
@@ -1430,7 +1428,6 @@ irohad = "{irohad}"
 extra = "/opt/keep/binary"
 
 [nexus]
-enabled = true
 lane_count = 2
 extra_lane = "keep"
 

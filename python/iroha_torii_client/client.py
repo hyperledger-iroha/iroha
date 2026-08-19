@@ -3283,6 +3283,7 @@ class OfflineErrorDetails:
     actual: Optional[str] = None
     profile: Optional[str] = None
     chain_discriminant: Optional[int] = None
+    entrypoint_hash: Optional[str] = None
     tx_hash: Optional[str] = None
     last_status: Optional[str] = None
     hint: Optional[str] = None
@@ -3487,6 +3488,7 @@ def _offline_error_details(value: Any, context: str) -> OfflineErrorDetails:
         chain_discriminant=_offline_optional_error_unsigned(
             record, "chain_discriminant", context, (1 << 16) - 1
         ),
+        entrypoint_hash=_offline_optional_error_string(record, "entrypoint_hash", context),
         tx_hash=_offline_optional_error_string(record, "tx_hash", context),
         last_status=_offline_optional_error_string(record, "last_status", context),
         hint=_offline_optional_error_string(record, "hint", context),
@@ -3496,9 +3498,7 @@ def _offline_error_details(value: Any, context: str) -> OfflineErrorDetails:
 
 def _offline_error(value: Any, context: str) -> OfflineErrorEnvelope:
     record = _offline_mapping(value, context)
-    code = _offline_exact_string(
-        _offline_required(record, "code", context), f"{context}.code"
-    )
+    code = _offline_exact_string(_offline_required(record, "code", context), f"{context}.code")
     if _OFFLINE_ERROR_CODE_RE.fullmatch(code) is None:
         raise RuntimeError(
             f"{context}.code must be a stable lowercase code of 1 to 64 characters"
@@ -8358,8 +8358,10 @@ class _SumeragiV2StatusParser:
         proposal = cls._exact_mapping(
             value,
             context,
-            {"descriptor", "proposal_hash"},
+            {"descriptor", "proposal_hash", "payload_block_hint"},
         )
+        if proposal["payload_block_hint"] is not None:
+            raise RuntimeError(f"{context}.payload_block_hint must be null")
         descriptor_context = f"{context}.descriptor"
         descriptor = cls._mapping(proposal.get("descriptor"), descriptor_context)
         required_fields = {
@@ -8580,6 +8582,7 @@ class _SumeragiV2StatusParser:
         return {
             "descriptor": normalized_descriptor,
             "proposal_hash": proposal_hash,
+            "payload_block_hint": None,
         }
 
     @classmethod

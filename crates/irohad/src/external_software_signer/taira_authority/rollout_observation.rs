@@ -126,6 +126,7 @@ fn validate_immutable_plan_v1(plan: &Value) -> ResultV1<[u8; 32]> {
     Ok(Sha256::digest(IMMUTABLE_PLAN_V1).into())
 }
 
+#[expect(clippy::too_many_lines, reason = "complete rollout observation schema")]
 fn validate_observation_v1(observation: &Value, plan_sha256: [u8; 32]) -> ResultV1 {
     let root = exact_object(
         observation,
@@ -664,6 +665,10 @@ fn validate_restart_v1(
     Ok(successor)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "complete post-cutover evidence schema"
+)]
 fn validate_post_cutover_v1(
     value: &Value,
     candidate_oci: &str,

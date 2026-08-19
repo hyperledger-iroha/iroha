@@ -403,6 +403,10 @@ Protected Namespaces
 
 Runtime Upgrade Hooks
 - Lane manifests may declare `hooks.runtime_upgrade` to gate runtime upgrade instructions (`ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`).
+- The first-release manifest schema is closed. `runtime_upgrade` is the only
+  accepted hook name, its object accepts exactly the fields below, and any
+  unknown top-level, validator-binding, overlay, module, hook, or hook-field
+  key rejects the manifest.
 - Hook fields:
   - `allow` (bool, default `true`): when `false`, all runtime-upgrade instructions are rejected.
   - `require_metadata` (bool, default `false`): require the transaction metadata entry specified by `metadata_key`.

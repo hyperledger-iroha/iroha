@@ -139,7 +139,6 @@ fn native_amx_participant_drift_fixture(
         .expect("current lane catalog");
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.routing_policy = policy.clone();
         nexus.lane_catalog = current_lane_catalog.clone();
         nexus.lane_config =
@@ -414,7 +413,6 @@ fn push_with_gossip_payload_with_state_and_routing_rejects_future_created_autosc
     crate::state::attach_synthetic_autoscale_committee_for_test(&mut future_elastic);
     {
         let nexus = state.nexus.get_mut();
-        nexus.enabled = true;
         nexus.fees.base_fee = Quantity::zero();
         nexus.fees.per_byte_fee = Quantity::zero();
         nexus.fees.per_instruction_fee = Quantity::zero();

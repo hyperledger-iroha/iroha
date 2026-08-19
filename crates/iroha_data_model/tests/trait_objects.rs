@@ -6,6 +6,9 @@ impl Drop for RegistryGuard {
         set_instruction_registry(iroha_data_model::instruction_registry::default());
     }
 }
+
+const INSTRUCTION_BOX_NORITO_CHILD: &str = "IROHA_DATA_MODEL_INSTRUCTION_BOX_NORITO_CHILD";
+
 #[test]
 fn instruction_box_roundtrip() {
     let log = Log::new(Level::INFO, "roundtrip".to_string());
@@ -23,6 +26,20 @@ fn instruction_box_roundtrip() {
 }
 #[test]
 fn instruction_box_norito_roundtrip() {
+    if std::env::var_os(INSTRUCTION_BOX_NORITO_CHILD).is_none() {
+        // Keep the deliberately narrowed process-global registry outside the
+        // grouped parent, where unrelated codecs may be running concurrently.
+        let status = std::process::Command::new(
+            std::env::current_exe().expect("resolve grouped integration-test executable"),
+        )
+        .arg("instruction_box_norito_roundtrip")
+        .env(INSTRUCTION_BOX_NORITO_CHILD, "1")
+        .status()
+        .expect("run isolated instruction-box registry test");
+        assert!(status.success(), "isolated registry test failed");
+        return;
+    }
+
     let _guard = RegistryGuard;
     set_instruction_registry(instruction_registry![Log]);
     let log = Log::new(Level::INFO, "norito".to_string());

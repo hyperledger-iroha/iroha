@@ -530,9 +530,73 @@ populated four-role closure diagnostic. Use
 prepasses, print exact source/equation/term and compiled-protocol point counts,
 and derive checked V6 Poseidon, historical raw V5 SHA, and counterfactual
 compressed-source SHA geometry.
+Use `probe-compact-k17-ipa-audit-bridge` only to reproduce the rejected V7 IPA
+experiment against those authentic inventories. The probe constructs
+an injective coefficient vector containing the domain/version, parity, parent
+selectors, exact stage ranges, compressed non-identity sources, ordered
+source-indexed coefficients, compiled-protocol structure digest, transcript
+initial state, and strictly increasing protocol-to-audit source map. It then
+creates and verifies a real Halo2 IPA opening, constrains the same Horner
+evaluation natively in the scalar half and non-natively in the reciprocal half,
+fully decides that opening against the audit parameters in the opposite Step
+circuit, retains the selector-gated dense MSM equation check, and attempts to print the
+four joined bootstrap/live k17 advice/lookup shapes. If a joined graph fits the
+fixed columns the probe also runs MockProver; otherwise it reports the exact
+column lower bound. The IPA transcript
+absorbs the public-statement digest, exact coefficient count, parity, IPA degree,
+and parameter digest before the commitment-derived evaluation challenge. Both
+creator and verifier recompute that digest from the actual `ParamsIPA`; a
+caller-supplied digest cannot relabel a different parameter set.
+The two parity polynomials do not share a scalar field: StepEq's vector and
+evaluation are in `Fp`, while StepEp's are in `Fq`. They are never directly
+equated. Each IPA opening and that same field evaluation are instead constrained
+non-natively inside the opposite base-field circuit (`Fp` in the `Fq` circuit
+and `Fq` in the `Fp` circuit). The probe prints this field direction and
+`cross_cycle_opening_join_integrated=true` explicitly. That label describes
+the implemented graph, not a sound or reviewed join: the circuit does not
+constrain the IPA commitment to either canonical vector. Consequently no
+shape, proof-size, or envelope result from this command is feasibility evidence.
+For the authenticated 2,025-source, eight-equation, 2,680-term, eight-stage,
+636-protocol-point inventory, the canonical vector is exactly 10,111
+coefficients and therefore needs IPA k14. The current primitive proof is 1,024
+bytes and the diagnostic standalone frame is 1,169 bytes. Adding two frames to
+the current 191,862-byte outer-pair release maximum gives 194,200 bytes and
+199,016 bytes of arithmetic headroom under 393,216. This is conservative
+standalone transport arithmetic: integrated opening transcripts are private
+Step witnesses, not extra accepted proof-pair framing.
+
+This rejected V7 identity is compiled only for tests and the memory lab. Its promotion
+gate is hard-failed: no decoder, manifest profile, candidate framing, or runtime
+acceptance path recognizes it. Independent cryptographic review must still
+approve the deterministic coefficient commitment/opposite-circuit sequencing
+and the in-circuit IPA verifier integration for each opposite-circuit join;
+authenticated parameters, keys, proof sizes, adversarial pair tests, and iPhone
+measurements must then be regenerated
+before the V5 production blocker can be removed. Standalone opening-wire
+arithmetic printed by the probe is diagnostic headroom, not a reviewed transport
+format or a claim that the outer proof size is unchanged.
+
+The replacement protocol must use a new typed V7 profile/pair/manifest and
+public layout. For each parity it exposes six canonical little-endian `u128`
+chunks, including during bootstrap: `D = SHA256(Poseidon(N))`, canonical
+nonidentity `C`, and full canonical `v`. `D` is computed over the complete
+actual native assigned vector. The reciprocal circuit canonical-decodes the
+same public `C` and enforces the dedicated, unconditional exact relation
+`C = sum R_i G_i` over its actual assigned vector and the generator set whose
+complete parameters digest is transcript-bound. That exact MSM relation is not
+part of the random dense batch. The evaluation challenge binds the domain,
+profile, parity, statement, degree, exact coefficient count, parameter digest,
+`D`, and `C`; both vector recurrences equal the public `v`. Coefficients beyond
+the exact count through `2^k` are specified zero and the commitment blind is
+zero. This construction, including its linkability/privacy consequences,
+requires adversarial circuit tests, enabled-selector and real-Prover-stage
+coverage, exact four-role k17 measurement, and independent cryptographic review
+before any artifact or runtime identity exists.
 The inventory command exits before either populated reciprocal Step circuit is
 built; its V5 figures are diagnostic alternatives, not production fallbacks.
-The guard admits only those three exact operations and rejects extra arguments.
+All three probe commands exit before publishing artifacts. The guard admits only
+the four exact operations (the full measurement plus those three probes) and
+rejects extra arguments.
 On Darwin, all diagnostic operations use the production runner's 250 ms
 process-group sampling and enforce the greater of aggregate RSS or physical
 footprint. Other hosts retain the process-group RSS policy because they do not

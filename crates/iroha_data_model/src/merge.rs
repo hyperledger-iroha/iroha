@@ -1395,6 +1395,10 @@ mod tests {
         assert!(MergeLaneSnapshot::decode(&mut legacy_snapshot.as_slice()).is_err());
     }
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one consensus-binding matrix mutates every lane-drain intent and certificate field"
+    )]
     fn lane_drain_intent_and_certificate_hash_every_consensus_field() {
         let intent = sample_lane_drain_intent();
         let intent_hash = intent.canonical_hash();

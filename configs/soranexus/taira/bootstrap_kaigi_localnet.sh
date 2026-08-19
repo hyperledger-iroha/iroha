@@ -6,7 +6,10 @@ LOCALNET_DIR="${IROHA_TAIRA_LOCALNET_DIR:-$ROOT_DIR/dist/taira-localnet}"
 SCREEN_SESSION="${IROHA_TAIRA_SCREEN_SESSION:-taira-localnet}"
 GENESIS_JSON="${IROHA_TAIRA_GENESIS_JSON:-$LOCALNET_DIR/genesis.json}"
 GENESIS_SIGNED="${IROHA_TAIRA_GENESIS_SIGNED:-$LOCALNET_DIR/genesis.signed.nrt}"
+GENESIS_EXPECTED_HASH="${IROHA_TAIRA_GENESIS_EXPECTED_HASH:-$LOCALNET_DIR/genesis.expected_hash}"
 GENESIS_PRIVATE_KEY_FILE="${IROHA_TAIRA_GENESIS_PRIVATE_KEY_FILE:-$LOCALNET_DIR/genesis.private_key}"
+KAIGI_MANIFEST="${IROHA_TAIRA_KAIGI_MANIFEST:-$LOCALNET_DIR/genesis.kaigi.json}"
+KAIGI_BOUND_MANIFEST="${IROHA_TAIRA_KAIGI_BOUND_MANIFEST:-$LOCALNET_DIR/genesis.kaigi.bound.json}"
 TAIRA_PROFILE_CONFIG="${IROHA_TAIRA_PROFILE_CONFIG:-$ROOT_DIR/configs/soranexus/taira/config.toml}"
 TAIRA_SECRETS_FILE="${IROHA_TAIRA_SECRETS_FILE:-$ROOT_DIR/configs/soranexus/taira/validator_secrets.local.toml}"
 TAIRA_ONBOARDING_TOKEN_FILE="${IROHA_TAIRA_ONBOARDING_TOKEN_FILE:-}"
@@ -17,6 +20,7 @@ REPORTED_AT_MS="${IROHA_TAIRA_KAIGI_REPORTED_AT_MS:-1890864000000}"
 RELAY_DOMAIN="${IROHA_TAIRA_KAIGI_RELAY_DOMAIN:-nexus.universal}"
 BOOTSTRAP_AUTHORITY_DOMAIN="${IROHA_TAIRA_KAIGI_BOOTSTRAP_AUTHORITY_DOMAIN:-nexus.universal}"
 KAIGI_HELPER_BIN="${IROHA_TAIRA_KAIGI_HELPER_BIN:-}"
+KAGAMI_BIN="${IROHA_TAIRA_KAGAMI_BIN:-}"
 DPN_DATASPACE_ID="${IROHA_TAIRA_DPN_DATASPACE_ID:-10}"
 DPN_DATASPACE_ALIAS="${IROHA_TAIRA_DPN_DATASPACE_ALIAS:-dpn}"
 DPN_ACCOUNT_DOMAIN="${IROHA_TAIRA_DPN_ACCOUNT_DOMAIN:-wonderland.dpn}"
@@ -957,8 +961,18 @@ helper_supports_cli() {
   [[ -x "$candidate" ]] || return 1
   local help
   help="$("$candidate" --help 2>&1)" || return 1
-  grep -q -- '--expected-genesis-public-key' <<<"$help" \
-    && grep -q -- '--genesis-private-key-file' <<<"$help"
+  grep -q -- '--out-manifest' <<<"$help" || return 1
+  local retired_flag
+  for retired_flag in \
+    '--seed' \
+    '--genesis-private-key-file' \
+    '--expected-genesis-public-key' \
+    '--config' \
+    '--out-file'; do
+    if grep -q -- "$retired_flag" <<<"$help"; then
+      return 1
+    fi
+  done
 }
 
 discover_helper_bin() {
@@ -968,7 +982,7 @@ discover_helper_bin() {
       printf '%s\n' "$KAIGI_HELPER_BIN"
       return 0
     fi
-    echo "configured Kaigi helper binary does not expose the genesis overlay CLI: $KAIGI_HELPER_BIN" >&2
+    echo "configured Kaigi helper binary does not expose the unsigned genesis manifest overlay CLI: $KAIGI_HELPER_BIN" >&2
     exit 1
   fi
   for candidate in \
@@ -991,6 +1005,93 @@ discover_helper_bin() {
     return 0
   fi
   return 1
+}
+
+run_kagami_genesis_sign() {
+  local args=(
+    genesis sign "$KAIGI_MANIFEST"
+    --private-key-file "$GENESIS_PRIVATE_KEY_FILE"
+    --expected-public-key "$LOCALNET_GENESIS_PUBLIC_KEY"
+    --config "$LOCALNET_DIR/peer0.toml"
+    --creation-time-ms "$REPORTED_AT_MS"
+    --out-file "$GENESIS_SIGNED"
+    --bound-manifest-out "$KAIGI_BOUND_MANIFEST"
+    --expected-hash-out "$GENESIS_EXPECTED_HASH"
+  )
+  if [[ -n "$KAGAMI_BIN" ]]; then
+    if [[ ! -x "$KAGAMI_BIN" ]]; then
+      echo "configured Kagami binary is not executable: $KAGAMI_BIN" >&2
+      exit 1
+    fi
+    "$KAGAMI_BIN" "${args[@]}"
+    return
+  fi
+  cargo run -p iroha_kagami --release -- "${args[@]}"
+}
+
+publish_localnet_genesis_identity() {
+  python3 - "$GENESIS_EXPECTED_HASH" "$KAIGI_BOUND_MANIFEST" "$GENESIS_SIGNED" \
+    "$LOCALNET_DIR/client.toml" "${PEER_CONFIGS[@]}" <<'PY'
+import json
+from pathlib import Path
+import re
+import sys
+
+hash_path, manifest_path, signed_path, client_path, *peer_paths = sys.argv[1:]
+genesis_hash = Path(hash_path).read_text(encoding="utf-8").strip()
+if (
+    len(genesis_hash) != 64
+    or any(ch not in "0123456789abcdef" for ch in genesis_hash)
+    or genesis_hash[-1] not in "13579bdf"
+):
+    raise SystemExit("Kagami emitted a non-canonical genesis hash record")
+
+network_id_body = genesis_hash.upper()
+checksum = 0xFFFF
+for byte in f"hash:{network_id_body}".encode("ascii"):
+    checksum ^= byte << 8
+    for _ in range(8):
+        checksum = (
+            ((checksum << 1) ^ 0x1021) & 0xFFFF
+            if checksum & 0x8000
+            else (checksum << 1) & 0xFFFF
+        )
+network_id = f"hash:{network_id_body}#{checksum:04X}"
+
+client = Path(client_path)
+client_text = client.read_text(encoding="utf-8")
+client_text, count = re.subn(
+    r'(?m)^network_id\s*=\s*"[^"]*"\s*$',
+    lambda _match: f"network_id = {json.dumps(network_id)}",
+    client_text,
+    count=1,
+)
+if count != 1:
+    raise SystemExit(f"client config has no unique network_id assignment: {client}")
+client.write_text(client_text, encoding="utf-8")
+
+for peer_raw in peer_paths:
+    peer = Path(peer_raw)
+    text = peer.read_text(encoding="utf-8")
+    match = re.search(r'(?ms)^\[genesis\]\s*\n(?P<body>.*?)(?=^\[|\Z)', text)
+    if match is None:
+        raise SystemExit(f"peer config has no [genesis] section: {peer}")
+    body = match.group("body")
+    body = re.sub(
+        r'(?m)^(?:file|manifest_json|expected_hash|expected_hash_file)\s*=.*\n?',
+        "",
+        body,
+    )
+    if body and not body.endswith("\n"):
+        body += "\n"
+    body += (
+        f"file = {json.dumps(str(Path(signed_path).resolve()))}\n"
+        f"manifest_json = {json.dumps(str(Path(manifest_path).resolve()))}\n"
+        f"expected_hash_file = {json.dumps(str(Path(hash_path).resolve()))}\n"
+    )
+    text = text[: match.start("body")] + body + text[match.end("body") :]
+    peer.write_text(text, encoding="utf-8")
+PY
 }
 
 need_cmd cargo
@@ -1086,13 +1187,10 @@ PY
 )"
 
 helper_bin="$(discover_helper_bin || true)"
-echo "building signed Kaigi overlay genesis"
+echo "building unsigned Kaigi overlay manifest"
 helper_args=(
   --genesis "$GENESIS_JSON"
-  --genesis-private-key-file "$GENESIS_PRIVATE_KEY_FILE"
-  --config "$LOCALNET_DIR/peer0.toml"
-  --out-file "$GENESIS_SIGNED"
-  --expected-genesis-public-key "$LOCALNET_GENESIS_PUBLIC_KEY"
+  --out-manifest "$KAIGI_MANIFEST"
   --host-public-key "$HOST_PUBLIC_KEY"
   --relay-domain "$RELAY_DOMAIN"
   --call-domain "$CALL_DOMAIN"
@@ -1119,6 +1217,9 @@ if [[ -n "$helper_bin" ]]; then
 else
   cargo run -p iroha_kagami --example taira_kaigi_localnet --release -- "${helper_args[@]}"
 fi
+echo "materializing and signing Kaigi genesis with canonical Kagami staging"
+run_kagami_genesis_sign
+publish_localnet_genesis_identity
 
 echo "stopping existing taira localnet session"
 "$LOCALNET_DIR/stop.sh" >/dev/null 2>&1 || true

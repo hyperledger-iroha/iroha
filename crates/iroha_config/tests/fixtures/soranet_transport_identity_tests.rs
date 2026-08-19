@@ -52,17 +52,30 @@ fn canonical_test_base_table() -> Table {
 }
 #[test]
 fn soranet_transport_identity_is_required_even_with_streaming_identity() {
+    let mut missing_public = canonical_test_base_table();
+    missing_public.remove("soranet_transport_public_key");
+    missing_public.remove("soranet_transport_private_key");
     let error = ConfigReader::new()
         .with_env(MockEnv::new())
-        .read_toml_with_extends(fixtures_dir().join("bad.missing_fields.toml"))
-        .expect("empty fixture should be readable")
+        .with_toml_source(TomlSource::inline(missing_public))
         .read_and_complete::<UserConfig>()
-        .expect_err("dedicated SoraNet transport identity must be required");
+        .expect_err("dedicated SoraNet transport public identity must be required");
     let message = strip_ansi_codes(&format!("{error:?}"));
     assert_contains!(message, "missing parameter: `soranet_transport_public_key`");
+
+    let mut missing_private = canonical_test_base_table();
+    missing_private.remove("soranet_transport_private_key");
+    let error = ConfigReader::new()
+        .with_env(MockEnv::new())
+        .with_toml_source(TomlSource::inline(missing_private))
+        .read_and_complete::<UserConfig>()
+        .expect("the public identity makes the user schema complete")
+        .parse()
+        .expect_err("dedicated SoraNet transport private identity must be required");
+    let message = strip_ansi_codes(&format!("{error:?}"));
     assert_contains!(
         message,
-        "missing parameter: `soranet_transport_private_key`"
+        "missing private-key source; configure exactly one of soranet_transport_private_key or soranet_transport_private_key_file"
     );
 }
 #[test]

@@ -1158,6 +1158,11 @@ mod tests {
         assert!(axt_properties.contains_key("next_handle_counter"));
         assert!(!axt_properties.contains_key("next_min_handle_era"));
         assert!(!axt_properties.contains_key("next_min_sub_nonce"));
+        let error_details_properties = schemas["ErrorDetails"]["properties"]
+            .as_object()
+            .expect("error details properties");
+        assert!(error_details_properties.contains_key("entrypoint_hash"));
+        assert!(error_details_properties.contains_key("tx_hash"));
     }
     #[test]
     fn static_account_operations_publish_exact_auth_and_private_responses() {

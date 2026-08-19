@@ -985,7 +985,7 @@ fn native_signer_payload_hard_cut_precedes_provider_use() {
     )
     .expect("seal exact native signer request");
     validate_operation_request(&request).expect("validate exact native signer request");
-    let signed = dispatch_server_operation(&state, &request)
+    let signed_transaction = dispatch_server_operation(&state, &request)
         .and_then(|bytes| {
             decode_canonical::<iroha_data_model::transaction::SignedTransaction>(
                 &bytes,
@@ -993,8 +993,8 @@ fn native_signer_payload_hard_cut_precedes_provider_use() {
             )
         })
         .expect("sign exact canonical payload");
-    assert_eq!(signed.payload(), &payload);
-    signed
+    assert_eq!(signed_transaction.payload(), &payload);
+    signed_transaction
         .verify_signature()
         .expect("verify exact signed payload");
     assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 1);
@@ -1075,7 +1075,7 @@ fn appeal_finance_signer_rejects_cross_network_before_provider_use() {
     .expect("seal exact appeal-finance signer request");
     validate_operation_request(&exact_request)
         .expect("validate exact appeal-finance signer request");
-    let signed = dispatch_server_operation(&state, &exact_request)
+    let signed_transaction = dispatch_server_operation(&state, &exact_request)
         .and_then(|bytes| {
             decode_canonical::<iroha_data_model::transaction::SignedTransaction>(
                 &bytes,
@@ -1083,8 +1083,8 @@ fn appeal_finance_signer_rejects_cross_network_before_provider_use() {
             )
         })
         .expect("sign exact appeal-finance payload");
-    assert_eq!(signed.payload(), &exact_payload);
-    signed
+    assert_eq!(signed_transaction.payload(), &exact_payload);
+    signed_transaction
         .verify_signature()
         .expect("verify appeal-finance transaction signature");
     assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 1);
@@ -1324,13 +1324,13 @@ fn moderation_transaction_signer_payload_and_result_are_exact() {
         dispatch_server_operation(&state, &request).expect("sign exact moderation payload");
     validate_operation_result(&request, STATUS_OK_V1, &result, &state.network_id)
         .expect("accept exact signed moderation result");
-    let signed = decode_canonical::<iroha_data_model::transaction::SignedTransaction>(
+    let signed_transaction = decode_canonical::<iroha_data_model::transaction::SignedTransaction>(
         &result,
         MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1,
     )
     .expect("decode exact signed moderation transaction");
-    assert_eq!(signed.payload(), &payload);
-    signed
+    assert_eq!(signed_transaction.payload(), &payload);
+    signed_transaction
         .verify_signature()
         .expect("verify moderation transaction signature");
     assert_eq!(signer.sign_calls.load(Ordering::Relaxed), 1);
@@ -1403,14 +1403,14 @@ fn moderation_transaction_signer_round_trips_and_poisons_on_substitution() {
     assert_eq!(qualification.revision(), 7);
     assert_eq!(qualification.policy_digest(), TEST_POLICY_DIGEST);
     let payload = moderation_transaction_signer_test_payload();
-    let signed =
+    let signed_transaction =
         iroha_torii::sorafs::moderation_runtime::ModerationSignedTransactionSignerV1::sign(
             signer.as_ref(),
             payload.clone(),
         )
         .expect("moderation transaction signer proxy signs exact payload");
-    assert_eq!(signed.payload(), &payload);
-    signed
+    assert_eq!(signed_transaction.payload(), &payload);
+    signed_transaction
         .verify_signature()
         .expect("verify brokered moderation signature");
     drop(dependencies);

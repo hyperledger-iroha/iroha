@@ -454,7 +454,7 @@ the two producer classes when both are ready. A finite simultaneous fsync/signat
 burst remains backpressured in its bounded producer queue; it cannot overflow the reducer FIFO or
 turn valid work into a restart.
 
-The shipped Taira profile sets `role = "validator"`, a 1,000 ms genesis cadence, a 10,000 ms round
+The shipped Taira profile sets `role = "validator"`, a 4,000 ms genesis cadence, a 10,000 ms round
 deadline, bounded 96-transaction/16 MiB bodies, and the finalized NPoS stake-snapshot roster. An
 observer changes only `role = "observer"`; it must not change the shared fingerprint.
 
@@ -857,8 +857,8 @@ Fresh global proposal production is workload-driven. The signed block cadence is
 view-zero proposal time, not an instruction to manufacture a body at every idle height. A leader
 defers before signing or encoding when the bounded queue snapshot, autonomous provider, and
 internal attachments contain no work. Internal work includes enabled, still-reachable time
-triggers which require ledger-clock progress, DA and pin material, previous-roster audit evidence,
-NPoS effects, SCCP commitments, certified merge work, and autonomous lane payloads. A resultless or
+triggers which require ledger-clock progress, DA and pin material, NPoS effects, SCCP commitments,
+certified merge work, and autonomous lane payloads. A resultless or
 wire-empty carrier is therefore admissible only when the shared semantic-work gate proves
 state-derived ledger-clock progress or authenticated external, autonomous, or other internal work;
 genuinely idle bodies are rejected.
@@ -1290,7 +1290,7 @@ four-peer, 13-peer global, soak, scaling, or full-workspace runs have passed.
 
 ## Taira profile
 
-The Sumeragi-v2 Taira chain starts from a new chain ID, targets one-second blocks, and uses a
+The Sumeragi-v2 Taira chain starts from a new chain ID, targets four-second blocks, and uses a
 ten-second round deadline. Cutover requires all four labeled validators to report the same build,
 protocol/config fingerprint, height context, and committed hash across repeated advancing samples.
 The shared public edge is checked only after those direct validator checks and a signed runtime-only

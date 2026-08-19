@@ -599,11 +599,7 @@ impl fmt::Display for PackageError {
             Self::UnsupportedPlatform => formatter.write_str(
                 "secure Musubi package planning is unsupported on this platform; qualified planning currently requires Unix stable file identities",
             ),
-            Self::Io {
-                operation,
-                path,
-                source,
-            } => write!(
+            Self::Io { operation, path, source } => write!(
                 formatter,
                 "failed to {operation} `{}`: {source}",
                 path.display()
@@ -2349,6 +2345,18 @@ manifest-version = 1
 name = "demo"
 version = "1.0.0"
 "#;
+    const SENSITIVE_PATH_COMPONENTS: [&str; 10] = [
+        ".envrc",
+        ".git-credentials",
+        ".authinfo.gpg",
+        "credentials.yaml",
+        "application_default_credentials.json",
+        "service-account.json",
+        "secrets.json",
+        "private_key",
+        "secret-key",
+        "mnemonic",
+    ];
     fn base_layout(root: &Path) -> PackageLayout {
         let mut layout = PackageLayout::new(root);
         layout.set_library("src");
@@ -2865,18 +2873,7 @@ exports = []
     }
     #[test]
     fn rejects_sensitive_paths_and_contents_without_echoing_secrets() {
-        for path in [
-            ".envrc",
-            ".git-credentials",
-            ".authinfo.gpg",
-            "credentials.yaml",
-            "application_default_credentials.json",
-            "service-account.json",
-            "secrets.json",
-            "private_key",
-            "secret-key",
-            "mnemonic",
-        ] {
+        for path in SENSITIVE_PATH_COMPONENTS {
             assert!(is_sensitive_component(path), "{path}");
         }
         let path_case = tempdir().expect("tempdir");

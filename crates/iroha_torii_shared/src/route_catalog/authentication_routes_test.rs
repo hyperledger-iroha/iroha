@@ -175,33 +175,36 @@ named_route_policy_test!(
     }
 );
 
-named_route_policy_test!(application_query_posts_authenticate_before_expensive_compute, {
-    assert_route_policies(
-        [
-            application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
-            application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST,
-            application_api::DOMAINS_QUERY_POST,
-            application_api::ACCOUNTS_QUERY_POST,
-            application_api::TRANSACTIONS_QUERY_POST,
-            application_api::TRANSACTIONS_VISIBLE_QUERY_POST,
-            application_api::REPO_AGREEMENTS_QUERY_POST,
-            telemetry::ASSET_HOLDERS_QUERY,
-            application_api::ASSETS_DEFINITIONS_QUERY_POST,
-            application_api::NFTS_QUERY_POST,
-            application_api::RWAS_QUERY_POST,
-        ],
-        ACCOUNT_EXPENSIVE,
-    );
-    assert_route_policy(
-        application_api::PROOFS_QUERY_POST,
-        RoutePolicyExpectation {
-            effect: Some(RouteEffect::ExpensiveCompute),
-            admission: Some(AdmissionPolicy::AuthenticatedAccount),
-            authentication: Some(AuthenticationPolicy::CanonicalSignedBody),
-            ..RoutePolicyExpectation::default()
-        },
-    );
-});
+named_route_policy_test!(
+    application_query_posts_authenticate_before_expensive_compute,
+    {
+        assert_route_policies(
+            [
+                application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
+                application_api::ACCOUNTS_BY_ACCOUNT_ID_ASSETS_QUERY_POST,
+                application_api::DOMAINS_QUERY_POST,
+                application_api::ACCOUNTS_QUERY_POST,
+                application_api::TRANSACTIONS_QUERY_POST,
+                application_api::TRANSACTIONS_VISIBLE_QUERY_POST,
+                application_api::REPO_AGREEMENTS_QUERY_POST,
+                telemetry::ASSET_HOLDERS_QUERY,
+                application_api::ASSETS_DEFINITIONS_QUERY_POST,
+                application_api::NFTS_QUERY_POST,
+                application_api::RWAS_QUERY_POST,
+            ],
+            ACCOUNT_EXPENSIVE,
+        );
+        assert_route_policy(
+            application_api::PROOFS_QUERY_POST,
+            RoutePolicyExpectation {
+                effect: Some(RouteEffect::ExpensiveCompute),
+                admission: Some(AdmissionPolicy::AuthenticatedAccount),
+                authentication: Some(AuthenticationPolicy::CanonicalSignedBody),
+                ..RoutePolicyExpectation::default()
+            },
+        );
+    }
+);
 
 named_route_policy_test!(local_sorafs_governance_state_is_operator_signed, {
     assert_route_policies(
@@ -254,47 +257,50 @@ named_route_policy_test!(
     }
 );
 
-named_route_policy_test!(sorafs_inventory_and_storage_reads_declare_fail_closed_admission, {
-    assert_route_policies(
-        [sorafs::ALIASES, sorafs::REPLICATION],
-        RoutePolicyExpectation {
-            method: Some(HttpMethod::Get),
-            surface: Some(ApiSurface::Public),
-            projections: Some(RouteProjections::OPENAPI_AND_SDK),
-            ..ACCOUNT_EXPENSIVE
-        },
-    );
-    assert_route_policy(
-        sorafs::STORAGE_STATE,
-        RoutePolicyExpectation {
-            projections: Some(RouteProjections::NONE),
-            ..OPERATOR_READ
-        },
-    );
-    assert_route_policy(
-        sorafs::STORAGE_FETCH,
-        RoutePolicyExpectation {
-            method: Some(HttpMethod::Post),
-            surface: Some(ApiSurface::Operator),
-            effect: Some(RouteEffect::ExpensiveCompute),
-            admission: Some(AdmissionPolicy::Operator),
-            authentication: Some(AuthenticationPolicy::OperatorSignature),
-            projections: Some(RouteProjections::NONE),
-            ..RoutePolicyExpectation::default()
-        },
-    );
-    assert_route_policies(
-        [sorafs::STORAGE_CAR, sorafs::STORAGE_CHUNK],
-        RoutePolicyExpectation {
-            method: Some(HttpMethod::Get),
-            effect: Some(RouteEffect::ReadOnly),
-            admission: Some(AdmissionPolicy::AuthenticatedProtocolPrincipal),
-            authentication: Some(AuthenticationPolicy::ProtocolHandshake),
-            projections: Some(RouteProjections::OPENAPI_AND_SDK),
-            ..RoutePolicyExpectation::default()
-        },
-    );
-});
+named_route_policy_test!(
+    sorafs_inventory_and_storage_reads_declare_fail_closed_admission,
+    {
+        assert_route_policies(
+            [sorafs::ALIASES, sorafs::REPLICATION],
+            RoutePolicyExpectation {
+                method: Some(HttpMethod::Get),
+                surface: Some(ApiSurface::Public),
+                projections: Some(RouteProjections::OPENAPI_AND_SDK),
+                ..ACCOUNT_EXPENSIVE
+            },
+        );
+        assert_route_policy(
+            sorafs::STORAGE_STATE,
+            RoutePolicyExpectation {
+                projections: Some(RouteProjections::NONE),
+                ..OPERATOR_READ
+            },
+        );
+        assert_route_policy(
+            sorafs::STORAGE_FETCH,
+            RoutePolicyExpectation {
+                method: Some(HttpMethod::Post),
+                surface: Some(ApiSurface::Operator),
+                effect: Some(RouteEffect::ExpensiveCompute),
+                admission: Some(AdmissionPolicy::Operator),
+                authentication: Some(AuthenticationPolicy::OperatorSignature),
+                projections: Some(RouteProjections::NONE),
+                ..RoutePolicyExpectation::default()
+            },
+        );
+        assert_route_policies(
+            [sorafs::STORAGE_CAR, sorafs::STORAGE_CHUNK],
+            RoutePolicyExpectation {
+                method: Some(HttpMethod::Get),
+                effect: Some(RouteEffect::ReadOnly),
+                admission: Some(AdmissionPolicy::AuthenticatedProtocolPrincipal),
+                authentication: Some(AuthenticationPolicy::ProtocolHandshake),
+                projections: Some(RouteProjections::OPENAPI_AND_SDK),
+                ..RoutePolicyExpectation::default()
+            },
+        );
+    }
+);
 
 named_route_policy_test!(
     soracloud_commands_require_exact_account_authentication_and_honest_effects,
@@ -332,42 +338,47 @@ named_route_policy_test!(
     }
 );
 
-named_route_policy_test!(soracloud_sensitive_reads_require_exact_account_authentication, {
-    let protected = [
-        application_api::SORACLOUD_STATUS_GET,
-        application_api::SORACLOUD_APPS_STATUS_GET,
-        application_api::SORACLOUD_APPS_BY_APP_NAME_STATUS_GET,
-        application_api::SORACLOUD_SERVICE_CONFIG_STATUS_GET,
-        application_api::SORACLOUD_SERVICE_SECRET_STATUS_GET,
-        application_api::SORACLOUD_HEALTH_COMPLIANCE_REPORT_GET,
-        application_api::SORACLOUD_TRAINING_JOB_STATUS_GET,
-        application_api::SORACLOUD_MODEL_WEIGHT_STATUS_GET,
-        application_api::SORACLOUD_MODEL_ARTIFACT_STATUS_GET,
-        application_api::SORACLOUD_MODEL_UPLOAD_STATUS_GET,
-        application_api::SORACLOUD_MODEL_UPLOAD_PRIVATE_RECEIPTS_GET,
-        application_api::SORACLOUD_HF_STATUS_GET,
-        application_api::SORACLOUD_MODEL_HOST_STATUS_GET,
-        application_api::SORACLOUD_AGENT_STATUS_GET,
-        application_api::SORACLOUD_AGENT_MAILBOX_STATUS_GET,
-        application_api::SORACLOUD_AGENT_AUTONOMY_STATUS_GET,
-    ];
-    assert_eq!(
-        protected.len(),
-        16,
-        "every sensitive Soracloud GET must be classified"
-    );
-    assert_route_policies(
-        protected,
-        RoutePolicyExpectation {
-            method: Some(HttpMethod::Get),
-            effect: Some(RouteEffect::ReadOnly),
-            ..ACCOUNT_AUTHENTICATED
-        },
-    );
-});
+named_route_policy_test!(
+    soracloud_sensitive_reads_require_exact_account_authentication,
+    {
+        let protected = [
+            application_api::SORACLOUD_STATUS_GET,
+            application_api::SORACLOUD_APPS_STATUS_GET,
+            application_api::SORACLOUD_APPS_BY_APP_NAME_STATUS_GET,
+            application_api::SORACLOUD_SERVICE_CONFIG_STATUS_GET,
+            application_api::SORACLOUD_SERVICE_SECRET_STATUS_GET,
+            application_api::SORACLOUD_HEALTH_COMPLIANCE_REPORT_GET,
+            application_api::SORACLOUD_TRAINING_JOB_STATUS_GET,
+            application_api::SORACLOUD_MODEL_WEIGHT_STATUS_GET,
+            application_api::SORACLOUD_MODEL_ARTIFACT_STATUS_GET,
+            application_api::SORACLOUD_MODEL_UPLOAD_STATUS_GET,
+            application_api::SORACLOUD_MODEL_UPLOAD_PRIVATE_RECEIPTS_GET,
+            application_api::SORACLOUD_HF_STATUS_GET,
+            application_api::SORACLOUD_MODEL_HOST_STATUS_GET,
+            application_api::SORACLOUD_AGENT_STATUS_GET,
+            application_api::SORACLOUD_AGENT_MAILBOX_STATUS_GET,
+            application_api::SORACLOUD_AGENT_AUTONOMY_STATUS_GET,
+        ];
+        assert_eq!(
+            protected.len(),
+            16,
+            "every sensitive Soracloud GET must be classified"
+        );
+        assert_route_policies(
+            protected,
+            RoutePolicyExpectation {
+                method: Some(HttpMethod::Get),
+                effect: Some(RouteEffect::ReadOnly),
+                ..ACCOUNT_AUTHENTICATED
+            },
+        );
+    }
+);
 
-named_route_policy_test!(soracloud_public_reads_are_bounded_single_object_discovery, {
-    assert_route_policies(
+named_route_policy_test!(
+    soracloud_public_reads_are_bounded_single_object_discovery,
+    {
+        assert_route_policies(
         [
             application_api::SORACLOUD_SERVICES_BY_SERVICE_NAME_PUBLIC_DISCOVERY_GET,
             application_api::SORACLOUD_SERVICES_BY_SERVICE_NAME_REVISIONS_BY_SERVICE_VERSION_PUBLIC_DISCOVERY_GET,
@@ -375,7 +386,8 @@ named_route_policy_test!(soracloud_public_reads_are_bounded_single_object_discov
         ],
         PUBLIC_READ,
     );
-});
+    }
+);
 
 named_route_policy_test!(
     subscription_commands_require_exact_account_authentication_and_mutation_admission,
@@ -549,35 +561,38 @@ named_route_policy_test!(
     }
 );
 
-named_route_policy_test!(moderation_dead_letter_routes_are_account_signed_operator_role_posts, {
-    let routes = [
-        (
-            contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_PREPARE_POST,
-            "contracts.sorafs_moderation_dead_letters_prepare_post",
-            "/v1/sorafs/moderation/dead-letters/prepare",
-        ),
-        (
-            contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_APPLY_POST,
-            "contracts.sorafs_moderation_dead_letters_apply_post",
-            "/v1/sorafs/moderation/dead-letters/apply",
-        ),
-    ];
-    for (route, stable_route_id, path) in routes {
-        assert_route_policy(
-            route,
-            RoutePolicyExpectation {
-                stable_route_id: Some(stable_route_id),
-                method: Some(HttpMethod::Post),
-                path: Some(path),
-                surface: Some(ApiSurface::Public),
-                authentication: Some(AuthenticationPolicy::CanonicalAccountSignature),
-                projections: Some(RouteProjections::OPENAPI_AND_SDK),
-                cors_options: Some(true),
-                app_api_enabled: Some(true),
-                cataloged: Some(true),
-                ..RoutePolicyExpectation::default()
-            },
-        );
+named_route_policy_test!(
+    moderation_dead_letter_routes_are_account_signed_operator_role_posts,
+    {
+        let routes = [
+            (
+                contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_PREPARE_POST,
+                "contracts.sorafs_moderation_dead_letters_prepare_post",
+                "/v1/sorafs/moderation/dead-letters/prepare",
+            ),
+            (
+                contracts_and_verification_keys::SORAFS_MODERATION_DEAD_LETTERS_APPLY_POST,
+                "contracts.sorafs_moderation_dead_letters_apply_post",
+                "/v1/sorafs/moderation/dead-letters/apply",
+            ),
+        ];
+        for (route, stable_route_id, path) in routes {
+            assert_route_policy(
+                route,
+                RoutePolicyExpectation {
+                    stable_route_id: Some(stable_route_id),
+                    method: Some(HttpMethod::Post),
+                    path: Some(path),
+                    surface: Some(ApiSurface::Public),
+                    authentication: Some(AuthenticationPolicy::CanonicalAccountSignature),
+                    projections: Some(RouteProjections::OPENAPI_AND_SDK),
+                    cors_options: Some(true),
+                    app_api_enabled: Some(true),
+                    cataloged: Some(true),
+                    ..RoutePolicyExpectation::default()
+                },
+            );
+        }
+        assert_eq!(validate_catalog(&routes.map(|(route, _, _)| route)), Ok(()));
     }
-    assert_eq!(validate_catalog(&routes.map(|(route, _, _)| route)), Ok(()));
-});
+);

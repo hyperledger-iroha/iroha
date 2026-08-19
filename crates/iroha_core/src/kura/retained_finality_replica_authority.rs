@@ -1469,6 +1469,17 @@ impl Kura {
     fn v2_finality_artifact_path(&self, height: u64) -> PathBuf {
         Self::v2_finality_artifact_path_for(&self.active_blocks_dir.lock(), height)
     }
+    /// Return the private finality-record path for cross-crate corruption tests.
+    ///
+    /// This surface is compiled only for the dedicated core-test feature. It
+    /// lets endpoint tests prove that production readers reject malformed and
+    /// mis-associated durable evidence; production callers cannot obtain or
+    /// mutate private Kura paths through this API.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[must_use]
+    pub fn v2_finality_artifact_path_for_testing(&self, height: u64) -> PathBuf {
+        self.v2_finality_artifact_path(height)
+    }
     fn v2_finality_artifact_heights_for(
         store_root: &Path,
         blocks_dir: &Path,

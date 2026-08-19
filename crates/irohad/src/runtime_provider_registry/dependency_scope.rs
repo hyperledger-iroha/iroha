@@ -4,6 +4,10 @@
 //! Shared provider objects remain valid only when every role in their fixed V1 pair was requested.
 use super::*;
 /// Return whether the resolved dependency catalog contains the requested role.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the exhaustive match documents the closed V1 provider-slot dependency projection"
+)]
 pub(super) fn dependency_is_present(
     dependencies: &IrohaRuntimeDeps,
     slot: IrohaRuntimeProviderSlotV1,
@@ -591,11 +595,11 @@ mod tests {
                 )
             }
         }
-        fn load_latest<'a>(
-            &'a self,
+        fn load_latest(
+            &self,
             _scope_digest: [u8; 32],
         ) -> sorafs_node::ProviderIngestFutureV1<
-            'a,
+            '_,
             Result<
                 Option<sorafs_node::MusubiProviderAttestationClockSealRecordV1>,
                 sorafs_node::MusubiProviderAttestationClockSealErrorV1,
@@ -708,11 +712,11 @@ mod tests {
     }
     struct Inventory(AttestationProviderMetadata);
     impl sorafs_node::MusubiProviderAttestationInventorySinkV1 for Inventory {
-        fn put<'a>(
-            &'a self,
+        fn put(
+            &self,
             _item: sorafs_node::MusubiProviderAttestationInventoryItemV1,
         ) -> sorafs_node::ProviderIngestFutureV1<
-            'a,
+            '_,
             Result<u64, sorafs_node::MusubiProviderAttestationInventoryErrorV1>,
         > {
             Box::pin(async {
@@ -773,10 +777,10 @@ mod tests {
                 )
             }
         }
-        fn check_readiness<'a>(
-            &'a self,
+        fn check_readiness(
+            &self,
         ) -> sorafs_node::ProviderIngestFutureV1<
-            'a,
+            '_,
             Result<(), sorafs_node::MusubiProviderAttestationInventoryRuntimeErrorV1>,
         > {
             Box::pin(async {

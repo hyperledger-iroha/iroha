@@ -29,28 +29,28 @@ struct StateMapSpec {
     key: Type,
     value: Type,
 }
-fn function_value_word_types(ty: &Type) -> Option<Vec<Type>> {
-    fn append(ty: &Type, words: &mut Vec<Type>) {
-        match semantic::resolve_struct_type(ty) {
-            Type::Struct { fields, .. } => {
-                for (_, field_ty) in fields.iter() {
-                    append(field_ty, words);
-                }
+fn append_value_word_types(ty: &Type, words: &mut Vec<Type>) {
+    match semantic::resolve_struct_type(ty) {
+        Type::Struct { fields, .. } => {
+            for (_, field_ty) in fields.iter() {
+                append_value_word_types(field_ty, words);
             }
-            Type::Tuple(items) => {
-                for item in items {
-                    append(&item, words);
-                }
-            }
-            // Sums are compiler-owned heap values. Their complete ABI value is
-            // one validated raw handle; inactive branches are never flattened
-            // into public registers or populated with placeholders.
-            handle @ (Type::Option(_) | Type::Result(_, _) | Type::List(_, _)) => {
-                words.push(handle);
-            }
-            leaf => words.push(leaf),
         }
+        Type::Tuple(items) => {
+            for item in items {
+                append_value_word_types(&item, words);
+            }
+        }
+        // Sums are compiler-owned heap values. Their complete ABI value is
+        // one validated raw handle; inactive branches are never flattened
+        // into public registers or populated with placeholders.
+        handle @ (Type::Option(_) | Type::Result(_, _) | Type::List(_, _)) => {
+            words.push(handle);
+        }
+        leaf => words.push(leaf),
     }
+}
+fn function_value_word_types(ty: &Type) -> Option<Vec<Type>> {
     if !matches!(
         semantic::resolve_struct_type(ty),
         Type::Struct { .. }
@@ -62,30 +62,12 @@ fn function_value_word_types(ty: &Type) -> Option<Vec<Type>> {
         return None;
     }
     let mut words = Vec::new();
-    append(ty, &mut words);
+    append_value_word_types(ty, &mut words);
     Some(words)
 }
 fn runtime_value_word_types(ty: &Type) -> Vec<Type> {
     let mut words = Vec::new();
-    fn append(ty: &Type, words: &mut Vec<Type>) {
-        match semantic::resolve_struct_type(ty) {
-            Type::Struct { fields, .. } => {
-                for (_, field_ty) in fields.iter() {
-                    append(field_ty, words);
-                }
-            }
-            Type::Tuple(items) => {
-                for item in items {
-                    append(&item, words);
-                }
-            }
-            handle @ (Type::Option(_) | Type::Result(_, _) | Type::List(_, _)) => {
-                words.push(handle);
-            }
-            leaf => words.push(leaf),
-        }
-    }
-    append(ty, &mut words);
+    append_value_word_types(ty, &mut words);
     words
 }
 fn runtime_word_is_pointer(ty: &Type) -> bool {
@@ -1365,12 +1347,11 @@ fn emit_state_value_schema_ref(ctx: &mut LowerCtx, ty: &Type) -> Option<Temp> {
     if encoded.len() > ivm_abi::state_value::MAX_STATE_VALUE_SCHEMA_BYTES {
         return None;
     }
-    let schema_ref = ctx.new_temp();
-    ctx.current_instr(Instr::DataRef {
-        dest: schema_ref,
-        kind: DataRefKind::NoritoBytes,
-        value: format!("0x{}", hex::encode(encoded)),
-    });
+    let schema_ref = emit_data_ref(
+        ctx,
+        DataRefKind::NoritoBytes,
+        format!("0x{}", hex::encode(encoded)),
+    );
     Some(schema_ref)
 }
 fn collect_state_value_words(
@@ -1381,21 +1362,11 @@ fn collect_state_value_words(
 ) -> bool {
     match semantic::resolve_struct_type(ty) {
         Type::Struct { fields, .. } => fields.iter().enumerate().all(|(index, (_, field_ty))| {
-            let field = ctx.new_temp();
-            ctx.current_instr(Instr::TupleGet {
-                dest: field,
-                tuple: value,
-                index,
-            });
+            let field = emit_tuple_get(ctx, value, index);
             collect_state_value_words(ctx, field, field_ty, words)
         }),
         Type::Tuple(items) => items.iter().enumerate().all(|(index, item_ty)| {
-            let item = ctx.new_temp();
-            ctx.current_instr(Instr::TupleGet {
-                dest: item,
-                tuple: value,
-                index,
-            });
+            let item = emit_tuple_get(ctx, value, index);
             collect_state_value_words(ctx, item, item_ty, words)
         }),
         Type::Option(_) | Type::Result(_, _) | Type::List(_, _) => {
@@ -1444,12 +1415,11 @@ fn lower_json_construction(
     };
     let expected_words = construction.word_count;
     let encoded_schema = construction.encoded;
-    let schema_ref = ctx.new_temp();
-    ctx.current_instr(Instr::DataRef {
-        dest: schema_ref,
-        kind: DataRefKind::NoritoBytes,
-        value: format!("0x{}", hex::encode(encoded_schema)),
-    });
+    let schema_ref = emit_data_ref(
+        ctx,
+        DataRefKind::NoritoBytes,
+        format!("0x{}", hex::encode(encoded_schema)),
+    );
     let mut words = Vec::with_capacity(expected_words);
     if !collect_json_construction_words(ctx, expr, vars, &mut words)
         || words.len() != expected_words
@@ -1470,8 +1440,7 @@ fn lower_json_construction(
             return emit_i64_const(ctx, 0);
         };
         let bytes = emit_i64_const(ctx, byte_len);
-        let table = ctx.new_temp();
-        ctx.current_instr(Instr::Alloc { dest: table, bytes });
+        let table = emit_alloc(ctx, bytes);
         for (index, word) in words.into_iter().enumerate() {
             let Some(offset) = index
                 .checked_mul(std::mem::size_of::<u64>())
@@ -1480,11 +1449,7 @@ fn lower_json_construction(
                 ctx.record_error("native JSON value-table offset exceeds the V1 limit".into());
                 return emit_i64_const(ctx, 0);
             };
-            ctx.current_instr(Instr::Store64Imm {
-                base: table,
-                imm: offset,
-                value: word,
-            });
+            emit_store64_imm(ctx, table, offset, word);
         }
         table
     };
@@ -1501,23 +1466,13 @@ fn collect_function_value_words(ctx: &mut LowerCtx, value: Temp, ty: &Type, word
     match semantic::resolve_struct_type(ty) {
         Type::Struct { fields, .. } => {
             for (index, (_, field_ty)) in fields.iter().enumerate() {
-                let field = ctx.new_temp();
-                ctx.current_instr(Instr::TupleGet {
-                    dest: field,
-                    tuple: value,
-                    index,
-                });
+                let field = emit_tuple_get(ctx, value, index);
                 collect_function_value_words(ctx, field, field_ty, words);
             }
         }
         Type::Tuple(items) => {
             for (index, item_ty) in items.iter().enumerate() {
-                let item = ctx.new_temp();
-                ctx.current_instr(Instr::TupleGet {
-                    dest: item,
-                    tuple: value,
-                    index,
-                });
+                let item = emit_tuple_get(ctx, value, index);
                 collect_function_value_words(ctx, item, item_ty, words);
             }
         }
@@ -1567,8 +1522,7 @@ fn rebuild_state_value_from_table(
                 .iter()
                 .map(|(_, field_ty)| rebuild_state_value_from_table(ctx, table, field_ty, index))
                 .collect::<Option<Vec<_>>>()?;
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack { dest, items });
+            let dest = emit_tuple_pack(ctx, items);
             Some(dest)
         }
         Type::Tuple(types) => {
@@ -1576,8 +1530,7 @@ fn rebuild_state_value_from_table(
                 .iter()
                 .map(|item_ty| rebuild_state_value_from_table(ctx, table, item_ty, index))
                 .collect::<Option<Vec<_>>>()?;
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack { dest, items });
+            let dest = emit_tuple_pack(ctx, items);
             Some(dest)
         }
         Type::Option(_) | Type::Result(_, _) | Type::List(_, _) => {
@@ -1601,8 +1554,7 @@ fn rebuild_function_value_from_words(
                 .iter()
                 .map(|(_, field_ty)| rebuild_function_value_from_words(ctx, field_ty, words, index))
                 .collect::<Option<Vec<_>>>()?;
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack { dest, items });
+            let dest = emit_tuple_pack(ctx, items);
             Some(dest)
         }
         Type::Tuple(types) => {
@@ -1610,8 +1562,7 @@ fn rebuild_function_value_from_words(
                 .iter()
                 .map(|item_ty| rebuild_function_value_from_words(ctx, item_ty, words, index))
                 .collect::<Option<Vec<_>>>()?;
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack { dest, items });
+            let dest = emit_tuple_pack(ctx, items);
             Some(dest)
         }
         Type::Option(_) | Type::Result(_, _) | Type::List(_, _) => {
@@ -1653,20 +1604,12 @@ fn sum_active_payload_type(ty: &Type, tag: u64) -> Option<Option<Type>> {
 fn emit_sum_value(ctx: &mut LowerCtx, sum_ty: &Type, tag: u64, payload: Option<Temp>) -> Temp {
     let Some(layout) = sum_layout_for_type(sum_ty) else {
         ctx.record_error("internal error: invalid sum layout".into());
-        let invalid = ctx.new_temp();
-        ctx.current_instr(Instr::Const {
-            dest: invalid,
-            value: 0,
-        });
+        let invalid = emit_i64_const(ctx, 0);
         return invalid;
     };
     let Some(payload_ty) = sum_active_payload_type(sum_ty, tag) else {
         ctx.record_error("internal error: invalid sum tag".into());
-        let invalid = ctx.new_temp();
-        ctx.current_instr(Instr::Const {
-            dest: invalid,
-            value: 0,
-        });
+        let invalid = emit_i64_const(ctx, 0);
         return invalid;
     };
     let mut payload_words = Vec::new();
@@ -1689,26 +1632,10 @@ fn emit_sum_value(ctx: &mut LowerCtx, sum_ty: &Type, tag: u64, payload: Option<T
             ctx.record_error("internal error: sum allocation exceeds V1 limits".into());
             8
         });
-    let byte_count = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: byte_count,
-        value: bytes,
-    });
-    let value = ctx.new_temp();
-    ctx.current_instr(Instr::Alloc {
-        dest: value,
-        bytes: byte_count,
-    });
-    let tag_temp = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: tag_temp,
-        value: i64::try_from(tag).expect("canonical sum tag fits int"),
-    });
-    ctx.current_instr(Instr::Store64Imm {
-        base: value,
-        imm: 0,
-        value: tag_temp,
-    });
+    let byte_count = emit_i64_const(ctx, bytes);
+    let value = emit_alloc(ctx, byte_count);
+    let tag_temp = emit_i64_const(ctx, i64::try_from(tag).expect("canonical sum tag fits int"));
+    emit_store64_imm(ctx, value, 0, tag_temp);
     for (index, word) in payload_words.into_iter().enumerate() {
         let offset = index
             .checked_add(1)
@@ -1727,13 +1654,7 @@ fn emit_sum_value(ctx: &mut LowerCtx, sum_ty: &Type, tag: u64, payload: Option<T
     value
 }
 fn load_sum_tag(ctx: &mut LowerCtx, value: Temp) -> Temp {
-    let tag = ctx.new_temp();
-    ctx.current_instr(Instr::Load64Imm {
-        dest: tag,
-        base: value,
-        imm: 0,
-    });
-    tag
+    emit_load64_imm(ctx, value, 0)
 }
 fn load_sum_payload(ctx: &mut LowerCtx, value: Temp, payload_ty: &Type) -> Temp {
     let word_types = runtime_value_word_types(payload_ty);
@@ -1779,6 +1700,104 @@ fn emit_i64_const(ctx: &mut LowerCtx, value: i64) -> Temp {
     ctx.current_instr(Instr::Const { dest: temp, value });
     temp
 }
+fn emit_data_ref_into(ctx: &mut LowerCtx, dest: Temp, kind: DataRefKind, value: String) {
+    ctx.current_instr(Instr::DataRef { dest, kind, value });
+}
+
+fn emit_data_ref(ctx: &mut LowerCtx, kind: DataRefKind, value: String) -> Temp {
+    let dest = ctx.new_temp();
+    emit_data_ref_into(ctx, dest, kind, value);
+    dest
+}
+
+fn emit_copy(ctx: &mut LowerCtx, dest: Temp, src: Temp) {
+    ctx.current_instr(Instr::Copy { dest, src });
+}
+
+fn emit_binary(ctx: &mut LowerCtx, op: BinaryOp, left: Temp, right: Temp) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::Binary {
+        dest,
+        op,
+        left,
+        right,
+    });
+    dest
+}
+
+fn emit_numeric_compare(
+    ctx: &mut LowerCtx,
+    op: BinaryOp,
+    left: Temp,
+    right: Temp,
+    kind: WideNumericKind,
+) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::NumericCompare {
+        dest,
+        op,
+        left,
+        right,
+        kind,
+    });
+    dest
+}
+
+fn emit_pointer_eq(ctx: &mut LowerCtx, left: Temp, right: Temp) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::PointerEq { dest, left, right });
+    dest
+}
+
+fn emit_unary(ctx: &mut LowerCtx, op: UnaryOp, operand: Temp) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::Unary { dest, op, operand });
+    dest
+}
+
+fn emit_load64_imm(ctx: &mut LowerCtx, base: Temp, imm: i16) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::Load64Imm { dest, base, imm });
+    dest
+}
+
+fn emit_store64_imm(ctx: &mut LowerCtx, base: Temp, imm: i16, value: Temp) {
+    ctx.current_instr(Instr::Store64Imm { base, imm, value });
+}
+
+fn emit_tuple_get(ctx: &mut LowerCtx, tuple: Temp, index: usize) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::TupleGet { dest, tuple, index });
+    dest
+}
+
+fn emit_tuple_pack(ctx: &mut LowerCtx, items: Vec<Temp>) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::TuplePack { dest, items });
+    dest
+}
+
+fn emit_state_get(ctx: &mut LowerCtx, path: Temp) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::StateGet { dest, path });
+    dest
+}
+fn emit_alloc(ctx: &mut LowerCtx, bytes: Temp) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::Alloc { dest, bytes });
+    dest
+}
+fn emit_pointer_to_norito(ctx: &mut LowerCtx, value: Temp) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::PointerToNorito { dest, value });
+    dest
+}
+fn emit_pointer_from_norito(ctx: &mut LowerCtx, blob: Temp, kind: DataRefKind) -> Temp {
+    let dest = ctx.new_temp();
+    ctx.current_instr(Instr::PointerFromNorito { dest, blob, kind });
+    dest
+}
+
 /// Cross the internal scalar/source-value boundary explicitly.
 ///
 /// Some internal arithmetic protocols return signed 64-bit words. A Kotodama
@@ -1817,20 +1836,11 @@ fn emit_list_allocation(ctx: &mut LowerCtx, list_ty: &Type, initial_len: u64) ->
             16
         });
     let bytes = emit_i64_const(ctx, bytes);
-    let list = ctx.new_temp();
-    ctx.current_instr(Instr::Alloc { dest: list, bytes });
+    let list = emit_alloc(ctx, bytes);
     let len = emit_i64_const(ctx, i64::try_from(initial_len).unwrap_or(i64::MAX));
-    ctx.current_instr(Instr::Store64Imm {
-        base: list,
-        imm: 0,
-        value: len,
-    });
+    emit_store64_imm(ctx, list, 0, len);
     let capacity = emit_i64_const(ctx, i64::from(layout.capacity()));
-    ctx.current_instr(Instr::Store64Imm {
-        base: list,
-        imm: 8,
-        value: capacity,
-    });
+    emit_store64_imm(ctx, list, 8, capacity);
     list
 }
 fn emit_list_slot_base(ctx: &mut LowerCtx, list: Temp, index: Temp, element_words: usize) -> Temp {
@@ -1842,21 +1852,8 @@ fn emit_list_slot_base(ctx: &mut LowerCtx, list: Temp, index: Temp, element_word
             8
         });
     let stride = emit_i64_const(ctx, stride);
-    let offset = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: offset,
-        op: BinaryOp::Mul,
-        left: index,
-        right: stride,
-    });
-    let slot = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: slot,
-        op: BinaryOp::Add,
-        left: list,
-        right: offset,
-    });
-    slot
+    let offset = emit_binary(ctx, BinaryOp::Mul, index, stride);
+    emit_binary(ctx, BinaryOp::Add, list, offset)
 }
 fn emit_list_word_address(ctx: &mut LowerCtx, slot: Temp, word_index: usize) -> Temp {
     let offset = word_index
@@ -1868,14 +1865,7 @@ fn emit_list_word_address(ctx: &mut LowerCtx, slot: Temp, word_index: usize) -> 
             16
         });
     let offset = emit_i64_const(ctx, offset);
-    let address = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: address,
-        op: BinaryOp::Add,
-        left: slot,
-        right: offset,
-    });
-    address
+    emit_binary(ctx, BinaryOp::Add, slot, offset)
 }
 fn load_list_element(ctx: &mut LowerCtx, list: Temp, index: Temp, element_ty: &Type) -> Temp {
     let word_types = runtime_value_word_types(element_ty);
@@ -1937,37 +1927,11 @@ fn clear_list_element(ctx: &mut LowerCtx, list: Temp, index: Temp, element_ty: &
     }
 }
 fn emit_list_index_is_present(ctx: &mut LowerCtx, index: Temp, len: Temp) -> Temp {
-    let zero = ctx.new_temp();
-    ctx.current_instr(Instr::DataRef {
-        dest: zero,
-        kind: DataRefKind::Int,
-        value: "0".to_owned(),
-    });
+    let zero = emit_data_ref(ctx, DataRefKind::Int, "0".to_owned());
     let len = emit_int_from_u64(ctx, len);
-    let non_negative = ctx.new_temp();
-    ctx.current_instr(Instr::NumericCompare {
-        dest: non_negative,
-        op: BinaryOp::Ge,
-        left: index,
-        right: zero,
-        kind: WideNumericKind::Int,
-    });
-    let below_len = ctx.new_temp();
-    ctx.current_instr(Instr::NumericCompare {
-        dest: below_len,
-        op: BinaryOp::Lt,
-        left: index,
-        right: len,
-        kind: WideNumericKind::Int,
-    });
-    let present = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: present,
-        op: BinaryOp::And,
-        left: non_negative,
-        right: below_len,
-    });
-    present
+    let non_negative = emit_numeric_compare(ctx, BinaryOp::Ge, index, zero, WideNumericKind::Int);
+    let below_len = emit_numeric_compare(ctx, BinaryOp::Lt, index, len, WideNumericKind::Int);
+    emit_binary(ctx, BinaryOp::And, non_negative, below_len)
 }
 fn lower_list_literal(
     ctx: &mut LowerCtx,
@@ -2010,12 +1974,7 @@ fn lower_list_comprehension(
         return emit_i64_const(ctx, 0);
     };
     let result = emit_list_allocation(ctx, list_ty, 0);
-    let source_len = ctx.new_temp();
-    ctx.current_instr(Instr::Load64Imm {
-        dest: source_len,
-        base: source_list,
-        imm: 0,
-    });
+    let source_len = emit_load64_imm(ctx, source_list, 0);
     let index = emit_i64_const(ctx, 0);
     let one = emit_i64_const(ctx, 1);
     let header = ctx.new_label();
@@ -2025,13 +1984,7 @@ fn lower_list_comprehension(
     let end = ctx.new_label();
     ctx.finish_current(Terminator::Jump(header));
     ctx.start_block(header);
-    let keep_going = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: keep_going,
-        op: BinaryOp::Lt,
-        left: index,
-        right: source_len,
-    });
+    let keep_going = emit_binary(ctx, BinaryOp::Lt, index, source_len);
     ctx.finish_current(Terminator::Branch {
         cond: keep_going,
         then_bb: body,
@@ -2053,12 +2006,7 @@ fn lower_list_comprehension(
     }
     ctx.start_block(append);
     let value = lower_expr(ctx, expression, &mut comprehension_vars);
-    let result_len = ctx.new_temp();
-    ctx.current_instr(Instr::Load64Imm {
-        dest: result_len,
-        base: result,
-        imm: 0,
-    });
+    let result_len = emit_load64_imm(ctx, result, 0);
     store_list_element(ctx, result, result_len, value, &result_element);
     ctx.current_instr(Instr::Binary {
         dest: result_len,
@@ -2066,11 +2014,7 @@ fn lower_list_comprehension(
         left: result_len,
         right: one,
     });
-    ctx.current_instr(Instr::Store64Imm {
-        base: result,
-        imm: 0,
-        value: result_len,
-    });
+    emit_store64_imm(ctx, result, 0, result_len);
     ctx.finish_current(Terminator::Jump(step));
     ctx.start_block(step);
     ctx.current_instr(Instr::Binary {
@@ -2091,26 +2035,10 @@ fn emit_product_value_eq(
 ) -> Temp {
     let mut result = emit_i64_const(ctx, 1);
     for (index, field_ty) in fields.into_iter().enumerate() {
-        let left_field = ctx.new_temp();
-        ctx.current_instr(Instr::TupleGet {
-            dest: left_field,
-            tuple: left,
-            index,
-        });
-        let right_field = ctx.new_temp();
-        ctx.current_instr(Instr::TupleGet {
-            dest: right_field,
-            tuple: right,
-            index,
-        });
+        let left_field = emit_tuple_get(ctx, left, index);
+        let right_field = emit_tuple_get(ctx, right, index);
         let equal = emit_typed_value_eq(ctx, left_field, right_field, &field_ty);
-        let combined = ctx.new_temp();
-        ctx.current_instr(Instr::Binary {
-            dest: combined,
-            op: BinaryOp::And,
-            left: result,
-            right: equal,
-        });
+        let combined = emit_binary(ctx, BinaryOp::And, result, equal);
         result = combined;
     }
     result
@@ -2119,13 +2047,7 @@ fn emit_product_value_eq(
 fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> Temp {
     let left_tag = load_sum_tag(ctx, left);
     let right_tag = load_sum_tag(ctx, right);
-    let tags_equal = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: tags_equal,
-        op: BinaryOp::Eq,
-        left: left_tag,
-        right: right_tag,
-    });
+    let tags_equal = emit_binary(ctx, BinaryOp::Eq, left_tag, right_tag);
     let matching_tags = ctx.new_label();
     let different_tags = ctx.new_label();
     let end = ctx.new_label();
@@ -2137,10 +2059,7 @@ fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> 
     });
     ctx.start_block(different_tags);
     let false_value = emit_i64_const(ctx, 0);
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: false_value,
-    });
+    emit_copy(ctx, result, false_value);
     ctx.finish_current(Terminator::Jump(end));
     ctx.start_block(matching_tags);
     match semantic::resolve_struct_type(ty) {
@@ -2154,19 +2073,13 @@ fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> 
             });
             ctx.start_block(none);
             let true_value = emit_i64_const(ctx, 1);
-            ctx.current_instr(Instr::Copy {
-                dest: result,
-                src: true_value,
-            });
+            emit_copy(ctx, result, true_value);
             ctx.finish_current(Terminator::Jump(end));
             ctx.start_block(some);
             let left_payload = load_sum_payload(ctx, left, &payload);
             let right_payload = load_sum_payload(ctx, right, &payload);
             let equal = emit_typed_value_eq(ctx, left_payload, right_payload, &payload);
-            ctx.current_instr(Instr::Copy {
-                dest: result,
-                src: equal,
-            });
+            emit_copy(ctx, result, equal);
             ctx.finish_current(Terminator::Jump(end));
         }
         Type::Result(ok, err) => {
@@ -2181,28 +2094,19 @@ fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> 
             let left_error = load_sum_payload(ctx, left, &err);
             let right_error = load_sum_payload(ctx, right, &err);
             let equal = emit_typed_value_eq(ctx, left_error, right_error, &err);
-            ctx.current_instr(Instr::Copy {
-                dest: result,
-                src: equal,
-            });
+            emit_copy(ctx, result, equal);
             ctx.finish_current(Terminator::Jump(end));
             ctx.start_block(success);
             let left_value = load_sum_payload(ctx, left, &ok);
             let right_value = load_sum_payload(ctx, right, &ok);
             let equal = emit_typed_value_eq(ctx, left_value, right_value, &ok);
-            ctx.current_instr(Instr::Copy {
-                dest: result,
-                src: equal,
-            });
+            emit_copy(ctx, result, equal);
             ctx.finish_current(Terminator::Jump(end));
         }
         _ => {
             ctx.record_error("internal error: aggregate equality expected Option or Result".into());
             let false_value = emit_i64_const(ctx, 0);
-            ctx.current_instr(Instr::Copy {
-                dest: result,
-                src: false_value,
-            });
+            emit_copy(ctx, result, false_value);
             ctx.finish_current(Terminator::Jump(end));
         }
     }
@@ -2211,25 +2115,9 @@ fn emit_sum_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -> 
 }
 /// Compare two bounded Lists by length and recursively by their active elements.
 fn emit_list_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, element_ty: &Type) -> Temp {
-    let left_len = ctx.new_temp();
-    ctx.current_instr(Instr::Load64Imm {
-        dest: left_len,
-        base: left,
-        imm: 0,
-    });
-    let right_len = ctx.new_temp();
-    ctx.current_instr(Instr::Load64Imm {
-        dest: right_len,
-        base: right,
-        imm: 0,
-    });
-    let lengths_equal = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: lengths_equal,
-        op: BinaryOp::Eq,
-        left: left_len,
-        right: right_len,
-    });
+    let left_len = emit_load64_imm(ctx, left, 0);
+    let right_len = emit_load64_imm(ctx, right, 0);
+    let lengths_equal = emit_binary(ctx, BinaryOp::Eq, left_len, right_len);
     let compare_elements = ctx.new_label();
     let header = ctx.new_label();
     let body = ctx.new_label();
@@ -2248,13 +2136,7 @@ fn emit_list_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, element_ty: &
     ctx.start_block(compare_elements);
     ctx.finish_current(Terminator::Jump(header));
     ctx.start_block(header);
-    let keep_going = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: keep_going,
-        op: BinaryOp::Lt,
-        left: index,
-        right: left_len,
-    });
+    let keep_going = emit_binary(ctx, BinaryOp::Lt, index, left_len);
     ctx.finish_current(Terminator::Branch {
         cond: keep_going,
         then_bb: body,
@@ -2279,17 +2161,11 @@ fn emit_list_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, element_ty: &
     ctx.finish_current(Terminator::Jump(header));
     ctx.start_block(different);
     let false_value = emit_i64_const(ctx, 0);
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: false_value,
-    });
+    emit_copy(ctx, result, false_value);
     ctx.finish_current(Terminator::Jump(end));
     ctx.start_block(equal);
     let true_value = emit_i64_const(ctx, 1);
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: true_value,
-    });
+    emit_copy(ctx, result, true_value);
     ctx.finish_current(Terminator::Jump(end));
     ctx.start_block(end);
     result
@@ -2334,10 +2210,7 @@ fn emit_typed_value_eq(ctx: &mut LowerCtx, left: Temp, right: Temp, ty: &Type) -
                     "internal error: List.contains cannot compare `{leaf:?}`"
                 ));
                 let false_value = emit_i64_const(ctx, 0);
-                ctx.current_instr(Instr::Copy {
-                    dest: equal,
-                    src: false_value,
-                });
+                emit_copy(ctx, equal, false_value);
             }
             equal
         }
@@ -2351,12 +2224,7 @@ fn lower_list_get(
 ) -> Temp {
     let list = lower_expr(ctx, &args[0], vars);
     let index = lower_expr(ctx, &args[1], vars);
-    let len = ctx.new_temp();
-    ctx.current_instr(Instr::Load64Imm {
-        dest: len,
-        base: list,
-        imm: 0,
-    });
+    let len = emit_load64_imm(ctx, list, 0);
     let present = emit_list_index_is_present(ctx, index, len);
     let some = ctx.new_label();
     let none = ctx.new_label();
@@ -2378,17 +2246,11 @@ fn lower_list_get(
     let index = emit_int_try_to_u64(ctx, index);
     let value = load_list_element(ctx, list, index, &element_ty);
     let value = emit_sum_value(ctx, result_ty, 1, Some(value));
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: value,
-    });
+    emit_copy(ctx, result, value);
     ctx.finish_current(Terminator::Jump(end));
     ctx.start_block(none);
     let value = emit_sum_value(ctx, result_ty, 0, None);
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: value,
-    });
+    emit_copy(ctx, result, value);
     ctx.finish_current(Terminator::Jump(end));
     ctx.start_block(end);
     result
@@ -2405,12 +2267,7 @@ fn lower_list_try_set(
         ctx.record_error("internal error: List.try_set receiver lost List type".into());
         return emit_i64_const(ctx, 0);
     };
-    let len = ctx.new_temp();
-    ctx.current_instr(Instr::Load64Imm {
-        dest: len,
-        base: list,
-        imm: 0,
-    });
+    let len = emit_load64_imm(ctx, list, 0);
     let present = emit_list_index_is_present(ctx, index, len);
     let success = ctx.new_label();
     let failure = ctx.new_label();
@@ -2426,17 +2283,11 @@ fn lower_list_try_set(
     let index = emit_int_try_to_u64(ctx, index);
     store_list_element(ctx, list, index, value, &element_ty);
     let one = emit_i64_const(ctx, 1);
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: one,
-    });
+    emit_copy(ctx, result, one);
     ctx.finish_current(Terminator::Jump(end));
     ctx.start_block(failure);
     let zero = emit_i64_const(ctx, 0);
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: zero,
-    });
+    emit_copy(ctx, result, zero);
     ctx.finish_current(Terminator::Jump(end));
     ctx.start_block(end);
     result
@@ -2452,20 +2303,9 @@ fn lower_list_try_push(
         ctx.record_error("internal error: List.try_push receiver lost List type".into());
         return emit_i64_const(ctx, 0);
     };
-    let len = ctx.new_temp();
-    ctx.current_instr(Instr::Load64Imm {
-        dest: len,
-        base: list,
-        imm: 0,
-    });
+    let len = emit_load64_imm(ctx, list, 0);
     let capacity = emit_i64_const(ctx, i64::from(capacity));
-    let has_capacity = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: has_capacity,
-        op: BinaryOp::Lt,
-        left: len,
-        right: capacity,
-    });
+    let has_capacity = emit_binary(ctx, BinaryOp::Lt, len, capacity);
     let success = ctx.new_label();
     let failure = ctx.new_label();
     let end = ctx.new_label();
@@ -2478,29 +2318,13 @@ fn lower_list_try_push(
     ctx.start_block(success);
     store_list_element(ctx, list, len, value, &element_ty);
     let one = emit_i64_const(ctx, 1);
-    let new_len = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: new_len,
-        op: BinaryOp::Add,
-        left: len,
-        right: one,
-    });
-    ctx.current_instr(Instr::Store64Imm {
-        base: list,
-        imm: 0,
-        value: new_len,
-    });
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: one,
-    });
+    let new_len = emit_binary(ctx, BinaryOp::Add, len, one);
+    emit_store64_imm(ctx, list, 0, new_len);
+    emit_copy(ctx, result, one);
     ctx.finish_current(Terminator::Jump(end));
     ctx.start_block(failure);
     let zero = emit_i64_const(ctx, 0);
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: zero,
-    });
+    emit_copy(ctx, result, zero);
     ctx.finish_current(Terminator::Jump(end));
     ctx.start_block(end);
     result
@@ -2516,20 +2340,9 @@ fn lower_list_pop(
         ctx.record_error("internal error: List.pop result is not Option<T>".into());
         return emit_i64_const(ctx, 0);
     };
-    let len = ctx.new_temp();
-    ctx.current_instr(Instr::Load64Imm {
-        dest: len,
-        base: list,
-        imm: 0,
-    });
+    let len = emit_load64_imm(ctx, list, 0);
     let zero = emit_i64_const(ctx, 0);
-    let non_empty = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: non_empty,
-        op: BinaryOp::Gt,
-        left: len,
-        right: zero,
-    });
+    let non_empty = emit_binary(ctx, BinaryOp::Gt, len, zero);
     let some = ctx.new_label();
     let none = ctx.new_label();
     let end = ctx.new_label();
@@ -2541,32 +2354,16 @@ fn lower_list_pop(
     });
     ctx.start_block(some);
     let one = emit_i64_const(ctx, 1);
-    let new_len = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: new_len,
-        op: BinaryOp::Sub,
-        left: len,
-        right: one,
-    });
+    let new_len = emit_binary(ctx, BinaryOp::Sub, len, one);
     let value = load_list_element(ctx, list, new_len, &element_ty);
     clear_list_element(ctx, list, new_len, &element_ty);
-    ctx.current_instr(Instr::Store64Imm {
-        base: list,
-        imm: 0,
-        value: new_len,
-    });
+    emit_store64_imm(ctx, list, 0, new_len);
     let value = emit_sum_value(ctx, result_ty, 1, Some(value));
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: value,
-    });
+    emit_copy(ctx, result, value);
     ctx.finish_current(Terminator::Jump(end));
     ctx.start_block(none);
     let value = emit_sum_value(ctx, result_ty, 0, None);
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: value,
-    });
+    emit_copy(ctx, result, value);
     ctx.finish_current(Terminator::Jump(end));
     ctx.start_block(end);
     result
@@ -2582,12 +2379,7 @@ fn lower_list_contains(
         ctx.record_error("internal error: List.contains receiver lost List type".into());
         return emit_i64_const(ctx, 0);
     };
-    let len = ctx.new_temp();
-    ctx.current_instr(Instr::Load64Imm {
-        dest: len,
-        base: list,
-        imm: 0,
-    });
+    let len = emit_load64_imm(ctx, list, 0);
     let index = emit_i64_const(ctx, 0);
     let one = emit_i64_const(ctx, 1);
     let result = emit_i64_const(ctx, 0);
@@ -2598,13 +2390,7 @@ fn lower_list_contains(
     let end = ctx.new_label();
     ctx.finish_current(Terminator::Jump(header));
     ctx.start_block(header);
-    let keep_going = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: keep_going,
-        op: BinaryOp::Lt,
-        left: index,
-        right: len,
-    });
+    let keep_going = emit_binary(ctx, BinaryOp::Lt, index, len);
     ctx.finish_current(Terminator::Branch {
         cond: keep_going,
         then_bb: body,
@@ -2619,10 +2405,7 @@ fn lower_list_contains(
         else_bb: step,
     });
     ctx.start_block(found);
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: one,
-    });
+    emit_copy(ctx, result, one);
     ctx.finish_current(Terminator::Jump(end));
     ctx.start_block(step);
     ctx.current_instr(Instr::Binary {
@@ -2652,12 +2435,7 @@ fn lower_list_take(
         return emit_i64_const(ctx, 0);
     };
     let result = emit_list_allocation(ctx, result_ty, 0);
-    let source_len = ctx.new_temp();
-    ctx.current_instr(Instr::Load64Imm {
-        dest: source_len,
-        base: source,
-        imm: 0,
-    });
+    let source_len = emit_load64_imm(ctx, source, 0);
     let index = emit_i64_const(ctx, 0);
     let one = emit_i64_const(ctx, 1);
     let header = ctx.new_label();
@@ -2665,27 +2443,9 @@ fn lower_list_take(
     let end = ctx.new_label();
     ctx.finish_current(Terminator::Jump(header));
     ctx.start_block(header);
-    let below_len = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: below_len,
-        op: BinaryOp::Lt,
-        left: index,
-        right: source_len,
-    });
-    let below_limit = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: below_limit,
-        op: BinaryOp::Lt,
-        left: index,
-        right: limit,
-    });
-    let keep_going = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: keep_going,
-        op: BinaryOp::And,
-        left: below_len,
-        right: below_limit,
-    });
+    let below_len = emit_binary(ctx, BinaryOp::Lt, index, source_len);
+    let below_limit = emit_binary(ctx, BinaryOp::Lt, index, limit);
+    let keep_going = emit_binary(ctx, BinaryOp::And, below_len, below_limit);
     ctx.finish_current(Terminator::Branch {
         cond: keep_going,
         then_bb: body,
@@ -2694,22 +2454,9 @@ fn lower_list_take(
     ctx.start_block(body);
     let value = load_list_element(ctx, source, index, &source_element);
     store_list_element(ctx, result, index, value, &result_element);
-    let new_len = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: new_len,
-        op: BinaryOp::Add,
-        left: index,
-        right: one,
-    });
-    ctx.current_instr(Instr::Store64Imm {
-        base: result,
-        imm: 0,
-        value: new_len,
-    });
-    ctx.current_instr(Instr::Copy {
-        dest: index,
-        src: new_len,
-    });
+    let new_len = emit_binary(ctx, BinaryOp::Add, index, one);
+    emit_store64_imm(ctx, result, 0, new_len);
+    emit_copy(ctx, index, new_len);
     ctx.finish_current(Terminator::Jump(header));
     ctx.start_block(end);
     result
@@ -2730,12 +2477,7 @@ fn lower_list_enumerate(
         return emit_i64_const(ctx, 0);
     };
     let result = emit_list_allocation(ctx, result_ty, 0);
-    let source_len = ctx.new_temp();
-    ctx.current_instr(Instr::Load64Imm {
-        dest: source_len,
-        base: source,
-        imm: 0,
-    });
+    let source_len = emit_load64_imm(ctx, source, 0);
     let index = emit_i64_const(ctx, 0);
     let one = emit_i64_const(ctx, 1);
     let header = ctx.new_label();
@@ -2743,13 +2485,7 @@ fn lower_list_enumerate(
     let end = ctx.new_label();
     ctx.finish_current(Terminator::Jump(header));
     ctx.start_block(header);
-    let keep_going = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: keep_going,
-        op: BinaryOp::Lt,
-        left: index,
-        right: source_len,
-    });
+    let keep_going = emit_binary(ctx, BinaryOp::Lt, index, source_len);
     ctx.finish_current(Terminator::Branch {
         cond: keep_going,
         then_bb: body,
@@ -2758,28 +2494,11 @@ fn lower_list_enumerate(
     ctx.start_block(body);
     let value = load_list_element(ctx, source, index, &source_element);
     let source_index = emit_int_from_u64(ctx, index);
-    let pair = ctx.new_temp();
-    ctx.current_instr(Instr::TuplePack {
-        dest: pair,
-        items: vec![source_index, value],
-    });
+    let pair = emit_tuple_pack(ctx, vec![source_index, value]);
     store_list_element(ctx, result, index, pair, &result_element);
-    let new_len = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: new_len,
-        op: BinaryOp::Add,
-        left: index,
-        right: one,
-    });
-    ctx.current_instr(Instr::Store64Imm {
-        base: result,
-        imm: 0,
-        value: new_len,
-    });
-    ctx.current_instr(Instr::Copy {
-        dest: index,
-        src: new_len,
-    });
+    let new_len = emit_binary(ctx, BinaryOp::Add, index, one);
+    emit_store64_imm(ctx, result, 0, new_len);
+    emit_copy(ctx, index, new_len);
     ctx.finish_current(Terminator::Jump(header));
     ctx.start_block(end);
     result
@@ -2794,12 +2513,7 @@ fn lower_list_intrinsic(
     Some(match name {
         semantic::LIST_LEN_INTRINSIC => {
             let list = lower_expr(ctx, &args[0], vars);
-            let len = ctx.new_temp();
-            ctx.current_instr(Instr::Load64Imm {
-                dest: len,
-                base: list,
-                imm: 0,
-            });
+            let len = emit_load64_imm(ctx, list, 0);
             emit_int_from_u64(ctx, len)
         }
         semantic::LIST_GET_INTRINSIC => lower_list_get(ctx, args, result_ty, vars),
@@ -3042,14 +2756,10 @@ fn rebuild_runtime_value(ctx: &mut LowerCtx, ty: &Type, words: &[Temp]) -> Temp 
     let value =
         rebuild_function_value_from_words(ctx, ty, words, &mut index).unwrap_or_else(|| {
             ctx.record_error("internal error: cannot rebuild branch result".into());
-            words.first().copied().unwrap_or_else(|| {
-                let invalid = ctx.new_temp();
-                ctx.current_instr(Instr::Const {
-                    dest: invalid,
-                    value: 0,
-                });
-                invalid
-            })
+            words
+                .first()
+                .copied()
+                .unwrap_or_else(|| emit_i64_const(ctx, 0))
         });
     if index != words.len() {
         ctx.record_error("internal error: branch result ABI width mismatch".into());
@@ -3424,12 +3134,11 @@ fn lower_entrypoint_wrapper(
         })?;
         let encoded_schema = ivm_abi::codec::encode_canonical_norito(&schema)
             .map_err(|error| format!("failed to encode entrypoint argument schema: {error}"))?;
-        let schema_temp = ctx.new_temp();
-        ctx.current_instr(Instr::DataRef {
-            dest: schema_temp,
-            kind: DataRefKind::NoritoBytes,
-            value: format!("0x{}", hex::encode(encoded_schema)),
-        });
+        let schema_temp = emit_data_ref(
+            &mut ctx,
+            DataRefKind::NoritoBytes,
+            format!("0x{}", hex::encode(encoded_schema)),
+        );
         let decoded_table = ctx.new_temp();
         ctx.current_instr(Instr::DirectHelperSyscall {
             dest: decoded_table,
@@ -3527,23 +3236,9 @@ fn load_entrypoint_payload(ctx: &mut LowerCtx, test_mode: bool) -> Temp {
         return payload;
     }
     let override_path = build_state_path_literal(ctx, TEST_TRIGGER_EVENT_OVERRIDE_KEY);
-    let override_payload = ctx.new_temp();
-    ctx.current_instr(Instr::StateGet {
-        dest: override_payload,
-        path: override_path,
-    });
-    let zero = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: zero,
-        value: 0,
-    });
-    let has_override = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: has_override,
-        op: BinaryOp::Ne,
-        left: override_payload,
-        right: zero,
-    });
+    let override_payload = emit_state_get(ctx, override_path);
+    let zero = emit_i64_const(ctx, 0);
+    let has_override = emit_binary(ctx, BinaryOp::Ne, override_payload, zero);
     let override_bb = ctx.new_label();
     let host_bb = ctx.new_label();
     let join_bb = ctx.new_label();
@@ -3559,18 +3254,12 @@ fn load_entrypoint_payload(ctx: &mut LowerCtx, test_mode: bool) -> Temp {
         dest: decoded_override,
         blob: override_payload,
     });
-    ctx.current_instr(Instr::Copy {
-        dest: payload,
-        src: decoded_override,
-    });
+    emit_copy(ctx, payload, decoded_override);
     ctx.finish_current(Terminator::Jump(join_bb));
     ctx.start_block(host_bb);
     let host_payload = ctx.new_temp();
     ctx.current_instr(Instr::GetTriggerEvent { dest: host_payload });
-    ctx.current_instr(Instr::Copy {
-        dest: payload,
-        src: host_payload,
-    });
+    emit_copy(ctx, payload, host_payload);
     ctx.finish_current(Terminator::Jump(join_bb));
     ctx.start_block(join_bb);
     payload
@@ -3583,11 +3272,7 @@ fn lower_invoke_entrypoint_call(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     let override_path = build_state_path_literal(ctx, TEST_TRIGGER_EVENT_OVERRIDE_KEY);
-    let previous_payload = ctx.new_temp();
-    ctx.current_instr(Instr::StateGet {
-        dest: previous_payload,
-        path: override_path,
-    });
+    let previous_payload = emit_state_get(ctx, override_path);
     let payload = lower_expr(ctx, payload_expr, vars);
     let encoded_payload = ctx.new_temp();
     ctx.current_instr(Instr::JsonEncode {
@@ -3604,12 +3289,7 @@ fn lower_invoke_entrypoint_call(
             args: Vec::new(),
             dest: None,
         });
-        let unit = ctx.new_temp();
-        ctx.current_instr(Instr::Const {
-            dest: unit,
-            value: 0,
-        });
-        unit
+        emit_i64_const(ctx, 0)
     } else if let Some(word_types) = function_value_word_types(result_ty) {
         let mut dests = Vec::with_capacity(word_types.len());
         for _ in word_types {
@@ -3634,18 +3314,8 @@ fn lower_invoke_entrypoint_call(
         });
         dest
     };
-    let zero = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: zero,
-        value: 0,
-    });
-    let has_previous = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: has_previous,
-        op: BinaryOp::Ne,
-        left: previous_payload,
-        right: zero,
-    });
+    let zero = emit_i64_const(ctx, 0);
+    let has_previous = emit_binary(ctx, BinaryOp::Ne, previous_payload, zero);
     let restore_bb = ctx.new_label();
     let clear_bb = ctx.new_label();
     let join_bb = ctx.new_label();
@@ -3669,13 +3339,7 @@ fn lower_invoke_entrypoint_call(
     result
 }
 fn lower_blob_literal(ctx: &mut LowerCtx, value: &str) -> Temp {
-    let dest = ctx.new_temp();
-    ctx.current_instr(Instr::DataRef {
-        dest,
-        kind: DataRefKind::Blob,
-        value: value.to_string(),
-    });
-    dest
+    emit_data_ref(ctx, DataRefKind::Blob, value.to_owned())
 }
 fn entrypoint_value_kind(
     value_name: &str,
@@ -4167,10 +3831,7 @@ fn initialize_loop_phi(
             continue;
         };
         let slot = ctx.new_temp();
-        ctx.current_instr(Instr::Copy {
-            dest: slot,
-            src: temp,
-        });
+        emit_copy(ctx, slot, temp);
         phi.insert(name.clone(), slot);
     }
     phi
@@ -4433,9 +4094,7 @@ fn lower_statement(
             let cond_t = if let Some(c) = cond {
                 lower_expr(ctx, c, &mut cond_vars)
             } else {
-                let t = ctx.new_temp();
-                ctx.current_instr(Instr::Const { dest: t, value: 1 });
-                t
+                emit_i64_const(ctx, 1)
             };
             ctx.finish_current(Terminator::Branch {
                 cond: cond_t,
@@ -4528,26 +4187,10 @@ fn lower_statement(
             debug_assert_eq!(*start, 0);
             let base_start_i64: i64 = 0;
             let limit_value = base_start_i64.saturating_add(max_iters_i64);
-            let index = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: index,
-                value: base_start_i64,
-            });
-            let limit = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: limit,
-                value: limit_value,
-            });
-            let sixteen = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: sixteen,
-                value: 16,
-            });
-            let one = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: one,
-                value: 1,
-            });
+            let index = emit_i64_const(ctx, base_start_i64);
+            let limit = emit_i64_const(ctx, limit_value);
+            let sixteen = emit_i64_const(ctx, 16);
+            let one = emit_i64_const(ctx, 1);
             let loop_label = ctx.new_label();
             let body_label = ctx.new_label();
             let step_label = ctx.new_label();
@@ -4564,13 +4207,7 @@ fn lower_statement(
             ctx.set_loop_phi(loop_phi.clone());
             ctx.finish_current(Terminator::Jump(loop_label));
             ctx.start_block(loop_label);
-            let cond_t = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: cond_t,
-                op: BinaryOp::Lt,
-                left: index,
-                right: limit,
-            });
+            let cond_t = emit_binary(ctx, BinaryOp::Lt, index, limit);
             ctx.finish_current(Terminator::Branch {
                 cond: cond_t,
                 then_bb: body_label,
@@ -4578,32 +4215,10 @@ fn lower_statement(
             });
             ctx.start_block(body_label);
             let mut body_vars = loop_env;
-            let offset_bytes = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: offset_bytes,
-                op: BinaryOp::Mul,
-                left: index,
-                right: sixteen,
-            });
-            let addr = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: addr,
-                op: BinaryOp::Add,
-                left: base,
-                right: offset_bytes,
-            });
-            let key_temp = ctx.new_temp();
-            ctx.current_instr(Instr::Load64Imm {
-                dest: key_temp,
-                base: addr,
-                imm: 0,
-            });
-            let value_temp = ctx.new_temp();
-            ctx.current_instr(Instr::Load64Imm {
-                dest: value_temp,
-                base: addr,
-                imm: 8,
-            });
+            let offset_bytes = emit_binary(ctx, BinaryOp::Mul, index, sixteen);
+            let addr = emit_binary(ctx, BinaryOp::Add, base, offset_bytes);
+            let key_temp = emit_load64_imm(ctx, addr, 0);
+            let value_temp = emit_load64_imm(ctx, addr, 8);
             body_vars.insert(key.clone(), key_temp);
             if let Some(val_name) = value {
                 body_vars.insert(val_name.clone(), value_temp);
@@ -4667,16 +4282,8 @@ fn lower_state_foreach_map(
     if bound == Some(0) {
         return;
     }
-    let offset = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: offset,
-        value: i64::from_le_bytes(start.to_le_bytes()),
-    });
-    let limit = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: limit,
-        value: bound.unwrap_or(0).min(i64::MAX as usize) as i64,
-    });
+    let offset = emit_i64_const(ctx, i64::from_le_bytes(start.to_le_bytes()));
+    let limit = emit_i64_const(ctx, bound.unwrap_or(0).min(i64::MAX as usize) as i64);
     let dynamic_access_hint = DynamicAccessHint {
         base_key: format!("{}{base_name}", semantic::V1_DYNAMIC_ACCESS_BASE_PREFIX),
         key_type: semantic::type_name(key_ty),
@@ -4712,31 +4319,16 @@ fn decode_state_map_key(ctx: &mut LowerCtx, key_blob: Temp, key_ty: &Type) -> Op
         }
         ty if semantic::is_wide_numeric_type(&ty) => {
             let kind = pointer_kind_for_type(&ty)?;
-            let key = ctx.new_temp();
-            ctx.current_instr(Instr::PointerFromNorito {
-                dest: key,
-                blob: key_blob,
-                kind,
-            });
+            let key = emit_pointer_from_norito(ctx, key_blob, kind);
             Some(key)
         }
         Type::String | Type::Bytes => {
-            let key = ctx.new_temp();
-            ctx.current_instr(Instr::PointerFromNorito {
-                dest: key,
-                blob: key_blob,
-                kind: DataRefKind::Blob,
-            });
+            let key = emit_pointer_from_norito(ctx, key_blob, DataRefKind::Blob);
             Some(key)
         }
         ty if semantic::is_pointer_type(&ty) => {
             let kind = pointer_kind_for_type(&ty)?;
-            let key = ctx.new_temp();
-            ctx.current_instr(Instr::PointerFromNorito {
-                dest: key,
-                blob: key_blob,
-                kind,
-            });
+            let key = emit_pointer_from_norito(ctx, key_blob, kind);
             Some(key)
         }
         _ => None,
@@ -4767,16 +4359,8 @@ fn lower_state_foreach_page(
         limit,
         dynamic_access_hint: Some(dynamic_access_hint),
     });
-    let index = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: index,
-        value: 0,
-    });
-    let one = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: one,
-        value: 1,
-    });
+    let index = emit_i64_const(ctx, 0);
+    let one = emit_i64_const(ctx, 1);
     let loop_label = ctx.new_label();
     let body_label = ctx.new_label();
     let step_label = ctx.new_label();
@@ -4793,13 +4377,7 @@ fn lower_state_foreach_page(
     ctx.set_loop_phi(loop_phi.clone());
     ctx.finish_current(Terminator::Jump(loop_label));
     ctx.start_block(loop_label);
-    let cond_t = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: cond_t,
-        op: BinaryOp::Lt,
-        left: index,
-        right: limit,
-    });
+    let cond_t = emit_binary(ctx, BinaryOp::Lt, index, limit);
     ctx.finish_current(Terminator::Branch {
         cond: cond_t,
         then_bb: body_label,
@@ -4813,18 +4391,8 @@ fn lower_state_foreach_page(
         base,
         index,
     });
-    let zero = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: zero,
-        value: 0,
-    });
-    let has_key = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: has_key,
-        op: BinaryOp::Ne,
-        left: key_blob,
-        right: zero,
-    });
+    let zero = emit_i64_const(ctx, 0);
+    let has_key = emit_binary(ctx, BinaryOp::Ne, key_blob, zero);
     let present_bb = ctx.new_label();
     ctx.finish_current(Terminator::Branch {
         cond: has_key,
@@ -5133,22 +4701,12 @@ fn lower_pointer_constructor_call(
         if constructor == PointerConstructor::AccountId
             && account_id_literal_uses_alias_resolution(s)
         {
-            let alias = ctx.new_temp();
-            ctx.current_instr(Instr::DataRef {
-                dest: alias,
-                kind: DataRefKind::Blob,
-                value: s.clone(),
-            });
+            let alias = emit_data_ref(ctx, DataRefKind::Blob, s.clone());
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::ResolveAccountAlias { dest, alias });
             return dest;
         }
-        let dest = ctx.new_temp();
-        ctx.current_instr(Instr::DataRef {
-            dest,
-            kind,
-            value: s.clone(),
-        });
+        let dest = emit_data_ref(ctx, kind, s.clone());
         return dest;
     }
     if constructor == PointerConstructor::NoritoBytes
@@ -5156,11 +4714,7 @@ fn lower_pointer_constructor_call(
     {
         let dest = ctx.new_temp();
         let hex = hex::encode(bytes);
-        ctx.current_instr(Instr::DataRef {
-            dest,
-            kind: DataRefKind::NoritoBytes,
-            value: format!("0x{hex}"),
-        });
+        emit_data_ref_into(ctx, dest, DataRefKind::NoritoBytes, format!("0x{hex}"));
         return dest;
     }
     let src = lower_expr(ctx, arg, vars);
@@ -5184,12 +4738,7 @@ fn lower_pointer_constructor_call(
             dest
         }
         (_, ty) if semantic::is_blob_like(&ty) => {
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::PointerFromNorito {
-                dest,
-                blob: src,
-                kind,
-            });
+            let dest = emit_pointer_from_norito(ctx, src, kind);
             dest
         }
         _ => src,
@@ -5203,30 +4752,10 @@ fn lower_transfer_batch_call(
     ctx.current_instr(Instr::TransferBatchBegin);
     for entry in args {
         let tuple = lower_expr(ctx, entry, vars);
-        let from = ctx.new_temp();
-        ctx.current_instr(Instr::TupleGet {
-            dest: from,
-            tuple,
-            index: 0,
-        });
-        let to = ctx.new_temp();
-        ctx.current_instr(Instr::TupleGet {
-            dest: to,
-            tuple,
-            index: 1,
-        });
-        let asset = ctx.new_temp();
-        ctx.current_instr(Instr::TupleGet {
-            dest: asset,
-            tuple,
-            index: 2,
-        });
-        let amount_raw = ctx.new_temp();
-        ctx.current_instr(Instr::TupleGet {
-            dest: amount_raw,
-            tuple,
-            index: 3,
-        });
+        let from = emit_tuple_get(ctx, tuple, 0);
+        let to = emit_tuple_get(ctx, tuple, 1);
+        let asset = emit_tuple_get(ctx, tuple, 2);
+        let amount_raw = emit_tuple_get(ctx, tuple, 3);
         let amount = amount_raw;
         ctx.current_instr(Instr::TransferBatchAsset {
             from,
@@ -5236,9 +4765,140 @@ fn lower_transfer_batch_call(
         });
     }
     ctx.current_instr(Instr::TransferBatchEnd);
-    let t = ctx.new_temp();
-    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-    t
+    emit_i64_const(ctx, 0)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MapFallback {
+    EagerDefault,
+    LazyDefault,
+    InsertDefault,
+}
+
+fn lower_map_fallback(
+    ctx: &mut LowerCtx,
+    map_expr: &TypedExpr,
+    key_expr: &TypedExpr,
+    default_expr: &TypedExpr,
+    fallback: MapFallback,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    let key = lower_expr(ctx, key_expr, vars);
+    if let Some(base) = state_map_base_name(map_expr)
+        && let Some(spec) = ctx.state_map_configs.get(&base).cloned()
+        && let Some(key_codec) = key_codec_for_type(&spec.key)
+    {
+        let path = build_state_map_path(ctx, &base, key, &key_codec);
+        let blob = emit_state_get(ctx, path);
+        let zero = emit_i64_const(ctx, 0);
+        let result_words = runtime_value_word_types(&spec.value)
+            .into_iter()
+            .map(|_| ctx.new_temp())
+            .collect::<Vec<_>>();
+        let present = emit_binary(ctx, BinaryOp::Ne, blob, zero);
+        let present_block = ctx.new_label();
+        let default_block = ctx.new_label();
+        let end_block = ctx.new_label();
+        ctx.finish_current(Terminator::Branch {
+            cond: present,
+            then_bb: present_block,
+            else_bb: default_block,
+        });
+
+        ctx.start_block(present_block);
+        let existing = decode_state_map_value_blob(ctx, blob, &spec.value)
+            .expect("durable map value should decode");
+        copy_runtime_value_words(ctx, existing, &spec.value, &result_words);
+        ctx.finish_current(Terminator::Jump(end_block));
+
+        ctx.start_block(default_block);
+        let default = lower_expr(ctx, default_expr, vars);
+        if fallback == MapFallback::InsertDefault {
+            let _ = lower_state_map_set_value(ctx, &base, key, &spec.key, &spec.value, default);
+        }
+        copy_runtime_value_words(ctx, default, &spec.value, &result_words);
+        ctx.finish_current(Terminator::Jump(end_block));
+
+        ctx.start_block(end_block);
+        return rebuild_runtime_value(ctx, &spec.value, &result_words);
+    }
+
+    let map = lower_expr(ctx, map_expr, vars);
+    let eager_default = match fallback {
+        MapFallback::EagerDefault => Some(lower_expr(ctx, default_expr, vars)),
+        MapFallback::LazyDefault | MapFallback::InsertDefault => None,
+    };
+    let stored_key = ctx.new_temp();
+    let stored_value = ctx.new_temp();
+    ctx.current_instr(Instr::MapLoadPair {
+        dest_key: stored_key,
+        dest_val: stored_value,
+        map,
+        offset: 0,
+    });
+    let zero = emit_i64_const(ctx, 0);
+    let result = ctx.new_temp();
+    let present = lower_map_key_eq(ctx, &key_expr.ty, stored_key, key);
+    let present_block = ctx.new_label();
+    let default_block = ctx.new_label();
+    let end_block = ctx.new_label();
+    ctx.finish_current(Terminator::Branch {
+        cond: present,
+        then_bb: present_block,
+        else_bb: default_block,
+    });
+
+    ctx.start_block(present_block);
+    ctx.current_instr(Instr::Binary {
+        dest: result,
+        op: BinaryOp::Add,
+        left: stored_value,
+        right: zero,
+    });
+    ctx.finish_current(Terminator::Jump(end_block));
+
+    ctx.start_block(default_block);
+    let default = match eager_default {
+        Some(default) => default,
+        None => lower_expr(ctx, default_expr, vars),
+    };
+    if fallback == MapFallback::InsertDefault {
+        ctx.current_instr(Instr::MapSet {
+            map,
+            key,
+            value: default,
+        });
+    }
+    ctx.current_instr(Instr::Binary {
+        dest: result,
+        op: BinaryOp::Add,
+        left: default,
+        right: zero,
+    });
+    ctx.finish_current(Terminator::Jump(end_block));
+
+    ctx.start_block(end_block);
+    result
+}
+
+fn lower_take2_pair(
+    ctx: &mut LowerCtx,
+    args: &[TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> (Temp, Temp) {
+    let base = lower_expr(ctx, &args[0], vars);
+    let start = lower_expr_as_u64(ctx, &args[1], vars);
+    let which = lower_expr_as_u64(ctx, &args[2], vars);
+    let one = emit_i64_const(ctx, 1);
+    let masked = emit_binary(ctx, BinaryOp::And, which, one);
+    let index = emit_binary(ctx, BinaryOp::Add, start, masked);
+    let sixteen = emit_i64_const(ctx, 16);
+    let bytes = emit_binary(ctx, BinaryOp::Mul, index, sixteen);
+    let address = emit_binary(ctx, BinaryOp::Add, base, bytes);
+    (
+        emit_load64_imm(ctx, address, 0),
+        emit_load64_imm(ctx, address, 8),
+    )
 }
 fn lower_surface_builtin_call(
     ctx: &mut LowerCtx,
@@ -5281,20 +4941,8 @@ fn lower_surface_builtin_call(
             // ABI v1 exposes only r10..r14. Keep the source-level API explicit while
             // packing the two booleans into one physical flags word.
             let two = emit_i64_const(ctx, 2);
-            let outgoing_bit = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: outgoing_bit,
-                op: BinaryOp::Mul,
-                left: outgoing,
-                right: two,
-            });
-            let availability_flags = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: availability_flags,
-                op: BinaryOp::Add,
-                left: incoming,
-                right: outgoing_bit,
-            });
+            let outgoing_bit = emit_binary(ctx, BinaryOp::Mul, outgoing, two);
+            let availability_flags = emit_binary(ctx, BinaryOp::Add, incoming, outgoing_bit);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::DirectHelperSyscall {
                 dest,
@@ -5537,11 +5185,7 @@ fn lower_surface_builtin_call(
             let d = ctx.new_temp();
             if semantic::is_numeric_type(&args[1].ty) || semantic::is_blob_like(&args[1].ty) {
                 let key = lower_expr(ctx, &args[1], vars);
-                let blob = ctx.new_temp();
-                ctx.current_instr(Instr::PointerToNorito {
-                    dest: blob,
-                    value: key,
-                });
+                let blob = emit_pointer_to_norito(ctx, key);
                 ctx.current_instr(Instr::PathMapKeyNorito {
                     dest: d,
                     base,
@@ -5576,8 +5220,7 @@ fn lower_surface_builtin_call(
         }
         Builtin::PointerToNorito => {
             let value = lower_expr(ctx, &args[0], vars);
-            let dest = ctx.new_temp();
-            ctx.current_instr(Instr::PointerToNorito { dest, value });
+            let dest = emit_pointer_to_norito(ctx, value);
             dest
         }
         Builtin::NumericToInt => {
@@ -5757,33 +5400,22 @@ fn lower_surface_builtin_call(
         Builtin::SetVl => {
             let value = lower_expr_as_u64(ctx, &args[0], vars);
             ctx.current_instr(Instr::SetVl { value });
-            let temp = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: temp,
-                value: 0,
-            });
-            temp
+            emit_i64_const(ctx, 0)
         }
         Builtin::StateGet => {
             let p = lower_expr(ctx, &args[0], vars);
-            let d = ctx.new_temp();
-            ctx.current_instr(Instr::StateGet { dest: d, path: p });
-            d
+            emit_state_get(ctx, p)
         }
         Builtin::StateSet => {
             let path = lower_expr(ctx, &args[0], vars);
             let val = lower_expr(ctx, &args[1], vars);
             ctx.current_instr(Instr::StateSet { path, value: val });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::StateDel => {
             let path = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::StateDel { path });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::StateKeys => {
             let prefix = lower_expr(ctx, &args[0], vars);
@@ -5872,12 +5504,7 @@ fn lower_surface_builtin_call(
                 offset,
                 limit,
             });
-            let page = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack {
-                dest: page,
-                items: vec![items_dest, next_offset_dest],
-            });
-            page
+            emit_tuple_pack(ctx, vec![items_dest, next_offset_dest])
         }
         Builtin::QueryGetParameter
         | Builtin::QueryGetContractManifest
@@ -5918,12 +5545,7 @@ fn lower_surface_builtin_call(
                 _ => unreachable!("matched operation-specific instruction bridge"),
             };
             ctx.current_instr(Instr::VendorExecuteInstruction { payload, kind });
-            let temp = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: temp,
-                value: 0,
-            });
-            temp
+            emit_i64_const(ctx, 0)
         }
         Builtin::ExecuteQuery => {
             let payload = lower_expr(ctx, &args[0], vars);
@@ -5939,21 +5561,11 @@ fn lower_surface_builtin_call(
         }
         Builtin::SubscriptionBill => {
             ctx.current_instr(Instr::SubscriptionBill);
-            let temp = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: temp,
-                value: 0,
-            });
-            temp
+            emit_i64_const(ctx, 0)
         }
         Builtin::SubscriptionRecordUsage => {
             ctx.current_instr(Instr::SubscriptionRecordUsage);
-            let temp = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: temp,
-                value: 0,
-            });
-            temp
+            emit_i64_const(ctx, 0)
         }
         Builtin::GetAccountBalance => {
             let account = lower_expr(ctx, &args[0], vars);
@@ -5988,16 +5600,12 @@ fn lower_surface_builtin_call(
         Builtin::DebugPrint => {
             let value = lower_expr_as_i64(ctx, &args[0], vars);
             ctx.current_instr(Instr::DebugPrint { value });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::DebugLog => {
             let payload = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::DebugLog { payload });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::Assert => {
             let cond = lower_expr(ctx, &args[0], vars);
@@ -6005,23 +5613,14 @@ fn lower_surface_builtin_call(
                 let _ = lower_expr(ctx, &args[1], vars);
             }
             ctx.current_instr(Instr::Assert { cond });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::Require => {
             let cond = lower_expr(ctx, &args[0], vars);
             let code = lower_expr_as_u64(ctx, &args[1], vars);
-            let reject = ctx.new_temp();
-            ctx.current_instr(Instr::Unary {
-                dest: reject,
-                op: UnaryOp::Not,
-                operand: cond,
-            });
+            let reject = emit_unary(ctx, UnaryOp::Not, cond);
             ctx.current_instr(Instr::AbortIf { cond: reject, code });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::Info => {
             let msg = if semantic::is_numeric_type(&args[0].ty) {
@@ -6036,9 +5635,7 @@ fn lower_surface_builtin_call(
                 lower_expr(ctx, &args[0], vars)
             };
             ctx.current_instr(Instr::Info { msg });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::AssertEq => {
             let left = lower_expr(ctx, &args[0], vars);
@@ -6052,9 +5649,7 @@ fn lower_surface_builtin_call(
                 kind: WideNumericKind::Int,
             });
             ctx.current_instr(Instr::Assert { cond: equal });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::SetAccountDetail => {
             let account = lower_expr(ctx, &args[0], vars);
@@ -6065,9 +5660,7 @@ fn lower_surface_builtin_call(
                 key,
                 value,
             });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::MintAsset => {
             let acc = lower_expr(ctx, &args[0], vars);
@@ -6076,9 +5669,7 @@ fn lower_surface_builtin_call(
                 semantic::ExprKind::IntLiteral(value)
                     if value.is_zero() && !semantic::is_wide_numeric_type(&args[2].ty) =>
                 {
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
+                    emit_i64_const(ctx, 0)
                 }
                 _ => lower_expr_as_numeric(ctx, &args[2], vars),
             };
@@ -6087,9 +5678,7 @@ fn lower_surface_builtin_call(
                 asset,
                 amount: amt,
             });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::BurnAsset => {
             let acc = lower_expr(ctx, &args[0], vars);
@@ -6100,9 +5689,7 @@ fn lower_surface_builtin_call(
                 asset,
                 amount: amt,
             });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::TransferAsset => {
             let from = lower_expr(ctx, &args[0], vars);
@@ -6117,78 +5704,58 @@ fn lower_surface_builtin_call(
                 amount: amt,
                 dataspace,
             });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::NftMintAsset => {
             let nft = lower_expr(ctx, &args[0], vars);
             let owner = lower_expr(ctx, &args[1], vars);
             ctx.current_instr(Instr::CreateNft { nft, owner });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::NftSetMetadata => {
             let nft = lower_expr(ctx, &args[0], vars);
             let key = lower_expr(ctx, &args[1], vars);
             let json = lower_expr(ctx, &args[2], vars);
             ctx.current_instr(Instr::SetNftData { nft, key, json });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::NftBurnAsset => {
             let nft = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::BurnNft { nft });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::NftTransferAsset => {
             let from = lower_expr(ctx, &args[0], vars);
             let nft = lower_expr(ctx, &args[1], vars);
             let to = lower_expr(ctx, &args[2], vars);
             ctx.current_instr(Instr::TransferNft { from, nft, to });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::RegisterDomain => {
             let domain = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::RegisterDomain { domain });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::UnregisterDomain => {
             let domain = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::UnregisterDomain { domain });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::TransferDomain => {
             let domain = lower_expr(ctx, &args[1], vars);
             let to = lower_expr(ctx, &args[2], vars);
             ctx.current_instr(Instr::TransferDomain { domain, to });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::RegisterAccount => {
             let account = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::RegisterAccount { account });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::UnregisterAccount => {
             let account = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::UnregisterAccount { account });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::RegisterAsset => {
             let asset = lower_expr(ctx, &args[0], vars);
@@ -6201,9 +5768,7 @@ fn lower_surface_builtin_call(
                 quantity,
                 mintable,
             });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::CreateNewAsset => {
             let asset = lower_expr(ctx, &args[0], vars);
@@ -6218,99 +5783,73 @@ fn lower_surface_builtin_call(
                 account,
                 mintable,
             });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::UnregisterAsset => {
             let asset = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::UnregisterAsset { asset });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::RegisterPeer => {
             let json = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::RegisterPeer { json });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::UnregisterPeer => {
             let json = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::UnregisterPeer { json });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::RegisterTrigger => {
             let json = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::CreateTrigger { json });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::UnregisterTrigger => {
             let name = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::RemoveTrigger { name });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::SetTriggerEnabled => {
             let name = lower_expr(ctx, &args[0], vars);
             let enabled = lower_expr_as_u64(ctx, &args[1], vars);
             ctx.current_instr(Instr::SetTriggerEnabled { name, enabled });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::CreateRole => {
             let name = lower_expr(ctx, &args[0], vars);
             let json = lower_expr(ctx, &args[1], vars);
             ctx.current_instr(Instr::CreateRole { name, json });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::DeleteRole => {
             let name = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::DeleteRole { name });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::GrantRole => {
             let account = lower_expr(ctx, &args[0], vars);
             let name = lower_expr(ctx, &args[1], vars);
             ctx.current_instr(Instr::GrantRole { account, name });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::RevokeRole => {
             let account = lower_expr(ctx, &args[0], vars);
             let name = lower_expr(ctx, &args[1], vars);
             ctx.current_instr(Instr::RevokeRole { account, name });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::GrantPermission => {
             let account = lower_expr(ctx, &args[0], vars);
             let token = lower_expr(ctx, &args[1], vars);
             ctx.current_instr(Instr::GrantPermission { account, token });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::RevokePermission => {
             let account = lower_expr(ctx, &args[0], vars);
             let token = lower_expr(ctx, &args[1], vars);
             ctx.current_instr(Instr::RevokePermission { account, token });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::GrantContractEntrypoint => {
             let account = lower_expr(ctx, &args[0], vars);
@@ -6319,9 +5858,7 @@ fn lower_surface_builtin_call(
                 account,
                 entrypoint,
             });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::RevokeContractEntrypoint => {
             let account = lower_expr(ctx, &args[0], vars);
@@ -6330,9 +5867,7 @@ fn lower_surface_builtin_call(
                 account,
                 entrypoint,
             });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::EscrowOpenOffer => {
             let escrow = lower_expr(ctx, &args[0], vars);
@@ -6345,37 +5880,27 @@ fn lower_surface_builtin_call(
                 amount,
                 evidence_hashes,
             });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::EscrowAccept => {
             let escrow = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::EscrowAccept { escrow });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::EscrowMarkPaymentSent => {
             let escrow = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::EscrowMarkPaymentSent { escrow });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::EscrowRelease => {
             let escrow = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::EscrowRelease { escrow });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::EscrowCancel => {
             let escrow = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::EscrowCancel { escrow });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::EscrowOpenDispute => {
             let escrow = lower_expr(ctx, &args[0], vars);
@@ -6384,9 +5909,7 @@ fn lower_surface_builtin_call(
                 escrow,
                 evidence_hashes,
             });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::EscrowResolveDispute => {
             let escrow = lower_expr(ctx, &args[0], vars);
@@ -6399,17 +5922,11 @@ fn lower_surface_builtin_call(
                 seller_amount,
                 evidence_hashes,
             });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::Alloc => {
             let bytes = lower_expr_as_u64(ctx, &args[0], vars);
-            let scalar = ctx.new_temp();
-            ctx.current_instr(Instr::Alloc {
-                dest: scalar,
-                bytes,
-            });
+            let scalar = emit_alloc(ctx, bytes);
             emit_int_from_u64(ctx, scalar)
         }
         Builtin::GetPrivateInput => {
@@ -6429,65 +5946,47 @@ fn lower_surface_builtin_call(
         }
         Builtin::CommitOutput => {
             ctx.current_instr(Instr::CommitOutput);
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::CreateNftsForAllUsers => {
             ctx.current_instr(Instr::CreateNftsForAllUsers);
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::SetExecutionDepth => {
             let value = lower_expr_as_u64(ctx, &args[0], vars);
             ctx.current_instr(Instr::SetExecutionDepth { value });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::TransferV1BatchBegin => {
             ctx.current_instr(Instr::TransferBatchBegin);
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::TransferV1BatchEnd => {
             ctx.current_instr(Instr::TransferBatchEnd);
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::TransferV1BatchApply => {
             let payload = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::TransferBatchApply { payload });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::TransferBatch => lower_transfer_batch_call(ctx, args, vars),
         Builtin::AxtBegin => {
             let desc = lower_expr(ctx, &args[0], vars);
             ctx.current_instr(Instr::AxtBegin { descriptor: desc });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::AxtTouch => {
             let dsid = lower_expr(ctx, &args[0], vars);
             let manifest = args.get(1).map(|m| lower_expr(ctx, m, vars));
             ctx.current_instr(Instr::AxtTouch { dsid, manifest });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::VerifyDsProof => {
             let dsid = lower_expr(ctx, &args[0], vars);
             let proof = args.get(1).map(|p| lower_expr(ctx, p, vars));
             ctx.current_instr(Instr::VerifyDsProof { dsid, proof });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::UseAssetHandle => {
             let handle = lower_expr(ctx, &args[0], vars);
@@ -6498,15 +5997,11 @@ fn lower_surface_builtin_call(
                 intent,
                 proof,
             });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::AxtCommit => {
             ctx.current_instr(Instr::AxtCommit);
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::DeactivateContractInstance
         | Builtin::RemoveSmartContractBytes
@@ -6518,9 +6013,7 @@ fn lower_surface_builtin_call(
                 payload,
                 syscall: direct_builtin_syscall(builtin),
             });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::ZkRootsGet => {
             let payload = lower_expr(ctx, &args[0], vars);
@@ -6542,12 +6035,7 @@ fn lower_surface_builtin_call(
                 number: direct_builtin_syscall(builtin),
                 payload,
             });
-            let temp = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: temp,
-                value: 0,
-            });
-            temp
+            emit_i64_const(ctx, 0)
         }
         Builtin::VrfEpochSeed => {
             let payload = lower_expr(ctx, &args[0], vars);
@@ -6669,17 +6157,13 @@ fn lower_surface_builtin_call(
             } else {
                 ctx.current_instr(Instr::RemoveSignatory { account, signatory });
             }
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::SetAccountQuorum => {
             let account = lower_expr(ctx, &args[0], vars);
             let quorum = lower_expr_as_u64(ctx, &args[1], vars);
             ctx.current_instr(Instr::SetAccountQuorum { account, quorum });
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
         Builtin::Contains => {
             let mexpr = &args[0];
@@ -6690,23 +6174,9 @@ fn lower_surface_builtin_call(
                 && let Some(key_codec) = key_codec_for_type(&spec.key)
             {
                 let t_path = build_state_map_path(ctx, &bn, key_tmp, &key_codec);
-                let t_blob = ctx.new_temp();
-                ctx.current_instr(Instr::StateGet {
-                    dest: t_blob,
-                    path: t_path,
-                });
-                let zero = ctx.new_temp();
-                ctx.current_instr(Instr::Const {
-                    dest: zero,
-                    value: 0,
-                });
-                let out = ctx.new_temp();
-                ctx.current_instr(Instr::Binary {
-                    dest: out,
-                    op: BinaryOp::Ne,
-                    left: t_blob,
-                    right: zero,
-                });
+                let t_blob = emit_state_get(ctx, t_path);
+                let zero = emit_i64_const(ctx, 0);
+                let out = emit_binary(ctx, BinaryOp::Ne, t_blob, zero);
                 return out;
             }
             let m = lower_expr(ctx, mexpr, vars);
@@ -6720,414 +6190,42 @@ fn lower_surface_builtin_call(
             });
             lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp)
         }
-        Builtin::GetOrDefault => {
-            let mexpr = &args[0];
-            let kexpr = &args[1];
-            let dexpr = &args[2];
-            let key_tmp = lower_expr(ctx, kexpr, vars);
-            if let Some(bn) = state_map_base_name(mexpr)
-                && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
-                && let Some(key_codec) = key_codec_for_type(&spec.key)
-            {
-                let t_path = build_state_map_path(ctx, &bn, key_tmp, &key_codec);
-                let t_blob = ctx.new_temp();
-                ctx.current_instr(Instr::StateGet {
-                    dest: t_blob,
-                    path: t_path,
-                });
-                let zero = ctx.new_temp();
-                ctx.current_instr(Instr::Const {
-                    dest: zero,
-                    value: 0,
-                });
-                let result_words = runtime_value_word_types(&spec.value)
-                    .into_iter()
-                    .map(|_| ctx.new_temp())
-                    .collect::<Vec<_>>();
-                let cond = ctx.new_temp();
-                ctx.current_instr(Instr::Binary {
-                    dest: cond,
-                    op: BinaryOp::Ne,
-                    left: t_blob,
-                    right: zero,
-                });
-                let then_bb = ctx.new_label();
-                let else_bb = ctx.new_label();
-                let end_bb = ctx.new_label();
-                ctx.finish_current(Terminator::Branch {
-                    cond,
-                    then_bb,
-                    else_bb,
-                });
-                ctx.start_block(then_bb);
-                let decoded = decode_state_map_value_blob(ctx, t_blob, &spec.value)
-                    .expect("durable map value should decode");
-                copy_runtime_value_words(ctx, decoded, &spec.value, &result_words);
-                ctx.finish_current(Terminator::Jump(end_bb));
-                ctx.start_block(else_bb);
-                let def = lower_expr(ctx, dexpr, vars);
-                copy_runtime_value_words(ctx, def, &spec.value, &result_words);
-                ctx.finish_current(Terminator::Jump(end_bb));
-                ctx.start_block(end_bb);
-                return rebuild_runtime_value(ctx, &spec.value, &result_words);
-            }
-            let m = lower_expr(ctx, mexpr, vars);
-            let d = lower_expr(ctx, dexpr, vars);
-            let sk = ctx.new_temp();
-            let sv = ctx.new_temp();
-            ctx.current_instr(Instr::MapLoadPair {
-                dest_key: sk,
-                dest_val: sv,
-                map: m,
-                offset: 0,
-            });
-            let zero = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: zero,
-                value: 0,
-            });
-            let result = ctx.new_temp();
-            let cond = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
-            let then_bb = ctx.new_label();
-            let else_bb = ctx.new_label();
-            let end_bb = ctx.new_label();
-            ctx.finish_current(Terminator::Branch {
-                cond,
-                then_bb,
-                else_bb,
-            });
-            ctx.start_block(then_bb);
-            ctx.current_instr(Instr::Binary {
-                dest: result,
-                op: BinaryOp::Add,
-                left: sv,
-                right: zero,
-            });
-            ctx.finish_current(Terminator::Jump(end_bb));
-            ctx.start_block(else_bb);
-            ctx.current_instr(Instr::Binary {
-                dest: result,
-                op: BinaryOp::Add,
-                left: d,
-                right: zero,
-            });
-            ctx.finish_current(Terminator::Jump(end_bb));
-            ctx.start_block(end_bb);
-            result
-        }
-        Builtin::GetOr => {
-            let mexpr = &args[0];
-            let kexpr = &args[1];
-            let dexpr = &args[2];
-            let key_tmp = lower_expr(ctx, kexpr, vars);
-            if let Some(bn) = state_map_base_name(mexpr)
-                && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
-                && let Some(key_codec) = key_codec_for_type(&spec.key)
-            {
-                let t_path = build_state_map_path(ctx, &bn, key_tmp, &key_codec);
-                let t_blob = ctx.new_temp();
-                ctx.current_instr(Instr::StateGet {
-                    dest: t_blob,
-                    path: t_path,
-                });
-                let zero = ctx.new_temp();
-                ctx.current_instr(Instr::Const {
-                    dest: zero,
-                    value: 0,
-                });
-                let result_words = runtime_value_word_types(&spec.value)
-                    .into_iter()
-                    .map(|_| ctx.new_temp())
-                    .collect::<Vec<_>>();
-                let cond = ctx.new_temp();
-                ctx.current_instr(Instr::Binary {
-                    dest: cond,
-                    op: BinaryOp::Ne,
-                    left: t_blob,
-                    right: zero,
-                });
-                let then_bb = ctx.new_label();
-                let else_bb = ctx.new_label();
-                let end_bb = ctx.new_label();
-                ctx.finish_current(Terminator::Branch {
-                    cond,
-                    then_bb,
-                    else_bb,
-                });
-                ctx.start_block(then_bb);
-                let existing = decode_state_map_value_blob(ctx, t_blob, &spec.value)
-                    .expect("durable map value should decode");
-                copy_runtime_value_words(ctx, existing, &spec.value, &result_words);
-                ctx.finish_current(Terminator::Jump(end_bb));
-                ctx.start_block(else_bb);
-                let def = lower_expr(ctx, dexpr, vars);
-                copy_runtime_value_words(ctx, def, &spec.value, &result_words);
-                ctx.finish_current(Terminator::Jump(end_bb));
-                ctx.start_block(end_bb);
-                return rebuild_runtime_value(ctx, &spec.value, &result_words);
-            }
-            let m = lower_expr(ctx, mexpr, vars);
-            let sk = ctx.new_temp();
-            let sv = ctx.new_temp();
-            ctx.current_instr(Instr::MapLoadPair {
-                dest_key: sk,
-                dest_val: sv,
-                map: m,
-                offset: 0,
-            });
-            let zero = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: zero,
-                value: 0,
-            });
-            let result = ctx.new_temp();
-            let cond = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
-            let then_bb = ctx.new_label();
-            let else_bb = ctx.new_label();
-            let end_bb = ctx.new_label();
-            ctx.finish_current(Terminator::Branch {
-                cond,
-                then_bb,
-                else_bb,
-            });
-            ctx.start_block(then_bb);
-            ctx.current_instr(Instr::Binary {
-                dest: result,
-                op: BinaryOp::Add,
-                left: sv,
-                right: zero,
-            });
-            ctx.finish_current(Terminator::Jump(end_bb));
-            ctx.start_block(else_bb);
-            let def = lower_expr(ctx, dexpr, vars);
-            ctx.current_instr(Instr::Binary {
-                dest: result,
-                op: BinaryOp::Add,
-                left: def,
-                right: zero,
-            });
-            ctx.finish_current(Terminator::Jump(end_bb));
-            ctx.start_block(end_bb);
-            result
-        }
-        Builtin::Ensure => {
-            let mexpr = &args[0];
-            let kexpr = &args[1];
-            let dexpr = &args[2];
-            let key_tmp = lower_expr(ctx, kexpr, vars);
-            if let Some(bn) = state_map_base_name(mexpr)
-                && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
-                && let Some(key_codec) = key_codec_for_type(&spec.key)
-            {
-                let t_path = build_state_map_path(ctx, &bn, key_tmp, &key_codec);
-                let t_blob = ctx.new_temp();
-                ctx.current_instr(Instr::StateGet {
-                    dest: t_blob,
-                    path: t_path,
-                });
-                let zero = ctx.new_temp();
-                ctx.current_instr(Instr::Const {
-                    dest: zero,
-                    value: 0,
-                });
-                let result_words = runtime_value_word_types(&spec.value)
-                    .into_iter()
-                    .map(|_| ctx.new_temp())
-                    .collect::<Vec<_>>();
-                let cond = ctx.new_temp();
-                ctx.current_instr(Instr::Binary {
-                    dest: cond,
-                    op: BinaryOp::Ne,
-                    left: t_blob,
-                    right: zero,
-                });
-                let then_bb = ctx.new_label();
-                let else_bb = ctx.new_label();
-                let end_bb = ctx.new_label();
-                ctx.finish_current(Terminator::Branch {
-                    cond,
-                    then_bb,
-                    else_bb,
-                });
-                ctx.start_block(then_bb);
-                let existing = decode_state_map_value_blob(ctx, t_blob, &spec.value)
-                    .expect("durable map value should decode");
-                copy_runtime_value_words(ctx, existing, &spec.value, &result_words);
-                ctx.finish_current(Terminator::Jump(end_bb));
-                ctx.start_block(else_bb);
-                let def = lower_expr(ctx, dexpr, vars);
-                let _ = lower_state_map_set_value(ctx, &bn, key_tmp, &spec.key, &spec.value, def);
-                copy_runtime_value_words(ctx, def, &spec.value, &result_words);
-                ctx.finish_current(Terminator::Jump(end_bb));
-                ctx.start_block(end_bb);
-                return rebuild_runtime_value(ctx, &spec.value, &result_words);
-            }
-            let m = lower_expr(ctx, mexpr, vars);
-            let sk = ctx.new_temp();
-            let sv = ctx.new_temp();
-            ctx.current_instr(Instr::MapLoadPair {
-                dest_key: sk,
-                dest_val: sv,
-                map: m,
-                offset: 0,
-            });
-            let zero = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: zero,
-                value: 0,
-            });
-            let result = ctx.new_temp();
-            let cond = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
-            let then_bb = ctx.new_label();
-            let else_bb = ctx.new_label();
-            let end_bb = ctx.new_label();
-            ctx.finish_current(Terminator::Branch {
-                cond,
-                then_bb,
-                else_bb,
-            });
-            ctx.start_block(then_bb);
-            ctx.current_instr(Instr::Binary {
-                dest: result,
-                op: BinaryOp::Add,
-                left: sv,
-                right: zero,
-            });
-            ctx.finish_current(Terminator::Jump(end_bb));
-            ctx.start_block(else_bb);
-            let def = lower_expr(ctx, dexpr, vars);
-            ctx.current_instr(Instr::MapSet {
-                map: m,
-                key: key_tmp,
-                value: def,
-            });
-            ctx.current_instr(Instr::Binary {
-                dest: result,
-                op: BinaryOp::Add,
-                left: def,
-                right: zero,
-            });
-            ctx.finish_current(Terminator::Jump(end_bb));
-            ctx.start_block(end_bb);
-            result
-        }
+        Builtin::GetOrDefault => lower_map_fallback(
+            ctx,
+            &args[0],
+            &args[1],
+            &args[2],
+            MapFallback::EagerDefault,
+            vars,
+        ),
+        Builtin::GetOr => lower_map_fallback(
+            ctx,
+            &args[0],
+            &args[1],
+            &args[2],
+            MapFallback::LazyDefault,
+            vars,
+        ),
+        Builtin::Ensure => lower_map_fallback(
+            ctx,
+            &args[0],
+            &args[1],
+            &args[2],
+            MapFallback::InsertDefault,
+            vars,
+        ),
         Builtin::StateMapRemove => lower_state_map_remove_option(ctx, args, vars),
         Builtin::KeysTake2 | Builtin::ValuesTake2 => {
-            let base = lower_expr(ctx, &args[0], vars);
-            let start_t = lower_expr_as_u64(ctx, &args[1], vars);
-            let which_t = lower_expr_as_u64(ctx, &args[2], vars);
-            let one = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: one,
-                value: 1,
-            });
-            let masked = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: masked,
-                op: BinaryOp::And,
-                left: which_t,
-                right: one,
-            });
-            let idx = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: idx,
-                op: BinaryOp::Add,
-                left: start_t,
-                right: masked,
-            });
-            let sixteen = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: sixteen,
-                value: 16,
-            });
-            let bytes = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: bytes,
-                op: BinaryOp::Mul,
-                left: idx,
-                right: sixteen,
-            });
-            let addr = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: addr,
-                op: BinaryOp::Add,
-                left: base,
-                right: bytes,
-            });
-            let k = ctx.new_temp();
-            let v = ctx.new_temp();
-            ctx.current_instr(Instr::Load64Imm {
-                dest: k,
-                base: addr,
-                imm: 0,
-            });
-            ctx.current_instr(Instr::Load64Imm {
-                dest: v,
-                base: addr,
-                imm: 8,
-            });
-            if builtin == Builtin::KeysTake2 { k } else { v }
+            let (key, value) = lower_take2_pair(ctx, args, vars);
+            if builtin == Builtin::KeysTake2 {
+                key
+            } else {
+                value
+            }
         }
         Builtin::KeysValuesTake2 => {
-            let base = lower_expr(ctx, &args[0], vars);
-            let start_t = lower_expr_as_u64(ctx, &args[1], vars);
-            let which_t = lower_expr_as_u64(ctx, &args[2], vars);
-            let one = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: one,
-                value: 1,
-            });
-            let masked = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: masked,
-                op: BinaryOp::And,
-                left: which_t,
-                right: one,
-            });
-            let idx = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: idx,
-                op: BinaryOp::Add,
-                left: start_t,
-                right: masked,
-            });
-            let sixteen = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: sixteen,
-                value: 16,
-            });
-            let bytes = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: bytes,
-                op: BinaryOp::Mul,
-                left: idx,
-                right: sixteen,
-            });
-            let addr = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: addr,
-                op: BinaryOp::Add,
-                left: base,
-                right: bytes,
-            });
-            let k = ctx.new_temp();
-            let v = ctx.new_temp();
-            ctx.current_instr(Instr::Load64Imm {
-                dest: k,
-                base: addr,
-                imm: 0,
-            });
-            ctx.current_instr(Instr::Load64Imm {
-                dest: v,
-                base: addr,
-                imm: 8,
-            });
-            let tup = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack {
-                dest: tup,
-                items: vec![k, v],
-            });
-            tup
+            let (key, value) = lower_take2_pair(ctx, args, vars);
+            emit_tuple_pack(ctx, vec![key, value])
         }
         Builtin::TestInvokeEntrypoint
         | Builtin::TestInvokeEntrypointAs
@@ -7247,11 +6345,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             } = &expr.ty
             else {
                 ctx.record_error("named struct literal lost its declared field layout".into());
-                let value = ctx.new_temp();
-                ctx.current_instr(Instr::Const {
-                    dest: value,
-                    value: 0,
-                });
+                let value = emit_i64_const(ctx, 0);
                 return value;
             };
             let mut items = Vec::with_capacity(declared_fields.len());
@@ -7263,28 +6357,20 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.record_error(format!(
                         "named struct literal is missing lowered field `{declared_name}`"
                     ));
-                    let placeholder = ctx.new_temp();
-                    ctx.current_instr(Instr::Const {
-                        dest: placeholder,
-                        value: 0,
-                    });
+                    let placeholder = emit_i64_const(ctx, 0);
                     items.push(placeholder);
                     continue;
                 };
                 items.push(*value);
             }
-            let value = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack { dest: value, items });
-            value
+            emit_tuple_pack(ctx, items)
         }
         semantic::ExprKind::Tuple(elems) => {
             let mut items = Vec::with_capacity(elems.len());
             for e in elems {
                 items.push(lower_expr(ctx, e, vars));
             }
-            let tup = ctx.new_temp();
-            ctx.current_instr(Instr::TuplePack { dest: tup, items });
-            tup
+            emit_tuple_pack(ctx, items)
         }
         semantic::ExprKind::List(elements) => lower_list_literal(ctx, elements, &expr.ty, vars),
         semantic::ExprKind::ListComprehension {
@@ -7317,11 +6403,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ));
                     DataRefKind::Int
                 });
-            ctx.current_instr(Instr::DataRef {
-                dest: t,
-                kind,
-                value: n.to_string(),
-            });
+            emit_data_ref_into(ctx, t, kind, n.to_string());
             t
         }
         semantic::ExprKind::DecimalLiteral { value, .. } => {
@@ -7335,21 +6417,10 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ));
                     DataRefKind::Decimal
                 });
-            ctx.current_instr(Instr::DataRef {
-                dest: t,
-                kind,
-                value: value.to_string(),
-            });
+            emit_data_ref_into(ctx, t, kind, value.to_string());
             t
         }
-        semantic::ExprKind::Bool(b) => {
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: t,
-                value: if *b { 1 } else { 0 },
-            });
-            t
-        }
+        semantic::ExprKind::Bool(b) => emit_i64_const(ctx, if *b { 1 } else { 0 }),
         semantic::ExprKind::String(s) => {
             let t = ctx.new_temp();
             ctx.current_instr(Instr::StringConst {
@@ -7361,11 +6432,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
         semantic::ExprKind::Bytes(bytes) => {
             let t = ctx.new_temp();
             let hex = hex::encode(bytes);
-            ctx.current_instr(Instr::DataRef {
-                dest: t,
-                kind: DataRefKind::Blob,
-                value: format!("0x{hex}"),
-            });
+            emit_data_ref_into(ctx, t, DataRefKind::Blob, format!("0x{hex}"));
             t
         }
         semantic::ExprKind::Ident(name) => {
@@ -7381,9 +6448,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 *temp
             } else {
                 ctx.record_error(format!("undefined variable {name}"));
-                let t = ctx.new_temp();
-                ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                t
+                emit_i64_const(ctx, 0)
             }
         }
         semantic::ExprKind::Unary { op, expr: inner } => {
@@ -7405,12 +6470,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 });
                 t
             } else {
-                let t = ctx.new_temp();
-                ctx.current_instr(Instr::Unary {
-                    dest: t,
-                    op: *op,
-                    operand: v,
-                });
+                let t = emit_unary(ctx, *op, v);
                 t
             }
         }
@@ -7461,13 +6521,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             });
             ctx.current_instr(Instr::NumericStatus { dest: status });
             let zero = emit_i64_const(ctx, 0);
-            let succeeded = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: succeeded,
-                op: BinaryOp::Eq,
-                left: status,
-                right: zero,
-            });
+            let succeeded = emit_binary(ctx, BinaryOp::Eq, status, zero);
             let success = ctx.new_label();
             let failure = ctx.new_label();
             let end = ctx.new_label();
@@ -7479,10 +6533,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             });
             ctx.start_block(success);
             let ok = emit_sum_value(ctx, &expr.ty, 1, Some(converted));
-            ctx.current_instr(Instr::Copy {
-                dest: result,
-                src: ok,
-            });
+            emit_copy(ctx, result, ok);
             ctx.finish_current(Terminator::Jump(end));
             ctx.start_block(failure);
             let fault = ctx.new_temp();
@@ -7491,10 +6542,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 value: status,
             });
             let error = emit_sum_value(ctx, &expr.ty, 0, Some(fault));
-            ctx.current_instr(Instr::Copy {
-                dest: result,
-                src: error,
-            });
+            emit_copy(ctx, result, error);
             ctx.finish_current(Terminator::Jump(end));
             ctx.start_block(end);
             result
@@ -7553,31 +6601,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 && is_pointer_eq_type(&left.ty)
                 && is_pointer_eq_type(&right.ty)
             {
-                let t = ctx.new_temp();
-                ctx.current_instr(Instr::PointerEq {
-                    dest: t,
-                    left: l,
-                    right: r,
-                });
+                let t = emit_pointer_eq(ctx, l, r);
                 if *op == BinaryOp::Ne {
-                    let t2 = ctx.new_temp();
-                    ctx.current_instr(Instr::Unary {
-                        dest: t2,
-                        op: UnaryOp::Not,
-                        operand: t,
-                    });
+                    let t2 = emit_unary(ctx, UnaryOp::Not, t);
                     return t2;
                 }
                 return t;
             }
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Binary {
-                dest: t,
-                op: *op,
-                left: l,
-                right: r,
-            });
-            t
+            emit_binary(ctx, *op, l, r)
         }
         semantic::ExprKind::Conditional {
             cond,
@@ -7804,9 +6835,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                                 payload,
                                 returns_pointer: false,
                             });
-                            let t = ctx.new_temp();
-                            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                            t
+                            emit_i64_const(ctx, 0)
                         }
                         aggregate if function_value_word_types(aggregate).is_some() => {
                             let word_types = function_value_word_types(aggregate)
@@ -7862,9 +6891,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                         entrypoint,
                         payload,
                     });
-                    let t = ctx.new_temp();
-                    ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                    t
+                    emit_i64_const(ctx, 0)
                 }
                 "actor_account" => {
                     let actor = match args[0].kind() {
@@ -7930,9 +6957,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                                 args: arg_tmps,
                                 dest: None,
                             });
-                            let t = ctx.new_temp();
-                            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-                            t
+                            emit_i64_const(ctx, 0)
                         }
                         aggregate if function_value_word_types(aggregate).is_some() => {
                             let word_types = function_value_word_types(aggregate)
@@ -7977,12 +7002,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "E_STATE_MAP_OPTIONAL_READ: StateMap rvalue indexing is invalid; use `map.get(key)`"
                     .into(),
             );
-            let invalid = ctx.new_temp();
-            ctx.current_instr(Instr::Const {
-                dest: invalid,
-                value: 0,
-            });
-            invalid
+            emit_i64_const(ctx, 0)
         }
         semantic::ExprKind::Member { object, field } => {
             // Support nested struct field access via flattened variables: base#i#j
@@ -8035,12 +7055,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             // Generic tuple/struct field access via TupleGet when index is numeric.
             if let Ok(idx) = field.parse::<usize>() {
                 let tup = lower_expr(ctx, object, vars);
-                let out = ctx.new_temp();
-                ctx.current_instr(Instr::TupleGet {
-                    dest: out,
-                    tuple: tup,
-                    index: idx,
-                });
+                let out = emit_tuple_get(ctx, tup, idx);
                 return out;
             }
             // Named struct fields: map to tuple index using type info.
@@ -8052,12 +7067,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     .find(|(_, (fname, _))| fname == field)
             {
                 let tup = lower_expr(ctx, object, vars);
-                let out = ctx.new_temp();
-                ctx.current_instr(Instr::TupleGet {
-                    dest: out,
-                    tuple: tup,
-                    index: idx,
-                });
+                let out = emit_tuple_get(ctx, tup, idx);
                 return out;
             }
             // Semantic analysis must prove every member against a tuple or named
@@ -8068,9 +7078,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 "typed member `{field}` has no Kotodama V1 lowering for `{}`",
                 crate::semantic::type_name(&object.ty)
             ));
-            let t = ctx.new_temp();
-            ctx.current_instr(Instr::Const { dest: t, value: 0 });
-            t
+            emit_i64_const(ctx, 0)
         }
     }
 }
@@ -8089,12 +7097,7 @@ fn lower_sum_type_call(
         "is_none" | "is_err" => {
             let tagged_value = lower_expr(ctx, &args[0], vars);
             let tag = load_sum_tag(ctx, tagged_value);
-            let inverted = ctx.new_temp();
-            ctx.current_instr(Instr::Unary {
-                dest: inverted,
-                op: UnaryOp::Not,
-                operand: tag,
-            });
+            let inverted = emit_unary(ctx, UnaryOp::Not, tag);
             inverted
         }
         "unwrap_or" => lower_tagged_unwrap(ctx, &args[0], &args[1], true, vars),
@@ -8169,20 +7172,14 @@ fn lower_present_or_inactive_state_value(
     ctx.start_block(present_block);
     let decoded = decode_aggregate_state_value(ctx, blob, &resolved)?;
     let some = emit_sum_value(ctx, &option_ty, 1, Some(decoded));
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: some,
-    });
+    emit_copy(ctx, result, some);
     if let Some(path) = delete_when_present {
         ctx.current_instr(Instr::StateDel { path });
     }
     ctx.finish_current(Terminator::Jump(end_block));
     ctx.start_block(absent_block);
     let none = emit_sum_value(ctx, &option_ty, 0, None);
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: none,
-    });
+    emit_copy(ctx, result, none);
     ctx.finish_current(Terminator::Jump(end_block));
     ctx.start_block(end_block);
     Some(result)
@@ -8216,18 +7213,8 @@ fn lower_state_map_get_option(
     let path = build_state_map_path(ctx, &base, key, &key_codec);
     let blob = ctx.new_temp();
     ctx.current_instr(Instr::StateGet { dest: blob, path });
-    let zero = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: zero,
-        value: 0,
-    });
-    let present = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: present,
-        op: BinaryOp::Ne,
-        left: blob,
-        right: zero,
-    });
+    let zero = emit_i64_const(ctx, 0);
+    let present = emit_binary(ctx, BinaryOp::Ne, blob, zero);
     lower_present_or_inactive_state_value(ctx, blob, present, &spec.value, None).unwrap_or_else(
         || {
             ctx.record_error("StateMap.get value type is not lowerable".into());
@@ -8258,18 +7245,8 @@ fn lower_state_map_remove_option(
     let path = build_state_map_path(ctx, &base, key, &key_codec);
     let blob = ctx.new_temp();
     ctx.current_instr(Instr::StateGet { dest: blob, path });
-    let zero = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: zero,
-        value: 0,
-    });
-    let present = ctx.new_temp();
-    ctx.current_instr(Instr::Binary {
-        dest: present,
-        op: BinaryOp::Ne,
-        left: blob,
-        right: zero,
-    });
+    let zero = emit_i64_const(ctx, 0);
+    let present = emit_binary(ctx, BinaryOp::Ne, blob, zero);
     lower_present_or_inactive_state_value(ctx, blob, present, &spec.value, Some(path))
         .unwrap_or_else(|| {
             ctx.record_error("StateMap.remove value type is not lowerable".into());
@@ -8445,11 +7422,7 @@ fn build_state_name_literal(ctx: &mut LowerCtx, name: &str) -> Temp {
         .get(name)
         .cloned()
         .unwrap_or_else(|| name.to_string());
-    ctx.current_instr(Instr::DataRef {
-        dest: t_base,
-        kind: DataRefKind::Name,
-        value: literal,
-    });
+    emit_data_ref_into(ctx, t_base, DataRefKind::Name, literal);
     t_base
 }
 fn build_state_base_name(ctx: &mut LowerCtx, name: &str) -> Temp {
@@ -8516,11 +7489,7 @@ fn build_state_map_path(ctx: &mut LowerCtx, name: &str, key: Temp, key_codec: &K
             t_path
         }
         KeyCodec::Pointer => {
-            let key_blob = ctx.new_temp();
-            ctx.current_instr(Instr::PointerToNorito {
-                dest: key_blob,
-                value: key,
-            });
+            let key_blob = emit_pointer_to_norito(ctx, key);
             let t_path = ctx.new_temp();
             ctx.current_instr(Instr::PathMapKeyNorito {
                 dest: t_path,
@@ -8572,22 +7541,12 @@ fn lower_short_circuit_bool(
     // Both predecessors use `Copy` so compiler fact propagation treats `result` as
     // a genuine control-flow merge rather than a block-local constant.
     ctx.start_block(short_label);
-    let short_result = ctx.new_temp();
-    ctx.current_instr(Instr::Const {
-        dest: short_result,
-        value: short_value,
-    });
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: short_result,
-    });
+    let short_result = emit_i64_const(ctx, short_value);
+    emit_copy(ctx, result, short_result);
     ctx.finish_current(Terminator::Jump(join_label));
     ctx.start_block(rhs_label);
     let right_value = lower_expr(ctx, right, &mut vars.clone());
-    ctx.current_instr(Instr::Copy {
-        dest: result,
-        src: right_value,
-    });
+    emit_copy(ctx, result, right_value);
     ctx.finish_current(Terminator::Jump(join_label));
     ctx.start_block(join_label);
     result

@@ -1,11 +1,4 @@
-use std::{
-    io,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
-};
+use super::*;
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
     NetworkId,
@@ -53,7 +46,14 @@ use sorafs_node::{
     ProviderIngestSourceRequestV1, ProviderIngestTransactionIngressV1,
     ProviderIngestTransactionObservationV1, config::StorageConfig, store::StorageError,
 };
-use super::*;
+use std::{
+    io,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 const LOCAL_PROVIDER: [u8; 32] = [0x11; 32];
 const SOURCE_PROVIDER: [u8; 32] = [0x22; 32];
 const ORDER_ID: [u8; 32] = [0x31; 32];
@@ -122,14 +122,14 @@ struct CrashRestartLedgerV1 {
     archive: MusubiReplicationOrderArchiveBindingV1,
 }
 impl ProviderIngestFinalizedLedgerV1 for CrashRestartLedgerV1 {
-    fn read_assignment_page<'a>(
-        &'a self,
+    fn read_assignment_page(
+        &self,
         claim_factory: ProviderIngestFinalizedClaimFactoryV1,
         at_finalized_cursor: Option<ProviderIngestFinalizedCursorV1>,
         after_order_id: Option<[u8; 32]>,
         limit: usize,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         Result<ProviderIngestFinalizedAssignmentPageV1, ProviderIngestFinalizedLedgerErrorV1>,
     > {
         let result = (|| {
@@ -176,21 +176,21 @@ struct CrashRestartFetchV1 {
 }
 impl ProviderIngestAuthenticatedSourceFetchV1 for CrashRestartFetchV1 {
     type Fetched = VerifiedProviderIngestPayloadV1;
-    fn fetch<'a>(
-        &'a self,
+    fn fetch(
+        &self,
         _request: ProviderIngestSourceRequestV1,
-    ) -> ProviderIngestFutureV1<'a, Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>> {
+    ) -> ProviderIngestFutureV1<'_, Result<Self::Fetched, ProviderIngestSourceFetchErrorV1>> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async { Err(ProviderIngestSourceFetchErrorV1::Unavailable) })
     }
 }
 struct NeverBuildCompletionV1;
 impl ProviderIngestCompletionPayloadBuilderV1 for NeverBuildCompletionV1 {
-    fn build_payload<'a>(
-        &'a self,
+    fn build_payload(
+        &self,
         _request: ProviderIngestCompletionPayloadRequestV1,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         Result<TransactionPayload, ProviderIngestCompletionPayloadErrorV1>,
     > {
         Box::pin(async { Err(ProviderIngestCompletionPayloadErrorV1::Rejected) })
@@ -199,11 +199,11 @@ impl ProviderIngestCompletionPayloadBuilderV1 for NeverBuildCompletionV1 {
 struct NeverResolveSignerV1;
 impl ProviderIngestCompletionSignerResolverV1 for NeverResolveSignerV1 {
     type Signer = TestGovernedCompletionSignerV1;
-    fn resolve<'a>(
-        &'a self,
+    fn resolve(
+        &self,
         _context: ProviderIngestCompletionSignerResolutionContextV1,
     ) -> ProviderIngestFutureV1<
-        'a,
+        '_,
         Result<Option<Self::Signer>, ProviderIngestCompletionSignerResolverErrorV1>,
     > {
         Box::pin(async { Err(ProviderIngestCompletionSignerResolverErrorV1::Rejected) })
@@ -212,24 +212,24 @@ impl ProviderIngestCompletionSignerResolverV1 for NeverResolveSignerV1 {
 struct NeverIngressV1;
 impl ProviderIngestTransactionIngressV1 for NeverIngressV1 {
     type Prepared = ();
-    fn prepare<'a>(
-        &'a self,
+    fn prepare(
+        &self,
         _transaction: SignedTransaction,
-    ) -> ProviderIngestFutureV1<'a, Result<Self::Prepared, ProviderIngestIngressPrepareErrorV1>>
+    ) -> ProviderIngestFutureV1<'_, Result<Self::Prepared, ProviderIngestIngressPrepareErrorV1>>
     {
         Box::pin(async { Err(ProviderIngestIngressPrepareErrorV1::Rejected) })
     }
-    fn expose<'a>(
-        &'a self,
+    fn expose(
+        &self,
         _prepared: Self::Prepared,
         _transaction: SignedTransaction,
-    ) -> ProviderIngestFutureV1<'a, ProviderIngestIngressDispositionV1> {
+    ) -> ProviderIngestFutureV1<'_, ProviderIngestIngressDispositionV1> {
         Box::pin(async { ProviderIngestIngressDispositionV1::Rejected })
     }
-    fn observe<'a>(
-        &'a self,
+    fn observe(
+        &self,
         _transaction_hash: [u8; 32],
-    ) -> ProviderIngestFutureV1<'a, ProviderIngestTransactionObservationV1> {
+    ) -> ProviderIngestFutureV1<'_, ProviderIngestTransactionObservationV1> {
         Box::pin(async { ProviderIngestTransactionObservationV1::Unknown })
     }
 }
@@ -272,6 +272,10 @@ fn runtime_policy() -> ProviderIngestRuntimePolicyV1 {
     }
 }
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the restart test exercises one complete shared-chunk quarantine lifecycle"
+)]
 async fn post_admission_quarantine_survives_restart_with_shared_chunks() {
     let temp = tempfile::tempdir().expect("provider-ingest crash tempdir");
     let root = temp.path().canonicalize().expect("canonical crash tempdir");
@@ -329,7 +333,7 @@ async fn post_admission_quarantine_survives_restart_with_shared_chunks() {
         multihash_code: manifest.chunking.multihash_code,
     };
     let commitment = MusubiArchiveCommitmentV1 {
-        root_cid: root_cid.clone(),
+        root_cid,
         chunker: chunker.clone(),
         chunk_plan_digest: MusubiContentDigestV1::new(manifest.chunk_digest_sha3_256),
         por_root: MusubiContentDigestV1::new(manifest.por_root),
@@ -351,7 +355,7 @@ async fn post_admission_quarantine_survives_restart_with_shared_chunks() {
     archive.validate().expect("Musubi archive binding");
     let mut pin = PinManifestRecord::new(
         digest,
-        root_cid.clone(),
+        root_cid,
         chunker.clone(),
         manifest.chunk_digest_sha3_256,
         manifest.por_root,

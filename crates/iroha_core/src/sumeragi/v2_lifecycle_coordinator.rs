@@ -166,29 +166,38 @@ pub(crate) use open::{AuthenticatedLifecycleRecoveryCut, LifecycleOpenError};
     reason = "reviewed certified-serve admission test seam"
 )]
 pub(crate) use projection::CertifiedServeAdmissionBoundaryError;
+pub(in crate::sumeragi) use projection::CertifiedServeTerminalReplayAuthorizationV1;
+#[allow(
+    unused_imports,
+    reason = "typed terminal replay failure is part of the owner boundary"
+)]
+pub(in crate::sumeragi) use projection::CertifiedServeTerminalReplayFailureV1;
 pub(in crate::sumeragi) use projection::lifecycle_context;
 #[allow(unused_imports, reason = "reviewed certified-serve test seam")]
 pub(crate) use projection::{
     AdapterEffectAdmissionError, CertifiedServeAdmissionError,
     CertifiedServeTerminalSettlementErrorV1, CertifiedServeTerminalSettlementFailureV1,
+    ProducerTurnTerminalSettlementErrorV1, ProducerTurnTerminalSettlementFailureV1,
 };
 pub(in crate::sumeragi) use replay_authority::LifecycleReplayAuthorityV1;
 pub(in crate::sumeragi) use replay_authority::RecoveredDecisionApplyCandidateLineageV1;
 pub(super) use replay_authority::SealedLiveWalPersistedEffectV1;
 #[allow(unused_imports, reason = "reviewed replay-evidence namespace")]
 pub(in crate::sumeragi) use replay_authority::{
-    DurableCertifiedFetchPendingMintPermit, DurableValidateReplayEvidenceV1,
-    InvalidBodyReportReplayEvidenceV1, LocalBodyPreIntentReplaySealV1,
-    LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
-    LocalValidateReplayEvidenceV1, RecoveredDecisionApplyReplayLineageV1,
-    RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
-    RemoteProposalFetchReplayEvidenceV1, RemoteProposalStoreReplayEvidenceV1,
-    RemoteProposalStoredReplayEvidenceV1, RemoteProposalValidateReplayEvidenceV1,
+    DurableCertifiedFetchPendingMintPermit, DurableValidateApplyReplayEvidenceV1,
+    DurableValidateReplayEvidenceV1, InvalidBodyReportReplayEvidenceV1,
+    LocalBodyPreIntentReplaySealV1, LocalProposalIntentReplayEvidenceV1,
+    LocalProposalReadyReplayEvidenceV1, LocalValidateReplayEvidenceV1,
+    RecoveredDecisionApplyReplayLineageV1, RecoveredLifecycleNextWalVoteCandidateProjectionV1,
+    RecoveredLifecycleNextWalVoteSealV1, RemoteProposalFetchReplayEvidenceV1,
+    RemoteProposalStoreReplayEvidenceV1, RemoteProposalStoredReplayEvidenceV1,
+    RemoteProposalValidateReplayEvidenceV1,
 };
 pub(crate) use replay_authority::{
     RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,
     RecoveredWalVoteReplayEvidenceV1,
 };
+pub(in crate::sumeragi) use scheduler_inputs::ProducerTurnSchedulerClaimErrorV1;
 #[allow(
     unused_imports,
     reason = "reviewed scheduler-input namespace retained for production wiring"
@@ -200,9 +209,10 @@ pub(crate) use scheduler_inputs::{
     ProductionIngressTurnPreparation, ProductionSchedulerInputsError, QueuedProductionIngressFetch,
 };
 pub(in crate::sumeragi) use scheduler_inputs::{
+    CertifiedServeSchedulerObservationV1, claim_certified_serve_turn_v1,
+};
+pub(in crate::sumeragi) use scheduler_inputs::{
     ProductionRecoveredCompletionDispatchErrorV1, ProductionRecoveredCompletionDispatchV1,
-    ProductionRecoveredDecisionApplyDispatchErrorV1, ProductionRecoveredDecisionApplyDispatchV1,
-    ProductionRecoveredDecisionFetchDispatchErrorV1, ProductionRecoveredDecisionFetchDispatchV1,
     ProductionRecoveredDecisionFetchPersistenceErrorV1,
     ProductionRecoveredDecisionFetchPersistenceV1, ProductionRecoveredLifecycleSignDispatchErrorV1,
     ProductionRecoveredLifecycleSignDispatchV1,
@@ -265,9 +275,19 @@ pub(in crate::sumeragi) use wal_recovery::{
     RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
     RecoveredLifecycleSignedBroadcastOutputAuthorityV1,
 };
+pub(in crate::sumeragi) use work_registry::ClaimedCertifiedServeDispatchV1;
 pub(in crate::sumeragi) use work_registry::RecoveredDecisionApplyRegistryProjectionPermit;
 #[cfg(test)]
 pub(in crate::sumeragi) use work_registry::RecoveredLifecycleSignClassV1;
+pub(in crate::sumeragi) use work_registry::{
+    AttemptedProducerTurnV1, ClaimedProducerTurnV1, LifecycleDurableValidateDispatchKeyV1,
+    PreparedRecoveredDecisionApplyDispatch, PreparedRecoveredDecisionFetchDispatchV1,
+    PreparedRecoveredLifecycleSignDispatch, ReadyValidateSignPredecessorAuthority,
+    RecoveredDecisionApplyCompletionProjectionPermit, RecoveredDecisionApplyDispatchIdentityV1,
+    RecoveredDecisionApplyDispatchKeyV1, RecoveredDecisionFetchDispatchIdentityV1,
+    RecoveredDecisionFetchDispatchKeyV1, RecoveredLifecycleSignDispatchIdentityV1,
+    RecoveredLifecycleSignDispatchKeyV1,
+};
 #[allow(unused_imports, reason = "reviewed recovered-WAL registry namespace")]
 pub(crate) use work_registry::{
     AuthenticatedRecoveredWalValidateLifecycleRepair,
@@ -283,16 +303,15 @@ pub(crate) use work_registry::{
     RecoveredWalValidateRegistryCut, RecoveredWalValidateRegistryJoinError,
 };
 pub(in crate::sumeragi) use work_registry::{
-    LiveValidateSignRegistryReservation, LiveValidateSignWorkProjectionPermit,
-    PreparedLiveValidateSignRegistryWork,
+    DurableValidateDispatch, ExecutedDurableValidateDispatch,
+    InvalidBodyReportRegistryWorkProjectionPermit, LiveValidateApplyRegistryReservation,
+    LiveValidateReportRegistryReservation, PreparedInvalidBodyReportRegistryWork,
+    PreparedReadyDurableValidateAdapterPreview, PreparedValidateApplyRegistryWork,
+    ValidateApplyRegistryWorkProjectionPermit,
 };
 pub(in crate::sumeragi) use work_registry::{
-    PreparedRecoveredDecisionApplyDispatch, PreparedRecoveredDecisionFetchDispatchV1,
-    PreparedRecoveredLifecycleSignDispatch, ReadyValidateSignPredecessorAuthority,
-    RecoveredDecisionApplyCompletionProjectionPermit, RecoveredDecisionApplyDispatchIdentityV1,
-    RecoveredDecisionApplyDispatchKeyV1, RecoveredDecisionFetchDispatchIdentityV1,
-    RecoveredDecisionFetchDispatchKeyV1, RecoveredLifecycleSignDispatchIdentityV1,
-    RecoveredLifecycleSignDispatchKeyV1,
+    LiveValidateSignRegistryReservation, LiveValidateSignWorkProjectionPermit,
+    PreparedLiveValidateSignRegistryWork,
 };
 const MAX_PENDING_ADMISSION_WAITS: usize = 64;
 /// Sole allocator and writer of logical Sumeragi lifecycle state.
@@ -428,6 +447,7 @@ impl LifecycleCoordinator {
         self.active_context
     }
     /// Return the durable ordinal high-water mark.
+    #[cfg(test)]
     pub(crate) const fn high_water(&self) -> u128 {
         self.high_water
     }
@@ -435,28 +455,11 @@ impl LifecycleCoordinator {
     pub(crate) const fn fault(&self) -> Option<CoordinatorFault> {
         self.fault
     }
-    /// Project and admit one exact runtime-bound production adapter effect.
-    ///
-    /// The live lifecycle runner uses its specialized typed owner paths; this
-    /// generic projection remains a closed compatibility seam for exact
-    /// runtime-effect admission checks.
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn admit_bound_adapter_effect(
-        &mut self,
-        verified: &crate::sumeragi::v2::VerifiedHeightContext,
-        effect: &crate::sumeragi::v2::AdapterEffect,
-        ownership: &crate::sumeragi::v2_runtime::RuntimeEffectOwnership,
-    ) -> Result<AdmissionDecision, AdapterEffectAdmissionError> {
-        let pending = ownership
-            .pending_adapter_effect_binding(effect)
-            .ok_or(AdapterEffectAdmissionError::UnboundEffect)?;
-        self.admit_pending_adapter_effect(verified, effect, &pending)
-    }
     /// Project and admit one sealed ordinal-free adapter-effect binding.
     ///
-    /// The lifecycle stack already owns the matching concrete-work registry;
-    /// this ordinal-free form remains the internal projection used by the
-    /// generic compatibility seam above.
+    /// The lifecycle stack already owns the matching concrete-work registry.
+    /// No runtime lifecycle ordinal enters this API; `reduce_admit` allocates
+    /// the only canonical logical ordinal after projection succeeds.
     #[cfg_attr(not(test), allow(dead_code))]
     fn admit_pending_adapter_effect(
         &mut self,

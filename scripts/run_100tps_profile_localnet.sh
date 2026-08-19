@@ -407,7 +407,6 @@ run_mode() {
     --out-dir "$out_dir"
     --peers "$PEERS"
     --seed "$seed"
-    --build-line iroha3
     --consensus-mode "$consensus_mode"
     --block-time-ms 1000
     --commit-time-ms 1000

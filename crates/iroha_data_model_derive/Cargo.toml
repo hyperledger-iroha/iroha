@@ -41,9 +41,5 @@ name = "expansion"
 harness = false
 
 [[test]]
-name = "ui"
-required-features = ["trybuild-tests"]
-
-[[test]]
 name = "derive_integration"
 path = "tests/derive_integration.rs"

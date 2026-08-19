@@ -49,6 +49,7 @@ impl ExternalSoftwareSignerBackendsV1 {
     ///
     /// The complete catalog is partitioned before either resolver is called; a base registry that
     /// returns any signer backend is rejected rather than overwritten.
+    #[must_use]
     pub fn with_base_registry(
         mut self,
         registry: Arc<dyn crate::RuntimeProviderBrokerBackendRegistryV1>,
@@ -57,6 +58,9 @@ impl ExternalSoftwareSignerBackendsV1 {
         self
     }
     /// Insert one native transaction signer, rejecting duplicates.
+    ///
+    /// # Errors
+    /// Returns a role mismatch when that native signer role is already populated.
     pub fn insert_native(
         &mut self,
         signer: Arc<ExternalSoftwareSignerNativeAdapterV1>,
@@ -69,20 +73,29 @@ impl ExternalSoftwareSignerBackendsV1 {
         Ok(())
     }
     /// Insert the sole Governance DAG signer.
+    ///
+    /// # Errors
+    /// Returns a role mismatch when the slot is already populated.
     pub fn insert_governance_dag(
         &mut self,
         signer: Arc<ExternalSoftwareSignerGovernanceDagAdapterV1>,
     ) -> Result<(), ExternalSoftwareSignerAdapterErrorV1> {
         insert_once(&mut self.governance_dag, signer)
     }
-    /// Insert the sole PoTR gateway signer.
+    /// Insert the sole `PoTR` gateway signer.
+    ///
+    /// # Errors
+    /// Returns a role mismatch when the slot is already populated.
     pub fn insert_potr_gateway(
         &mut self,
         signer: Arc<ExternalSoftwareSignerPotrGatewayAdapterV1>,
     ) -> Result<(), ExternalSoftwareSignerAdapterErrorV1> {
         insert_once(&mut self.potr_gateway, signer)
     }
-    /// Insert the sole PoTR provider signer.
+    /// Insert the sole `PoTR` provider signer.
+    ///
+    /// # Errors
+    /// Returns a role mismatch when the slot is already populated.
     pub fn insert_potr_provider(
         &mut self,
         signer: Arc<ExternalSoftwareSignerPotrProviderAdapterV1>,
@@ -90,6 +103,9 @@ impl ExternalSoftwareSignerBackendsV1 {
         insert_once(&mut self.potr_provider, signer)
     }
     /// Insert the sole billing-statement signer.
+    ///
+    /// # Errors
+    /// Returns a role mismatch when the slot is already populated.
     pub fn insert_billing_statement(
         &mut self,
         signer: Arc<ExternalSoftwareSignerBillingStatementAdapterV1>,
@@ -97,6 +113,9 @@ impl ExternalSoftwareSignerBackendsV1 {
         insert_once(&mut self.billing_statement, signer)
     }
     /// Insert the sole evidence-viewer signer.
+    ///
+    /// # Errors
+    /// Returns a role mismatch when the slot is already populated.
     pub fn insert_evidence_viewer(
         &mut self,
         signer: Arc<ExternalSoftwareSignerEvidenceViewerAdapterV1>,
@@ -104,13 +123,19 @@ impl ExternalSoftwareSignerBackendsV1 {
         insert_once(&mut self.evidence_viewer, signer)
     }
     /// Insert the sole stream-token signer.
+    ///
+    /// # Errors
+    /// Returns a role mismatch when the slot is already populated.
     pub fn insert_stream_token(
         &mut self,
         signer: Arc<ExternalSoftwareSignerStreamTokenAdapterV1>,
     ) -> Result<(), ExternalSoftwareSignerAdapterErrorV1> {
         insert_once(&mut self.stream_token, signer)
     }
-    /// Insert the approved decorated PoP provider registry.
+    /// Insert the approved decorated `PoP` provider registry.
+    ///
+    /// # Errors
+    /// Returns a role mismatch when the slot is already populated.
     pub fn insert_pop_registry(
         &mut self,
         registry: Arc<dyn iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1>,
@@ -160,6 +185,10 @@ impl ExternalSoftwareSignerBackendsV1 {
         }
         backends
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the signer subset validator keeps all purpose-separated slots in one auditable match"
+    )]
     fn validate_signer_subset(
         &self,
         bindings: &crate::IrohaRuntimeProviderBindingsV1,

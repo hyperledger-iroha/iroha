@@ -215,7 +215,6 @@ fn runtime_registration_builder() -> NetworkBuilder {
                 TomlValue::Array(vec![TomlValue::Table(rule_alice)]),
             );
             layer
-                .write(["nexus", "enabled"], true)
                 // Dataspace-scoped manifest grants and publish/revoke ISI route canonically to a
                 // lane bound to the target dataspace, so the benchmark dataspace needs one too.
                 .write(["nexus", "lane_count"], 2_i64)

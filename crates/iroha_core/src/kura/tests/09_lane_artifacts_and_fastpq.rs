@@ -1,8 +1,6 @@
 #[test]
 fn lane_block_artifacts_snapshot_returns_all_valid_artifacts_in_replay_order() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane0 = LaneId::from(0);
     let lane1 = LaneId::from(1);
     let lane0_entry = lane_config.entry(lane0).expect("lane 0 entry");
@@ -62,9 +60,7 @@ fn lane_block_artifacts_snapshot_returns_all_valid_artifacts_in_replay_order() {
 }
 #[test]
 fn latest_lane_block_artifact_for_dataspace_skips_newer_foreign_dataspace() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let foreign_dataspace = DataSpaceId::new(77);
@@ -104,9 +100,7 @@ fn latest_lane_block_artifact_for_dataspace_skips_newer_foreign_dataspace() {
 }
 #[test]
 fn lane_block_artifact_read_rejects_global_block_hash_mismatch() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let lane_block_height = 1;
@@ -145,9 +139,7 @@ fn lane_block_artifact_read_rejects_global_block_hash_mismatch() {
 }
 #[test]
 fn lane_block_artifact_read_rejects_replay_material_mismatch() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let lane_block_height = 1;
@@ -186,9 +178,7 @@ fn lane_block_artifact_read_rejects_replay_material_mismatch() {
 }
 #[test]
 fn latest_lane_block_artifact_skips_replay_material_mismatch() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let mut generator = DummyBlocks::new();
@@ -239,9 +229,7 @@ fn latest_lane_block_artifact_skips_replay_material_mismatch() {
 }
 #[test]
 fn lane_block_artifact_conflicting_rewrite_is_rejected_and_preserves_original() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let lane_block_height = 1;
@@ -300,9 +288,7 @@ fn lane_block_artifact_conflicting_rewrite_is_rejected_and_preserves_original() 
 }
 #[test]
 fn lane_block_artifact_rolls_back_when_block_write_fails() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let lane_block_height = 1;
@@ -344,9 +330,7 @@ fn lane_block_artifact_rolls_back_when_block_write_fails() {
 }
 #[test]
 fn lane_block_artifact_backward_rebase_rolls_back_when_block_write_fails() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let mut generator = DummyBlocks::new();
@@ -393,9 +377,7 @@ fn lane_block_artifact_backward_rebase_rolls_back_when_block_write_fails() {
 }
 #[test]
 fn lane_block_artifact_remains_canonical_when_post_commit_merge_append_fails() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let lane_block_height = 1;
@@ -476,9 +458,7 @@ fn lane_block_artifact_remains_canonical_when_post_commit_merge_append_fails() {
 }
 #[test]
 fn replace_top_block_overwrites_replaced_lane_artifact() {
-    let temp_dir = TempDir::new().expect("create temp dir");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let lane_config = two_lane_runtime_config();
+    let (temp_dir, config, lane_config) = two_lane_storage_fixture();
     let lane_id = LaneId::from(1);
     let lane_entry = lane_config.entry(lane_id).expect("lane entry");
     let lane_block_height = 1;
@@ -560,19 +540,7 @@ fn store_block_rejects_lane_payload_ownership_for_unconfigured_lane() {
 }
 #[test]
 fn pipeline_sidecar_roundtrip() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
-    let block_hash = store_dummy_blocks(&kura, 1)[0];
-    let sidecar = PipelineRecoverySidecar::new(
-        1,
-        block_hash,
-        PipelineDagSnapshot {
-            fingerprint: [0u8; 32],
-            key_count: 0,
-        },
-        Vec::new(),
-    );
+    let (temp_dir, config, kura, block_hash, sidecar) = default_pipeline_sidecar_fixture();
     kura.write_pipeline_metadata(&sidecar);
     let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
     assert_eq!(got.height, 1);
@@ -581,7 +549,7 @@ fn pipeline_sidecar_roundtrip() {
     assert_eq!(got.format_label(), "pipeline.recovery");
 }
 #[test]
-fn framed_sidecar_boundaries_are_canonical_and_ambient_independent() {
+fn framed_pipeline_sidecar_boundaries_are_canonical_and_ambient_independent() {
     let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
         b"canonical framed sidecar boundary",
     ));
@@ -594,37 +562,22 @@ fn framed_sidecar_boundaries_are_canonical_and_ambient_independent() {
         },
         Vec::new(),
     );
-    let roster = RosterSidecar::new(1, block_hash, None, None, None);
     let canonical_pipeline =
         norito::encode_canonical(&pipeline).expect("encode canonical pipeline sidecar");
-    let canonical_roster =
-        norito::encode_canonical(&roster).expect("encode canonical roster sidecar");
     assert_eq!(
         pipeline.encode_framed().expect("frame pipeline sidecar"),
         canonical_pipeline
     );
-    assert_eq!(
-        roster.encode_framed().expect("frame roster sidecar"),
-        canonical_roster
-    );
     let alternate_flags =
         norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
-    let (alternate_pipeline, alternate_roster) = {
+    let alternate_pipeline = {
         let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
-        (
-            norito::to_bytes(&pipeline).expect("encode alternate-layout pipeline sidecar"),
-            norito::to_bytes(&roster).expect("encode alternate-layout roster sidecar"),
-        )
+        norito::to_bytes(&pipeline).expect("encode alternate-layout pipeline sidecar")
     };
     assert_ne!(alternate_pipeline, canonical_pipeline);
-    assert_ne!(alternate_roster, canonical_roster);
     assert!(
         norito::decode_canonical::<PipelineRecoverySidecar>(&alternate_pipeline).is_err(),
         "durable pipeline sidecars must reject alternate layouts"
-    );
-    assert!(
-        norito::decode_canonical::<RosterSidecar>(&alternate_roster).is_err(),
-        "durable roster sidecars must reject alternate layouts"
     );
     let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
     assert_eq!(
@@ -632,12 +585,6 @@ fn framed_sidecar_boundaries_are_canonical_and_ambient_independent() {
             .encode_framed()
             .expect("frame pipeline sidecar under alternate ambient layout"),
         canonical_pipeline
-    );
-    assert_eq!(
-        roster
-            .encode_framed()
-            .expect("frame roster sidecar under alternate ambient layout"),
-        canonical_roster
     );
 }
 #[test]
@@ -695,9 +642,7 @@ fn bound_progress_intent_identity_is_canonical_and_ambient_independent() {
 }
 #[test]
 fn pipeline_sidecar_exact_candidate_read_preserves_canonical_authority() {
-    let temp_dir = TempDir::new().expect("create Kura root");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _) = Kura::new(&config, &RuntimeLaneConfig::default()).expect("open Kura");
+    let (temp_dir, config, kura) = kura_root_fixture(BLOCKS_IN_MEMORY);
     let mut blocks = DummyBlocks::new();
     let candidate = blocks.next();
     let height = candidate.header().height().get();
@@ -831,19 +776,7 @@ fn pipeline_tx_snapshot_rejects_pre_release_bytes_without_counts() {
 }
 #[test]
 fn pipeline_sidecar_enqueue_flushes() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
-    let block_hash = store_dummy_blocks(&kura, 1)[0];
-    let sidecar = PipelineRecoverySidecar::new(
-        1,
-        block_hash,
-        PipelineDagSnapshot {
-            fingerprint: [0u8; 32],
-            key_count: 0,
-        },
-        Vec::new(),
-    );
+    let (temp_dir, config, kura, block_hash, sidecar) = default_pipeline_sidecar_fixture();
     assert_eq!(
         kura.enqueue_pipeline_metadata(sidecar),
         PipelineSidecarEnqueueResult::Enqueued { queue_depth: 1 }
@@ -982,19 +915,7 @@ fn consensus_sidecar_enqueues_do_not_wait_for_unrelated_prune_lock_holder() {
 }
 #[test]
 fn fastpq_proof_snapshot_merges_into_pipeline_sidecar() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
-    let block_hash = store_dummy_blocks(&kura, 1)[0];
-    let sidecar = PipelineRecoverySidecar::new(
-        1,
-        block_hash,
-        PipelineDagSnapshot {
-            fingerprint: [0u8; 32],
-            key_count: 0,
-        },
-        Vec::new(),
-    );
+    let (temp_dir, config, kura, block_hash, sidecar) = default_pipeline_sidecar_fixture();
     kura.write_pipeline_metadata(&sidecar);
     let proof = b"fastpq-proof".to_vec();
     let snapshot = FastpqProofSnapshot {
@@ -1035,9 +956,7 @@ fn fastpq_proof_snapshot_merges_into_pipeline_sidecar() {
 }
 #[test]
 fn fastpq_proof_snapshot_persists_compact_metadata_only() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (temp_dir, config, kura) = unwrapped_kura_fixture();
     let block_hash = store_dummy_blocks(&kura, 1)[0];
     kura.write_pipeline_metadata(&PipelineRecoverySidecar::new(
         1,
@@ -1073,19 +992,7 @@ fn fastpq_proof_snapshot_persists_compact_metadata_only() {
 }
 #[test]
 fn fastpq_proof_snapshots_for_same_block_flush_as_single_sidecar_update() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
-    let block_hash = store_dummy_blocks(&kura, 1)[0];
-    let sidecar = PipelineRecoverySidecar::new(
-        1,
-        block_hash,
-        PipelineDagSnapshot {
-            fingerprint: [0u8; 32],
-            key_count: 0,
-        },
-        Vec::new(),
-    );
+    let (temp_dir, config, kura, block_hash, sidecar) = default_pipeline_sidecar_fixture();
     let base_payload_len = sidecar.encode_framed().expect("encode sidecar").len() as u64;
     kura.write_pipeline_metadata(&sidecar);
     let snapshot1 = sample_fastpq_snapshot(1, block_hash, 8);
@@ -1158,19 +1065,7 @@ fn fastpq_proof_snapshot_retries_missing_sidecar_until_limit() {
 }
 #[test]
 fn pipeline_sidecar_promotes_temp_index_on_read() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
-    let block_hash = store_dummy_blocks(&kura, 1)[0];
-    let sidecar = PipelineRecoverySidecar::new(
-        1,
-        block_hash,
-        PipelineDagSnapshot {
-            fingerprint: [0u8; 32],
-            key_count: 0,
-        },
-        Vec::new(),
-    );
+    let (temp_dir, config, kura, block_hash, sidecar) = default_pipeline_sidecar_fixture();
     let payload = sidecar.encode_framed().expect("encode sidecar");
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
@@ -1244,9 +1139,7 @@ fn indexed_sidecar_recovery_promotes_canonical_header_only_rewrite() {
 }
 #[test]
 fn pipeline_sidecar_promotes_temp_index_after_data_promotion_crash() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (temp_dir, config, kura) = unwrapped_kura_fixture();
     let hashes = store_dummy_blocks(&kura, 2);
     let sidecar = PipelineRecoverySidecar::new(
         1,
@@ -1325,9 +1218,7 @@ fn pipeline_sidecar_promotes_temp_index_after_data_promotion_crash() {
 }
 #[test]
 fn pipeline_sidecar_recovers_temp_data_before_temp_index() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (temp_dir, config, kura) = unwrapped_kura_fixture();
     let block_hash = store_dummy_blocks(&kura, 1)[0];
     let old_sidecar = PipelineRecoverySidecar::new(
         1,
@@ -1542,19 +1433,7 @@ fn pipeline_sidecar_prune_marker_sync_failure_keeps_main_pair_unchanged() {
 }
 #[test]
 fn pipeline_sidecar_fails_closed_on_corrupt_temp_index() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
-    let block_hash = store_dummy_blocks(&kura, 1)[0];
-    let sidecar = PipelineRecoverySidecar::new(
-        1,
-        block_hash,
-        PipelineDagSnapshot {
-            fingerprint: [0u8; 32],
-            key_count: 0,
-        },
-        Vec::new(),
-    );
+    let (temp_dir, config, kura, block_hash, sidecar) = default_pipeline_sidecar_fixture();
     kura.write_pipeline_metadata(&sidecar);
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
@@ -1572,9 +1451,7 @@ fn pipeline_sidecar_fails_closed_on_corrupt_temp_index() {
 }
 #[test]
 fn pipeline_sidecar_fails_closed_on_orphaned_temp_data() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (temp_dir, config, kura) = unwrapped_kura_fixture();
     let hashes = store_dummy_blocks(&kura, 2);
     let sidecar = PipelineRecoverySidecar::new(
         1,
@@ -1608,9 +1485,7 @@ fn pipeline_sidecar_fails_closed_on_orphaned_temp_data() {
 }
 #[test]
 fn pipeline_sidecar_rejects_height_mismatch() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (temp_dir, config, kura) = unwrapped_kura_fixture();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
@@ -1646,35 +1521,12 @@ fn pipeline_sidecar_rejects_height_mismatch() {
 }
 #[test]
 fn sidecar_fsync_mode_tracks_kura_config() {
-    use iroha_config::base::WithOrigin;
-    let temp_dir = TempDir::new().unwrap();
-    let (kura, _count) = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: WithOrigin::inline(temp_dir.path().to_str().unwrap().into()),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Always,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap();
+    let (temp_dir, kura) = unwrapped_inline_kura_fixture_with_fsync(FsyncMode::Always);
     assert_eq!(kura.sidecar_fsync_mode(), FsyncMode::Always);
 }
 #[test]
 fn pipeline_sidecar_rejects_block_hash_mismatch() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (temp_dir, config, kura) = unwrapped_kura_fixture();
     let mut blocks = DummyBlocks::new();
     let block = blocks.next();
     let expected_hash = block.hash();
@@ -1698,9 +1550,7 @@ fn pipeline_sidecar_rejects_block_hash_mismatch() {
 }
 #[test]
 fn pipeline_sidecars_append_to_single_store() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (temp_dir, config, kura) = unwrapped_kura_fixture();
     let hashes = store_dummy_blocks(&kura, 2);
     let dag = PipelineDagSnapshot {
         fingerprint: [1u8; 32],
@@ -1788,9 +1638,7 @@ fn pipeline_sidecar_overwrite_updates_entry() {
 }
 #[test]
 fn pipeline_sidecar_rejects_overlapping_offsets() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (temp_dir, config, kura) = unwrapped_kura_fixture();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
@@ -1839,9 +1687,7 @@ fn pipeline_sidecar_rejects_overlapping_offsets() {
 }
 #[test]
 fn pipeline_sidecar_allows_out_of_order_offsets() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (temp_dir, config, kura) = unwrapped_kura_fixture();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
@@ -1891,9 +1737,7 @@ fn pipeline_sidecar_allows_out_of_order_offsets() {
 }
 #[test]
 fn pipeline_sidecar_allows_misaligned_index() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (temp_dir, config, kura) = unwrapped_kura_fixture();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
@@ -1929,27 +1773,8 @@ fn pipeline_sidecar_allows_misaligned_index() {
 fn sidecar_reader_rejects_oversized_payloads() {
     let temp_dir = TempDir::new().unwrap();
     let store_root = temp_dir.path().join("kura");
-    let kura = Kura::new(
-        &Config {
-            init_mode: InitMode::Strict,
-            store_dir: iroha_config::base::WithOrigin::inline(store_root),
-            max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
-            blocks_in_memory: BLOCKS_IN_MEMORY,
-            debug_output_new_blocks: false,
-            merge_ledger_cache_capacity:
-                iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY,
-            fsync_mode: iroha_config::kura::FsyncMode::Batched,
-            fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
-            block_sync_roster_retention:
-                iroha_config::parameters::defaults::kura::BLOCK_SYNC_ROSTER_RETENTION,
-            roster_sidecar_retention:
-                iroha_config::parameters::defaults::kura::ROSTER_SIDECAR_RETENTION,
-            replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
-        },
-        &RuntimeLaneConfig::default(),
-    )
-    .unwrap()
-    .0;
+    let config = kura_config_for_path(&store_root, BLOCKS_IN_MEMORY);
+    let kura = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap().0;
     let mut dir = kura.store_dir().expect("store dir");
     dir.push(PIPELINE_DIR_NAME);
     std::fs::create_dir_all(&dir).expect("create pipeline dir");
@@ -1992,9 +1817,7 @@ fn sidecar_reader_rejects_oversized_payloads() {
 }
 #[test]
 fn pipeline_sidecar_ignores_invalid_prev_entry() {
-    let temp_dir = TempDir::new().unwrap();
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
-    let (kura, _count) = Kura::new(&config, &RuntimeLaneConfig::default()).unwrap();
+    let (temp_dir, config, kura) = unwrapped_kura_fixture();
     let mut pipeline_dir = kura.store_dir().expect("pipeline store dir");
     pipeline_dir.push(PIPELINE_DIR_NAME);
     std::fs::create_dir_all(&pipeline_dir).expect("create pipeline dir");
@@ -2397,8 +2220,7 @@ fn terminal_frontier_compaction_fails_before_replacing_malformed_pending_slot() 
 }
 #[test]
 fn terminal_auxiliary_cleanup_resumes_after_each_mutation_budget() {
-    let temp_dir = TempDir::new().expect("temporary Kura directory");
-    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (temp_dir, config) = kura_storage_fixture("temporary Kura directory", BLOCKS_IN_MEMORY);
     let lane_config = RuntimeLaneConfig::default();
     let lane = lane_config.primary();
     let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");

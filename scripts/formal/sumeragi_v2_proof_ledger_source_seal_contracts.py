@@ -330,16 +330,32 @@ _KURA_PRODUCTION_COMPONENT_FILES = (
 )
 
 _REVIEWED_RUST_INCLUDE_MANIFESTS = {
+    'crates/iroha_core/src/block.rs': (
+        'block/autonomous_merge_carrier_content_tests.rs',
+        'block/exact_quorum_cardinality_tests.rs',
+        'block/autonomous_anchor_network_tests.rs',
+        'block/canonical_genesis_validation_tests.rs',
+        'block/scheduler_variant_tests.rs',
+        'block/native_amx_exact_quorum_cardinality_tests.rs',
+        'block/native_amx_and_dag_tests.rs',
+        'block/sequential_rejected_pipeline_trigger_tests.rs',
+        'block/tx_order_validation_revalidation_test.rs',
+        'block/rejected_live_batch_fee_tests.rs',
+        'block/fee_admission_tests.rs',
+        'block/bootstrap_and_genesis_tests.rs',
+    ),
     'crates/iroha_core/src/commit_roster_journal.rs': (
         'commit_roster_journal/tests.rs',
     ),
     'crates/iroha_config/src/parameters/actual.rs': (
-        'actual/sora_profile_discovery_disabled_test.rs',
-        'actual/sora_profile_runtime_tests.rs',
         'actual/torii_tx_history.rs',
         'actual/torii_http_transport.rs',
         'actual/torii_mcp_profile.rs',
         'actual/tests.rs',
+    ),
+    'crates/iroha_config/src/parameters/actual/tests.rs': (
+        'sora_profile_discovery_disabled_test.rs',
+        'sora_profile_runtime_tests.rs',
     ),
     'crates/iroha_config/src/parameters/user.rs': (
         'user/kura.rs',
@@ -490,6 +506,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'main/runtime_deps.rs',
         'sumeragi_lane_relay_item.rs',
         'main/online_peers_provider.rs',
+        'main/resolved_genesis_trust_anchor_wrong_hash_test.rs',
         'main_tests/governance_dag_publisher_binding_signer.rs',
         'main/governance_dag_launcher_tests.rs',
         'main/runtime_budget_and_config_tests.rs',
@@ -516,6 +533,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/v2.rs': (
         'v2_authenticated_recovered_adapter_startup_impl.rs',
+        'v2_ready_durable_validate_adapter_publication.rs',
         'tests/v2_adapter_main_00.rs',
         'tests/v2_adapter_main_01.rs',
         'tests/v2_adapter_main_02.rs',
@@ -541,6 +559,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/sumeragi/v2_lifecycle_projection.rs': (
         'tests/v2_lifecycle_projection_cases.rs',
     ),
+    'crates/iroha_core/src/sumeragi/v2_lifecycle_scheduler_inputs.rs': (
+        'tests/v2_lifecycle_scheduler_certified_serve_cases.rs',
+    ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs': (
         'v2_lifecycle_replay_authority_certified_serve.rs',
         'v2_lifecycle_replay_authority_certified_body.rs',
@@ -553,6 +574,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_lifecycle_work_registry_validate_recovery_parent.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs': (
+        'v2_lifecycle_work_registry_decision_apply.rs',
         'v2_lifecycle_work_registry_recovered_wal.rs',
         'v2_lifecycle_work_registry_validate_recovery.rs',
         'v2_lifecycle_work_registry_validate_execution.rs',
@@ -572,6 +594,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/sumeragi/v2_runtime.rs': (
         'v2_runtime_effect_ownership_core_impl.rs',
         'v2_runtime_effect_ownership_rebind_impl.rs',
+        'v2_runtime_body_lifecycle_adapter_bridge.rs',
         'v2_runtime/network_ingress_classification.rs',
         'tests/v2_runtime_pending_binding_cases.rs',
         'tests/v2_runtime_main_00.rs',
@@ -585,6 +608,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_runtime_unsealed_02_owner_retirement_and_fairness.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_worker.rs': (
+        'v2_worker/io_command_queue.rs',
         'v2_worker/exact_output_rollover_claim.rs',
         'v2_worker/queue_plan_admission_handoff.rs',
         'v2_worker/exact_output_pending_state.rs',
@@ -595,17 +619,15 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_worker_main_00.rs',
         'tests/v2_worker_main_01.rs',
         'tests/v2_worker_lifecycle_capacity_cases.rs',
-        'tests/v2_worker_equivocation_and_selected_serve_fixture.rs',
+        'tests/v2_worker_equivocation_fixture.rs',
         'v2_worker/applied_height_handoff_tests.rs',
         'v2_worker/queue_plan_admission_handoff_tests.rs',
         'v2_worker/upstream_reply_route_test.rs',
         'tests/v2_worker_main_02.rs',
-        'tests/v2_worker_main_03.rs',
         'tests/v2_worker_main_04.rs',
         'tests/v2_worker_main_05.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_runner.rs': (
-        'v2_runner/height_ingress_bindings.rs',
         'v2_runner/lifecycle_terminal_recovery.rs',
         'v2_runner/decided_lane_recovery.rs',
         'v2_runner/outer_ingress_cursor.rs',
@@ -652,13 +674,13 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_core_terminal_transactionality.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_effects.rs': (
+        'v2_effects_body_lifecycle_adapter_bridge.rs',
         'tests/v2_effects_main_00.rs',
         'tests/v2_effects_main_01.rs',
         'tests/v2_effects_main_02.rs',
         'tests/v2_effects_main_03.rs',
         'tests/v2_effects_main_04.rs',
         'tests/v2_effects_main_05.rs',
-        'tests/v2_effects_lifecycle_predecessor.rs',
         'tests/v2_effects_03_locked_body_and_sidecar.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_lane_work.rs': (
@@ -666,6 +688,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_lane_work/queue_plan_admission_handoff.rs',
         'v2_lane_work/native_amx_signing_guard_capacity_boundary_test.rs',
         'v2_lane_work/typed_finality_handoff_tests.rs',
+        'v2_lane_work/terminal_retirement_journal_failure_test.rs',
         'tests/v2_lane_work_native_signing_guard.rs',
         'v2_lane_work/native_amx_route_and_receipt_tests.rs',
         'tests/v2_lane_work_observer_role.rs',
@@ -706,11 +729,6 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_worker_backpressure_cases.rs',
         'v2_worker_recovered_lifecycle_output_cases.rs',
         'v2_worker_nonzero_view_restart.rs',
-    ),
-    'crates/iroha_core/src/sumeragi/tests/v2_worker_main_04.rs': (
-        'v2_worker_serve_unsealed_cases.rs',
-        'v2_worker_serve_decision_restart_cases.rs',
-        'v2_worker_certified_serve_budget_cases.rs',
     ),
     'crates/iroha_core/src/sumeragi/tests/v2_effects_main_05.rs': (
         'v2_effects_kura_tip_replay.rs',
@@ -1205,7 +1223,7 @@ _PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256 = {
     "eligible_deferred_admission_ordinals": (
         "ca2db5b8e601e556e10001d3c0a6be5b18dd1cd1f92e5eecf0273fe158fb232d"
     ),
-    "runtime_step": "bafd283fd50fe929e000481a8314f98cd0ad3aef30c8e8677a93b0784045136c",
+    "runtime_step": "cf7ea7ef32f0e4a7f8b418780848c030bf6cc04ccb2c04a61bb0037b684547a3",
     "runtime_step_recovery": (
         "818947b3b1356bfe825b34f2b4ee35f8293b24d9a12ef21fdd0d4f5d97c4ef0e"
     ),
@@ -1379,7 +1397,7 @@ _RUNTIME_RESTORED_PRE_RUNTIME_TC_CANNOT_DEADLOCK_ITEM_SHA256 = (
     "b80fda2727730a33aa51875e3681e9cf355fc0394943b170a4793c2a78f46e23"
 )
 _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256 = (
-    "de38450cc7767e992802f00326914057ad452ab0b7b558b74f53147be40ab619"
+    "c4bf44c2f0037ff4d1d4f803bef306501f47344da605f51f20a03e63bc3feeb3"
 )
 _RUNNER_ROLLOVER_FINALIZED_HEIGHT_OUTPUTS_ITEM_SHA256 = (
     "c5aeb105b87871255d05ead870a60f056dd591e327e8cdeb44d75443885fc33a"
@@ -1511,11 +1529,8 @@ _PRODUCTION_CAUSAL_FIFO_RUNTIME_REGRESSION_SHA256 = {
     "later_same_semantic_fair_retry_retains_runtime_lifecycle_root": (
         "12e41e90bcd59ef22389131ad4b5cdeb56dce7fa04cd15357d18ce9f62cb1b6a"
     ),
-    "ordinary_fair_predecessor_remains_before_serve_until_runtime_consumes_it": (
-        "b69ec152b545fb4e705335eeaecaa5785b1736349fa1494b383f18c257aa8d18"
-    ),
     "older_frozen_aggregate_carrier_rebases_queued_runtime_minimum": (
-        "77dbbfac307f2bd98b86d1d9d111579c40b30fed6254da221544dacf1df8a7ba"
+        "95df3889b70c9358ed887e6bdf4c5ad6a08e361d10d8415e8587057e765d8d38"
     ),
     "network_runtime_rejects_unminted_and_unrelated_colliding_fair_ordinals": (
         "878269e9bdf567147360a1f3c2bf5a7def18b7abd1b38aed3978dc7923624291"
@@ -1541,7 +1556,7 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
         "be2e39948e3696646e15c3331e020351b8f5065ecb25d9aef466674afc18b648"
     ),
     "ingress::fair_v2_ingress_queue_gate_verdict": (
-        "c867fbfccf0d45fff2757bfbec97655de382b225ce9adada9f451e01c3e38e8d"
+        "d4bd27c607b63e39c37499f79cf9fbf3a678f52c392985bb1ffd8bf71a13e675"
     ),
     "ingress::select_fair_v2_ingress_candidate": (
         "9d12522aa0b65a229efc08e35feae5d887c7656366fa074e05b14c2c370a6068"
@@ -1559,11 +1574,9 @@ _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256 = {
         "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
     ),
     "ingress::try_recv_if_at_checked_classified": (
-        "85690909b5ba43380188e092eaeb4eed4d9b262f2bd7b770ce65e0d5486eaaf0"
+        "8867eda9f132eefd0510e3aa1cc70fad7ed02b27df25deec9c7f35046a339f32"
     ),
-    "lifecycle_runner::service_retained_certified_response": "bc06c7c88a5a330e5339c58abcfe1a02c57272df017da88a9751e00ef386e960",
-    "lifecycle_runner::service_certified_serve_barrier": "c46dbe28a53c58c1ff1d8c7e99147ad44f728d032c57dfcbb6c703d47f84bf5e",
-    "pending_runner::service_pending_certified_serve_barrier": "03cdfab54d76fe1b7a2745b61e8e0fc92140ce1ce16182c510d802d827385837",
+    "lifecycle_runner::service_retained_certified_response": "900626da0502f65f262766e815878ce5e3d7bdb196a89657e89413159f83c30f",
     "runner::drain_v2_ingress": (
         _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256
     ),
@@ -1620,11 +1633,7 @@ _TIMEOUT_VOTE_EPISODE_RUNTIME_REGRESSION_SHA256 = {
     ),
 }
 
-_TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256 = {
-    "timeout_vote_episode_reaches_its_predicate_across_a_selected_serve_barrier": (
-        "6b66126a0ae12666093b2126bfadf1149738c9e19c3cd3ff9990fe0be46587bf"
-    ),
-}
+_TIMEOUT_VOTE_EPISODE_WORKER_REGRESSION_SHA256 = {}
 
 # Comment-normalized formal operators for the same finite producer episode.
 # These remain fail-closed placeholders until every listed semantic mutation
@@ -1936,17 +1945,17 @@ _TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256 = {
         ),
     },
     "SumeragiV2AsyncRecoveryVoteEpochProofs.tla": {
-        "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileEpisodeDue": (
-            "87a2bae16488fb91aa75fe1a768cf789af85395501336a69ad8049ea81dc41f3"
+        "AsyncNetworkStepPreservesEmptyServeIngressOwnersWhileProducerTurnReady": (
+            "2b82a05a24eabc175cc34bb7dfa19d2a5f9d1ee2fa745169c3ea13de8d1f682d"
         ),
-        "AsyncNextPreservesEmptyServeIngressOwnersWhileEpisodeDue": (
-            "ef5e61577913d1fac48f01db1ba8cfefb0ee72f722bf9a2bda30da5db92384a2"
+        "AsyncNextPreservesEmptyServeIngressOwnersWhileProducerTurnReady": (
+            "4759d2f074d0c77694fcd0aec61d6c72fc9f2f68b87a9013c321203a08d6cc71"
         ),
-        "AsyncNextPreservesServeProducerEpisodeTypeInvariant": (
-            "341a2e27665c84e9a483ddb897b03535d3b81406d299f17a81db1ec920e9b90a"
+        "AsyncNextPreservesServeProducerTurnTypeInvariant": (
+            "be2bca26611e684353c591890ee166a9ec007cdec385d25018cb0331cfeee846"
         ),
-        "AsyncNextPreservesServeProducerEpisodeInvariants": (
-            "09da7c9d7814236562f6a87fb5f88d48777db0dd5f739ae99a5e77f65f51739f"
+        "AsyncNextPreservesServeProducerTurnInvariants": (
+            "5ceb7abda7dceaaaaa54ed2b174385a25af5412f8574563c6cedcc3619506421"
         ),
         "AsyncTimeoutRecoveryMutationFrameProjectsBoundaryFrame": (
             "1b4c3dfb92c959259a888b735f68844adab19402ea9fb2898dbddea784965c8a"
@@ -2100,12 +2109,12 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 }
 
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 860
-_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 88
+_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 91
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "4082945a72bd97c31bc147f9cd7bbcb77fef8c2f70c59f9e0c6b2892ee459329"
+    "b6457553bc8d41f74ebc708ea3d4e6187117f0f008da2c2dea697b0771741b44"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "97d125f9196963710fd6eb72e98e0b86f6503489f1b1ee492b4cfc628e320d82"
+    "517f8e9e8dc7b522144fc1d6f05ecd0f99142630d5a3dcb456e512ef45b44030"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2119,7 +2128,7 @@ _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
 _PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 527
 _PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 528
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "4dd855f85b071369ec2457dfa75caacc8f597ce17390b406de8f190dd52c6c18"
+    "db96b6b781b450c4b04dbe1f6d4068a4a2a4f13cea3f0fbd868f50dbce4baabb"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -2195,7 +2204,7 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
-        43,
+        42,
     ),
     ("production-merge-sidecar", "merge_sidecar::tests", 118),
     ("production-state-governance-unlock-audit", "state::tests", 1),
@@ -2221,13 +2230,18 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::serviced_candidate_store::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 47),
+    ("production-v2-adapter", "sumeragi::v2::tests", 48),
     ("production-v2-body-store", "sumeragi::v2_body_store::tests", 2),
+    (
+        "production-v2-certified-serve-payload-store",
+        "sumeragi::v2_certified_serve_payload_store::tests",
+        11,
+    ),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 3),
-    ("production-v2-effects", "sumeragi::v2_effects::tests", 72),
+    ("production-v2-effects", "sumeragi::v2_effects::tests", 71),
     ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 63),
-    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 68),
+    ("production-v2-runtime", "sumeragi::v2_runtime::tests", 65),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
     (
@@ -2235,8 +2249,18 @@ _PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS = (
         "sumeragi::v2_lifecycle_recovery::tests",
         5,
     ),
+    (
+        "production-v2-lifecycle-coordinator",
+        "sumeragi::v2_lifecycle_coordinator",
+        39,
+    ),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 37),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 135),
+    (
+        "production-v2-runner-lifecycle-height-driver",
+        "sumeragi::v2_runner::lifecycle_height_driver::tests",
+        1,
+    ),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 88),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",
@@ -2347,8 +2371,8 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_runtime::tests::drained_internal_ignore_uses_exact_durable_tombstone_before_readmission",
     "sumeragi::v2_runtime::tests::queued_body_completion_coalesces_only_its_incumbent_owner",
     "sumeragi::v2_runtime::tests::stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordinal",
-    "sumeragi::v2_runtime::tests::restored_serve_high_watermark_precedes_startup_runtime_owner",
-    "sumeragi::v2_runtime::tests::full_runtime_churn_cannot_cross_an_exact_serve_ordinal",
+    "sumeragi::v2_lifecycle_coordinator::tests::restart_seeds_high_water_and_rollover_preserves_it",
+    "sumeragi::v2_lifecycle_coordinator::tests::producer_handoff_blocks_later_work_without_making_serve_a_global_barrier",
     "sumeragi::v2_runtime::tests::decision_retirement_releases_queued_leader_wire_runtime_owner",
     "sumeragi::v2_runtime::tests::lock_retirement_releases_busy_deferred_leader_wire_runtime_owner",
     "sumeragi::v2_runtime::tests::production_authenticated_preflight_is_never_semantic_only_coalesce",
@@ -2446,11 +2470,11 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = (
     "sumeragi::v2_runner::tests::runner_dispatch_rejects_durable_response_without_reply_routes",
     "sumeragi::v2_worker::tests::actor_backpressure_retains_exact_final_lane_commit_qc_post",
     "sumeragi::v2_worker::tests::actor_backpressure_retains_complete_merge_share_fanout",
-    "sumeragi::v2_worker::tests::certified_serve_receiver_close_rolls_back_pending_capacity_replacement",
-    "sumeragi::v2_worker::tests::certified_serve_receiver_close_rolls_back_materialized_unclaimed_replacement",
-    "sumeragi::v2_worker::tests::certified_serve_shutdown_rolls_back_materialized_unclaimed_replacement",
-    "sumeragi::v2_worker::tests::certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fifo",
-    "sumeragi::v2_worker::tests::certified_serve_terminal_replay_source_retains_retired_route_and_reconnects",
+    "sumeragi::v2_lifecycle_coordinator::tests::serve_retirement_activates_reserved_producer_before_later_admission",
+    "sumeragi::v2_worker::tests::receiver_teardown_preserves_completion_pending_lifecycle_serve",
+    "sumeragi::v2_worker::tests::receiver_teardown_rejects_queued_or_active_lifecycle_serve",
+    "sumeragi::v2::tests::production_lifecycle_factory_replays_markers_with_its_retained_apply_dependencies",
+    "sumeragi::v2_runner::lifecycle_height_driver::tests::completed_certified_serve_yields_before_the_next_outer_turn",
     "sumeragi::v2_worker::tests::same_tenure_updates_and_reconnect_preserve_current_item",
     "sumeragi::v2_worker::tests::closed_sidecar_source_reconnect_retries_current_item_while_sibling_backpressures",
     "sumeragi::v2_worker::tests::completed_sidecar_reconnect_preserves_terminal_cursor_without_capacity_charge",
@@ -2736,45 +2760,45 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_runner::tests::relayed_generation_hint_preserves_reply_route_from_lane_through_worker",
     "sumeragi::v2_worker::tests::generation_hint_requires_exact_reply_route_ownership",
     "network_relay_tests::certified_merge_sidecar_messages_preserve_ingress_reply_route",
-    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_required_serve_gate_precedes_open",
+    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::turn_cut_dequeues_exact_winner_once_and_preserves_ready_rotation",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_same_source_serve",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_certified_request_cutoff_blocks_later_churn",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_occurrence_ordinal_coalesces_and_overflow_closes",
     "sumeragi::authoritative_runtime_gate_tests::restored_productive_retry_stays_behind_an_earlier_certified_request_carrier",
-    "sumeragi::v2_worker::tests::exact_serve_predecessor_admission_services_older_local_without_admitting_later_io",
-    "sumeragi::v2_worker::tests::dropping_exact_serve_predecessor_admission_closes_transient_aperture",
-    "sumeragi::v2_worker::tests::exact_serve_predecessor_admission_is_transient_and_barrier_bound",
-    "sumeragi::v2_worker::tests::repeated_exact_serve_admissions_close_all_older_sources_before_later_io",
-    "sumeragi::v2_worker::tests::exact_serve_admission_waits_out_full_control_prefix_before_older_causal_work",
-    "sumeragi::v2_worker::tests::fair_ingress_exact_ticket_coalesces_and_commits_before_later_io_producers",
-    "sumeragi::v2_worker::tests::drained_exact_retransmission_gets_fresh_scheduler_ordinal",
-    "sumeragi::v2_worker::tests::fair_ingress_gate_overflow_closes_without_partial_admission",
-    "sumeragi::v2_worker::tests::fair_ingress_classifies_current_historical_future_and_unauthenticated_requests",
-    "sumeragi::v2_worker::tests::fair_ingress_rollover_retires_ticket_before_old_service_teardown",
-    "sumeragi::v2_worker::tests::fair_ingress_producer_episode_wins_or_yields_without_partial_exact_admission",
-    "sumeragi::v2_worker::tests::fair_ingress_full_prefix_materializes_exact_serve_before_later_churn",
-    "sumeragi::v2_worker::tests::fair_ingress_serve_only_prefix_materializes_after_frozen_completion_ack",
-    "sumeragi::v2_worker::tests::fair_ingress_terminal_retry_replays_without_lifecycle_resurrection",
-    "sumeragi::v2_worker::tests::fair_ingress_higher_view_waits_out_active_family_before_admission",
-    "sumeragi::v2_worker::tests::durable_serve_restart_before_terminal_seal_locally_completes_without_retry",
-    "sumeragi::v2_worker::tests::durable_coalesced_retransmission_restart_locally_completes_without_retry",
-    "sumeragi::v2_worker::tests::restored_serve_waiter_advances_shared_runtime_source",
-    "sumeragi::v2_worker::tests::durable_serve_abort_before_commit_restarts_into_local_completion",
-    "sumeragi::v2_worker::tests::durable_serve_seal_before_completion_post_restores_terminal_replay",
-    "sumeragi::v2_worker::tests::durable_serve_seal_survives_post_before_physical_ack",
-    "sumeragi::v2_worker::tests::durable_serve_corruption_fails_closed_without_highwater_reset",
-    "sumeragi::v2_worker::tests::durable_serve_frame_bound_covers_max_layout_manifest_hashes",
-    "sumeragi::v2_worker::tests::durable_higher_view_abort_republishes_displaced_terminal_before_restart",
-    "sumeragi::v2_worker::tests::durable_higher_view_admission_crash_locally_completes_successor_union",
-    "sumeragi::v2_worker::tests::durable_serve_restore_rejects_capacity_owner_swap_across_replacement",
-    "sumeragi::v2_worker::tests::durable_serve_state_is_pruned_only_with_successor_rollover_root",
-    "sumeragi::v2_worker::tests::certified_serve_future_slot_blocks_control_and_consensus_replenishment",
-    "sumeragi::v2_worker::tests::certified_serve_cross_relay_retry_replays_one_terminal_tombstone",
-    "sumeragi::v2_worker::tests::certified_serve_terminal_rejects_mismatched_response_hash_without_releasing_owner",
-    "sumeragi::v2_worker::tests::certified_serve_observer_owner_contains_prepare_and_commit_subfamilies",
-    "sumeragi::v2_worker::tests::certified_serve_higher_view_abort_restores_terminal_high_watermark",
-    "sumeragi::v2_worker::tests::certified_serve_receiver_close_aborts_reserved_replacement_without_orphan",
-    "sumeragi::v2_worker::tests::certified_serve_delayed_lower_view_cross_relay_cannot_resurrect",
+    "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_a_later_valid_payload_from_a_second_store_owner",
+    "sumeragi::v2_certified_serve_payload_store::tests::capacity_is_checked_before_a_second_file_is_published",
+    "sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_certified_responder_authority",
+    "sumeragi::v2_certified_serve_payload_store::tests::authenticated_cut_rejects_store_directory_symlink_replacement",
+    "sumeragi::v2_certified_serve_payload_store::tests::completed_payload_requires_exact_durable_body_receipt_and_bytes",
+    "sumeragi::v2_certified_serve_payload_store::tests::negative_terminal_is_idempotent_and_cannot_be_replaced",
+    "sumeragi::v2_certified_serve_payload_store::tests::only_the_call_that_created_pending_owns_preledger_abort_authority",
+    "sumeragi::v2_certified_serve_payload_store::tests::pending_receipt_requires_verified_qc_and_local_retention_authority",
+    "sumeragi::v2_certified_serve_payload_store::tests::recovery_cut_reauthenticates_request_qc_and_typed_negative",
+    "sumeragi::v2_certified_serve_payload_store::tests::recovery_cut_reconstructs_and_authenticates_completed_response",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::frame_roundtrip_is_canonical_and_preserves_high_water",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::one_signed_serve_request_cannot_own_two_lifecycle_pairs",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::orphan_serve_or_producer_records_are_rejected",
+    "sumeragi::v2_lifecycle_coordinator::projection::tests::cancelled_certified_serve_tombstone_replays_with_its_terminal_producer_pair",
+    "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_completion_settles_from_the_post_fsync_response_receipt",
+    "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_negative_settlement_requires_the_exact_post_fsync_receipt",
+    "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_rejects_a_receipt_for_another_signed_request",
+    "sumeragi::v2_lifecycle_coordinator::projection::tests::certified_serve_terminal_family_mismatch_fails_without_state_mutation",
+    "sumeragi::v2_lifecycle_coordinator::projection::tests::pending_certified_serve_admits_one_ready_serve_and_adjacent_dormant_producer",
+    "sumeragi::v2_lifecycle_coordinator::replay_authority::tests::certified_serve_pending_replay_pair_binds_exact_fsync_origin_and_records",
+    "sumeragi::v2_lifecycle_coordinator::replay_authority::tests::recovered_serve_states_reconstruct_one_common_source_per_replay_pair",
+    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::post_cut_append_preserves_geometry_but_pre_cut_mutation_fails_cas",
+    "sumeragi::v2_lifecycle_coordinator::ingress_position::tests::prepared_commit_preserves_unrelated_post_cut_append",
+    "sumeragi::v2_lifecycle_coordinator::launch::turn_driver::ordinary_ingress_token_tests::armed_token_closes_output_before_releasing_dequeued_carrier_and_serve_result",
+    "sumeragi::v2_lifecycle_coordinator::open::recovery_tests::complete_tip_serve_reconciliation_binds_the_exact_source_frame",
+    "sumeragi::v2_lifecycle_coordinator::open::recovery_tests::complete_tip_serve_reconciliation_rejects_missing_final_cut_coverage",
+    "sumeragi::v2_lifecycle_coordinator::scheduler_inputs::certified_serve_scheduler_tests::certified_serve_claim_rolls_back_when_its_exact_carrier_drifted",
+    "sumeragi::v2_lifecycle_coordinator::scheduler_inputs::certified_serve_scheduler_tests::certified_serve_scheduler_creates_exactly_one_live_claim",
+    "sumeragi::v2_lifecycle_coordinator::tests::capacity_fence_freezes_the_complete_serve_companion",
+    "sumeragi::v2_lifecycle_coordinator::tests::durable_rollover_rejects_live_serve_without_payload_cancellation_receipt",
+    "sumeragi::v2_lifecycle_coordinator::tests::recovery_requires_a_bijective_atomic_serve_producer_pair",
+    "sumeragi::v2_lifecycle_coordinator::tests::restart_derives_ready_producer_debt_from_terminal_serve",
+    "sumeragi::v2_lifecycle_coordinator::tests::serve_and_producer_share_one_reconstruction_source",
+    "sumeragi::v2_lifecycle_coordinator::tests::serve_and_producer_terminalization_fail_closed_without_the_atomic_debt",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_checked_dequeue_freezes_one_physical_cut_per_occurrence",
     "sumeragi::v2::tests::deferred_occurrence_capability_binds_direct_authenticated_provenance",
     "sumeragi::v2_runtime::tests::runtime_rejects_driver_selection_outside_eligible_deferred_owner_set",
@@ -2783,13 +2807,13 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_runtime::tests::post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target",
     "sumeragi::v2_runtime::tests::pre_dequeue_probe_validates_unfrozen_leader_wire_identity",
     "sumeragi::v2_runtime::tests::busy_deferred_older_aggregate_rebases_owner_and_rejects_identity_mutation",
-    "sumeragi::v2_worker::tests::invalid_requester_signed_qc_quarantines_one_family_without_consuming_honest_capacity",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::durable_ready_fetch_recovery::fresh_certified_serve_rejects_foreign_target_and_rolls_back_capacity_wait",
     "sumeragi::v2_effects::tests::fetch_retransmissions_reuse_one_work_slot_and_one_signed_request",
     "sumeragi::v2_effects::tests::apply_retransmissions_reuse_one_work_slot",
     "sumeragi::v2_runtime::tests::distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner",
     "sumeragi::v2_worker::tests::durable_reconstructed_body_terminalizes_late_chunk_across_arrival_order",
     "sumeragi::v2_worker::tests::productive_retry_after_proofless_reconstruction_does_not_become_orphan",
-    "sumeragi::v2_effects::tests::late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps",
+    "sumeragi::v2_lifecycle_coordinator::launch::tests::recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit",
     "sumeragi::v2_lane_work::tests::native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order",
     "sumeragi::v2_lane_work::tests::native_amx_merge_projection_excludes_coordinator_only_receipts",
     "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_same_route_identity_conflict",
@@ -2840,11 +2864,11 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
         "275bb4749f89c76810b7154c1eca151f2c85e970c162fb3f737034870520578b"
     ),
     "step_pacemaker_once": (
-        "09140d1b32a493a591303e376d5ed642ea1479cb2fddae358d8d4d9b5b2a7df5"
+        "d90bde4c655d3762e26e4fc3b8093188f70d2ab5adf2d55f39c09fe09342a320"
     ),
-    "step": "c56df5c78384e0685390837f6442bf17f81f37134a840445cb2522326a226bcb",
+    "step": "228b118113f804899bd2d0ca54254014ebb9ee0f671e6d1e900470c7e9a17c9c",
     "step_pending_tip_recovery": (
-        "2fea51da5e34af31e90c8a42ed6915cb8d6e64dc18a7df89ef0a0545b81b6f94"
+        "839907e02db4e0fdda25a94c9d17b3b98b8884e0037eb5038d45899d98c4c05e"
     ),
 }
 
@@ -3205,7 +3229,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkLimits::new": "be6dab607a9d6656ec34deb79c2cc0aff0e75d59731c290051e0f6dc10ba6bd5",
     "RetainedMergeSidecars::rehydrate_for_successor": "709b44e4cf845ffe76903ad4d7f61b9fa174ccc1f0a1a793d6733a37a23cd0a6",
     "V2LaneWorkAdapter::new_with_output_guard_and_transport": "017c1afe0515ff169d85bd9fd1a9ba86689ea35405952fe7647c66f42dabc8dd",
-    "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner": "f0f8c398b46044273cd15f6c980a9058bf0f4418d0aaf13188f700048679ee8e",
+    "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner": "b469facd2579e72d4cb4eacd686cfe795dea917838393f68e7fc5e62f2811dbc",
     "V2LaneWorkAdapter::activate_after_lane_drain_queue_install": "638503cfcc9963213cb6146d16d82ab270016e6f5da7bbbc8b2918aea9120cb2",
     "V2LaneWorkAdapter::into_retained_merge_sidecars": "96d1e194eda3660ccccf9b4e1860b26a4db8d9ee9fb2bad4f988e37c85627218",
     "V2LaneWorkAdapter::accept_relay_message": "87420fc8a24b8fb713af40ba5ba2f2df0efa3a04cf2893b087b2f221f34a0603",
@@ -3230,7 +3254,7 @@ _PRODUCTION_LANE_ACK_SEAM_ITEM_SHA256 = {
     "V2LaneWorkAdapter::replace_stranded_retryable_sidecar_control": "13094aa7fc37a32648ebf74c461802e857173858f09d7c61ef0054530e340e4c",
     "V2LaneWorkAdapter::service_next_certified_merge_sidecar_materialization": "ac05dcfd3b1457f5632cbd3eb9fc337ee2a1200b6ce02e2cd154c392a3f5cc32",
     "V2LaneWorkAdapter::persist_anchored_sessions": "ac81d09b993cf6c83cfcf157d87de1873395bfb240bdc256159243dc05387ee1",
-    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "0df3ea8e18a50206465b35407003a6e3606e67da1d4edeaebde620301fac2a54",
+    "V2LaneWorkAdapter::hydrate_canonical_lane_artifacts": "08ec48a97069a5d90426a973c98d4a4090fc0296f530d5d363453471b2f4e8ad",
     "V2LaneWorkAdapter::next_effect": "62af9ea4c3707845b5b097a27f5cc9281b8ade4bc60db49cdbc9f1c3e2b3496a",
     "V2LaneWorkAdapter::effect_count": "3be06e0c96fdc63e06952ec83b5aa900daf39912955249ca6aad64ec50e1354a",
     "V2LaneWorkAdapter::requeue_effect": "5259377bba158615135666cb3cddf88e0fbfbdb63e55a7691ba397e34195d856",
@@ -3306,8 +3330,8 @@ _PRODUCTION_RUNNER_ACK_SEAM_ITEM_SHA256 = {
     "dispatch_lane_work_effect_from_snapshot": "20b07ac620f07eca9a61e14f198473a5beb9fdf77bf5222d34f0d7338791ec47",
 }
 
-_PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {"ordinary_loop": "e8f3f96412246ef16424373e71d01d4d80615655e6aaf591ecabba2ed22c6ef5", "pending_loop": "949496954f41d44439d51b95e09ac1898df7ec139326dfe884611d045198ee57", "ordinary_finalize": "6912b9343625468b23c8fab85f498aadf721dec6402573ee3136a6a1f6b379c7", "pending_active": "0deb2b7672620c8cd217f6350e3cc83d59efe046262c63eb83c662e8107cb276"}
-_PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "82bd8ab2d7e1c5a3f0517e28c0698c6db0e4fcb4d243c324b0d9d530225cd969"
+_PRODUCTION_LIFECYCLE_EXACT_OUTPUT_ITEM_SHA256 = {"ordinary_loop": "fe38b2b2ab597569383e9b693deabb75346eee956713ec26e3c5174eca38f767", "pending_loop": "520469f9f7c3a23d8915e5aa63e32c459bc8e7b069e796f527540b082741ba38", "ordinary_finalize": "05a36cb47c73bd91e88590bfed1eb0f078a5c75915a5f314497fb89f352aa041", "pending_active": "8dc3176a1258276beae209c81337c0e3da850a21eaec712088d80708b8284ceb"}
+_PRODUCTION_ORDINARY_INGRESS_CONSUMER_ITEM_SHA256 = "e3156115c7608e58491724d41dc852b11db86a92617e2d9454049a6dc898a08d"
 
 # `asyncNodeServiceDeadlines` is a proof-only projection of this one explicit
 # trusted runtime contract. These complete-item seals bind the structural
@@ -3323,131 +3347,36 @@ _RUNTIME_AFTER_GST_REQUIREMENT = (
     "work terminates within declared service bounds"
 )
 
-_DIRECT_SERVE_WORKER_STRUCT_SHA256 = {
-    "V2IoCertifiedServeIngressReservation": "688f72e32860edfe711bc5882ff3d83a9a99c809581b943700194475b7369ad2",
-    "V2IoCompletionOwnership": "ab8a1b61fd83ca1eccaa7aab25c8cfdda367f4a4a00e16fc4882f1cb18c518fb",
-    "CertifiedServePredecessorAdmissionState": "6d80c339fb126ee25fa70da5b08ab490c70fa124fb6d0ec050e395b513df6108",
-    "CertifiedServePredecessorAdmissionV1": "d1cc99c65d2278cf28ce5a3cc2b7d253aaa28a5ce715e3a6eb64e9ce0212a953",
-    # The producer lease is independent of the transient predecessor aperture.
-    "CertifiedServeProducerEpisode": "e1e0bdfc4854c5553d5fbf70a67a153998be353b7e7016e890af3bbe9a76a67b",
-    "V2IoCommandQueueState": "8ea3c5c5f025272450a1bc3af06ace9f34321cf356a31e45a7e7e3f6cc8897b5",
-}
-
-_DIRECT_SERVE_OBSERVATION_STRUCT_SHA256 = {
-    "ExactServePredecessorCompletionEvidence": "7082b85e0e2a57faf487af708330fa5a1b465ac7ca99688d0b33ffc1b643f017",
-    "ExactServePredecessorObservation": "b565c7b6e69ed35ae24fbf878ffeee2bef4473320c5a5f47d24c181a9b506d58",
-}
-
-_DIRECT_SERVE_OBSERVATION_ITEM_SHA256 = {
-    "ExactServePredecessorCompletionEvidence::try_new": "828911f00faca005db61b893bec82ef145090eb7d1bd33173b053e8be04e4598",
-    "ExactServePredecessorCompletionEvidence::lifecycle_ordinal": "3ba70b16c7a9ecf65562435fe08dcfb3733263d1380bffe7e0b12b5302df667c",
-    "ExactServePredecessorCompletionEvidence::validate_exact": "b0633ba009dd400f635563661d1dc9ae31a7a6b9a708abdaaeca8742cd042c8e",
-    "ExactServePredecessorObservation::new": "b0eb8b8d8d6ac3b01c8656302683ec2c9a34be125cef153fa463bd5d8044f457",
-    "ExactServePredecessorObservation::should_open_predecessor_admission": "1755d8970069039295fb7331fd940defa798fe8d3a53869c97f13c0a51b3635f",
-    "ExactServePredecessorObservation::has_runnable_predecessor": "1e8c4ab2814a86782dd6a9473c3b45243e087627038c22a36c3be97dc4de8293",
+# The first-release Certified-Serve path is owned entirely by LifecycleLedgerV1,
+# its concrete registry, the complete Ready census, and one dedicated worker
+# command/completion family.  Complete-item seals complement the semantic
+# token/order contract and make removal of any reviewed owner fail closed.
+_LIFECYCLE_CERTIFIED_SERVE_ITEM_SHA256 = {
+    "registry:ConcreteLifecycleWorkRegistry::attest_ready_certified_serve_request": "310178621cd80f93a0fd32ffa4de5b38ca55237dcd0e5b2d3e09d2e051da4dea",
+    "registry:ConcreteLifecycleWorkRegistry::project_claimed_certified_serve_dispatch": "985dcb45690f99cde6bc2b07703e9c2cf915ceb1abb43b99710e8be71c4f5f26",
+    "scheduler:CertifiedServeSchedulerObservationV1::from_live_cuts": "886ef927aff3c6f8ae8577bb1bcb729f4058b48f20df6c5fbf1c3773c43b3d4f",
+    "scheduler:claim_certified_serve_turn_v1": "93578174a9077b0cda5510e9f763b416731fd5bcae84fcc3c124949c8a3535d1",
+    "turn:prepare_and_dispatch_current_certified_serve": "3860ef97a19c524a74b7ae6aaaa0af2d8e0696571e8e5644986595f47f66d085",
+    "turn:LaunchedProductionLifecycleV1::drive_completion_turn": "26d2ec8d584372896275230c113558e7b6143de582d241b904bdfc87b3acc503",
+    "worker:LifecycleCertifiedServeTaskV1::from_dequeued_parts": "0c9f86b230960b4db64254028b54894adcc3ee29d7a09aff10df489f82830aa1",
+    "worker:LifecycleIoCapacityReservation<'_>::preflight_lifecycle_certified_serve": "698cf37eefa08f22e3fc49a3bba6e04fce8c4e031e94ba6922cde786ce78556c",
+    "worker:LifecycleIoCapacityReservation<'_>::commit_lifecycle_certified_serve": "f1edcfbd0f5c22919a05212cf7de00e5f914d551ca86f6b5b6156dc254e3d3f9",
+    "worker:PreparedLifecycleCertifiedServeCompletionV1::settle_deliver_and_acknowledge": "2fb06e74b5c42ad6d54976116085bf255908f5e0549544e7216e8738576a975d",
+    "worker:ProductionV2Services::post_to_peer_on_reply_routes": "326e01fb46a4f99e7bd8c3b09f3216252b74ee7448003a2640dec578e4a8c08f",
+    "worker:ProductionV2Services::drain_lifecycle_certified_serve_completion": "689949b5b5c84b99ae0c5ef0124b264111c358b9f1f2da88a2700e26ce5a4fbf",
+    "body_store:V2BodyStore::read_durable_body_for_certified_serve": "c3e4d12afaa3f18ad1d5b0865eb3a54f4ad892eff4449b9d9d5b72bfd8f26c87",
+    "projection:super::ProductionLifecycleOwnerV1::settle_certified_serve_worker_completed": "77930bc25fa0078aba267238ba1f3e8016eaa28f9a2d3aa58b4199c3f3333d10",
+    "projection:super::ProductionLifecycleOwnerV1::settle_producer_turn_advanced": "d15b6ada19aa19ddd64ce9a23ca4ec06518cb4eb99cfe386976f7f85bc6f3917",
+    "ordinary:run_lifecycle_active_height": "9132194372fc1d4c4f8a61f44dc019cd4829a5c233b0317c3334355cf284398e",
+    "pending:run_pending_active_height": "8dc3176a1258276beae209c81337c0e3da850a21eaec712088d80708b8284ceb",
+    "height:drain_lifecycle_v2_ingress": "9a75ea7202bfcace792b217f5fca78ff31d041ef6f41039765823b4d6da0b0d2",
+    "launch:ProductionLeaderWireIngressBindingV1::bind": "a2c191a1ada7ec3b3dd00c36c4f495b1ed6c06e2527b2ca9e68b3729f8071f81",
+    "launch:ProductionLeaderWireIngressBindingV1::retire": "9d86d64a689217d27551b081f69a145e8b43a860dcd7ddf209ff3d53760f3485",
+    "launch:ProductionLifecycleOwnerV1::launch": "6b74510906f87755de55b779c17ce3b7eb64b670f77026c2b7f14f4aadfcd48d",
 }
 
 # Completion provenance remains separately sealed because the direct runtime
 # census consumes evidence without transferring worker ownership.
-_DIRECT_SERVE_COMPLETION_PROVENANCE_ITEM_SHA256 = {
-    "V2IoCommand::runtime_lifecycle_ordinal": "6f20f6ca45dde2755022f714d99f98d5d59e10e501c5f8309555f09e3197f382",
-    "V2IoAdmission::retain_completion": "ceb4c44f4b8f7acaf7a7e6dd838975a867777b292f030ff34a1033f284f773ba",
-    "V2IoAdmission::abandon_latest_completion": "8b15ac13c7155d468869bc06451eda891a0e83306291e8979645a40b7b1403a4",
-    "V2IoAdmission::completion_ownership_at": "d5344d0c356eefd40ac512da5052531d72b1b421293656086dea462874c8732e",
-    "V2IoHandle::spawn": "94e1038db8ee6b2ce66bb921464e8701c36b209f562d747817a81c27bb354093",
-    "V2IoHandle::completion_ownership_at": "3b8de8e5d3c0702bee6510648bf0bd4f36f64fc46c79fcd04528d5cd8f892035",
-    "LocalCompletion::runtime_lifecycle_ordinal": "f71dece7980910cbc53626ff041fd945f7f163082b943e1a429bd55e95559417",
-    "send_completion_with_lifecycle_ordinal": "5d91be7698dbaf645fbe0d1d83cdfe346f97259ad437e8e6e02c36fe7444378e",
-    "send_tracked_completion_with_lifecycle_ordinal": "287b40b3cb5725b4fccf468d3e68b956fd6ff32a918103afcc5c1ca51464209f",
-    "try_send_tracked_completion_with_lifecycle_ordinal": "d5cc9cc3351c53307192ffa45bb9602af64f37df1b267b413d9c7d35ab9bbbba",
-}
-
-_DIRECT_SERVE_RESERVATION_ITEM_SHA256 = {
-    "barrier": "bce35afb422de5e3b0b7a2667bea940f9170f0ba95dfae03bbea01c36de5a9ad",
-    "matches_barrier": "d4ba831e00f4262e51db685213bd83bbdac6edb12ebc691b9aaa62774880a3b8",
-}
-
-_DIRECT_SERVE_WORKER_ITEM_SHA256 = {
-    "build_v2_io_command_channel": "51555d88f961e90b5c6112c3578027122cd2699c74b089c881da2081380971ab",
-    "CertifiedServePredecessorAdmissionV1::finish": "05f53cf850a0ce0497e0b70fd6761717dc4916cbdc62ed9d21d128617e7aa768",
-    "CertifiedServePredecessorAdmissionV1::drop": "c53ba75aff5cee08c5cd269c7b1aaff8568c30f9d2ef7b407f225e624d61fa3f",
-    "CertifiedServeProducerEpisode::drop": "926626c686c14d453e18bf20dd7232e33383b26b814178e2d2b7e2c2beb161e3",
-    "V2IoCommandQueue::close_receiver": "0a4453bbd1b0da3033722427504423e7d359a9b53503f33afd150dbb4df91171",
-    "V2IoCommandQueue::reserve_serve_ingress": "5e136355d98bb02ad45803722a003147dde348a4efc67d003e80075e3592b094",
-    "V2IoCommandQueue::retire_selected_serve_ingress_occurrence": "c0821d882ae2997fa2632ab0855afde09bf051d353a4a1bd76293b9491d0dce1",
-    "V2IoCommandQueue::try_begin_producer_episode": "31abb399d6e4ee100a51caa5c7213977aa99835a586d1e129057d4a9f9f2c8d0",
-    "V2IoCommandQueue::suspend_materialized_serve_barrier_for_runtime_predecessor": "af55e56ebf4bffef6b765e06aec105ede58a1be56f9612c310799fe67aef2ec1",
-    "V2IoCommandQueue::serve_barrier": "1104236dd8cfd0ccec5ea0f3171b9d23c6dc1b0f257f0ec13ff6fe8685ad7d4e",
-    "V2IoCommandQueue::open_serve_predecessor_admission": "c8f5517341709400292b34477fe6e5fa8e02d3d00e23fdadf4635f9e13ca152c",
-    "V2IoCommandQueue::serve_predecessor_capacity_available": "992ad6858e2fc42e4659c9754243fe79aa6ab52a45a572eaa2f7b64af3ea2dcb",
-    "V2IoCommandQueue::close_serve_predecessor_admission": "d3447296d5b45ff829878786feab8830df6e0963e1c32c1f93fff2c970c27e91",
-    "V2IoCommandQueue::try_send_as": "e078b2c34943a757c96221a436d6f2ff779a4857f1fb646a7d9edd5bc26dbe41",
-    "ProductionV2Services::certified_serve_barrier": "2daa1fafb0049a95cb78d01630aa55932539b3de9a0db99eb169c0e5e031f56d",
-    "ProductionV2Services::open_certified_serve_predecessor_admission": "7c54df3b5536b30694268c594af0739857b9f67d557ff402a46e6bd74f411a90",
-    "ProductionV2Services::certified_serve_predecessor_completion_evidence": "d52c64cf0e0cfd12bce5b23e0b70242dad19f209fc5f62dff9df85691d178951",
-    "ProductionV2Services::certified_serve_predecessor_capacity_available": "f138d8e58e610e570f05838abadbccfa41f25e7fa54862b86e77abddf05ae039",
-    "ProductionV2Services::try_begin_certified_serve_producer_episode": "b86f953644efbd6a73d81bba2a3cbc23195cc9dcb68e44bc90e6b9a4a8cfd15f",
-    "ProductionV2Services::take_exact_serve_predecessor_completion": "c033089df5ad252d912aec754b9535d16f5a96d99c718a47239116c5916dad88",
-    "ProductionV2Services::take_lifecycle_prefix_completion": "4e8e73973d093f5b642996a26b0995247a38b2c13726567d2b719fbae232d1b6",
-    "ProductionV2Services::drain_exact_serve_runtime_predecessor": "32f88cdb12d5d67bfa896ea472b9571988d1d9755a74e86be25e9036538b87c6",
-    "ProductionV2Services::drain_completions_inner": "bd2ca1a454703b2a5cea6ab934733525249814edd8a0d1e181b875f3a720937b",
-}
-
-_DIRECT_SERVE_RUNNER_ITEM_SHA256 = {
-    "advance_executor_once_before_exact_serve": "065cad68c50e4271298c681772d42e7d823bdd253ee2dc848597194f8490ca26",
-    "ordinary_serve": "c46dbe28a53c58c1ff1d8c7e99147ad44f728d032c57dfcbb6c703d47f84bf5e",
-    "pending_serve": "03cdfab54d76fe1b7a2745b61e8e0fc92140ce1ce16182c510d802d827385837",
-    "ordinary_active": "f702cefd43e52a98f0574d8fa162dab5ee234c2421283624d43b7056024e4e4b",
-    "pending_active": "0deb2b7672620c8cd217f6350e3cc83d59efe046262c63eb83c662e8107cb276",
-}
-
-_DIRECT_SERVE_RESTORE_ITEM_SHA256 = {
-    "restore_certified_serve_tombstones": "a57485c702b6a08ed6053215ffe0cfc630392c98157add917b9d5d34c3d6f727",
-}
-
-_DIRECT_SERVE_EFFECT_ITEM_SHA256 = {
-    "publish_external_lifecycle_owners": "0b872fdf4ad76a4b092cadc6cd33d041463153adbe0d67724b7919767e7f46ab",
-    "older_runtime_lifecycle_predates_retained_response": "596d7ac14ed46a77c83a8d1697ba45c4c6424563bdbe037de96c63eed99f5ec9",
-    "exact_serve_predecessor_observation": "bf165a744fca6fa37f4c1066471c6d678b959283c08f69185450d1fddd06aa0e",
-}
-
-_DIRECT_SERVE_RUNTIME_ITEM_SHA256 = {
-    "with_driver_and_lifecycle_ordinals": "8b70e4c1d229b5d2fefd9eaa7f6a11a5ec6d07a0afff4dd275dc4cc7f4e972d1",
-    "minimum_active_lifecycle_ordinal": "bb4ac2c885dce0086aed3df676af4b5d4c45ea00c9d93e06521242058ef85c9d",
-    "minimum_active_lifecycle_ordinal_excluding": "61dfb5c5bed49fe8191be06bd09a2e929f70da89b1ff829add86f8966fd90f01",
-    "minimum_runnable_lifecycle_ordinal": "18d848ad2bd2263010994b2649313c9e3d9d1db9b2117a9c772120478bb65fd3",
-    "active_lifecycle_uses_ordinal": "ae450e3b7d749e88ebb10ea93d575ffd88257f1c691bc58d9478adde058cd869",
-    "older_lifecycle_predates_exact_serve": "dcc531da72187b94a2b44fc133677fadb0a76cb198ca90a73a5ce294210ececb",
-    "older_lifecycle_predates_retained_response": "2a93432530d127c39a34cbf2abc8349809173a5af546f8aa23cad0da081efed1",
-    "exact_serve_predecessor_observation": "0cefb1e46d8ee9268c1a46fb9d8597b0fcc11bac4fe00b868cfc7163b5724844",
-    "step": "bafd283fd50fe929e000481a8314f98cd0ad3aef30c8e8677a93b0784045136c",
-}
-
-_DIRECT_SERVE_INGRESS_ITEM_SHA256 = {
-    "oldest_active_lifecycle_ordinal": "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86",
-    "uses_lifecycle_ordinal": "248f70bfe769734211acc566c8b91b7e0faf037990be47f95b231d5f102a557a",
-}
-
-_DIRECT_SERVE_REGRESSION_TEST_SHA256 = {
-    # This independently sealed producer lease remains after target drain.
-    "final_serve_retirement_yields_one_producer_episode_before_replenishment": "059218b1bec2859b84f8fe440c785360072fca157e1ea7a4579bff252cd6dde0",
-    "exact_serve_predecessor_admission_services_older_local_without_admitting_later_io": "bb1b988ab5aac78ae3565f0c4568fc3ca684cad466a8e2c79a25f70e14e97ead",
-    "repeated_exact_serve_admissions_close_all_older_sources_before_later_io": "2ff25d1cf67eee40a2d6c9def911d3601b7292e762b1a89be108042291d5620b",
-    "dropping_exact_serve_predecessor_admission_closes_transient_aperture": "d9d9b1e9057674fda69df800937034cd13c60670df69a02312b97a1ad11586c6",
-    "exact_serve_predecessor_admission_is_transient_and_barrier_bound": "2a8d421ab6bd859ce9446200d53c7c64b2525814958e56953b91f9872d25ea28",
-    "exact_serve_admission_waits_out_full_control_prefix_before_older_causal_work": "cc6b7186835765e2aea7019b17990d698a54c4da6d9447b680ada35f4671217e",
-    "worker_completion_is_retained_behind_a_full_runtime_fifo": "4e807f3dd45e855a96923c803bd970dbc2a6684583b8dfa84aa6db788c5206c1",
-    "production_drain_publishes_worker_completion_behind_full_runtime_fifo": "913796745fa6c589f20dd309da632c1dfb05f84aa963377b04ffa9a0556e21eb",
-}
-
-_DIRECT_SERVE_EFFECT_REGRESSION_TEST_SHA256 = {
-    "late_passive_fetch_completion_opens_one_serve_predecessor_admission_and_steps": "07ddf49b7e51afe260fab99ed5479fd3858b6999a6fd2ee9f14deccd2ff22c61",
-}
-
-_DIRECT_SERVE_RUNTIME_REGRESSION_TEST_SHA256 = {
-    "retry_unadmitted_predecessor_gets_one_bounded_serve_attempt": "a73484dd2ecc4a87fee74a7221bdfae0115e63fb61aa059feb07be0c5a25c440",
-}
-
 _LEADER_WIRE_PHYSICAL_INGRESS_REGRESSION_TEST_SHA256 = {
     "restored_productive_retry_freezes_the_current_physical_source_prefix": (
         "0717cee735d0b0a435bdcd502ca6e29c87a554a9f017cb7edbf1efb46ef33d20"
@@ -3465,104 +3394,25 @@ _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256 = {
         "ab9e90e132fbd369c255a7982b5ceab98e74ed3b535cc494b0b12a57a53bf81f"
     ),
     "try_recv_if_at_checked_classified": (
-        "85690909b5ba43380188e092eaeb4eed4d9b262f2bd7b770ce65e0d5486eaaf0"
+        "8867eda9f132eefd0510e3aa1cc70fad7ed02b27df25deec9c7f35046a339f32"
     ),
     "fair_v2_ingress_leader_wire_selector_projection": (
-        "34eebea6c6b1a3aefeb68010a2ea367970cc3f16a7d5adf592e184bcc799201e"
+        "08ce0575f38ec671cff556b343d981536dd24fb5bc6c49874b76508cd9cd8104"
     ),
     "fair_v2_ingress_queue_gate_verdict": (
-        "c867fbfccf0d45fff2757bfbec97655de382b225ce9adada9f451e01c3e38e8d"
+        "d4bd27c607b63e39c37499f79cf9fbf3a678f52c392985bb1ffd8bf71a13e675"
     ),
     "ingress_scheduler_ordinals": (
         "994beede48b0f3f8b0418f2eac37029ca5f65fc934aa4206e9dfc69d1a2acefe"
     ),
     "bind_leader_wire_lifecycle_gate": (
-        "d6d8898d1a10684cc1f1aea7c91aa84dfb2f90862378d41d0f0908d57e2dfcc2"
+        "6e28cc9ea4d84a58f77736f20459030f6591ace7c3e33fae673ad2c5bc4f4c25"
     ),
-}
-
-_PRODUCTION_LOCAL_RUNNER_SERVICE_ITEM_SHA256 = {
-    "runner::service_certified_serve_barrier_liveness_turn": "56deeba2ddc708c8adf1f28d77f64b59e63a9585d6d2d3aa11e31dc9d7aaaa65",
-    "runner::advance_executor": "ce2f1975fd47aac0b33326547595f05779ab0a920e5996499bf450330c457f93",
-    "runner::outer_ingress_turns": "7b77924cf0d587238d52bb45398db1f4b39806e71606f1014be4b225bda7e377",
-    "runner::apply_bounded_sidecar_admissions": "27eb4ede4dd038babb38255b89f6a25259b79f55c6dcee33779efbc5d91e04ad",
-    "runner::dispatch_lane_work_effects": "a26b7238a9a62db73e31134d6b6722ccf22577166cfead1d881f863040d4f139",
-    "runner::dispatch_lane_work_effects_with_progress": "3eb4bbb2474d45ee9e51283c5165e5a82ee25c9fabd4b90a6e4d4eeaf9d5d9c5",
-    "runner::drain_lane_relay_ingress": "665e0ea1c01501d80a547ec3d4ddd72117d32f7ea748de4ee2d0803519afbfb6",
-    "ordinary::service_retained_certified_response": "bc06c7c88a5a330e5339c58abcfe1a02c57272df017da88a9751e00ef386e960",
-    "ordinary::service_certified_serve_barrier": "c46dbe28a53c58c1ff1d8c7e99147ad44f728d032c57dfcbb6c703d47f84bf5e",
-    "ordinary::run_lifecycle_active_height": "f702cefd43e52a98f0574d8fa162dab5ee234c2421283624d43b7056024e4e4b",
-    "pending::service_pending_certified_serve_barrier": "03cdfab54d76fe1b7a2745b61e8e0fc92140ce1ce16182c510d802d827385837",
-    "pending::run_pending_active_height": "0deb2b7672620c8cd217f6350e3cc83d59efe046262c63eb83c662e8107cb276",
-    "pending::run_pending_kura_lifecycle_height": "949496954f41d44439d51b95e09ac1898df7ec139326dfe884611d045198ee57",
-    "worker::ProductionV2Services::drain_completions": "36d4eaf5b185f8f5a24d9b9ad5167667bb9e6f1031291ec7583c617cc73022b4",
-    "worker::ProductionV2Services::drain_completions_with_lifecycle": "6ed10fa2b93d0396d8ee8d8107f5b44aa3164ba5cf0de7f3e97c7580334b9b04",
 }
 
 # Exact comment/literal-free source seals for the production-shaped selected
 # Serve timeout-recovery regression. Each seal was approved independently after
 # its corresponding digest-refreshed semantic mutation was rejected.
-_PRODUCTION_SELECTED_SERVE_LIVENESS_REGRESSION_ITEM_SHA256 = {
-    "runner::CertifiedServeBarrierLivenessAction": (
-        "4a520a5e830e2eb78e6384de5e353c50d488698ab1f3ee622bcb97a7b8dc2d5b"
-    ),
-    # Bound after the composed late-passive-Fetch invocation was removed under
-    # a digest refresh and rejected semantically.
-    "runner::closed_certified_serve_predecessor_admission_cannot_veto_pacemaker": (
-        "6d999db67c983505be65f7206225bb2d4d2749b6e5bbee0355335f3e4f18df50"
-    ),
-    # Each fixture carrier is bound after exact-inventory and field-removal
-    # mutations were rejected.
-    "worker::SelectedServeTimeoutRecoveryMode": (
-        "4d7d121b2669db449618073d79f8c0d43a8195a584d958e2e847bba657c76c9c"
-    ),
-    "worker::SelectedServeLatePassiveFetch": (
-        "291c5357cc35ec7571fe2d166a9b6b1b4ea5f27fd509ebc1f1c5ac10417804b5"
-    ),
-    "worker::SelectedServeTimeoutRecoveryFixture": (
-        "6bda84eb41716036a6938b9f727bf54bcba2f5ca3918146eadbb0cee9f859fc5"
-    ),
-    # Bound after both exact constructor delegates and the shared mode
-    # constructor survived their individual semantic mutations.
-    "worker::SelectedServeTimeoutRecoveryFixture::new": (
-        "793a3708eb7fdce3d109a60528acf0be0bc5771bc52027c2dbfcfe44414081d8"
-    ),
-    "worker::SelectedServeTimeoutRecoveryFixture::new_late_passive_fetch": (
-        "d23e6ab382f4c478ed392c4cdf9dafff92db47f6817fd0713075671442d2fca0"
-    ),
-    "worker::SelectedServeTimeoutRecoveryFixture::new_for_mode": (
-        "2a9992be83d6b0a0adfa2178a40cf122a5c3228c2f839a25d6b06f13ad60e81d"
-    ),
-    "worker::SelectedServeTimeoutRecoveryFixture::service_exact_serve_runtime_prefix": (
-        "e8fe7b35c2c4f0389fd422a768c0155fe66223ae1538520540fa0ce97ed6dcb2"
-    ),
-    # Bound after the complete BodyAvailable -> Store -> Validate rejection ->
-    # Serve -> producer handoff mutation set was rejected.
-    "worker::SelectedServeTimeoutRecoveryFixture::assert_late_passive_fetch_completion_reopens_selected_serve": (
-        "b52fdd8a6acfd5951e9aa514dce783984a2edf6a752f638c91c31d0ce05b0b40"
-    ),
-    "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_vote_episode": (
-        "aa266e22920cc2b8b5ce8ea0095b519da73c93827d9d916e075df8002ddeca50"
-    ),
-    "worker::SelectedServeTimeoutRecoveryFixture::service_timeout_recovery_prefix": (
-        "26f8db46c991874a993888431415631adee676513c41ba1671176f8e7b91bd9a"
-    ),
-    "worker::SelectedServeTimeoutRecoveryFixture::service_pacemaker": (
-        "38dbb93aa1cb6f4326767382a354244d21e07a97c78119472da994558d96f65c"
-    ),
-    "worker::SelectedServeTimeoutRecoveryFixture::entered_view_one": (
-        "dff5113863756090795cfd2ff950a3bfd390e5120260d9ef7986b8a95772d93c"
-    ),
-    "worker::SelectedServeTimeoutRecoveryFixture::assert_complete": (
-        "6f322ae1a6658bfa8b5275ed3c7220a8e9a0dbffcd86851340e00358005fdda9"
-    ),
-    "worker::SelectedServeTimeoutRecoveryFixture::assert_missing_proposal_serve_selected": (
-        "72b5987aae636d8c8be84bcc96617451c63fc3d0b2765a189737a7bb04365c7a"
-    ),
-    "worker::SelectedServeTimeoutRecoveryFixture::drop": (
-        "ce14c1b4e75b8ba5c1b225653eac74cfa39a0432dfd7a84592791342f6cb9881"
-    ),
-}
 _PRODUCTION_WORKER_ACK_SEAM_ITEM_SHA256 = {
     "PendingExactFanout::classified_with_route_history": "a1f9ad9102ffddade0c83bac4895a781a72ba7bec980d99e914eb0641dafc9e7",
     "PendingExactFanout::classified_with_reply_routes": "84c22ccbeecfb531f69c7a03b6f659281fb69fde25f013e0aa394afba347914a",
@@ -3725,9 +3575,9 @@ _PRODUCTION_EXACT_OUTPUT_RESERVATION_ITEM_SHA256 = {
         "b6379336a656f578037f65bb7b297529092f3f64c06bf38ef5f590a4a3aa81c6"
     ),
     "ProductionV2Services::start": (
-        "e5f95d2ddf2cecf9ec9126f98b7a8deda43be6e8b254118658c11acea27e93b6"
+        "80da0d69fc6dcdb2d8c4b0eddf28b0b7069d56e9125981889d3d99c7174a961a"
     ),
-    "ProductionV2Services::start_inner": "3d1647a9ffbc521eabde68bc7a4cd9714145a7ac7649c80c9d28d925d7941545",
+    "ProductionV2Services::start_inner": "e62189ff4aa78a631db1a60e1b773f0c5cd87fb2a613831134e75bca801f9174",
     "ProductionV2Services::exact_target_geometry": (
         "978520459f9dd3c5459478e222418ffed2924445c40a79722c307f97e6d28871"
     ),
@@ -3888,7 +3738,7 @@ _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
     # drain_v2_ingress was approved separately after its three-mode drain
     # mutations passed.
     "drain_v2_ingress": _RUNNER_DRAIN_V2_INGRESS_ITEM_SHA256,
-    "authorize_decided_lane_recovery_drain": "8fb8fd574de3803b19b638916495d5ea9db53e90e1042e77a745fe4c1ac5c5ef",
+    "authorize_decided_lane_recovery_drain": "f62eb9f1b38234b28765dafe591bd22098ae66267c90060a812ef37910cbf2eb",
     # Bound after the exact-output handoff mutation survived refreshing this
     # helper's own token digest.
     "rollover_finalized_height_outputs": (
@@ -3906,19 +3756,16 @@ _PRODUCTION_EXACT_OUTPUT_RUNNER_ITEM_SHA256 = {
 # rather than retaining stale duplicate route/terminal assertions in callers.
 _PRODUCTION_EXACT_OUTPUT_ORDINARY_INGRESS_ITEM_SHA256 = {
     "prepare_current_certified_serve_pre_admission": (
-        "c2fd5a45d61d100dc2811dc7fb62065d0286f4f5d22aa1c42535890581cdc637"
-    ),
-    "authorize_current_certified_serve_pre_dequeue": (
-        "4332716121a9974a144388b6b5274b5f01a535792841ba0d471dbb76dd6fdbd0"
+        "2916d22c3e395f974f472d106ade75d700b75662f2985911e8ce09c130da7106"
     ),
     "consume_prepared_dequeued_v2_ingress": (
-        "82bd8ab2d7e1c5a3f0517e28c0698c6db0e4fcb4d243c324b0d9d530225cd969"
+        "e3156115c7608e58491724d41dc852b11db86a92617e2d9454049a6dc898a08d"
     ),
 }
 
-# Exact production retirement of the two per-height fair-ingress gates. The
-# former runner binding wrappers are test-only compatibility scaffolding; the
-# production contract binds the canonical close and queue-owned unbind seams.
+# Exact production retirement of the leader-wire lifecycle gate. The retired
+# Certified-Serve gate and joint height-ingress wrappers are not production
+# seams; the lifecycle contract binds canonical close and exact leader unbind.
 _PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256 = {
     "runner::close_ingress_for_rollover": (
         "61ae9f7cd71bc2576f9330c5874d2018b873d6144514e9f733f5774343ddd1a5"
@@ -3926,16 +3773,8 @@ _PRODUCTION_HEIGHT_INGRESS_BINDING_ITEM_SHA256 = {
     "ingress::unbind_leader_wire_lifecycle_gate": (
         "4a5b25faedea52bea79ac5041b0f643b5baf7bbb0858d9e6953a5f9e9260869c"
     ),
-    "ingress::unbind_height_ingress_gates": (
-        "966e4feae1f1ca53553abce8847c1a14f8275eb81d4003bedf95e3591f362714"
-    ),
     "ingress::close": (
         "24741c2de73120ea5e1a9564203f5d5e0bd9d80a7f1a89d0bca2511e73dee1a7"
-    ),
-}
-_PRODUCTION_HEIGHT_INGRESS_BINDING_TEST_ITEM_SHA256 = {
-    "worker::closed_height_atomically_retires_serve_and_leader_ingress": (
-        "be7493c6461cb56ae73d8355a7b1da9bf5b6eaa89a95c039107052ba7af82220"
     ),
 }
 
@@ -4038,7 +3877,7 @@ _PRODUCTION_RETAINED_RESPONSE_ESCAPE_LATCH_RUST_ITEM_SHA256 = {
         "a582bffffe57486d860afa3ad9387ad54c6bcab75dda5f2cd82a856605a7d657"
     ),
     "lifecycle_runner::service_retained_certified_response": (
-        "bc06c7c88a5a330e5339c58abcfe1a02c57272df017da88a9751e00ef386e960"
+        "900626da0502f65f262766e815878ce5e3d7bdb196a89657e89413159f83c30f"
     ),
     "test::retained_response_certificate_escape_is_charged_only_once": (
         "e02e3d3dcd687669c86ec284919831836d03986292eab84974d6f3896d0d0aca"
@@ -4236,18 +4075,6 @@ _PRODUCTION_EXACT_OUTPUT_INGRESS_SEAM_ITEM_SHA256 = {
     ),
     "worker::claimed_with_reply_routes_and_ingress_ownership": (
         "8c95a2604897a3dbf327d36721388bf466784f2203869d1fc6aead594ecd7e44"
-    ),
-    "worker::serve_certified_request_on_routes": (
-        "6cfa46d3647ba72ae53fa12585926eb6803ed38dff9d656894ba7e7693dc06ac"
-    ),
-    "worker::queue_commit_serve": (
-        "73b2b40e5c2255d557c2e67ccdd58c3593381c5d713b4dd6315e48c350ff7dfb"
-    ),
-    "worker::io_handle_certified_serve_ingress_gate": (
-        "87acd6865d179d3911a66692e063ece997fbf7669a81493b19d9f443e1291735"
-    ),
-    "worker::services_certified_serve_ingress_gate": (
-        "95906877d32686cc23249747ff5e31f8552d5abb237277f96fd4091da1a92d77"
     ),
     "worker::route_payload_chunk": (
         "ed0c01f2a93defb44b23ffa108c622bbdc4550588a859f44ac7313490f52c705"
@@ -4965,7 +4792,7 @@ _PRODUCTION_P2P_REPLY_ROUTES_MERGE_OBSERVED_SHA256 = (
 )
 _PRODUCTION_TRANSPORT_REPLY_ROUTE_ITEM_SHA256 = {
     "try_from_transport_with_reply_route": (
-        "614facaea868b070cd9ce0dc08e8bb472f3afc3fff9769f09a85128e54a7c11e"
+        "2337f3996a09cfe4d4f70d6da7d9c99a02265e6a709b41e43ca7ec32ff86ceb0"
     ),
     "transport_reply_route_construction_is_fallible_and_target_bound": (
         "4a26c079cad7e57615605b7af734211e3b62ba1e9dc54c36f2e0581fe5c23190"

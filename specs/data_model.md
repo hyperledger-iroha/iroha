@@ -182,13 +182,16 @@ a node advertising any other data-model version before submission.
   - `signatures: BTreeSet<BlockSignature>` (from validators),
   - `payload: BlockPayload` with the header, the sole canonical
     `external_entrypoints: Vec<TransactionEntrypoint>` sequence, and the required
-    V1 DA, roster, NPoS, and execution-context option fields,
+    V1 DA, NPoS, and execution-context option fields,
   - `result: BlockResult` (secondary execution state) containing `time_triggers`, entry/result Merkle trees, `transaction_results`, `committed_fragment_count`, `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`, AXT and trigger records, the AXT policy snapshot, and lane-finality statements.
 - Utilities: `presigned`, fallible `set_transaction_results(...)` and `set_transaction_results_with_transcripts(...)`, `header()`, `signatures()`, `hash()`, `add_signature`, `replace_signatures`.
 - Every `BlockPayload` and `BlockResult` V1 field is present on wire, including
   empty vectors and `None` options. Pre-release layouts that omitted empty
   entrypoints or trailing fields are rejected instead of being hydrated or
-  defaulted.
+  defaulted. Block-local roster evidence is not part of V1: reconfiguration
+  authority comes solely from the authenticated Sumeragi v2 height context and
+  its parent CommitQC, and the longer pre-release roster-bearing block layouts
+  are rejected.
 - `BlockHeader` JSON likewise carries every nullable commitment as an explicit
   value or `null`. Consensus signatures use one versioned V1 header projection
   that always includes the nullable NPoS- and execution-context commitments;

@@ -70,6 +70,8 @@ fn authenticated_candidate_binding_release() -> (
         authenticated_source_seal_projection_sha256: [0x62; 32],
         reviewed_cargo_binary_sha256: [0x63; 32],
         reviewed_rustc_binary_sha256: [0x64; 32],
+        generator_binary_sha256: [0x65; 32],
+        sealed_candidate_build_report_sha256: [0x66; 32],
         network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,
         >::from_untyped_unchecked(iroha_crypto::Hash::new(
@@ -221,6 +223,8 @@ fn authenticated_candidate_binding_release() -> (
             .authenticated_source_seal_projection_sha256,
         reviewed_cargo_binary_sha256: manifest.reviewed_cargo_binary_sha256,
         reviewed_rustc_binary_sha256: manifest.reviewed_rustc_binary_sha256,
+        generator_binary_sha256: manifest.generator_binary_sha256,
+        sealed_candidate_build_report_sha256: manifest.sealed_candidate_build_report_sha256,
         candidate_sha256,
         qualification_receipt_sha256: manifest.qualification_receipt_sha256,
         qualified_candidate_sha256: manifest.qualified_candidate_sha256,
@@ -373,6 +377,8 @@ fn qualification_seal_fixture(
                 .authenticated_source_seal_projection_sha256,
             reviewed_cargo_binary_sha256: manifest.reviewed_cargo_binary_sha256,
             reviewed_rustc_binary_sha256: manifest.reviewed_rustc_binary_sha256,
+            generator_binary_sha256: manifest.generator_binary_sha256,
+            sealed_candidate_build_report_sha256: manifest.sealed_candidate_build_report_sha256,
             benchmark_evidence_sha256: manifest.benchmark_evidence_sha256,
             cryptographic_review_sha256: manifest.cryptographic_review_sha256,
             promotion_record_sha256: Sha256::digest(

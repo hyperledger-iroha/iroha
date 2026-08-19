@@ -241,20 +241,20 @@ LaneConfigEntry {
   or public validator listings.
   The configured default lane itself must stay outside the autoscale-owned
   elastic id range so it remains a stable base anchor. Live-state routing also
-  requires `nexus.enabled = true` and `autoscale.enabled = true` and filters
+  requires `autoscale.enabled = true` and filters
   managed elastic candidates to the configured
-  `autoscale.min_lanes..autoscale.max_lanes` id range, so disabled Nexus,
-  disabled autoscale, or corrupted out-of-range managed lanes cannot receive
+  `autoscale.min_lanes..autoscale.max_lanes` id range, so disabled autoscale
+  or corrupted out-of-range managed lanes cannot receive
   default traffic. If that active elastic range contains a manual lane,
   malformed autoscale-managed lane, or managed lane outside the default
   dataspace, live routing fails closed to the configured base default lane
   until the catalog is repaired. The integration router harness pins the same
   behavior at the fallible `LaneRouter::try_route_with_view` boundary, so
   in-range catalog corruption falls back to the base lane, stale managed lanes
-  left in the catalog are ignored when either gate is disabled, and enabled
+  left in the catalog are ignored when autoscale is disabled, and enabled
   autoscale still shards over valid elastic lanes.
-  Block autoscale application also requires both enabled Nexus and enabled
-  autoscale, so corrupted actual state with either gate disabled cannot create
+  Block autoscale application also requires enabled autoscale, so actual state
+  with that subordinate gate disabled cannot create
   or retire elastic lanes. Autoscale catalog changes are staged inside the
   `StateBlock` and published to committed Nexus state and lane storage geometry
   only during `StateBlock::commit()` after transaction-height validation, so a
@@ -344,8 +344,8 @@ LaneConfigEntry {
   even when the claim is malformed, so elastic capacity cannot become the
   canonical lane for a dataspace. A dataspace with only autoscale-owned lanes
   fails closed with `no_lane_for_dataspace`.
-  Disabled Nexus, corrupted runtime autoscale bounds, or a default lane at or
-  above `autoscale.min_lanes` disable elastic sharding for routing and keep
+  Corrupted runtime autoscale bounds or a default lane at or above
+  `autoscale.min_lanes` disable elastic sharding for routing and keep
   no-target default traffic on the configured default lane.
   Scale-out also requires a free id in the configured
   `autoscale.min_lanes..autoscale.max_lanes` elastic range; hot windows fail
@@ -491,7 +491,7 @@ LaneConfigEntry {
   by that ingress node.
 - SDKs surface lane selectors and map user-friendly aliases to `LaneId` using the lane catalog.
 - Routing rules operate on the validated catalog and may pick both lane and dataspace. `LaneConfig` provides telemetry-friendly aliases for dashboards and logs.
-- Enabled Nexus config swaps and lane lifecycle plans are validated before
+- Nexus config swaps and lane lifecycle plans are validated before
   mutation: the configured default route and explicit rule targets must resolve
   against the candidate lane/dataspace catalogs. A rule that omits `dataspace`
   is validated against `nexus.routing_policy.default_dataspace`, and explicit
@@ -523,9 +523,8 @@ LaneConfigEntry {
   Config swaps also cannot disable `autoscale.enabled` while owned elastic lanes
   exist; valid owned lanes must remain under the autoscaler, and invalid owned
   lanes must be explicitly retired before the owner is disabled. Static TOML
-  parsing rejects `nexus.autoscale.enabled = true` unless
-  `nexus.enabled = true`; it also rejects both the reserved
-  `autoscale.managed` lane metadata key and manual lanes in the enabled
+  parsing rejects both the reserved `autoscale.managed` lane metadata key and
+  manual lanes in the enabled
   elastic id range before runtime for the same ownership boundary. The internal
   autoscale lifecycle path must create
   deterministic public elastic lanes in the configured default dataspace
@@ -548,18 +547,16 @@ LaneConfigEntry {
   repaired by an explicit lifecycle retire, while valid autoscale-owned lanes
   remain protected from manual retirement and corrupted owned lanes cannot be
   hidden behind an unrelated lifecycle plan.
-  Runtime
-  `State::set_nexus` also rejects disabled Nexus configs that carry lane,
-  dataspace, or routing overrides, enable autoscale, enable lane-relay
-  emergency overrides, or enable the relay worker,
-  matching the user-config parser's single-lane disabled profile. Relay worker
-  configs must also use lane-relay-burn fee settlement at the state boundary.
+  Runtime `State::set_nexus` validates lane, dataspace, routing, autoscale,
+  lane-relay emergency, and relay-worker configuration as one atomic Nexus
+  policy. Relay worker configs must also use lane-relay-burn fee settlement at
+  the state boundary.
   Authority-paid Nexus fees are rejected in this mode until an authenticated
   authority spend-lease protocol exists; sponsor receipts require a verified
   source allocation for the exact program revision and asset. Emergency relay
   multisig thresholds cannot exceed member count. Per-dataspace defaults name
-  one exact `fee_sponsor_program_id` and require enabled Nexus plus dataspace
-  keys present in the active catalog; there is no sponsorship toggle or account
+  one exact `fee_sponsor_program_id` and require dataspace keys present in the
+  active catalog; there is no sponsorship toggle or account
   fallback. Runtime config swaps also enforce the parser's fee-shape contract:
   the fee asset selector must be the canonical XOR asset definition id or
   `xor#universal`/`xor#universal.universal` after genesis binds the alias to a
@@ -636,9 +633,9 @@ LaneConfigEntry {
   when recomputing execution-context routing and per-lane transaction
   summaries. Validators therefore accept matching elastic execution contexts
   and reject stale base-lane contexts for transactions that the committed Nexus
-  state routes to an elastic default lane. If Nexus is disabled, or if the
-  active elastic range contains a manual, malformed managed, or off-default
-  managed lane, validators likewise reject stale elastic execution contexts
+  state routes to an elastic default lane. If the active elastic range contains
+  a manual, malformed managed, or off-default managed lane, validators likewise
+  reject stale elastic execution contexts
   because live routing falls back to the base default lane. Native AMX execution
   contexts also compare every committed coordinator and participant leg with the
   recomputed full plan, so a stale participant route cannot survive merely
@@ -733,7 +730,13 @@ LaneConfigEntry {
   validator or peer weight. Protected governance admission and transaction
   state validation canonicalize the same duplicate-free validator set before
   authority or quorum checks, so duplicate validator rows fail closed instead
-  of being silently collapsed at one boundary. Governance quorum metadata
+  of being silently collapsed at one boundary. A manifest that declares a
+  quorum without an explicit validator set is contradictory and rejects.
+  First-release manifest, validator-binding, governance-overlay, and overlay
+  module objects are closed: unknown fields reject, as do unknown hook names
+  and unknown fields inside the sole supported `runtime_upgrade` hook. A typo
+  therefore cannot silently preserve the hook's permissive defaults.
+  Governance quorum metadata
   (`gov_manifest_approvers`) is duplicate-free as well; duplicate approver
   claims reject the transaction instead of being collapsed into one approval.
   Manifest loading likewise rejects duplicate protected namespaces and duplicate
@@ -830,7 +833,18 @@ LaneConfigEntry {
 - `LaneCatalog`, `LaneConfig`, and `DataSpaceCatalog` live in `iroha_data_model::nexus` and provide Norito-format structures for manifests and SDKs.
 - `LaneConfig` lives in `iroha_config::parameters::actual::Nexus` and is derived automatically from the catalog; it does not require Norito encoding because it is an internal runtime helper.
 - The user-facing configuration (`iroha_config::parameters::user::Nexus`) continues to accept declarative lane and dataspace descriptors; parsing now derives the geometry and rejects invalid aliases or duplicate lane ids.
-- `DataSpaceMetadata.fault_tolerance` controls lane-relay committee sizing; committee membership is sampled deterministically per epoch from the dataspace validator pool using the VRF epoch seed bound with `(dataspace_id, lane_id)`.
+- `DataSpaceMetadata.fault_tolerance` controls every lane-consensus committee,
+  not only relay fanout. The only valid first-release geometry is an exact
+  `3f+1` committee with `f >= 1`. Authority resolution takes the exact
+  `(lane_id, dataspace_id, height)` route, rejects inactive/rebound routes and
+  pools smaller than `3f+1`, and samples exactly `3f+1` distinct peers from the
+  canonical manifest or stake pool. Membership uses the consensus epoch seed
+  bound with `(dataspace_id, lane_id)` and the resulting validator set is put in
+  canonical peer order. An oversized pool never becomes an oversized voting
+  committee. Autoscale incarnations instead use their immutable creation pin,
+  which must itself contain exactly the dataspace's `3f+1` validators. New pins
+  are selected from the same canonical manifest/stake authority inputs; commit
+  topology is transport state and is never an authority fallback.
 
 ## Outstanding Work
 

@@ -131,10 +131,10 @@ fn historical_native_amx_recovery_and_diagnostics_share_the_frozen_source_bounda
     );
     assert_eq!(
         source
-            .matches("HistoricalNativeAmxSourceAuthority::CertifiedCoordinator(")
+            .matches("HistoricalNativeAmxSourceAuthority::CertifiedCoordinator {")
             .count(),
         1,
-        "bundle-only diagnostics must establish the still-active coordinator authority",
+        "bundle-only diagnostics must use proposal-finality-authenticated coordinator authority",
     );
     let recovery_branch = source
         .rfind("if !validate_live_authority {")

@@ -963,7 +963,7 @@ pub struct ReplicationOrderRecord {
     pub manifest_digest: ManifestDigest,
     /// Content root CID bound into the canonical replication payload.
     pub manifest_root_cid: ManifestRootCid,
-    /// Immutable Musubi archive purpose, absent for generic SoraFS orders.
+    /// Immutable Musubi archive purpose, absent for generic `SoraFS` orders.
     pub musubi_archive: Option<ArchiveId>,
     /// Account that issued the order.
     pub issued_by: AccountId,

@@ -17,7 +17,7 @@ impl Kura {
                 "lane merge application frontier does not match its merge entry and carrier",
             ));
         }
-        let retention = self.roster_sidecar_retention;
+        let retention = self.lane_history_retention;
         let pairs = [
             (
                 Self::lane_artifact_paths_for_entry(entry, &self.store_root),

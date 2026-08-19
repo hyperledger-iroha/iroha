@@ -30,9 +30,9 @@ present	iroha.runtime.upgrades.list
 present	iroha.runtime.upgrades.propose
 present	iroha.runtime.upgrades.activate
 present	iroha.runtime.upgrades.cancel
-present	iroha.sumeragi.commit_certificates
-present	iroha.sumeragi.validator_sets.list
-present	iroha.sumeragi.validator_sets.get
+absent	iroha.sumeragi.commit_certificates
+absent	iroha.sumeragi.validator_sets.list
+absent	iroha.sumeragi.validator_sets.get
 present	iroha.sumeragi.pacemaker
 absent	iroha.sumeragi.phases
 present	iroha.sumeragi.params
@@ -44,7 +44,7 @@ present	iroha.sumeragi.consensus_keys
 present	iroha.sumeragi.bls_keys
 present	iroha.sumeragi.key_lifecycle
 absent	iroha.sumeragi.telemetry
-present	iroha.sumeragi.commit_qc.get
+absent	iroha.sumeragi.commit_qc.get
 present	iroha.sumeragi.evidence.count
 present	iroha.sumeragi.evidence.list
 present	iroha.sumeragi.vrf.penalties

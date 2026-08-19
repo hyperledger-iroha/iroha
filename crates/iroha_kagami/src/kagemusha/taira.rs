@@ -7,14 +7,16 @@ use iroha_core::zk::confidential_v2::{
     kagemusha_topup_shield_v2_vk_record,
 };
 use iroha_crypto::{HashOf, PublicKey};
+#[cfg(test)]
+use iroha_data_model::isi::{Burn, Transfer};
 use iroha_data_model::{
     NetworkId,
     account::{Account, AccountId, ParsedAccountId, address::ChainDiscriminantGuard},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::consensus_v2::{ConsensusMode, ValidatorPower},
     isi::{
-        Burn, BurnBox, Grant, GrantBox, InstructionBox, Mint, MintBox, Register, RegisterBox,
-        Transfer, TransferBox,
+        BurnBox, Grant, GrantBox, InstructionBox, Mint, MintBox, Register, RegisterBox,
+        TransferBox,
         asset_alias::SetAssetDefinitionAlias,
         governance::RegisterCitizen,
         nexus::{
@@ -53,15 +55,12 @@ const PUBLIC_TAIRA_CHAIN_NAME: &str = "fc56984b-2be7-431d-840e-21514d1883f0";
 const TAIRA_RELEASE_GENERATION_V4: &str = "production-gate-real-artifacts-v4";
 const TAIRA_RELEASE_ACTIVATION_HEIGHT_V4: u64 = 2;
 const DEFAULT_TAIRA_RELEASE_WITHDRAWAL_HEIGHT_V4: u64 = 1_000_000_000;
-const LEGACY_TAIRA_BLOCK_CADENCE_MS: u64 = 1_000;
 const PUBLIC_TAIRA_BLOCK_CADENCE_MS: u64 = 4_000;
 const PUBLIC_TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
 const PUBLIC_TAIRA_OFFLINE_ASSET_ID: &str = "7ZepsJTHCVLKsrFFNZGSRGZgvBhv";
 const PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS: &str = "ds#boi.is";
 const PUBLIC_TAIRA_OFFLINE_ASSET_SCALE: u32 = 2;
 const PUBLIC_TAIRA_FEE_ASSET_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
-const LEGACY_TAIRA_OFFLINE_ASSET_NAME: &str = "sbd";
-const LEGACY_TAIRA_OFFLINE_ASSET_ALIAS: &str = "sbd#cbsi";
 const PUBLIC_TAIRA_OFFLINE_ASSET_NAME: &str = "ds";
 /// Build the exact public Taira top-up finality roster consumed by release generation.
 #[derive(Debug, ClapArgs)]
@@ -112,43 +111,46 @@ fn json_string_field<'a>(
         .and_then(JsonValue::as_str)
         .ok_or_else(|| eyre!("{context}.{key} must be a string"))
 }
-fn migrate_legacy_taira_asset_to_digital_shekel(manifest: &mut JsonValue) -> Result<()> {
+#[expect(
+    clippy::too_many_lines,
+    reason = "the validator checks one canonical asset identity in a single ordered fail-closed pass"
+)]
+fn validate_canonical_taira_asset_manifest(manifest: &JsonValue) -> Result<()> {
     let transactions = manifest
-        .get_mut("transactions")
-        .and_then(JsonValue::as_array_mut)
+        .get("transactions")
+        .and_then(JsonValue::as_array)
         .ok_or_else(|| eyre!("fresh Taira genesis is missing its transactions array"))?;
     let mut registration_count = 0_usize;
     let mut alias_count = 0_usize;
-    for (transaction_index, transaction) in transactions.iter_mut().enumerate() {
+    for (transaction_index, transaction) in transactions.iter().enumerate() {
         let transaction = transaction
-            .as_object_mut()
+            .as_object()
             .ok_or_else(|| eyre!("genesis transaction {transaction_index} is not an object"))?;
-        let Some(instructions) = transaction.get_mut("instructions") else {
+        let Some(instructions) = transaction.get("instructions") else {
             continue;
         };
-        let instructions = instructions.as_array_mut().ok_or_else(|| {
+        let instructions = instructions.as_array().ok_or_else(|| {
             eyre!("genesis transaction {transaction_index}.instructions is not an array")
         })?;
-        for (instruction_index, instruction) in instructions.iter_mut().enumerate() {
+        for (instruction_index, instruction) in instructions.iter().enumerate() {
             let instruction_context =
                 format!("transactions[{transaction_index}].instructions[{instruction_index}]");
             let instruction = instruction
-                .as_object_mut()
+                .as_object()
                 .ok_or_else(|| eyre!("{instruction_context} is not an object"))?;
-            if let Some(register) = instruction.get_mut("Register") {
+            if let Some(register) = instruction.get("Register") {
                 let register = register
-                    .as_object_mut()
+                    .as_object()
                     .ok_or_else(|| eyre!("{instruction_context}.Register is not an object"))?;
-                if let Some(definition) = register.get_mut("AssetDefinition") {
-                    let definition = definition.as_object_mut().ok_or_else(|| {
+                if let Some(definition) = register.get("AssetDefinition") {
+                    let definition = definition.as_object().ok_or_else(|| {
                         eyre!("{instruction_context}.Register.AssetDefinition is not an object")
                     })?;
                     let id = json_string_field(
                         definition,
                         "id",
                         &format!("{instruction_context}.Register.AssetDefinition"),
-                    )?
-                    .to_owned();
+                    )?;
                     if id == PUBLIC_TAIRA_OFFLINE_ASSET_ID {
                         registration_count += 1;
                         if registration_count != 1 {
@@ -161,27 +163,25 @@ fn migrate_legacy_taira_asset_to_digital_shekel(manifest: &mut JsonValue) -> Res
                             "name",
                             &format!("{instruction_context}.Register.AssetDefinition"),
                         )?;
-                        if name != LEGACY_TAIRA_OFFLINE_ASSET_NAME {
+                        if name != PUBLIC_TAIRA_OFFLINE_ASSET_NAME {
                             bail!(
-                                "canonical Taira asset registration must have the clean legacy name `{LEGACY_TAIRA_OFFLINE_ASSET_NAME}`, got `{name}`"
+                                "canonical Taira asset registration must have name `{PUBLIC_TAIRA_OFFLINE_ASSET_NAME}`, got `{name}`"
                             );
                         }
-                        definition.insert(
-                            "name".to_owned(),
-                            JsonValue::String(PUBLIC_TAIRA_OFFLINE_ASSET_NAME.to_owned()),
-                        );
                         let metadata = definition
-                            .get_mut("metadata")
-                            .and_then(JsonValue::as_object_mut)
+                            .get("metadata")
+                            .and_then(JsonValue::as_object)
                             .ok_or_else(|| {
                                 eyre!(
                                     "{instruction_context}.Register.AssetDefinition.metadata is not an object"
                                 )
                             })?;
                         for (key, expected) in [
-                            ("currency_code", "SBD"),
-                            ("display_code", "e-SBD"),
-                            ("display_name", "Digital Solomon Islands Dollar"),
+                            ("currency_code", "DS"),
+                            ("display_code", "DS"),
+                            ("display_name", "Digital Shekel"),
+                            ("iso_currency_code", "ILS"),
+                            ("symbol", "₪"),
                         ] {
                             let actual = json_string_field(
                                 metadata,
@@ -190,46 +190,27 @@ fn migrate_legacy_taira_asset_to_digital_shekel(manifest: &mut JsonValue) -> Res
                             )?;
                             if actual != expected {
                                 bail!(
-                                    "clean legacy Taira asset metadata `{key}` must be `{expected}`, got `{actual}`"
+                                    "canonical Taira asset metadata `{key}` must be `{expected}`, got `{actual}`"
                                 );
                             }
                         }
-                        metadata.insert(
-                            "currency_code".to_owned(),
-                            JsonValue::String("DS".to_owned()),
-                        );
-                        metadata.insert(
-                            "display_code".to_owned(),
-                            JsonValue::String("DS".to_owned()),
-                        );
-                        metadata.insert(
-                            "display_name".to_owned(),
-                            JsonValue::String("Digital Shekel".to_owned()),
-                        );
-                        metadata.insert(
-                            "iso_currency_code".to_owned(),
-                            JsonValue::String("ILS".to_owned()),
-                        );
-                        metadata.insert("symbol".to_owned(), JsonValue::String("₪".to_owned()));
                     }
                 }
             }
-            if let Some(set_alias) = instruction.get_mut("SetAssetDefinitionAlias") {
-                let set_alias = set_alias.as_object_mut().ok_or_else(|| {
+            if let Some(set_alias) = instruction.get("SetAssetDefinitionAlias") {
+                let set_alias = set_alias.as_object().ok_or_else(|| {
                     eyre!("{instruction_context}.SetAssetDefinitionAlias is not an object")
                 })?;
                 let asset_definition_id = json_string_field(
                     set_alias,
                     "asset_definition_id",
                     &format!("{instruction_context}.SetAssetDefinitionAlias"),
-                )?
-                .to_owned();
+                )?;
                 let alias = json_string_field(
                     set_alias,
                     "alias",
                     &format!("{instruction_context}.SetAssetDefinitionAlias"),
-                )?
-                .to_owned();
+                )?;
                 if alias == PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS
                     && asset_definition_id != PUBLIC_TAIRA_OFFLINE_ASSET_ID
                 {
@@ -244,15 +225,11 @@ fn migrate_legacy_taira_asset_to_digital_shekel(manifest: &mut JsonValue) -> Res
                             "fresh Taira genesis contains multiple aliases for `{PUBLIC_TAIRA_OFFLINE_ASSET_ID}`"
                         );
                     }
-                    if alias != LEGACY_TAIRA_OFFLINE_ASSET_ALIAS {
+                    if alias != PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS {
                         bail!(
-                            "canonical Taira asset must have the clean legacy alias `{LEGACY_TAIRA_OFFLINE_ASSET_ALIAS}`, got `{alias}`"
+                            "canonical Taira asset must have alias `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}`, got `{alias}`"
                         );
                     }
-                    set_alias.insert(
-                        "alias".to_owned(),
-                        JsonValue::String(PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS.to_owned()),
-                    );
                 }
             }
         }
@@ -264,7 +241,7 @@ fn migrate_legacy_taira_asset_to_digital_shekel(manifest: &mut JsonValue) -> Res
     }
     if alias_count != 1 {
         bail!(
-            "fresh Taira genesis must contain exactly one `{LEGACY_TAIRA_OFFLINE_ASSET_ALIAS}` binding for `{PUBLIC_TAIRA_OFFLINE_ASSET_ID}`"
+            "fresh Taira genesis must contain exactly one `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}` binding for `{PUBLIC_TAIRA_OFFLINE_ASSET_ID}`"
         );
     }
     Ok(())
@@ -364,7 +341,7 @@ fn taira_release_roster_v4(
     Ok(roster)
 }
 pub(super) fn prepare_release_roster_v4<T: std::io::Write>(
-    args: PrepareReleaseRosterV4Args,
+    args: &PrepareReleaseRosterV4Args,
     writer: &mut std::io::BufWriter<T>,
 ) -> Outcome {
     let config_bytes = super::read_external_bounded(
@@ -409,7 +386,7 @@ fn taira_base_verifier_records(
      -> Result<(VerifyingKeyId, VerifyingKeyRecord)> {
         let id = VerifyingKeyId::new(KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND, role);
         let mut record = build(role, 1).map_err(|error| eyre!(error))?;
-        record.namespace = KAGEMUSHA_VERIFIER_NAMESPACE.to_owned();
+        KAGEMUSHA_VERIFIER_NAMESPACE.clone_into(&mut record.namespace);
         record.activation_height = Some(activation_height);
         record.withdraw_height = None;
         Ok((id, record))
@@ -685,14 +662,11 @@ fn has_nonzero_online_backing_source(
     })
 }
 fn validate_source_block_cadence_ms(block_cadence_ms: u64) -> Result<()> {
-    if matches!(
-        block_cadence_ms,
-        LEGACY_TAIRA_BLOCK_CADENCE_MS | PUBLIC_TAIRA_BLOCK_CADENCE_MS
-    ) {
+    if block_cadence_ms == PUBLIC_TAIRA_BLOCK_CADENCE_MS {
         return Ok(());
     }
     bail!(
-        "source genesis has unexpected signed block cadence {block_cadence_ms} ms; expected legacy {LEGACY_TAIRA_BLOCK_CADENCE_MS} ms or target {PUBLIC_TAIRA_BLOCK_CADENCE_MS} ms"
+        "source genesis has unexpected signed block cadence {block_cadence_ms} ms; expected canonical public Taira cadence {PUBLIC_TAIRA_BLOCK_CADENCE_MS} ms"
     )
 }
 fn unit_permission(name: &'static str) -> Permission {
@@ -720,9 +694,12 @@ struct TairaBaseGenesisReport {
     instructions_hash: String,
     output: String,
 }
-#[allow(clippy::too_many_lines)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the base-genesis command keeps ordered source admission and append-only construction in one auditable transaction"
+)]
 pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
-    args: PrepareTestnetBaseGenesisV4Args,
+    args: &PrepareTestnetBaseGenesisV4Args,
     writer: &mut std::io::BufWriter<T>,
 ) -> Outcome {
     iroha_genesis::init_instruction_registry();
@@ -733,12 +710,12 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
     )?;
     validate_genesis_manifest_json(&genesis_bytes)
         .wrap_err("fresh Taira genesis manifest exceeds fixed resource bounds")?;
-    let mut genesis_value: JsonValue = norito::json::from_slice(&genesis_bytes)
+    let genesis_value: JsonValue = norito::json::from_slice(&genesis_bytes)
         .wrap_err("failed to decode fresh Taira genesis JSON")?;
     drop(genesis_bytes);
-    migrate_legacy_taira_asset_to_digital_shekel(&mut genesis_value)?;
+    validate_canonical_taira_asset_manifest(&genesis_value)?;
     let genesis: RawGenesisTransaction = norito::json::value::from_value(genesis_value)
-        .wrap_err("failed to decode migrated Taira genesis manifest")?;
+        .wrap_err("failed to decode canonical Taira genesis manifest")?;
     if genesis.chain_id().as_str() != PUBLIC_TAIRA_CHAIN_NAME {
         bail!(
             "genesis chain name must be canonical public Taira `{PUBLIC_TAIRA_CHAIN_NAME}`, got `{}`",
@@ -796,7 +773,7 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
     match inventory.asset_names.get(&asset_definition_id) {
         Some(name) if name == PUBLIC_TAIRA_OFFLINE_ASSET_NAME => {}
         Some(name) => bail!(
-            "canonical Taira offline asset has wrong name after migration: expected `{PUBLIC_TAIRA_OFFLINE_ASSET_NAME}`, got `{name}`"
+            "canonical Taira offline asset has wrong name: expected `{PUBLIC_TAIRA_OFFLINE_ASSET_NAME}`, got `{name}`"
         ),
         None => bail!(
             "canonical Taira offline asset `{PUBLIC_TAIRA_OFFLINE_ASSET_ID}` has no registered name"
@@ -813,12 +790,12 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
             "source genesis already contains a recursive-release activation; reset from clean genesis"
         );
     }
-    if let Some(existing) = &inventory.ds_alias_binding {
-        if existing != &asset_definition_id {
-            bail!(
-                "source genesis binds `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}` to wrong asset `{existing}`"
-            );
-        }
+    if let Some(existing) = &inventory.ds_alias_binding
+        && existing != &asset_definition_id
+    {
+        bail!(
+            "source genesis binds `{PUBLIC_TAIRA_OFFLINE_ASSET_ALIAS}` to wrong asset `{existing}`"
+        );
     }
     if inventory.zk_assets.contains(&asset_definition_id) {
         bail!("source genesis already registers the Taira offline asset as a ZK asset");
@@ -1003,7 +980,7 @@ mod tests {
             .expect("derive test account");
         AccountId::new(key_pair.public_key().clone())
     }
-    fn legacy_taira_asset_json() -> JsonValue {
+    fn canonical_taira_asset_json() -> JsonValue {
         norito::json::from_str(
             r#"{
                 "transactions": [{
@@ -1012,18 +989,20 @@ mod tests {
                             "Register": {
                                 "AssetDefinition": {
                                     "id": "7ZepsJTHCVLKsrFFNZGSRGZgvBhv",
-                                    "name": "sbd",
+                                    "name": "ds",
                                     "metadata": {
-                                        "currency_code": "SBD",
-                                        "display_code": "e-SBD",
-                                        "display_name": "Digital Solomon Islands Dollar"
+                                        "currency_code": "DS",
+                                        "display_code": "DS",
+                                        "display_name": "Digital Shekel",
+                                        "iso_currency_code": "ILS",
+                                        "symbol": "₪"
                                     }
                                 }
                             }
                         },
                         {
                             "SetAssetDefinitionAlias": {
-                                "alias": "sbd#cbsi",
+                                "alias": "ds#boi.is",
                                 "asset_definition_id": "7ZepsJTHCVLKsrFFNZGSRGZgvBhv",
                                 "lease_expiry_ms": null
                             }
@@ -1032,14 +1011,14 @@ mod tests {
                 }]
             }"#,
         )
-        .expect("decode legacy Taira asset fixture")
+        .expect("decode canonical Taira asset fixture")
     }
     #[test]
-    fn legacy_taira_asset_is_migrated_to_exact_digital_shekel_identity() {
-        let mut manifest = legacy_taira_asset_json();
-        migrate_legacy_taira_asset_to_digital_shekel(&mut manifest)
-            .expect("migrate the unique clean legacy asset");
-        let encoded = norito::json::to_string(&manifest).expect("encode migrated fixture");
+    fn canonical_taira_asset_identity_is_accepted() {
+        let manifest = canonical_taira_asset_json();
+        validate_canonical_taira_asset_manifest(&manifest)
+            .expect("accept the exact canonical asset identity");
+        let encoded = norito::json::to_string(&manifest).expect("encode canonical fixture");
         for expected in [
             r#""name":"ds""#,
             r#""currency_code":"DS""#,
@@ -1051,39 +1030,54 @@ mod tests {
         ] {
             assert!(
                 encoded.contains(expected),
-                "migrated asset is missing {expected}: {encoded}"
+                "canonical asset is missing {expected}: {encoded}"
             );
         }
-        assert!(!encoded.contains("sbd#cbsi"));
-        assert!(!encoded.contains("Digital Solomon Islands Dollar"));
     }
     #[test]
-    fn legacy_taira_asset_migration_rejects_unreviewed_metadata() {
-        let mut manifest = legacy_taira_asset_json();
-        let encoded = norito::json::to_string(&manifest)
-            .expect("encode legacy fixture")
-            .replace("\"currency_code\":\"SBD\"", "\"currency_code\":\"ILS\"");
-        manifest = norito::json::from_str(&encoded).expect("decode altered fixture");
-        let error = migrate_legacy_taira_asset_to_digital_shekel(&mut manifest)
-            .expect_err("unreviewed source identity must fail closed");
-        assert!(error.to_string().contains("currency_code"));
+    fn canonical_taira_asset_validation_rejects_noncanonical_identity_fields() {
+        let encoded = norito::json::to_string(&canonical_taira_asset_json())
+            .expect("encode canonical fixture");
+        for (canonical, replacement, expected_error) in [
+            ("\"name\":\"ds\"", "\"name\":\"sbd\"", "must have name"),
+            (
+                "\"alias\":\"ds#boi.is\"",
+                "\"alias\":\"sbd#cbsi\"",
+                "must have alias",
+            ),
+            (
+                "\"currency_code\":\"DS\"",
+                "\"currency_code\":\"USD\"",
+                "currency_code",
+            ),
+        ] {
+            let altered: JsonValue =
+                norito::json::from_str(&encoded.replace(canonical, replacement))
+                    .expect("decode altered fixture");
+            let error = validate_canonical_taira_asset_manifest(&altered)
+                .expect_err("non-canonical source identity must fail closed");
+            assert!(
+                error.to_string().contains(expected_error),
+                "unexpected rejection for {replacement}: {error}"
+            );
+        }
     }
     #[test]
-    fn checked_in_taira_genesis_migrates_without_changing_backing_supply() {
+    fn checked_in_taira_genesis_has_canonical_identity_and_backing_supply() {
         iroha_genesis::init_instruction_registry();
         let _discriminant = ChainDiscriminantGuard::enter(PUBLIC_TAIRA_CHAIN_DISCRIMINANT);
-        let mut manifest: JsonValue = norito::json::from_str(include_str!(
+        let manifest: JsonValue = norito::json::from_str(include_str!(
             "../../../../configs/soranexus/taira/genesis.json"
         ))
-        .expect("decode checked-in clean Taira genesis");
-        migrate_legacy_taira_asset_to_digital_shekel(&mut manifest)
-            .expect("migrate checked-in Taira asset identity");
+        .expect("decode checked-in canonical Taira genesis");
+        validate_canonical_taira_asset_manifest(&manifest)
+            .expect("validate checked-in Taira asset identity");
         let genesis: RawGenesisTransaction = norito::json::value::from_value(manifest)
-            .expect("decode migrated checked-in Taira genesis");
+            .expect("decode canonical checked-in Taira genesis");
         let definition = AssetDefinitionId::parse_address_literal(PUBLIC_TAIRA_OFFLINE_ASSET_ID)
             .expect("static Taira asset definition");
         let inventory = TairaGenesisInventory::from_genesis(&genesis, &definition)
-            .expect("inventory migrated genesis");
+            .expect("inventory canonical genesis");
         assert_eq!(
             inventory.asset_names.get(&definition).map(String::as_str),
             Some(PUBLIC_TAIRA_OFFLINE_ASSET_NAME)
@@ -1304,28 +1298,28 @@ mod tests {
         assert!(balances.is_empty());
     }
     #[test]
-    fn taira_cadence_accepts_legacy_input_but_rejects_unknown_conflicts() {
-        validate_source_block_cadence_ms(LEGACY_TAIRA_BLOCK_CADENCE_MS)
-            .expect("canonical v20 source cadence may be upgraded");
+    fn taira_cadence_accepts_only_the_canonical_public_value() {
         validate_source_block_cadence_ms(PUBLIC_TAIRA_BLOCK_CADENCE_MS)
-            .expect("already-upgraded source cadence remains canonical");
-        let error =
-            validate_source_block_cadence_ms(2_000).expect_err("unknown cadence must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("unexpected signed block cadence")
-        );
+            .expect("canonical public cadence is accepted");
+        for rejected in [1_000, 2_000] {
+            let error = validate_source_block_cadence_ms(rejected)
+                .expect_err("non-canonical cadence must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("unexpected signed block cadence")
+            );
+        }
     }
     #[test]
-    fn genesis_builder_freezes_effective_taira_cadence_at_four_seconds() {
+    fn genesis_builder_preserves_canonical_taira_cadence() {
         let _discriminant = ChainDiscriminantGuard::enter(PUBLIC_TAIRA_CHAIN_DISCRIMINANT);
         let source = iroha_genesis::GenesisBuilder::new_without_executor(
             ChainId::from(PUBLIC_TAIRA_CHAIN_NAME),
             ".",
         )
         .with_block_cadence_ms(
-            NonZeroU64::new(LEGACY_TAIRA_BLOCK_CADENCE_MS).expect("legacy cadence is non-zero"),
+            NonZeroU64::new(PUBLIC_TAIRA_BLOCK_CADENCE_MS).expect("canonical cadence is non-zero"),
         )
         .build_raw();
         assert_eq!(
@@ -1335,18 +1329,19 @@ mod tests {
                 .sumeragi
                 .block_cadence_ms
                 .get(),
-            LEGACY_TAIRA_BLOCK_CADENCE_MS,
+            PUBLIC_TAIRA_BLOCK_CADENCE_MS,
         );
-        let upgraded = source
+        let rebuilt = source
             .into_builder()
             .with_block_cadence_ms(
-                NonZeroU64::new(PUBLIC_TAIRA_BLOCK_CADENCE_MS).expect("target cadence is non-zero"),
+                NonZeroU64::new(PUBLIC_TAIRA_BLOCK_CADENCE_MS)
+                    .expect("canonical cadence is non-zero"),
             )
             .build_raw();
         assert_eq!(
-            upgraded
+            rebuilt
                 .effective_parameters()
-                .expect("upgraded parameters")
+                .expect("rebuilt parameters")
                 .sumeragi
                 .block_cadence_ms
                 .get(),

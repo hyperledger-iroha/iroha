@@ -80,7 +80,10 @@ class SorafsOrderbookSubmissionMixin:
 
     def _configure_sorafs_orderbook_native_verifier(self, verifier: Any) -> None:
         if verifier is not None:
-            _require_native_function(verifier, "inspect_sorafs_orderbook_submission_v1")
+            _require_native_function(
+                verifier,
+                "inspect_sorafs_orderbook_submission_for_discriminant_v1",
+            )
             _require_native_function(
                 verifier, "verify_sorafs_orderbook_submission_receipt_v1"
             )
@@ -414,7 +417,10 @@ def prepare_orderbook_submission(
     expected_receipt_signer: Any,
     context: str,
 ) -> tuple[bytes, SorafsOrderbookSubmissionIdentity, Any]:
-    inspect = _require_native_function(native, "inspect_sorafs_orderbook_submission_v1")
+    inspect = _require_native_function(
+        native,
+        "inspect_sorafs_orderbook_submission_for_discriminant_v1",
+    )
     verify_native_receipt = _require_native_function(
         native, "verify_sorafs_orderbook_submission_receipt_v1"
     )

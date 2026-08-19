@@ -104,24 +104,34 @@ fn applies_account_and_instruction_rules() {
     assert_eq!(decision.lane_id.as_u32(), 0);
 }
 #[test]
-fn single_lane_router_supports_state_free_routing() {
+fn canonical_config_router_defers_untargeted_single_lane_routing_to_state() {
     let (alice_id, alice_keypair) = gen_account_in("wonderland");
     let tx = sample_transaction(
         &alice_id,
         alice_keypair.private_key(),
-        vec![InstructionBox::from(Register::domain(Domain::new(
-            DomainId::try_new("single", "universal").expect("domain"),
-        )))],
+        vec![role_registration_instruction(&alice_id, "single_lane")],
     );
     let state = blank_state();
-    let router = SingleLaneRouter::new();
+    let router = ConfigLaneRouter::new(
+        LaneRoutingPolicy::default(),
+        DataSpaceCatalog::default(),
+        LaneCatalog::default(),
+    );
+    install_router_nexus(&state, &router);
     let with_view = router
         .try_route_with_view(&tx, &state.view())
-        .expect("single-lane routing should resolve");
+        .expect("canonical single-lane routing should resolve");
     let without_view = router
         .try_route_without_state(&tx)
-        .expect("single-lane state-free routing should resolve");
-    assert_eq!(without_view, Some(with_view));
+        .expect("canonical single-lane state-free routing should defer cleanly");
+    assert_eq!(
+        without_view, None,
+        "even a one-lane catalog must inspect account scope before selecting the route"
+    );
+    assert_eq!(
+        with_view,
+        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
+    );
 }
 #[test]
 fn config_lane_router_state_free_path_matches_view_path() {

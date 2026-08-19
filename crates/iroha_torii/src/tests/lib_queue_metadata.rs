@@ -49,9 +49,11 @@ mod tests_queue_metadata {
         let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
             b"outcome-unknown",
         ));
+        let signed_transaction_hash =
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(b"signed-transaction"));
         let error = queue::Error::PlanJournalDurabilityIndeterminate {
             entrypoint_hash,
-            signed_transaction_hash: None,
+            signed_transaction_hash: Some(signed_transaction_hash),
             reason: "cleanup sync failed".to_owned(),
         };
         assert_eq!(
@@ -72,13 +74,41 @@ mod tests_queue_metadata {
         let envelope =
             super::Error::queue_error_envelope(&error, queue::BackpressureState::default());
         let details = envelope.details.expect("outcome-unknown details");
-        let expected_hash = transaction_hash.to_string();
-        assert_eq!(details.tx_hash.as_deref(), Some(expected_hash.as_str()));
+        let expected_entrypoint_hash = entrypoint_hash.to_string();
+        let expected_signed_hash = signed_transaction_hash.to_string();
+        assert_eq!(
+            details.entrypoint_hash.as_deref(),
+            Some(expected_entrypoint_hash.as_str())
+        );
+        assert_eq!(details.tx_hash.as_deref(), Some(expected_signed_hash.as_str()));
         assert!(
             details
                 .hint
                 .as_deref()
                 .is_some_and(|hint| hint.contains("byte-identical signed bytes"))
+        );
+
+        let error_without_signed_hash = queue::Error::PlanJournalDurabilityIndeterminate {
+            entrypoint_hash,
+            signed_transaction_hash: None,
+            reason: "cleanup sync failed".to_owned(),
+        };
+        let envelope = super::Error::queue_error_envelope(
+            &error_without_signed_hash,
+            queue::BackpressureState::default(),
+        );
+        let details = envelope.details.expect("entrypoint-only outcome details");
+        assert_eq!(
+            details.entrypoint_hash.as_deref(),
+            Some(expected_entrypoint_hash.as_str())
+        );
+        assert!(details.tx_hash.is_none());
+        assert!(
+            details
+                .hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("exact entrypoint hash")
+                    && !hint.contains("byte-identical signed bytes"))
         );
     }
 }

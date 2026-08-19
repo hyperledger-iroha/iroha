@@ -20,7 +20,7 @@ EXTENDED_MAX_LINES = 721
 
 HELPER_START = "#[derive(Clone, Copy)]\nenum McpAliasDispatchArguments"
 HELPER_END = "fn enable_writer_mcp"
-HELPER_HASH = "a5326fe5b494b8b59c81c010e3edd93e580e8ee02bd8cd7ed9695574bbae9382"
+HELPER_HASH = "8d9728ba23c408afd1d6d9f7bf1564ae2e0b0ed4cec6bc307178390ad4ec58ed"
 
 # file, name, expectation, request id, tool name, argument row, assertion messages
 CASES = (
@@ -52,7 +52,7 @@ CASES = (
         "iroha.transactions.status",
         "InvalidHash",
         "invalid flat hash should be marked as MCP tool error",
-        "expected invalid flat hash to be rejected",
+        "tool_execution_error",
     ),
     (
         "main",
@@ -62,7 +62,7 @@ CASES = (
         "iroha.transactions.status",
         "InvalidTransactionHash",
         "invalid transaction_hash alias should be marked as MCP tool error",
-        "expected invalid transaction_hash alias to be rejected",
+        "tool_execution_error",
     ),
     (
         "main",
@@ -238,7 +238,7 @@ HELPER_TOKENS = (
     'norito::json!({"page": 1})',
     "cfg.torii.mcp.enabled = true",
     '"method": "tools/call"',
-    '"arguments": arguments',
+    '"arguments": { case.arguments.into_json() }',
     "assert_eq!(status, StatusCode::OK)",
     "tool_is_error(&call)",
     ".is_some_and(|status| status >= 400)",

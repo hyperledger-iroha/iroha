@@ -1,5 +1,6 @@
 [package]
 name = "iroha"
+autotests = false
 
 edition.workspace = true
 version.workspace = true
@@ -103,3 +104,15 @@ iroha_sccp = { path = "../iroha_sccp", features = ["test-fixtures"] }
 assertables = { workspace = true }
 tokio-stream = { workspace = true }
 sorafs_chunker = { workspace = true }
+
+[[test]]
+name = "musubi_archive_fetch_memory"
+path = "tests/musubi_archive_fetch_memory.rs"
+
+[[test]]
+name = "tx_confirmation"
+path = "tests/tx_confirmation.rs"
+
+[[test]]
+name = "tx_ttl"
+path = "tests/tx_ttl.rs"

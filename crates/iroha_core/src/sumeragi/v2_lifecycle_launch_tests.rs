@@ -215,12 +215,9 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
     ingress
         .configure_roster([validator.clone()])
         .expect("one-validator launch binding geometry");
-    ingress.require_certified_serve_gate();
     ingress.require_leader_wire_lifecycle_gate();
     ingress.state.lock().leader_wire_max_chunk_count = 2;
 
-    let (first_serve_gate, first_ordinals) =
-        crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
     let (first_gate, first_restore) = empty_leader_wire_gate_for_binding_test(
         &directory,
         "explicit.wal",
@@ -232,13 +229,11 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
         Arc::clone(&ingress),
         Arc::clone(&first_gate),
         first_restore,
-        first_ordinals,
+        RuntimeLifecycleOrdinalSource::after_high_watermark(0),
         context_id,
         HEIGHT,
     )
-    .expect("bind the exact launch gate")
-    .bind_certified_serve(first_serve_gate.clone())
-    .expect("join the exact certified Serve gate");
+    .expect("bind the exact launch gate");
     assert!(
         ingress
             .state
@@ -247,27 +242,17 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
             .as_ref()
             .is_some_and(|bound| LeaderWireLifecycleStoreGate::ptr_eq(bound, &first_gate))
     );
-    assert!(
-        ingress
-            .state
-            .lock()
-            .certified_serve_gate
-            .as_ref()
-            .is_some_and(|bound| bound.ptr_eq(&first_serve_gate))
-    );
     binding
         .retire()
-        .expect("explicit retirement detaches both exact launch gates");
+        .expect("explicit retirement detaches the exact launch gate");
     binding
         .retire()
         .expect("explicit retirement remains idempotent");
     {
         let state = ingress.state.lock();
-        assert!(state.leader_wire_lifecycle_gate.is_none() && state.certified_serve_gate.is_none());
+        assert!(state.leader_wire_lifecycle_gate.is_none());
     }
 
-    let (drop_serve_gate, drop_ordinals) =
-        crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
     let (drop_gate, drop_restore) = empty_leader_wire_gate_for_binding_test(
         &directory, "drop.wal", context_id, HEIGHT, &validator,
     );
@@ -275,51 +260,17 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
         Arc::clone(&ingress),
         Arc::clone(&drop_gate),
         drop_restore,
-        drop_ordinals,
-        context_id,
-        HEIGHT,
-    )
-    .expect("rebind the exact launch gate")
-    .bind_certified_serve(drop_serve_gate)
-    .expect("rejoin the certified Serve gate");
-    drop(binding);
-    {
-        let state = ingress.state.lock();
-        assert!(
-            state.leader_wire_lifecycle_gate.is_none() && state.certified_serve_gate.is_none(),
-            "Drop must detach both exact launch gates"
-        );
-    }
-
-    let (mismatched_serve_gate, _) =
-        crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
-    let (mismatch_gate, mismatch_restore) = empty_leader_wire_gate_for_binding_test(
-        &directory,
-        "mismatch.wal",
-        context_id,
-        HEIGHT,
-        &validator,
-    );
-    let mismatch = match ProductionLeaderWireIngressBindingV1::bind(
-        Arc::clone(&ingress),
-        mismatch_gate,
-        mismatch_restore,
         RuntimeLifecycleOrdinalSource::after_high_watermark(0),
         context_id,
         HEIGHT,
     )
-    .expect("bind the leader gate before the mismatched Serve join")
-    .bind_certified_serve(mismatched_serve_gate)
-    {
-        Ok(_) => panic!("a foreign lifecycle ordinal source passed the joint join"),
-        Err(error) => error,
-    };
-    assert!(mismatch.contains("actor-global lifecycle ordinal source"));
+    .expect("rebind the exact launch gate");
+    drop(binding);
     {
         let state = ingress.state.lock();
         assert!(
-            state.leader_wire_lifecycle_gate.is_none() && state.certified_serve_gate.is_none(),
-            "a failed joint join must drop the retained leader binding"
+            state.leader_wire_lifecycle_gate.is_none(),
+            "Drop must detach the exact launch gate"
         );
     }
 
@@ -330,20 +281,15 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
         HEIGHT,
         &validator,
     );
-    let (incumbent_serve_gate, incumbent_ordinals) =
-        crate::sumeragi::v2_worker::tests::certified_serve_ingress_gate_fixture();
     ingress
         .bind_leader_wire_lifecycle_gate(
             Arc::clone(&incumbent_gate),
             incumbent_restore,
-            incumbent_ordinals,
+            RuntimeLifecycleOrdinalSource::after_high_watermark(0),
             context_id,
             HEIGHT,
         )
         .expect("bind the incumbent gate");
-    ingress
-        .bind_certified_serve_gate(incumbent_serve_gate.clone())
-        .expect("bind the incumbent certified Serve gate");
     ingress.open().expect("open the incumbent ingress");
     let (foreign_gate, foreign_restore) = empty_leader_wire_gate_for_binding_test(
         &directory,
@@ -369,8 +315,8 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
         "failed binding must close ingress"
     );
     ingress
-        .unbind_height_ingress_gates(&incumbent_serve_gate, &incumbent_gate)
-        .expect("clean up both incumbent bindings");
+        .unbind_leader_wire_lifecycle_gate(&incumbent_gate)
+        .expect("clean up the incumbent binding");
 }
 
 #[test]
@@ -549,7 +495,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert_eq!(
         launch.matches("inputs.auxiliary_io_capacity,").count(),
         2,
-        "Serve restore and service startup must share the exact certified-request capacity"
+        "lifecycle restore and service startup must share the exact auxiliary capacity"
     );
     let identity = launch
         .rfind("self.body_store_identity = Some(body_store_identity)")
@@ -711,14 +657,10 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
             "executor\n                .install_authenticated_genesis_body(authenticated_genesis.signed_block())",
             "ProductionV2Services::start_with_apply_service(",
-            "services\n            .certified_serve_ingress_gate()",
-            ".bind_certified_serve(certified_serve_gate)",
         ],
     );
-    let joint_ingress_bind =
-        source_token_position(launch, ".bind_certified_serve(certified_serve_gate)");
     let worker = source_token_position(launch, "ProductionV2Services::start_with_apply_service(");
-    assert!(joint_ingress_bind < identity && worker < identity && identity < complete);
+    assert!(worker < identity && identity < complete);
     assert_source_tokens_in_order(
         launch,
         &[
@@ -734,7 +676,6 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         ));
     assert!(launch.contains("leader_wire_ingress_binding,"));
     assert!(source.contains("impl Drop for ProductionLeaderWireIngressBindingV1"));
-    assert!(source.contains("certified_serve_gate: Option<CertifiedServeIngressGate>"));
     let launched_fields = source_region(
         &source,
         "pub(in crate::sumeragi) struct LaunchedProductionLifecycleV1 {",
@@ -760,13 +701,6 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
         &[
             "self.ingress.close()",
             "self.ingress.unbind_leader_wire_lifecycle_gate(gate)?",
-        ],
-    );
-    assert_source_tokens_in_order(
-        leader_wire_drop,
-        &[
-            "self.ingress.close()",
-            ".unbind_height_ingress_gates(certified_serve_gate, leader_wire_gate)",
         ],
     );
     assert!(source.contains("impl Drop for ProductionV2CompletionObserverActivationPermitSealV1"));
@@ -1391,6 +1325,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
             "BlockSignaturePolicy::GenesisAuthority(",
             "WalRecordV2::Decision(decision.clone())",
             "let mut launched = owner",
+            "ProductionLifecycleCompletionSelectionV1::RecoveredIoDispatch(result)",
             "ProductionRecoveredCompletionDispatchV1::ApplyQueued",
             "ProductionLifecycleCompletionSelectionV1::RecoveredDecisionApplyApplied",
             "let mut activated = launched",
@@ -1823,7 +1758,7 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     let capacity = source_region(
         worker_source,
         "fn capture_recovered_lifecycle_sign_capacity<'a>(",
-        "fn begin_decision_serve_reconciliation(",
+        "pub(crate) fn restore_lifecycle_ordinal_source(",
     );
     assert_source_token_count(capacity, "operation.complete()", 5);
     assert_forbidden_source_tokens(capacity, &["drop(operation)"]);
@@ -1893,7 +1828,7 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     let refanout = source_region(
         scheduler_source,
         "fn refanout_recovered_lifecycle_signed_broadcast_with_runner_debt(",
-        "/// Sign, reserve, claim, and publish the sole recovered Decision Fetch",
+        "pub(super) fn persist_recovered_decision_fetch_response_after_runner(",
     );
     assert_source_tokens_in_order(
         refanout,
@@ -2065,80 +2000,127 @@ fn assert_recovered_proposal_broadcast_and_sign_settlement_is_atomic_and_restart
 }
 
 #[test]
-fn recovered_decision_fetch_dispatch_reserves_capacity_before_claim_and_failures_leave_no_mutation()
-{
+fn recovered_decision_fetch_composite_dispatch_reserves_capacity_before_claim_and_commit() {
     let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
     let dispatch = scheduler
-        .split_once("fn dispatch_recovered_decision_fetch_with_runner_debt(")
-        .expect("recovered Fetch has one request-dispatch transaction")
+        .split_once("fn dispatch_recovered_completion_with_runner_debt(")
+        .expect("recovered Completion has one composite dispatch transaction")
         .1
-        .split_once("/// Persist one selected recovered Decision Fetch response")
-        .expect("request dispatch stays a bounded source region")
+        .split_once(
+            "/// Reserve, claim, and dispatch the sole Ready lifecycle-owned recovered Sign.",
+        )
+        .expect("composite dispatch stays a bounded source region")
         .0;
-    let output = dispatch
-        .find("capture_recovered_decision_fetch_exact_output(&owner)")
-        .expect("exact output is captured");
-    let executor = dispatch
-        .find("prepare_recovered_decision_fetch_request_registration(owner)")
-        .expect("executor vacancy is reserved");
+    let census = dispatch
+        .find("capture_recovered_completion_capacity_census(probes)")
+        .expect("the joint physical census is captured");
     let claim = dispatch
         .find("self.coordinator.plan_turn(inputs)")
         .expect("coordinator claim exists");
+    let output = dispatch
+        .find("census.select_fetch(ordinal)")
+        .expect("the selected Fetch owns exact output");
+    let executor = dispatch
+        .find("prepare_recovered_decision_fetch_request_registration(owner)")
+        .expect("executor vacancy is reserved");
+    let registry = dispatch
+        .find("prepare_recovered_decision_fetch_dispatch(")
+        .expect("the claimed row projects its exact task");
     let commit = dispatch
         .find("registration.commit(prepared)")
         .expect("request owner has one commit tail");
-    assert!(output < executor && executor < claim && claim < commit);
-    assert!(dispatch.contains("output.abort_before_claim();"));
-    assert!(dispatch.contains("rollback_unpublished_turn(&lease)"));
+    let publication = dispatch
+        .find("output.commit();")
+        .expect("exact output publishes after request installation");
+    assert!(
+        census < claim
+            && claim < output
+            && output < executor
+            && executor < registry
+            && registry < commit
+            && commit < publication
+    );
 }
 
 #[test]
-fn recovered_decision_fetch_queue_parks_generic_drain_and_extracts_only_dedicated_completion() {
+fn recovered_decision_fetch_queue_parks_generic_drain_and_uses_unified_completion_classifier() {
     let worker = include_str!("v2_worker.rs");
     let generic = worker
         .split_once("fn take_io_completion(")
         .expect("generic completion selector exists")
         .1
-        .split_once("fn take_recovered_decision_apply_completion(")
+        .split_once("fn take_recovered_lifecycle_sign_completion(")
         .expect("generic selector stays bounded")
         .0;
     assert!(generic.contains("V2IoCompletion::RecoveredDecisionFetchBodyPersisted(_)"));
     assert!(generic.contains("self.held_io_completion = Some(completion);"));
-    let dedicated = worker
-        .split_once("fn take_recovered_decision_fetch_body_completion(")
-        .expect("dedicated recovered Fetch extractor exists")
+    let classifier = worker
+        .split_once("fn take_next_recovered_lifecycle_completion(")
+        .expect("unified recovered lifecycle classifier exists")
         .1
-        .split_once("fn take_next_completion(")
-        .expect("dedicated extractor stays bounded")
+        .split_once("/// Drain only the oldest lifecycle-owned recovered Sign completion.")
+        .expect("unified classifier stays bounded")
         .0;
-    assert!(dedicated.contains("RecoveredDecisionFetchBodyPersisted"));
+    assert!(classifier.contains("V2IoCompletion::RecoveredDecisionFetchBodyPersisted(guarded)"));
+    assert!(classifier.contains("RecoveredLifecycleCompletionTakeV1::DecisionFetch("));
     assert!(worker.contains("tracked.state = V2IoWorkState::Active;"));
     assert!(worker.contains("tracked.state = V2IoWorkState::CompletionPending;"));
-    assert!(worker.contains("drain_recovered_decision_fetch_body_completion"));
+    assert!(!worker.contains("drain_recovered_decision_fetch_body_completion"));
 }
 
 #[test]
-fn recovered_decision_fetch_phase_a_rejects_foreign_ingress_cursor_before_mutation() {
+fn ordinary_certified_body_pipeline_has_no_retained_compatibility_carrier() {
+    let effects = include_str!("v2_effects.rs");
+    let runtime = include_str!("v2_runtime.rs");
+    let run_inner = include_str!("v2_runner/lifecycle_run_inner.rs");
+    let ordinary_consumer = include_str!("v2_runner/ordinary_ingress_consumer.rs");
+    let turn_driver = include_str!("v2_lifecycle_turn_driver.rs");
+
+    for (source, forbidden) in [
+        (effects, "RetainedCertifiedBodyResponse"),
+        (effects, "retained_certified_body_response"),
+        (
+            effects,
+            "accept_certified_body_response_with_ingress_ownership",
+        ),
+        (runtime, "retained_response_predecessor_target_ordinal"),
+        (runtime, "retained_response_predecessor_retry_attempted"),
+        (run_inner, "service_retained_certified_response"),
+        (run_inner, "retry_retained_certified_body_response"),
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "retired ordinary response compatibility surface returned: {forbidden}",
+        );
+    }
+    assert!(
+        ordinary_consumer.contains("certified body response bypassed its lifecycle Fetch owner")
+    );
+    assert!(!ordinary_consumer.contains("accept_certified_body_response("));
+    assert!(turn_driver.contains("drive_certified_fetch_ingress_selector(selector, runner)"));
+    assert!(turn_driver.contains("complete_certified_fetch_body_persistence("));
+}
+
+#[test]
+fn recovered_decision_fetch_phase_a_is_reachable_only_after_runner_validation() {
+    let driver = include_str!("v2_lifecycle_turn_driver.rs");
     let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
-    let wrapper = scheduler
-        .split_once("pub(crate) fn persist_recovered_decision_fetch_response(")
-        .expect("production Phase-A wrapper exists")
+    let ingress_turn = driver
+        .split_once("pub(in crate::sumeragi) fn drive_ingress_turn")
+        .expect("unified ingress driver exists")
         .1
-        .split_once("/// Exercise Phase A with a fixture-owned current Ingress snapshot.")
-        .expect("production cursor check stays isolated")
+        .split_once("fn drive_recovered_ingress_selector")
+        .expect("runner validation precedes the recovered Phase-A helper")
         .0;
-    let cursor = wrapper
-        .find("runner.target() != LifecycleRunnerRankTarget::Ingress")
-        .expect("Phase A requires the Ingress cursor");
-    let reject = wrapper
-        .find("ForeignRunnerObservation")
-        .expect("foreign cursor rejects explicitly");
-    let handoff = wrapper
-        .find("persist_recovered_decision_fetch_response_after_runner")
-        .expect("mutation lives behind cursor validation");
-    assert!(cursor < reject && reject < handoff);
-    assert!(!wrapper[..handoff].contains("capture_lifecycle_capacity_rank"));
-    assert!(!wrapper[..handoff].contains("prepare_recovered_decision_fetch_response_claim"));
+    let cursor = ingress_turn
+        .find("if !self.runner_turn_matches(")
+        .expect("the driver validates the borrow-bound runner");
+    let handoff = ingress_turn
+        .find("self.drive_recovered_ingress_selector(selector, runner)")
+        .expect("the validated runner enters recovered Phase A");
+    assert!(cursor < handoff);
+    assert!(driver.contains("persist_recovered_decision_fetch_response_after_runner("));
+    assert!(!scheduler.contains("fn persist_recovered_decision_fetch_response("));
 }
 
 #[test]

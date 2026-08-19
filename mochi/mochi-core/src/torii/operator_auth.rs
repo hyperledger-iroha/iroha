@@ -207,7 +207,6 @@ fn operator_request_message(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine as _;
     use iroha_crypto::{Algorithm, KeyPair, ed25519_parse_signature};
     use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
     fn context() -> OperatorSigningContext {

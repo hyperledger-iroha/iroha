@@ -22,34 +22,48 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
     let bound = bind_adapter_effect_batch_ownership(&[store.clone()], vec![owner])
         .expect("one exact StoreBody candidate is within the bound");
     assert!(bound[0].validate_bound_exact());
+    let mut missing_producer = bound[0].clone();
+    missing_producer.producer = None;
+    assert!(!missing_producer.validate_bound_exact());
+    assert!(missing_producer.current_effect_producer(&store).is_none());
+    let mut corrupted_producer = bound[0].clone();
+    corrupted_producer
+        .producer
+        .as_mut()
+        .expect("bound ownership retains its producer")
+        .projection_hash = Hash::new(b"mutated producer projection");
+    assert!(!corrupted_producer.validate_bound_exact());
+    assert!(corrupted_producer.current_effect_producer(&store).is_none());
     let pending = bound[0]
-        .pending_adapter_effect_binding(&store)
-        .expect("exact bound effect mints one pending binding");
+        .current_effect_producer(&store)
+        .expect("exact bound effect seals one producer")
+        .mint_pending_binding();
     assert!(pending.exactly_binds_adapter_effect(&store));
-    let different_legacy_ordinal = bind_adapter_effect_batch_ownership(
+    let different_scheduler_ordinal = bind_adapter_effect_batch_ownership(
         &[store.clone()],
         vec![RuntimeEffectOwnership::fresh_for_test(tag, 72)],
     )
-    .expect("same effect remains bindable under a different legacy ordinal");
-    let mut different_pending = different_legacy_ordinal[0]
-        .pending_adapter_effect_binding(&store)
-        .expect("different legacy owner mints one pending binding");
+    .expect("same effect remains bindable under a different scheduler ordinal");
+    let mut different_pending = different_scheduler_ordinal[0]
+        .current_effect_producer(&store)
+        .expect("different scheduler ordinal retains the same producer")
+        .mint_pending_binding();
     assert_eq!(
         pending, different_pending,
-        "pending admission authority deliberately excludes the legacy logical ordinal"
+        "pending admission authority deliberately excludes runtime scheduling ordinals"
     );
-    let exact_effect_kind = different_pending.effect_kind;
-    different_pending.effect_kind = 0;
+    let exact_effect_kind = different_pending.binding.effect_kind;
+    different_pending.binding.effect_kind = 0;
     assert!(!different_pending.exactly_binds_adapter_effect(&store));
-    different_pending.effect_kind = exact_effect_kind;
-    let exact_candidate_kind = different_pending.candidate_kind;
-    different_pending.candidate_kind = RUNTIME_CANDIDATE_KIND_NONE;
+    different_pending.binding.effect_kind = exact_effect_kind;
+    let exact_candidate_kind = different_pending.binding.candidate_kind;
+    different_pending.binding.candidate_kind = RUNTIME_CANDIDATE_KIND_NONE;
     assert!(!different_pending.exactly_binds_adapter_effect(&store));
-    different_pending.candidate_kind = exact_candidate_kind;
-    let exact_projection_hash = different_pending.projection_hash;
-    different_pending.projection_hash = Hash::new(b"mutated pending projection");
+    different_pending.binding.candidate_kind = exact_candidate_kind;
+    let exact_projection_hash = different_pending.binding.projection_hash;
+    different_pending.binding.projection_hash = Hash::new(b"mutated pending projection");
     assert!(!different_pending.exactly_binds_adapter_effect(&store));
-    different_pending.projection_hash = exact_projection_hash;
+    different_pending.binding.projection_hash = exact_projection_hash;
     assert!(different_pending.exactly_binds_adapter_effect(&store));
     let first_owner_projection = production_adapter_effect_candidate_trace_projection(
         &store, &bound[0], 1, 1, 1, 1, 0, 1, true,
@@ -854,15 +868,10 @@ fn fetch_authority_adoption_retains_owner_and_incoming_positions() {
     let commit = signed_runtime_quorum_certificate(&context, &keys, 0x77);
     let tag = EventTag::new(context.height, commit.round.view, Generation::new(5));
     let bytes = vec![0x77, 6];
-    let manifest = encode_payload(
-        &context,
-        commit.proposal_round,
-        commit.subject,
-        &bytes,
-    )
-    .expect("ordinary fetch payload has a canonical RS16 encoding")
-    .manifest()
-    .clone();
+    let manifest = encode_payload(&context, commit.proposal_round, commit.subject, &bytes)
+        .expect("ordinary fetch payload has a canonical RS16 encoding")
+        .manifest()
+        .clone();
     let ordinary_fetch = AdapterEffect::FetchBody {
         tag,
         round: commit.proposal_round,
@@ -1377,11 +1386,12 @@ fn fair_network_ownership(
     message: &wire::ConsensusMessageV2,
     sender: PeerId,
 ) -> FairV2IngressOwnershipEvidence {
-    let mut admitted =
-        super::super::fair_v2_ingress_admit_for_test(super::super::InboundBlockMessage::new(
+    let mut admitted = super::super::fair_v2_ingress_admit_for_test(
+        super::super::InboundBlockMessage::from_authenticated_peer(
             super::super::message::BlockMessage::V2(message.clone()),
-            Some(sender),
-        ));
+            sender,
+        ),
+    );
     admitted
         .take_ingress_ownership()
         .expect("real test fair ingress produces exact source ownership")
@@ -1462,9 +1472,9 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
     if push_all_before_dequeue {
         for (message, semantic_origin) in messages {
             assert!(matches!(
-                ingress.try_push(InboundBlockMessage::new(
+                ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                     BlockMessage::V2(message.clone()),
-                    Some(semantic_origin.clone()),
+                    semantic_origin.clone(),
                 )),
                 Ok(super::super::FairV2IngressPushDisposition::Enqueued)
             ));
@@ -1476,9 +1486,9 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
         .map(|(message_index, (message, semantic_origin))| {
             if !push_all_before_dequeue {
                 assert!(matches!(
-                    ingress.try_push(InboundBlockMessage::new(
+                    ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                         BlockMessage::V2(message.clone()),
-                        Some(semantic_origin.clone()),
+                        semantic_origin.clone(),
                     )),
                     Ok(super::super::FairV2IngressPushDisposition::Enqueued)
                 ));
@@ -1525,9 +1535,9 @@ fn preowned_leader_wire_ownerships_with_dequeue_mode(
                 .bind_leader_wire_runtime_ownership(&mut ownership)
                 .expect("repeated preowned leader-wire bind is idempotent");
             assert!(matches!(
-                ingress.try_push(InboundBlockMessage::new(
+                ingress.try_push(InboundBlockMessage::from_authenticated_peer(
                     BlockMessage::V2(message.clone()),
-                    Some(semantic_origin.clone()),
+                    semantic_origin.clone(),
                 )),
                 Ok(super::super::FairV2IngressPushDisposition::Coalesced)
             ));
@@ -1646,9 +1656,9 @@ fn leader_wire_proposal_fixture(
     .validator
     .clone();
     assert!(matches!(
-        ingress.try_push(InboundBlockMessage::new(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
             BlockMessage::V2(message.clone()),
-            Some(semantic_origin),
+            semantic_origin,
         )),
         Ok(super::super::FairV2IngressPushDisposition::Enqueued)
     ));
@@ -1714,10 +1724,12 @@ fn assert_volatile_leader_wire_release(
     );
     let semantic_origin = fixture.receipt.token().identity.semantic_origin.clone();
     assert!(matches!(
-        fixture.ingress.try_push(InboundBlockMessage::new(
-            BlockMessage::V2(fixture.message.clone()),
-            Some(semantic_origin),
-        )),
+        fixture
+            .ingress
+            .try_push(InboundBlockMessage::from_authenticated_peer(
+                BlockMessage::V2(fixture.message.clone()),
+                semantic_origin,
+            )),
         Ok(super::super::FairV2IngressPushDisposition::Coalesced)
     ));
 }

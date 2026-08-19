@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     kura::Kura,
-    prelude::{AcceptedTransaction, World},
+    prelude::World,
     query::store::LiveQueryStore,
     queue::{
         LaneQueueReservationKeyV2, Queue, RoutingDecision, RoutingPlan,
@@ -31,8 +31,8 @@ use iroha_config::{
             Kura as KuraConfig, LaneConfig as RuntimeLaneConfig, Nexus, Queue as QueueConfig,
         },
         defaults::kura::{
-            BLOCK_SYNC_ROSTER_RETENTION, BLOCKS_IN_MEMORY, FSYNC_INTERVAL,
-            MERGE_LEDGER_CACHE_CAPACITY, ROSTER_SIDECAR_RETENTION,
+            BLOCKS_IN_MEMORY, FSYNC_INTERVAL, LANE_HISTORY_RETENTION,
+            MERGE_LEDGER_CACHE_CAPACITY,
         },
     },
 };
@@ -52,7 +52,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-use std::{borrow::Cow, num::NonZeroU32, sync::Arc};
+use std::{num::NonZeroU32, sync::Arc};
 use tempfile::TempDir;
 fn lifecycle_key_pair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -84,8 +84,7 @@ fn lifecycle_kura_config(dir: &TempDir) -> KuraConfig {
         merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
-        block_sync_roster_retention: BLOCK_SYNC_ROSTER_RETENTION,
-        roster_sidecar_retention: ROSTER_SIDECAR_RETENTION,
+        lane_history_retention: LANE_HISTORY_RETENTION,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
@@ -501,7 +500,7 @@ fn generation_takeover_runs_crash_recover_and_rehydrate_then_stutters() {
     )
     .expect("construct lifecycle State");
     let nexus = Nexus {
-        enabled: true,
+
         lane_catalog: lifecycle_lane_catalog(),
         ..Nexus::default()
     };
@@ -710,7 +709,7 @@ fn exercise_lifecycle_recovery_post_cas_interruption(boundary: LifecycleRecovery
         .validate()
         .expect("interruption context must be structurally valid");
     let nexus = Nexus {
-        enabled: true,
+
         lane_catalog: lifecycle_lane_catalog(),
         ..Nexus::default()
     };

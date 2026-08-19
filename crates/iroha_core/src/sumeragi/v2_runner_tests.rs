@@ -1,5 +1,5 @@
 //! Integration-heavy unit cases for the Sumeragi v2 runner.
-use super::super::FairV2IngressPushError;
+use super::super::{FairV2IngressPushError, authenticated_peer_for_test};
 use super::*;
 use crate::{
     NetworkMessage,
@@ -9,7 +9,10 @@ use crate::{
         CertifiedMergeSidecarSemanticSequenceV1, CertifiedMergeSidecarServiceGenerationV1,
         CertifiedMergeSidecarStreamEpochV1,
     },
-    sumeragi::{LaneRelayMessage, v2_effects::v2_payload_is_terminal_reducer_control},
+    sumeragi::{
+        LaneRelayMessage, serviced_candidate_store::LeaderWireLifecycleStoreGate,
+        v2_effects::v2_payload_is_terminal_reducer_control,
+    },
 };
 use iroha_config::parameters::actual::{NodeRole, SumeragiV2KeyPolicy, SumeragiV2Limits};
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};

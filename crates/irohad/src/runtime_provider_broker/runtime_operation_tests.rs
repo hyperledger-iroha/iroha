@@ -13,6 +13,10 @@ fn valid_governance_sign_request_payload() -> Vec<u8> {
     .expect("encode governance sign request")
 }
 #[test]
+#[expect(
+    clippy::vec_init_then_push,
+    reason = "sequential fixtures document the ordered mutating-operation inventory"
+)]
 fn evidence_viewer_operations_are_bounded_canonical_and_ambiguity_typed() {
     let webauthn = evidence_viewer_binding(IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn);
     let grants = evidence_viewer_binding(IrohaRuntimeProviderSlotV1::EvidenceViewerGrantAuthority);
@@ -1093,7 +1097,7 @@ fn operation_response_rejects_session_order_slot_binding_and_digest_confusion() 
     validate_operation_request(&request).expect("validate operation request");
     let result = encode_canonical(
         &SignResultWireV1 {
-            signature: [0x44; 64],
+            signature: test_governance_operation_signature(&request),
         },
         MAX_OPERATION_FRAME_BYTES_V1,
     )
@@ -1288,7 +1292,7 @@ fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
         assert_eq!(decoded.payload, expected_governance_payload);
         let signature = encode_canonical(
             &SignResultWireV1 {
-                signature: [0x55; 64],
+                signature: test_governance_operation_signature(&sign),
             },
             MAX_OPERATION_FRAME_BYTES_V1,
         )
@@ -1346,7 +1350,7 @@ fn fake_broker_qualifies_signs_and_enforces_monotonic_request_ids() {
             &governance_payload,
         )
         .expect("sign through broker"),
-        [0x55; 64]
+        test_governance_signature(&governance_payload)
     );
     sorafs_node::GovernanceDagRuntimeSigner::qualification(&signer).expect("requalify signer");
     server.join().expect("join fake broker");
@@ -1851,7 +1855,7 @@ fn billing_runtime_operation_matrix_is_strict_and_bounded() {
         assert!(operation_frame_limit(operation) <= MAX_OPERATION_FRAME_BYTES_V1);
     }
     assert!(
-        MAX_BILLING_RUNTIME_FRAME_BYTES_V1 < MAX_OPERATION_FRAME_BYTES_V1,
+        std::hint::black_box(MAX_BILLING_RUNTIME_FRAME_BYTES_V1) < MAX_OPERATION_FRAME_BYTES_V1,
         "billing frames must not inherit the 512 MiB appeal-finance ceiling"
     );
     assert_eq!(

@@ -254,6 +254,7 @@ pub(crate) enum LifecycleWorkClass {
     ProducerTurn,
 }
 impl LifecycleWorkClass {
+    #[cfg(test)]
     pub(super) const ALL: [Self; 13] = [
         Self::SignProposal,
         Self::SignVote,
@@ -532,6 +533,7 @@ impl SchedulerRank {
         }
     }
     /// Return the exact eight rank components.
+    #[cfg(test)]
     pub(crate) const fn components(self) -> [u64; 8] {
         [
             self.remaining_stages,
@@ -603,6 +605,7 @@ impl LifecycleWorkClass {
 pub(crate) struct PhysicalSlotId(pub(super) u16, pub(super) u16);
 impl PhysicalSlotId {
     /// Construct a slot address within the frozen capacity geometry.
+    #[cfg(test)]
     pub(super) const fn new(class: u16, index: u16) -> Self {
         Self(class, index)
     }
@@ -643,10 +646,12 @@ impl PhysicalSlot {
         Self { id, digest }
     }
     /// Return the finite slot address.
+    #[cfg(test)]
     pub(crate) const fn id(self) -> PhysicalSlotId {
         self.id
     }
     /// Return the authenticated physical-work digest.
+    #[cfg(test)]
     pub(crate) const fn digest(self) -> LifecycleDigest {
         self.digest
     }
@@ -774,7 +779,6 @@ impl WaitToken {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[expect(
     variant_size_differences,
-    clippy::large_enum_variant,
     reason = "scheduler tombstones remain Copy and allocation-free; boxing would change lifecycle state semantics"
 )]
 pub(crate) enum TerminalOutcome {
@@ -881,6 +885,7 @@ pub(super) enum DurableServeNegativeOutcome {
     Failed(u16),
 }
 impl DurableServeNegativeOutcome {
+    #[cfg(test)]
     pub(super) const fn from_terminal(outcome: TerminalOutcome) -> Option<Self> {
         match outcome {
             TerminalOutcome::Cancelled => Some(Self::Cancelled),
@@ -907,6 +912,7 @@ impl DurablePayloadReference {
             certificate,
         }
     }
+    #[cfg(test)]
     pub(super) const fn is_certified_serve(self) -> bool {
         matches!(
             self,
@@ -1243,6 +1249,13 @@ pub(crate) enum InitialLifecycleState {
     /// The record is immediately ready.
     Ready,
     /// The record waits on an exact generation.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "first-release adapters currently materialize waits after admission; retain the explicit reducer input while its production arms remain authoritative"
+        )
+    )]
     Waiting(WaitToken),
 }
 /// Reserved producer-turn record admitted atomically with Certified Serve.
@@ -1378,6 +1391,13 @@ pub(crate) enum AdmissionRequest {
     /// A lifecycle candidate subject to exact ownership and capacity checks.
     Candidate(CandidateAdmission),
     /// A sealed zero-owner effect minted only by the exhaustive classifier.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "first-release projection filters non-candidates before admission; retain the explicit reducer boundary and its production match arms"
+        )
+    )]
     NonCandidate(NonCandidateEffect),
 }
 /// Sealed proof that an input has no adapter-effect lifecycle class.
@@ -1479,7 +1499,6 @@ pub(super) struct AttestedReadyValidateDemand {
     slot: PhysicalSlotId,
     digest: LifecycleDigest,
     capacity_class: Option<CapacityClass>,
-    requires_io_dispatch: bool,
 }
 impl AttestedReadyValidateDemand {
     /// Bind one opaque registry carrier seal to its exact Validate row.
@@ -1509,7 +1528,6 @@ impl AttestedReadyValidateDemand {
             capacity_class: seal
                 .requires_consensus_capacity()
                 .then_some(CapacityClass::Consensus),
-            requires_io_dispatch: seal.requires_io_dispatch(),
         })
     }
     /// Mint a raw carrier classification only for focused scheduler tests.
@@ -1531,7 +1549,6 @@ impl AttestedReadyValidateDemand {
             slot,
             digest,
             capacity_class: rejected.then_some(CapacityClass::Consensus),
-            requires_io_dispatch: false,
         })
     }
     fn matches_record(self, record: &LifecycleRecord) -> bool {
@@ -1550,9 +1567,20 @@ impl AttestedReadyValidateDemand {
     pub(super) const fn capacity_class(self) -> Option<CapacityClass> {
         self.capacity_class
     }
-    /// Return whether this carrier must first enter the bounded I/O service.
-    pub(super) const fn requires_io_dispatch(self) -> bool {
-        self.requires_io_dispatch
+}
+/// Closed authority family for one Ready Fetch row.
+pub(super) enum AttestedReadyFetchV1 {
+    /// Ordinary response persistence installed a durable Fetch completion.
+    Certified(super::work_registry::ReadyCertifiedFetchAttestationV1),
+    /// Recovered Decision WAL work retained its dedicated request authority.
+    Recovered(super::work_registry::ReadyRecoveredDecisionFetchAttestationV1),
+}
+impl AttestedReadyFetchV1 {
+    fn matches_ready_record(&self, record: &LifecycleRecord) -> bool {
+        match self {
+            Self::Certified(attestation) => attestation.matches_ready_record(record),
+            Self::Recovered(attestation) => attestation.matches_ready_record(record),
+        }
     }
 }
 /// One identity-bound row of live runtime rank debts.
@@ -1561,6 +1589,7 @@ pub(crate) struct SchedulerReadyInputs {
     owner: OwnerId,
     key: LifecycleKey,
     validate_attestation: Option<AttestedReadyValidateDemand>,
+    producer_handoff_blocked: bool,
     output_capacity_class: Option<CapacityClass>,
     physical_capacity_available: bool,
     mode: u64,
@@ -1588,6 +1617,7 @@ impl SchedulerReadyInputs {
             owner: record.owner,
             key: record.key,
             validate_attestation: None,
+            producer_handoff_blocked: false,
             output_capacity_class: None,
             physical_capacity_available: true,
             mode,
@@ -1619,9 +1649,8 @@ impl SchedulerReadyInputs {
         recovered_sign_attestation: Option<
             super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
         >,
-        recovered_fetch_attestation: Option<
-            super::work_registry::ReadyRecoveredDecisionFetchAttestationV1,
-        >,
+        store_attestation: Option<super::work_registry::ReadyDurableStoreAttestationV1>,
+        fetch_attestation: Option<AttestedReadyFetchV1>,
         live_debts: [u64; 6],
     ) -> Option<Self> {
         let [mode, capacity, selector, lane, source, runner] = live_debts;
@@ -1636,6 +1665,7 @@ impl SchedulerReadyInputs {
             owner: record.owner,
             key: record.key,
             validate_attestation,
+            producer_handoff_blocked: false,
             output_capacity_class,
             physical_capacity_available: true,
             mode,
@@ -1649,12 +1679,14 @@ impl SchedulerReadyInputs {
             LifecycleWorkClass::Validate => {
                 recovered_apply_attestation.is_none()
                     && recovered_sign_attestation.is_none()
-                    && recovered_fetch_attestation.is_none()
+                    && store_attestation.is_none()
+                    && fetch_attestation.is_none()
             }
             LifecycleWorkClass::Apply => {
                 validate_attestation.is_none()
                     && recovered_sign_attestation.is_none()
-                    && recovered_fetch_attestation.is_none()
+                    && store_attestation.is_none()
+                    && fetch_attestation.is_none()
                     && recovered_apply_attestation
                         .as_ref()
                         .is_some_and(|attestation| attestation.matches_ready_record(record))
@@ -1664,7 +1696,8 @@ impl SchedulerReadyInputs {
             | LifecycleWorkClass::SignTimeout => {
                 validate_attestation.is_none()
                     && recovered_apply_attestation.is_none()
-                    && recovered_fetch_attestation.is_none()
+                    && store_attestation.is_none()
+                    && fetch_attestation.is_none()
                     && recovered_sign_attestation
                         .as_ref()
                         .is_some_and(|attestation| attestation.matches_ready_record(record))
@@ -1673,7 +1706,17 @@ impl SchedulerReadyInputs {
                 validate_attestation.is_none()
                     && recovered_apply_attestation.is_none()
                     && recovered_sign_attestation.is_none()
-                    && recovered_fetch_attestation
+                    && store_attestation.is_none()
+                    && fetch_attestation
+                        .as_ref()
+                        .is_some_and(|attestation| attestation.matches_ready_record(record))
+            }
+            LifecycleWorkClass::Store => {
+                validate_attestation.is_none()
+                    && recovered_apply_attestation.is_none()
+                    && recovered_sign_attestation.is_none()
+                    && fetch_attestation.is_none()
+                    && store_attestation
                         .as_ref()
                         .is_some_and(|attestation| attestation.matches_ready_record(record))
             }
@@ -1681,10 +1724,34 @@ impl SchedulerReadyInputs {
                 validate_attestation.is_none()
                     && recovered_apply_attestation.is_none()
                     && recovered_sign_attestation.is_none()
-                    && recovered_fetch_attestation.is_none()
+                    && store_attestation.is_none()
+                    && fetch_attestation.is_none()
             }
         };
         (carrier_matches && row.identity_matches(record.ordinal, record)).then_some(row)
+    }
+    /// Join one later Ready row to the registry seal proving that an older
+    /// selectable ProducerHandoffBarrier makes it ineligible in this complete
+    /// planning episode.
+    pub(super) fn from_authenticated_producer_handoff_blocked(
+        _factory: &AuthenticatedSchedulerInputsFactory,
+        record: &LifecycleRecord,
+        seal: super::work_registry::ProducerHandoffBlockedReadySealV1,
+    ) -> Option<Self> {
+        seal.matches_record(record).then_some(Self {
+            owner: record.owner,
+            key: record.key,
+            validate_attestation: None,
+            producer_handoff_blocked: true,
+            output_capacity_class: None,
+            physical_capacity_available: true,
+            mode: 0,
+            capacity: 0,
+            selector: 0,
+            lane: 0,
+            source: 0,
+            runner: 0,
+        })
     }
     /// Join the same authenticated row to one service-frozen physical corridor result.
     ///
@@ -1702,9 +1769,8 @@ impl SchedulerReadyInputs {
         recovered_sign_attestation: Option<
             super::work_registry::ReadyRecoveredLifecycleSignAttestationV1,
         >,
-        recovered_fetch_attestation: Option<
-            super::work_registry::ReadyRecoveredDecisionFetchAttestationV1,
-        >,
+        store_attestation: Option<super::work_registry::ReadyDurableStoreAttestationV1>,
+        fetch_attestation: Option<AttestedReadyFetchV1>,
         physical_capacity_available: bool,
         live_debts: [u64; 6],
     ) -> Option<Self> {
@@ -1714,7 +1780,8 @@ impl SchedulerReadyInputs {
             validate_attestation,
             recovered_apply_attestation,
             recovered_sign_attestation,
-            recovered_fetch_attestation,
+            store_attestation,
+            fetch_attestation,
             live_debts,
         )?;
         row.physical_capacity_available = physical_capacity_available;
@@ -1733,6 +1800,7 @@ impl SchedulerReadyInputs {
             key: record.key,
             validate_attestation: rejected_validate
                 .and_then(|rejected| AttestedReadyValidateDemand::for_test(record, rejected)),
+            producer_handoff_blocked: false,
             output_capacity_class: rejected_validate
                 .filter(|rejected| *rejected)
                 .map(|_| CapacityClass::Consensus),
@@ -1765,13 +1833,17 @@ impl SchedulerReadyInputs {
         ordinal == record.ordinal
             && self.owner == record.owner
             && self.key == record.key
-            && match (record.work_class, self.validate_attestation) {
-                (LifecycleWorkClass::Validate, Some(attestation)) => {
-                    attestation.matches_record(record)
+            && if self.producer_handoff_blocked {
+                self.validate_attestation.is_none() && self.output_capacity_class.is_none()
+            } else {
+                match (record.work_class, self.validate_attestation) {
+                    (LifecycleWorkClass::Validate, Some(attestation)) => {
+                        attestation.matches_record(record)
+                    }
+                    (LifecycleWorkClass::Validate, None) => false,
+                    (_, None) => true,
+                    (_, Some(_)) => false,
                 }
-                (LifecycleWorkClass::Validate, None) => false,
-                (_, None) => true,
-                (_, Some(_)) => false,
             }
     }
     /// Return the sealed extra capacity class needed before this row is claimed.
@@ -1934,6 +2006,7 @@ impl TurnLease {
         self.stage
     }
     /// Return the exact rank snapshot used to select this lease.
+    #[cfg(test)]
     pub(crate) const fn rank(&self) -> SchedulerRank {
         self.rank
     }
@@ -1952,6 +2025,13 @@ pub(crate) enum TurnOutcome {
     Advanced,
     Terminal(TerminalOutcome),
     Blocked(WaitToken),
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "first-release workers do not yet emit replenishment settlements; retain deterministic finite-slot settlement semantics"
+        )
+    )]
     Replenished(PhysicalSlot),
 }
 /// Deterministic result of one scheduler planning call.
@@ -1975,6 +2055,7 @@ pub(crate) enum CoordinatorFault {
     CapacityAccounting,
     LeaseExhausted,
     RecoveryRejected,
+    #[cfg(test)]
     InvalidRollover,
 }
 /// Fixed capacity limits owned by one coordinator.

@@ -4812,7 +4812,7 @@ mod tests {
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         nexus::{DataSpaceId, LaneId},
-        transaction::{SignedTransaction, TransactionEntrypoint},
+        transaction::TransactionEntrypoint,
     };
     use std::{fs::OpenOptions, io::Write};
     const V3_RESERVATION_JOURNAL_FRAME_DOMAIN: &[u8] = b"iroha:queue-lane-reservation-frame:v3";

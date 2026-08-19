@@ -16,9 +16,9 @@ SOURCE = TARGET.read_text(encoding="utf-8")
 ORIGINAL_RUST_LINES = 13_063
 MINIMUM_RUST_LINE_SAVING = 750
 MAXIMUM_RUST_LINES = ORIGINAL_RUST_LINES - MINIMUM_RUST_LINE_SAVING
-EXPECTED_TEST_COUNT = 109
+EXPECTED_TEST_COUNT = 108
 EXPECTED_TEST_RECORD_DIGEST = (
-    "707fc93943edc06bd5697e04803ef8907962ecce6dd380f8144a22d3606cd9f5"
+    "daa7d43c196f168f430760b7376d7b99f26c2b746cfee84283133124a164c5da"
 )
 
 REAL_LOCALNET_TEST_FINGERPRINTS = {
@@ -48,12 +48,12 @@ REGION_FINGERPRINTS = {
     "commit quorum and committed-lane status": (
         "    fn status_with_commit_quorum(",
         "    fn utilization_permille_for_probe_tx(",
-        "d3b2a000130cbcfd4250192b6a41ab64619a81ae539db34659d42729a968a9ce",
+        "2aa20b5f8e9bc5cdcc9aa5037636df7516e856dfc966d55ca667a085cb3a7f66",
     ),
     "transition parser and delta fixtures": (
         "    #[test]\n    fn autoscale_transition_stats_parse_log_markers()",
         "    #[test]\n    fn soak_summary_serialization_contains_required_fields()",
-        "18c8c39476f303268f3b9cf889e0a833e327b9c991488b72482852e047bbf80c",
+        "e2fca03b022fa2491d50fb69f75737a96ac8ded8331e4c3c7fde06c9e0bb195f",
     ),
     "public-profile evidence fixtures": (
         "    #[test]\n    fn public_profile_expansion_ignores_wrong_elastic_lane_signal()",
@@ -348,7 +348,10 @@ class AutoscaleLocalnetPureFixtureCompactionTest(unittest.TestCase):
                     _validate_source(mutated)
 
     def test_line_budget_mutation_fails_closed(self) -> None:
-        padding = "\n".join("// guard mutation padding" for _ in range(24))
+        padding = "\n".join(
+            "// guard mutation padding"
+            for _ in range(MAXIMUM_RUST_LINES - len(SOURCE.splitlines()) + 1)
+        )
         with self.assertRaises(AssertionError):
             _validate_source(f"{SOURCE}\n{padding}\n")
 

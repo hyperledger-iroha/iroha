@@ -63,9 +63,10 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   by `scripts/telemetry/validate_nexus_telemetry_pack.py`, must be published
   alongside the config delta evidence so operators can replay the exact
   artefacts used during B4.
-- Iroha 2 bundles remain lane-free: configs with `nexus.enabled = false` now
-  reject lane/dataspace/routing overrides unless the Nexus profile is enabled
-  (`--sora`), so strip `nexus.*` sections from single-lane templates.
+- First-release generators expose neither a Nexus availability toggle nor a
+  build-line selector. The canonical one-lane catalog uses the same mandatory
+  transaction-aware router as custom multi-lane topology; `enabled` is not a
+  valid key in the first-release `[nexus]` table.
 - Universal merge-ledger rollout policy (Nexus mode): release the async merge
   schema and routing contract via genesis reset + full node redeploy. In-place
   migration and backward wire compatibility are intentionally out of scope for
@@ -91,13 +92,13 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   `Nexus Multilane Pipeline` workflow
   (`.github/workflows/integration_tests_multilane.yml`), replacing the retired
   `pytests/nexus/test_multilane_pipeline.py` reference; keep the hash for
-  `defaults/nexus/config.toml` (`nexus.enabled = true`, blake2b
-  `7614e537be8983d69b716d79677f7e2806d03071792da724ac89b8ff412d7c91`) in sync
+  `defaults/nexus/config.toml` (blake2b
+  `6c24bbb896e1270836d3fa4fbe71a35bedfefc6e5658f4e3e6bffae2c71269e5`) in sync
   with the tracker when refreshing rehearsal bundles.
 
 ## Runtime Lane Lifecycle
 
-- Runtime lane lifecycle plans and enabled Nexus config swaps now validate
+- Runtime lane lifecycle plans and Nexus config swaps validate
   dataspace bindings and routing-policy targets before mutation. Plans/configs
   that would leave the default route, a rule lane, or a rule dataspace
   unresolved fail atomically. Rule lanes without an explicit rule dataspace are
@@ -158,9 +159,8 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   owned elastic lane outside the range or dataspace the autoscaler can manage.
   A config swap also cannot disable `autoscale.enabled` while autoscale-managed
   lanes are still present; otherwise the only owner allowed to destroy them
-  would be disabled. Static TOML parsing rejects
-  `nexus.autoscale.enabled = true` unless `nexus.enabled = true`; it also
-  rejects the reserved `autoscale.managed` lane metadata key and manual lanes
+  would be disabled. Static TOML parsing rejects the reserved
+  `autoscale.managed` lane metadata key and manual lanes
   in the enabled elastic id range before runtime for the same reason. Runtime
   lifecycle validation checks every lane in the post-plan catalog too, so
   unrelated plans cannot
@@ -182,17 +182,15 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   `elastic-lane-{id}` alias) and refuses to add or retire unmanaged/manual
   lanes, malformed autoscale-owned lanes, or managed lanes outside the
   configured elastic id range or default dataspace.
-  Runtime `State::set_nexus` applies the same disabled-profile guard as the
-  parser, so direct actual-config swaps cannot disable Nexus while carrying
-  lane, dataspace, or routing overrides, enabling autoscale, enabling
-  lane-relay emergency overrides, or enabling the relay worker. The relay
-  worker also requires lane-relay-burn settlement at the state boundary,
-  matching the parser guard. Authority-paid Nexus fees are rejected in this
+  Runtime `State::set_nexus` atomically validates lane, dataspace, routing,
+  autoscale, lane-relay emergency, and relay-worker configuration. The relay
+  worker requires lane-relay-burn settlement at the state boundary, matching
+  the parser guard. Authority-paid Nexus fees are rejected in this
   mode until an authenticated authority spend-lease protocol exists; sponsor
   receipts require a verified source allocation for the exact program revision
   and asset. Emergency relay multisig thresholds cannot exceed member count.
-  Per-dataspace defaults name one exact `fee_sponsor_program_id` and require
-  enabled Nexus plus a dataspace key present in the active catalog; there is no
+  Per-dataspace defaults name one exact `fee_sponsor_program_id` and require a
+  dataspace key present in the active catalog; there is no
   sponsorship toggle or account fallback. Runtime config swaps also mirror the
   parser's fee-shape checks: the Nexus fee asset selector must be the canonical
   XOR asset definition id or `xor#universal`/`xor#universal.universal` after
@@ -218,18 +216,18 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   lanes only when live Nexus and autoscale are enabled, the default lane remains
   outside the elastic id range, and the managed lane id remains in
   `autoscale.min_lanes..autoscale.max_lanes`. If autoscale is disabled or no
-  eligible elastic lane remains, or if Nexus itself is disabled, live routing
-  falls back to the default lane. If the active elastic range contains a manual
+  eligible elastic lane remains, live routing falls back to the default lane.
+  If the active elastic range contains a manual
   lane, malformed autoscale-managed lane, or managed lane outside the default
   dataspace, live routing also fails closed to the default lane until the
   catalog is repaired; catalog-only routing without a live Nexus
   state view also falls back to the base default lane instead of sharding over
   a stale router snapshot. The integration router harness pins the same disabled
-  Nexus/autoscale gates and in-range corruption fallback at the public
+  autoscale gate and in-range corruption fallback at the public
   `LaneRouter::try_route_with_view` boundary while preserving the
   enabled-autoscale sharding path.
-  Block autoscale application also requires both enabled Nexus and enabled
-  autoscale, so corrupted actual state with either gate disabled cannot create
+  Block autoscale application requires enabled autoscale, so actual state with
+  that subordinate gate disabled cannot create
   or retire elastic lanes. Autoscale catalog changes are staged inside the
   block scope and published to committed Nexus state and lane storage geometry
   only during `StateBlock::commit()` after transaction-height validation, so a
@@ -631,4 +629,4 @@ alarms match the rehearsal topology.
 | TRACE-MULTILANE-CANARY agenda | `artifacts/nexus/rehearsals/2026q2/TRACE-MULTILANE-CANARY-agenda.md` | Planning notes for the Q2 rehearsal (window, slot range, workload seed, action owners). |
 | Launch rehearsal runbook | `specs/runbooks/nexus_multilane_rehearsal.md` | Operational checklist for staging → execution → rollback; update when lane topology or exporter guidance changes. |
 | Telemetry pack validator | `scripts/telemetry/validate_nexus_telemetry_pack.py` | CLI referenced by B4 retro; archive digests alongside the tracker whenever the pack changes. |
-| Multilane regression | `ci/check_nexus_multilane.sh` + `integration_tests/tests/nexus/multilane_router.rs` | Proves `nexus.enabled = true` for multi-lane configs, preserves the Sora catalog hashes, and provisions lane-local Kura/merge-log paths (`blocks/lane_{id:03}_{slug}`) via `ConfigLaneRouter` before publishing artefact digests. |
+| Multilane regression | `ci/check_nexus_multilane.sh` + `integration_tests/tests/nexus/multilane_router.rs` | Proves Nexus routing is mandatory for one-lane and multi-lane configs, preserves the Sora catalog hashes, and provisions lane-local Kura/merge-log paths (`blocks/lane_{id:03}_{slug}`) via `ConfigLaneRouter` before publishing artefact digests. |

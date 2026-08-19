@@ -6,7 +6,7 @@ use mochi_core::sign_kagami_stub_genesis_from_config;
 use mochi_integration::kagami_default_manifest_json;
 use std::{env, fs, path::PathBuf, process};
 const DEFAULT_CHAIN_ID: &str = "mochi-mock-chain";
-const VERSION_OUTPUT: &str = "kagami_mock iroha3 test-stub";
+const VERSION_OUTPUT: &str = "kagami_mock 3.0.0 test-stub";
 fn main() {
     if let Err(err) = run() {
         eprintln!("kagami_mock: {err:?}");
@@ -553,7 +553,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
     }
     #[test]
-    fn version_probe_reports_iroha3_build_line() {
-        assert!(VERSION_OUTPUT.contains("iroha3"));
+    fn version_probe_reports_program_version() {
+        assert!(VERSION_OUTPUT.contains("3.0.0"));
     }
 }

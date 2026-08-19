@@ -167,6 +167,7 @@ def _leg(
         "participant_proposal": {
             "descriptor": descriptor,
             "proposal_hash": proposal_hash,
+            "payload_block_hint": None,
         },
         "participant_settlement": settlement,
         "participant_settlement_hash": settlement_hash,
@@ -374,6 +375,7 @@ def test_lane_commitment_preserves_exact_native_amx_and_fee_evidence() -> None:
         receipt.legs[0].participant_proposal.proposal_hash
         == receipt.legs[0].prepare_qc.body.participant_proposal_hash
     )
+    assert receipt.legs[0].participant_proposal.payload_block_hint is None
     assert (
         receipt.legs[0].participant_settlement_hash
         == receipt.legs[0].commit_qc.body.participant_settlement_commitment
@@ -608,8 +610,14 @@ def test_native_amx_parser_rejects_participant_finality_tampering() -> None:
     def mismatch_proposal_hash(leg: dict[str, Any]) -> None:
         leg["participant_proposal"]["proposal_hash"] = _hash(0xC3)
 
-    def add_payload_hint(leg: dict[str, Any]) -> None:
-        leg["participant_proposal"]["payload_block_hint"] = None
+    def delete_payload_hint(leg: dict[str, Any]) -> None:
+        del leg["participant_proposal"]["payload_block_hint"]
+
+    def add_nonnull_payload_hint(leg: dict[str, Any]) -> None:
+        leg["participant_proposal"]["payload_block_hint"] = {}
+
+    def add_proposal_field(leg: dict[str, Any]) -> None:
+        leg["participant_proposal"]["future_proposal_field"] = None
 
     def delete_descriptor_field(leg: dict[str, Any]) -> None:
         del leg["participant_proposal"]["descriptor"]["subject_hash"]
@@ -687,7 +695,9 @@ def test_native_amx_parser_rejects_participant_finality_tampering() -> None:
         wrong_body_type,
         mismatch_commit_identity,
         mismatch_proposal_hash,
-        add_payload_hint,
+        delete_payload_hint,
+        add_nonnull_payload_hint,
+        add_proposal_field,
         delete_descriptor_field,
         add_descriptor_field,
         delete_required_predecessor,

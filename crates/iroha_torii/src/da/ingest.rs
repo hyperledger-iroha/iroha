@@ -231,14 +231,6 @@ pub async fn handler_post_da_ingest(
         .telemetry_cluster_label
         .as_deref()
         .unwrap_or("default");
-    let nexus = app.state.nexus_snapshot();
-    if !nexus.enabled {
-        return Err(ResponseError::from(build_error_response(
-            StatusCode::BAD_REQUEST,
-            "/v1/da/ingest requires nexus.enabled=true; lanes are unavailable in Iroha 2 mode",
-            format,
-        )));
-    }
     validate_request_shape(&request).map_err(|(status, message)| {
         ResponseError::from(build_error_response(status, message, format))
     })?;
@@ -925,14 +917,6 @@ pub async fn handler_get_da_manifest(
     utils::negotiate_json_only_response(headers.get(axum::http::header::ACCEPT))
         .map_err(ResponseError::from)?;
     let format = ResponseFormat::Json;
-    let nexus_enabled = app.state.nexus_snapshot().enabled;
-    if !nexus_enabled {
-        return Err(ResponseError::from(build_error_response(
-            StatusCode::BAD_REQUEST,
-            "/v1/da/manifests requires nexus.enabled=true; lanes are unavailable in Iroha 2 mode",
-            format,
-        )));
-    }
     let ticket_bytes = match parse_storage_ticket_hex(ticket_hex.trim()) {
         Ok(bytes) => bytes,
         Err(message) => {

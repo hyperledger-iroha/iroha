@@ -860,9 +860,10 @@ pub struct Root {
     )]
     chain_discriminant: WithOrigin<u16>,
     /// BLS Proof-of-Possession entries for validator trusted peers.
-    /// When present, these entries define the BLS trusted-peer subset that
-    /// participates in consensus; trusted peers without PoPs are network-trusted
-    /// observers. Invalid or duplicate PoP entries are rejected.
+    /// These entries define the BLS trusted-peer subset that participates in
+    /// consensus; an empty list defines no validators. Trusted peers without
+    /// PoPs remain network-trusted observers. Invalid, duplicate, or extraneous
+    /// PoP entries are rejected.
     #[config(env = "TRUSTED_PEERS_POP", default)]
     trusted_peers_pop: TrustedPeerPops,
     #[config(nested)]
@@ -5703,8 +5704,8 @@ pub struct SumeragiQueues {
     pub body_bytes: NonZeroUsize,
     /// Per-ingress-source canonical outer-ingress wire-byte partition.
     /// Validator partitions isolate ordinary traffic, payload completions, and
-    /// timeout votes; authenticated non-validator and anonymous partitions do
-    /// not spend the timeout reserve. This also reserves the fixed atomic
+    /// timeout votes; authenticated non-validator partitions do not spend the
+    /// timeout reserve. This also reserves the fixed atomic
     /// lane-certificate and executable-source minima.
     #[config(default = "defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES")]
     pub body_source_bytes: NonZeroUsize,
@@ -5998,17 +5999,17 @@ impl Sumeragi {
         let minimum_body_sources = queues
             .authenticated_non_validator_sources
             .get()
-            .checked_add(2);
+            .checked_add(1);
         let minimum_body_messages = queues
             .authenticated_non_validator_sources
             .get()
             .checked_mul(3)
-            .and_then(|hubs| hubs.checked_add(7));
+            .and_then(|sources| sources.checked_add(5));
         match minimum_body_messages {
             Some(minimum) if queues.bodies.get() < minimum => {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.bodies must reserve five positions for at least one validator, three per authenticated non-validator source, and two anonymous positions (minimum {minimum}, configured {})",
+                        "sumeragi.queues.bodies must reserve five positions for at least one validator and three per authenticated non-validator source (minimum {minimum}, configured {})",
                         queues.bodies,
                     )),
                 );
@@ -6028,7 +6029,7 @@ impl Sumeragi {
             Some(minimum) if queues.body_bytes.get() < minimum => {
                 emitter.emit(
                     Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
-                        "sumeragi.queues.body_bytes must reserve one validator, every configured authenticated non-validator source, and the anonymous source partition (minimum {minimum}, configured {})",
+                        "sumeragi.queues.body_bytes must reserve one validator and every configured authenticated non-validator source (minimum {minimum}, configured {})",
                         queues.body_bytes,
                     )),
                 );
@@ -7816,9 +7817,8 @@ pub struct Settlement {
     pub router: Router,
 }
 /// User-level optional Kagemusha proof-release cache configuration.
-#[allow(clippy::struct_field_names)]
 #[derive(Debug, ReadConfig, Clone)]
-#[allow(
+#[expect(
     clippy::struct_field_names,
     reason = "the kagemusha_ prefix is part of the public settlement configuration schema"
 )]
@@ -8440,9 +8440,9 @@ impl Streaming {
                 );
                 None
             }
-            (Some(_), true, None) | (None, true, None) => None,
+            (Some(_) | None, true, None) => None,
             (None, false, None) => Some(identity.clone()),
-            (Some(_), false, Some(_)) | (None, false, Some(_)) => {
+            (Some(_) | None, false, Some(_)) => {
                 unreachable!("an unconfigured private-key source cannot resolve")
             }
         }
@@ -9016,10 +9016,7 @@ impl Crypto {
 /// User-level configuration container for `Nexus`.
 #[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
 pub struct Nexus {
-    /// Enable multilane (Nexus/Iroha3) consensus features.
-    #[config(default = "defaults::nexus::ENABLED")]
-    pub enabled: bool,
-    /// Storage budget controls for Nexus-enabled nodes.
+    /// Storage budget controls for Nexus nodes.
     #[config(nested)]
     pub storage: NexusStorage,
     /// Exclusive lane-id bound for the initial catalog.
@@ -9103,7 +9100,6 @@ macro_rules! impl_default {
     };
 }
 impl_default!(Nexus {
-    enabled: defaults::nexus::ENABLED,
     storage: NexusStorage::default(),
     lane_count: defaults::nexus::LANE_COUNT,
     lane_catalog: Vec::new(),
@@ -9128,7 +9124,7 @@ impl_default!(Nexus {
 /// User-level configuration container for Nexus storage budgets.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
 pub struct NexusStorage {
-    /// Aggregate on-disk storage budget for Nexus-enabled nodes (bytes).
+    /// Aggregate on-disk storage budget for Nexus nodes (bytes).
     ///
     /// When omitted, `irohad` derives a filesystem-aware budget at runtime without modifying the
     /// operator configuration.
@@ -10939,7 +10935,6 @@ impl Nexus {
     /// Convert this user configuration into the runtime representation.
     pub fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Nexus> {
         let Nexus {
-            enabled,
             storage,
             lane_count,
             lane_catalog,
@@ -10980,51 +10975,11 @@ impl Nexus {
         let lane_relay_emergency = lane_relay_emergency.parse(emitter)?;
         let staking = staking.parse(emitter)?;
         let fees = fees.parse(emitter)?;
-        if !dataspace_fee_sponsor_program_ids.is_empty() && !enabled {
-            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
-                "nexus.dataspace_catalog fee_sponsor_program_id requires nexus.enabled = true",
-            ));
-            return None;
-        }
         let relay_worker = relay_worker.parse(emitter)?;
         let hf_shared_leases = hf_shared_leases.parse(emitter)?;
         let uploaded_models = uploaded_models.parse(emitter)?;
         let endorsement = endorsement_cfg.parse(emitter)?;
         let lane_config = actual::LaneConfig::from_catalog(&lane_catalog);
-        let has_multilane = lane_catalog.lane_count().get() > 1
-            || dataspace_catalog.entries().len() > 1
-            || routing_policy.default_lane != LaneId::SINGLE
-            || routing_policy.default_dataspace != DataSpaceId::UNIVERSAL
-            || !routing_policy.rules.is_empty();
-        if has_multilane && !enabled {
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig).attach(
-                    "multi-lane catalogs or routing policies require `nexus.enabled = true` (set the flag or use `--sora`)",
-                ),
-            );
-            return None;
-        }
-        if autoscale.enabled && !enabled {
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.autoscale.enabled requires nexus.enabled = true"),
-            );
-            return None;
-        }
-        if lane_relay_emergency.enabled && !enabled {
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.lane_relay_emergency.enabled requires nexus.enabled = true"),
-            );
-            return None;
-        }
-        if relay_worker.enabled && !enabled {
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig)
-                    .attach("nexus.relay_worker.enabled requires nexus.enabled = true"),
-            );
-            return None;
-        }
         if relay_worker.enabled
             && fees.settlement_mode != actual::NexusFeeSettlementMode::LaneRelayBurn
         {
@@ -11034,19 +10989,7 @@ impl Nexus {
             );
             return None;
         }
-        let has_lane_overrides = !enabled
-            && (lane_catalog != LaneCatalog::default()
-                || dataspace_catalog != DataSpaceCatalog::default()
-                || routing_policy != actual::LaneRoutingPolicy::default());
-        if has_lane_overrides {
-            emitter.emit(
-                Report::new(ParseError::InvalidNexusConfig).attach(
-                    "nexus.enabled=false requires the default single-lane catalog and routing policy; remove Nexus lane/dataspace overrides or set `nexus.enabled = true`",
-                ),
-            );
-            return None;
-        }
-        if enabled && autoscale.enabled {
+        if autoscale.enabled {
             let min_lanes = autoscale.min_lanes.get();
             let max_lanes = autoscale.max_lanes.get();
             let mut reserved_range_error = false;
@@ -11072,7 +11015,6 @@ impl Nexus {
             }
         }
         Some(actual::Nexus {
-            enabled,
             storage,
             staking,
             fees,
@@ -12301,10 +12243,8 @@ pub struct Snapshot {
     /// Chunk size (bytes) used to derive Merkle proofs for snapshots.
     #[config(default = "defaults::snapshot::MERKLE_CHUNK_SIZE_BYTES")]
     pub merkle_chunk_size_bytes: NonZeroUsize,
-    /// Maximum snapshot payload bytes buffered during startup.
-    ///
-    /// Snapshot authentication precedes JSON state construction, but restoration uses
-    /// additional transient memory beyond this on-disk byte bound.
+    /// Maximum authenticated snapshot bytes buffered during startup; restoration may
+    /// use additional transient memory beyond this on-disk bound.
     #[config(default = "defaults::snapshot::MAX_PAYLOAD_BYTES")]
     pub max_payload_bytes: NonZeroUsize,
     /// Typed decode and transient-allocation budgets for snapshot restoration.
@@ -12320,6 +12260,10 @@ pub struct Snapshot {
 }
 /// Strict typed-decoder and transient-allocation budgets for snapshot restoration.
 #[derive(Debug, Clone, Copy, ReadConfig)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "public config keys share max_ prefix"
+)]
 pub struct SnapshotResourcePolicy {
     /// Maximum nesting depth admitted by the typed decoder.
     #[config(default = "defaults::snapshot::MAX_DECODE_DEPTH")]
@@ -12347,10 +12291,8 @@ impl_default!(SnapshotResourcePolicy {
 impl SnapshotResourcePolicy {
     /// Validate resource-budget relationships against the enclosing payload bound.
     ///
-    /// The decoder cannot honor an individual-value budget larger than either
-    /// the authenticated payload or its total transient-allocation budget.
-    /// Keeping these relationships fail-closed also prevents a configuration
-    /// typo from silently weakening the smaller limit.
+    /// Relationships stay fail-closed so values cannot exceed the authenticated
+    /// payload or the total transient-allocation budget.
     fn validate(&self, max_payload_bytes: NonZeroUsize) -> core::result::Result<(), String> {
         if self.max_decode_depth.get() > norito::json::MAX_JSON_VALUE_NESTING_DEPTH {
             return Err(format!(
@@ -31260,6 +31202,10 @@ mod offline_cfg_tests {
 }
 #[cfg(test)]
 mod duration_clamp_tests {
+    use super::{
+        AssetDefinitionId, BTreeSet, ConfidentialComputeMechanism, DaManifestPolicy, DomainId,
+        Emitter, LaneId, NexusFees, NonZeroU64, RETIRED_LANE_FUNCTIONAL_METADATA_KEYS,
+    };
     use crate::parameters::{
         actual, defaults,
         user::{LaneValidatorModeConfig, SoracloudRuntime, SoracloudRuntimeHuggingFace},
@@ -31296,7 +31242,7 @@ mod duration_clamp_tests {
                 ));
                 match fs::create_dir(&path) {
                     Ok(()) => return Self(path),
-                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
                     Err(error) => panic!("create test directory {}: {error}", path.display()),
                 }
             }
@@ -31646,7 +31592,7 @@ policy_digest_hex = "{policy_digest_hex}"
                 ),
                 (
                     "operation_registry_max_bytes".into(),
-                    Value::Integer(524288),
+                    Value::Integer(524_288),
                 ),
             ])),
         );
@@ -31863,7 +31809,6 @@ policy_digest_hex = "{policy_digest_hex}"
     fn nexus_lane_shard_id_has_one_typed_configuration_surface() {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
         set_lane_count(nexus, 2);
         let mut sharded = lane_descriptor(1, "sharded");
         {
@@ -31914,7 +31859,6 @@ policy_digest_hex = "{policy_digest_hex}"
         ]) {
             let mut table = base_table();
             let nexus = nexus_table_mut(&mut table);
-            nexus.insert("enabled".into(), Value::Boolean(true));
             set_lane_count(nexus, 1);
             let mut lane = lane_descriptor(0, "primary");
             let lane = lane.as_table_mut().expect("lane descriptor table");
@@ -31942,7 +31886,6 @@ policy_digest_hex = "{policy_digest_hex}"
     fn nexus_lane_typed_functional_policy_loads_from_toml() {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
         set_lane_count(nexus, 1);
         let mut lane = lane_descriptor(0, "private");
         let lane = lane.as_table_mut().expect("lane descriptor table");
@@ -32066,7 +32009,6 @@ policy_digest_hex = "{policy_digest_hex}"
         ] {
             let mut table = base_table();
             let nexus = nexus_table_mut(&mut table);
-            nexus.insert("enabled".into(), Value::Boolean(true));
             set_lane_count(nexus, 1);
             let mut lane = lane_descriptor(0, "primary");
             lane.as_table_mut()
@@ -32087,19 +32029,23 @@ policy_digest_hex = "{policy_digest_hex}"
             let mut fees = NexusFees::default();
             fees.settlement_mode = canonical.to_owned();
             let mut emitter = Emitter::new();
+            let parsed = fees.parse(&mut emitter);
             assert!(
-                fees.parse(&mut emitter).is_some(),
+                parsed.is_some(),
                 "canonical settlement mode `{canonical}` must parse"
             );
+            assert!(emitter.into_result().is_ok());
         }
         for alias in ["lane-relay-burn", "Lane_Relay_Burn", " direct", "direct "] {
             let mut fees = NexusFees::default();
             fees.settlement_mode = alias.to_owned();
             let mut emitter = Emitter::new();
+            let parsed = fees.parse(&mut emitter);
             assert!(
-                fees.parse(&mut emitter).is_none(),
+                parsed.is_none(),
                 "non-canonical settlement mode `{alias}` must fail closed"
             );
+            assert!(emitter.into_result().is_err());
         }
     }
     #[test]
@@ -32170,24 +32116,21 @@ policy_digest_hex = "{policy_digest_hex}"
         assert_eq!(algorithm, iroha_crypto::Algorithm::Ed25519);
     }
     #[test]
-    fn nexus_autoscale_parse_rejects_enabled_autoscale_when_nexus_disabled() {
-        let mut table = base_table();
-        let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(false));
-        set_valid_autoscale_defaults(nexus);
-        let error = actual::Root::from_toml_source(TomlSource::inline(table))
-            .expect_err("autoscale cannot be enabled while Nexus is disabled");
-        let report = format!("{error:?}");
-        assert!(
-            report.contains("nexus.autoscale.enabled requires nexus.enabled = true"),
-            "{report}"
-        );
+    fn nexus_enabled_is_rejected_as_an_unknown_parameter() {
+        for enabled in [true, false] {
+            let mut table = base_table();
+            nexus_table_mut(&mut table).insert("enabled".into(), Value::Boolean(enabled));
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("the retired Nexus runtime switch must be unknown");
+            let report = format!("{error:?}");
+            assert!(report.contains("unknown parameter"), "{report}");
+            assert!(report.contains("nexus.enabled"), "{report}");
+        }
     }
     #[test]
     fn nexus_autoscale_parse_rejects_default_lane_inside_elastic_range() {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
         set_valid_autoscale_defaults(nexus);
         set_lane_count(nexus, 4);
         nexus.insert(
@@ -32211,7 +32154,6 @@ policy_digest_hex = "{policy_digest_hex}"
     fn nexus_autoscale_parse_rejects_default_lane_above_elastic_range() {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
         set_valid_autoscale_defaults(nexus);
         set_lane_count(nexus, 4);
         nexus.insert(
@@ -32234,7 +32176,6 @@ policy_digest_hex = "{policy_digest_hex}"
     fn nexus_autoscale_parse_rejects_manual_lane_inside_elastic_range() {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
         set_valid_autoscale_defaults(nexus);
         set_lane_count(nexus, 4);
         nexus.insert(
@@ -32259,7 +32200,6 @@ policy_digest_hex = "{policy_digest_hex}"
     fn nexus_autoscale_parse_rejects_reserved_managed_metadata() {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
         set_valid_autoscale_defaults(nexus);
         set_lane_count(nexus, 4);
         let mut default_lane = Table::new();
@@ -32289,7 +32229,6 @@ policy_digest_hex = "{policy_digest_hex}"
     fn nexus_autoscale_parse_rejects_reserved_created_height_metadata() {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
         set_valid_autoscale_defaults(nexus);
         set_lane_count(nexus, 4);
         let mut default_lane = Table::new();
@@ -32322,7 +32261,6 @@ policy_digest_hex = "{policy_digest_hex}"
     fn nexus_autoscale_parse_rejects_reserved_drain_state_metadata() {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
         set_valid_autoscale_defaults(nexus);
         set_lane_count(nexus, 4);
         let mut default_lane = Table::new();
@@ -32355,7 +32293,6 @@ policy_digest_hex = "{policy_digest_hex}"
     fn nexus_autoscale_parse_rejects_reserved_committee_metadata() {
         let mut table = base_table();
         let nexus = nexus_table_mut(&mut table);
-        nexus.insert("enabled".into(), Value::Boolean(true));
         set_valid_autoscale_defaults(nexus);
         set_lane_count(nexus, 4);
         let mut default_lane = Table::new();
@@ -34026,7 +33963,7 @@ publish_delay_seconds = 17
             "authenticated_non_validator_sources".into(),
             Value::Integer(33),
         );
-        queues.insert("bodies".into(), Value::Integer(72));
+        queues.insert("bodies".into(), Value::Integer(106));
         queues.insert("body_bytes".into(), Value::Integer(35 * 33 * 1024 * 1024));
         let error = actual::Root::from_toml_source(TomlSource::inline(table))
             .expect_err("home profile admits at most 32 independent authenticated sources");

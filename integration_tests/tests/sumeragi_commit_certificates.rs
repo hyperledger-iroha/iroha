@@ -82,7 +82,6 @@ fn npos_commit_quorum_network_builder() -> NetworkBuilder {
         .with_config_layer(|layer| {
             let gas_account_str = ALICE_ID.to_string();
             layer
-                .write(["nexus", "enabled"], true)
                 .write(
                     ["nexus", "fees", "fee_asset_id"],
                     nexus_fee_asset_id_literal(),

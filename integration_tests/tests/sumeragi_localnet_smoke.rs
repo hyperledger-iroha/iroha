@@ -3517,7 +3517,6 @@ async fn sumeragi_status_json_endpoint_decodes_to_wire_end_to_end() -> Result<()
         )))
         .with_config_layer(move |layer| {
             layer
-                .write(["nexus", "enabled"], true)
                 .write(["nexus", "lane_count"], 3_i64)
                 .write(
                     ["nexus", "lane_catalog"],

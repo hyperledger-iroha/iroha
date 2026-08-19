@@ -397,7 +397,7 @@ pub mod json_wrappers {
     /// input. This removes the attacker-sized second destination allocation.
     pub(super) fn base64_decode(encoded: String) -> Result<Vec<u8>, norito::json::Error> {
         let mut bytes = encoded.into_bytes();
-        if bytes.len() % 4 != 0 {
+        if !bytes.len().is_multiple_of(4) {
             return Err(norito::json::Error::InvalidField {
                 field: String::from("base64"),
                 message: String::from("invalid base64 payload"),
@@ -426,11 +426,11 @@ pub mod json_wrappers {
                     bytes[written + 1] = (third << 6) | fourth;
                     written += 2;
                 }
-                (Some(third), None, _, b'=', true) if third & 0x03 == 0 => {
+                (Some(third), None, _, b'=', true) if third.trailing_zeros() >= 2 => {
                     bytes[written] = (second << 4) | (third >> 2);
                     written += 1;
                 }
-                (None, None, b'=', b'=', true) if second & 0x0f == 0 => {}
+                (None, None, b'=', b'=', true) if second.trailing_zeros() >= 4 => {}
                 _ => {
                     return Err(norito::json::Error::InvalidField {
                         field: String::from("base64"),
@@ -930,6 +930,10 @@ mod model {
         /// Return the exact fixed-v1 bare payload length without allocating an output buffer.
         fn encoded_payload_len_exact(&self) -> Option<usize>;
         /// Stream the fixed-v1 bare payload without allocating an intermediate payload buffer.
+        ///
+        /// # Errors
+        ///
+        /// Returns an error if the query payload cannot be encoded into the destination writer.
         fn encode_payload_to(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -3353,8 +3357,7 @@ mod candidate {
             let err = candidate
                 .into_signed()
                 .verify_signature()
-                .err()
-                .expect("expected signature validation to fail");
+                .expect_err("expected signature validation to fail");
             assert_eq!(err, SignedQueryValidationError::InvalidSignature);
         }
         #[test]
@@ -3448,8 +3451,7 @@ mod candidate {
             let err = candidate
                 .into_signed()
                 .verify_signature()
-                .err()
-                .expect("expected signature validation to fail");
+                .expect_err("expected signature validation to fail");
             assert_eq!(err, SignedQueryValidationError::InvalidSignature);
         }
         #[test]
@@ -3466,7 +3468,7 @@ mod candidate {
                 payload,
             };
             let error = match candidate.into_signed().verify_signature() {
-                Ok(_) => panic!("multisig query authority must be rejected"),
+                Ok(()) => panic!("multisig query authority must be rejected"),
                 Err(error) => error,
             };
             assert_eq!(error, SignedQueryValidationError::AuthorityNotSingleKey);

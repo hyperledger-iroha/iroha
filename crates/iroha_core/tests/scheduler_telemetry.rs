@@ -522,7 +522,6 @@ fn governance_rules(validators: &[AccountId], allowed_ids: &BTreeSet<String>) ->
                 metadata_key: Some(Name::from_str("upgrade_id").expect("metadata key")),
                 allowed_ids: Some(allowed_ids.clone()),
             }),
-            unknown: BTreeMap::new(),
         },
     }
 }
@@ -693,7 +692,6 @@ fn nexus_config_diff_counter_and_event_emitted() {
         ..Da::default()
     };
     let nexus = Nexus {
-        enabled: true,
         storage: NexusStorage::default(),
         relay_worker: NexusRelayWorker::default(),
         staking: NexusStaking::default(),
