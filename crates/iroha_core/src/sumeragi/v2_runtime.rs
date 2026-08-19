@@ -72,7 +72,10 @@ use super::{
         AuthenticatedRecoveredWalControlProjection,
         AuthenticatedRecoveredWalDecisionFetchProjection,
         AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
-        DurableCertifiedFetchPendingMintPermit, DurableValidateReplayEvidenceV1,
+        DurableCertifiedFetchPendingMintPermit, DurableStandaloneValidatePendingMintPermit,
+        DurableValidateReplayEvidenceV1,
+        PreparedReadyDurableValidateAdapterPreview, PreparedReadyDurableValidateExecution,
+        ReadyDurableValidateAdapterPreviewError,
         RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
         RecoveredWalVoteReplayEvidenceV1,
     },
@@ -2943,6 +2946,47 @@ impl PendingRuntimeEffectBinding {
                 ..
             }
         ) {
+            return None;
+        }
+        let effect_kind = production_adapter_effect_kind(effect);
+        let effect_identity = runtime_effect_identity_hash(
+            effect_kind,
+            &production_adapter_effect_semantic_identity(effect),
+        );
+        let candidate = production_adapter_effect_candidate_binding(effect, None).ok()??;
+        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
+            candidate.kind,
+            &candidate.semantic_identity,
+        ));
+        let projection_hash = pending_runtime_effect_binding_projection_hash(
+            &causal_lifecycle_key,
+            effect_kind,
+            &effect_identity,
+            candidate.kind,
+            candidate.statement,
+            candidate_semantic_identity.as_ref(),
+        );
+        let pending = Self {
+            causal_lifecycle_key,
+            effect_kind,
+            effect_identity,
+            candidate_kind: candidate.kind,
+            candidate_statement: candidate.statement,
+            candidate_semantic_identity,
+            projection_hash,
+        };
+        pending.validate_exact(effect).then_some(pending)
+    }
+    /// Reconstruct the unique ordinal-free owner of a standalone durable Validate.
+    ///
+    /// The replay module mints the permit only after the canonical LocalBody or
+    /// signed-Proposal authority has joined the exact authenticated BodyFrame.
+    pub(in crate::sumeragi) fn from_durable_standalone_validate(
+        _permit: DurableStandaloneValidatePendingMintPermit,
+        causal_lifecycle_key: iroha_crypto::Hash,
+        effect: &AdapterEffect,
+    ) -> Option<Self> {
+        if !matches!(effect, AdapterEffect::ValidateBody { .. }) {
             return None;
         }
         let effect_kind = production_adapter_effect_kind(effect);
@@ -15497,6 +15541,27 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         self.driver
             .prepare_durable_store_validate(tag, round, subject, receipt)
+    }
+    /// Freeze the serialized shell around one registry-owned Ready Validate outcome.
+    pub(in crate::sumeragi) fn prepare_ready_durable_validate_adapter_preview<'registry>(
+        &mut self,
+        execution: PreparedReadyDurableValidateExecution<'registry>,
+    ) -> Result<
+        PreparedReadyDurableValidateAdapterPreview<'registry, '_>,
+        ReadyDurableValidateAdapterPreviewError<'registry>,
+    > {
+        if self.fail_closed
+            || self.ingress.len() != 0
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err(ReadyDurableValidateAdapterPreviewError::runtime_gate(
+                execution,
+                AdapterError::ReadyDurableValidatePublicationContractViolation,
+            ));
+        }
+        execution.prepare_adapter_preview(&mut self.driver)
     }
     /// Freeze the serialized shell around one lifecycle-owned signature.
     pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(

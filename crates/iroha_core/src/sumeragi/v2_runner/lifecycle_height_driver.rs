@@ -117,7 +117,9 @@ impl LifecycleProducerClaimDispositionV1 {
             (
                 Self::Eligible,
                 Completion::CompletionIoDispatch(Ok(
-                    Dispatch::ApplyQueued { .. } | Dispatch::SignQueued { .. },
+                    Dispatch::ValidateQueued { .. }
+                    | Dispatch::ApplyQueued { .. }
+                    | Dispatch::SignQueued { .. },
                 )),
             ) => Ok(Self::AwaitingCompletion),
             (
@@ -132,7 +134,9 @@ impl LifecycleProducerClaimDispositionV1 {
             (
                 Self::Eligible,
                 Completion::CompletionIoDispatch(Ok(
-                    Dispatch::BodyStageAdvanced { .. } | Dispatch::ReducerFenceWait { .. },
+                    Dispatch::BodyStageAdvanced { .. }
+                    | Dispatch::ReducerFenceWait { .. }
+                    | Dispatch::ValidateNoSuccessor { .. },
                 )),
             ) => {
                 // Ordinary body publication either installs its exact Ready
@@ -143,7 +147,9 @@ impl LifecycleProducerClaimDispositionV1 {
             }
             (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyDeferred)
             | (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyRequeued)
-            | (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyCompletionDeferred) => {
+            | (Self::AwaitingCompletion, Completion::RecoveredDecisionApplyCompletionDeferred)
+            | (Self::AwaitingCompletion, Completion::LifecycleValidatePublicationRetry)
+            | (Self::Eligible | Self::AwaitingCompletion, Completion::LifecycleValidateDeferred) => {
                 Ok(Self::AwaitingCompletion)
             }
             (
@@ -188,6 +194,11 @@ impl LifecycleProducerClaimDispositionV1 {
                 Completion::RecoveredDecisionFetchCompletion(FetchSettlement::Applied),
             )
             | (Self::AwaitingCompletion, Completion::CertifiedFetchBodyPersisted)
+            | (Self::AwaitingCompletion, Completion::LifecycleValidatePublished)
+            | (
+                Self::Eligible | Self::AwaitingCompletion,
+                Completion::LifecycleValidateSidecarWoken,
+            )
             | (Self::AwaitingCompletion, Completion::CertifiedServeClaimedCompleted) => {
                 Ok(Self::Eligible)
             }

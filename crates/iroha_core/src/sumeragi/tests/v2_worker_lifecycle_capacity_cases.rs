@@ -293,9 +293,27 @@ fn recovered_decision_apply_completion_accounting_is_stable_by_exact_key() {
     let admission = V2IoAdmission::new(2, 2).expect("construct bounded I/O admission");
     let key = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 1);
     let same_ordinal_foreign = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 2);
-    admission.retain_completion(Instant::now(), false, None, None, None, None, None);
-    admission.retain_completion(Instant::now(), true, Some(7), Some(key), None, None, None);
-    admission.retain_completion(Instant::now(), false, Some(8), None, None, None, None);
+    admission.retain_completion(Instant::now(), false, None, None, None, None, None, None);
+    admission.retain_completion(
+        Instant::now(),
+        true,
+        Some(7),
+        Some(key),
+        None,
+        None,
+        None,
+        None,
+    );
+    admission.retain_completion(
+        Instant::now(),
+        false,
+        Some(8),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
     assert!(admission.recovered_decision_apply_completion_is_exact(key));
     assert!(
         !admission.recovered_decision_apply_completion_is_exact(same_ordinal_foreign),
@@ -321,13 +339,23 @@ fn recovered_decision_apply_retry_requeues_exact_key_and_preserves_foreign_compl
         v2_io_command_channel(admission.capacity(), 1, 1, 1, Arc::clone(&admission));
     let key = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 1);
     let same_ordinal_foreign = RecoveredDecisionApplyDispatchKeyV1::for_test(7, 2);
-    admission.retain_completion(Instant::now(), false, None, None, None, None, None);
-    admission.retain_completion(Instant::now(), true, Some(7), Some(key), None, None, None);
+    admission.retain_completion(Instant::now(), false, None, None, None, None, None, None);
+    admission.retain_completion(
+        Instant::now(),
+        true,
+        Some(7),
+        Some(key),
+        None,
+        None,
+        None,
+        None,
+    );
     admission.retain_completion(
         Instant::now(),
         true,
         Some(7),
         Some(same_ordinal_foreign),
+        None,
         None,
         None,
         None,
@@ -374,7 +402,16 @@ fn recovered_decision_apply_retry_unavailable_preserves_pending_owner() {
         .try_send(V2IoCommand::Shutdown)
         .expect("fill the sole physical queue position");
     let key = RecoveredDecisionApplyDispatchKeyV1::for_test(11, 3);
-    admission.retain_completion(Instant::now(), true, Some(11), Some(key), None, None, None);
+    admission.retain_completion(
+        Instant::now(),
+        true,
+        Some(11),
+        Some(key),
+        None,
+        None,
+        None,
+        None,
+    );
     command_tx.queue.lock().recovered_decision_applies.insert(
         key,
         V2IoTrackedRecoveredDecisionApplyV1 {

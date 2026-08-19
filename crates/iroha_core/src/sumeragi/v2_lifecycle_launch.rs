@@ -50,6 +50,7 @@ use super::{
     ProductionRecoveredLifecycleSignDispatchV1,
     ProductionRecoveredLifecycleSignedBroadcastRefanoutErrorV1,
     ProductionRecoveredLifecycleSignedBroadcastRefanoutV1,
+    RegisteredLifecycleValidateSidecarWaitV1,
     ingress_position::{FairIngressTurnContextCut, FairIngressTurnCut},
     work_registry::RecoveredDecisionApplyTerminalPublicationError,
 };
@@ -75,6 +76,7 @@ use crate::{
         v2_worker::{
             DurableExactOutputServiceOwner, KuraReplicaAdvertRefreshOwner,
             LifecycleCompletionTakeV1, PreparedCertifiedFetchBodyPersistenceCompletion,
+            PreparedDeferredLifecycleValidateCompletionV1, PreparedLifecycleValidateCompletionV1,
             PreparedRecoveredDecisionApplyCompletionV1,
             PreparedRecoveredDecisionFetchBodyCompletionV1,
             PreparedRecoveredLifecycleSignCompletionV1, ProductionV2Services,
@@ -251,6 +253,13 @@ enum PendingLifecycleCompletionV1 {
     RecoveredDecisionFetch(PreparedRecoveredDecisionFetchBodyCompletionV1),
     /// Recovered Sign persistence awaits its adapter-family settlement.
     RecoveredSign(PreparedRecoveredLifecycleSignCompletionV1),
+    /// One executed lifecycle Validate awaits same-address Ready publication.
+    Validate(PreparedLifecycleValidateCompletionV1),
+    /// A missing-sidecar lifecycle Validate remains parked under its exact wait owner.
+    DeferredValidate(PreparedDeferredLifecycleValidateCompletionV1),
+    /// The exact missing-sidecar registration is fsynced and retains either
+    /// the live guarded completion or its authenticated cold-open equivalent.
+    RegisteredDeferredValidate(RegisteredLifecycleValidateSidecarWaitV1),
 }
 
 impl PendingLifecycleCompletionV1 {
@@ -295,7 +304,20 @@ impl PendingLifecycleCompletionV1 {
             Self::RecoveredSign(completion) => Some(completion),
             Self::RecoveredDecisionApplyDeferred(_)
             | Self::CertifiedFetch(_)
-            | Self::RecoveredDecisionFetch(_) => None,
+            | Self::RecoveredDecisionFetch(_)
+            | Self::Validate(_)
+            | Self::DeferredValidate(_)
+            | Self::RegisteredDeferredValidate(_) => None,
+        }
+    }
+
+    fn take_validate(slot: &mut Option<Self>) -> Option<PreparedLifecycleValidateCompletionV1> {
+        match slot.take() {
+            Some(Self::Validate(completion)) => Some(completion),
+            other => {
+                *slot = other;
+                None
+            }
         }
     }
 }
@@ -1506,6 +1528,9 @@ pub(in crate::sumeragi) enum ProductionLifecycleLaunchErrorV1 {
     /// The ordered I/O worker could not start with the transferred store.
     #[error("production I/O launch failed: {0}")]
     Services(String),
+    /// A durable Validate sidecar registration could not be authenticated and rebound.
+    #[error("Validate sidecar registration recovery failed: {0}")]
+    ValidateSidecarRegistration(String),
     /// A post-construction process-identity check failed.
     #[error("launched lifecycle stack lost exact process ownership")]
     OwnershipMismatch,
@@ -2415,6 +2440,14 @@ impl ProductionLifecycleOwnerV1 {
         } {
             return Err(ProductionLifecycleLaunchErrorV1::InvalidOwner);
         }
+        let recovered_validate_sidecar =
+            RegisteredLifecycleValidateSidecarWaitV1::recover_at_launch(
+                &mut self.coordinator,
+                &self.registry,
+            )
+            .map_err(|error| {
+                ProductionLifecycleLaunchErrorV1::ValidateSidecarRegistration(error.to_string())
+            })?;
         let launch_storage = self
             .kura_binding
             .as_ref()
@@ -2552,7 +2585,8 @@ impl ProductionLifecycleOwnerV1 {
             services,
             pending_kura_apply_replay,
             recovered_local_proposal_attempt,
-            pending_lifecycle_completion: None,
+            pending_lifecycle_completion: recovered_validate_sidecar
+                .map(PendingLifecycleCompletionV1::RegisteredDeferredValidate),
             pending_ingress_capacity: None,
             completion_observer_activation: Some(
                 ProductionV2CompletionObserverActivationPermitV1 {

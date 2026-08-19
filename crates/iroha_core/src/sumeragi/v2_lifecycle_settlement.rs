@@ -72,9 +72,9 @@ impl LifecycleCoordinator {
             return self.latch_settlement_fault(CoordinatorFault::StaleLease);
         }
         if lease.output_reservation().is_some() {
-            // TODO: The sole rejected-Validate transaction must either consume
-            // this reservation into its exact report child or release it on a
-            // typed non-report outcome. Generic settlement cannot distinguish
+            // The sealed rejected-Validate transaction consumes this
+            // reservation into its exact report child; typed non-report
+            // outcomes release it. Generic settlement cannot distinguish
             // those cuts and therefore retains the active lease fail-closed.
             return self.latch_settlement_fault(CoordinatorFault::InvalidTerminalOutcome);
         }

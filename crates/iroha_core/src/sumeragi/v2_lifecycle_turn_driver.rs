@@ -3,7 +3,7 @@
 use super::*;
 use crate::sumeragi::v2_lifecycle_coordinator::{
     AdmissionDecision, CertifiedServeSchedulerObservationV1, LifecycleLedgerV1,
-    claim_certified_serve_turn_v1,
+    LifecycleValidateSidecarDriveV1, claim_certified_serve_turn_v1,
 };
 #[cfg(test)]
 pub(in crate::sumeragi) use crate::sumeragi::v2_runner::ordinary_ingress_consumer::ProductionPreparedCertifiedServeTestSettlementV1;
@@ -67,6 +67,14 @@ impl ProductionRecoveredLifecycleSignCompletionSelectionV1 {
 #[allow(variant_size_differences)]
 #[must_use = "the lifecycle-selected Completion result must be observed"]
 pub(in crate::sumeragi) enum ProductionLifecycleCompletionSelectionV1 {
+    /// One executed lifecycle Validate published its exact Ready replacement.
+    LifecycleValidatePublished,
+    /// A prepublication Validate failure retained the exact guarded owner for retry.
+    LifecycleValidatePublicationRetry,
+    /// A missing-sidecar Validate remains parked under its immutable registration owner.
+    LifecycleValidateDeferred,
+    /// The exact sidecar became durable and woke the same Validate row without a new ordinal.
+    LifecycleValidateSidecarWoken,
     /// The exact missing-sidecar Apply owner remains parked for another turn.
     RecoveredDecisionApplyDeferred,
     /// The unchanged deferred Apply command re-entered its dedicated FIFO.
@@ -131,6 +139,10 @@ impl ProductionLifecycleCompletionSelectionV1 {
             | Self::RecoveredDecisionApplyRequeued
             | Self::RecoveredDecisionApplyApplied
             | Self::RecoveredDecisionApplyCompletionDeferred
+            | Self::LifecycleValidatePublished
+            | Self::LifecycleValidatePublicationRetry
+            | Self::LifecycleValidateDeferred
+            | Self::LifecycleValidateSidecarWoken
             | Self::CertifiedFetchBodyPersisted
             | Self::CertifiedFetchBodyPersistenceRetry
             | Self::CertifiedServeClaimedCompleted
@@ -817,6 +829,122 @@ fn dequeue_prepared_ordinary_ingress<'cursor>(
 }
 
 impl LaunchedProductionLifecycleV1 {
+    fn drive_registered_lifecycle_validate_sidecar(
+        &mut self,
+        registration: RegisteredLifecycleValidateSidecarWaitV1,
+        lane_work: &mut V2LaneWorkAdapter,
+    ) -> ProductionLifecycleCompletionSelectionV1 {
+        match registration.drive(&mut self.owner.coordinator, &self.owner.registry, lane_work) {
+            LifecycleValidateSidecarDriveV1::Waiting(registration) => {
+                assert!(self.pending_lifecycle_completion.is_none());
+                self.pending_lifecycle_completion = Some(
+                    PendingLifecycleCompletionV1::RegisteredDeferredValidate(registration),
+                );
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateDeferred
+            }
+            LifecycleValidateSidecarDriveV1::Woken => {
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateSidecarWoken
+            }
+            LifecycleValidateSidecarDriveV1::RestartRequired(error) => {
+                iroha_logger::error!(
+                    %error,
+                    "lifecycle Validate sidecar registration failed closed"
+                );
+                self.close_output_for_restart();
+                ProductionLifecycleCompletionSelectionV1::RestartRequired
+            }
+        }
+    }
+
+    fn register_and_drive_lifecycle_validate_sidecar(
+        &mut self,
+        completion: PreparedDeferredLifecycleValidateCompletionV1,
+        lane_work: &mut V2LaneWorkAdapter,
+    ) -> ProductionLifecycleCompletionSelectionV1 {
+        let registration = match RegisteredLifecycleValidateSidecarWaitV1::register_live(
+            &self.owner.coordinator,
+            &self.owner.registry,
+            completion,
+        ) {
+            Ok(registration) => registration,
+            Err((error, completion)) => {
+                iroha_logger::error!(
+                    %error,
+                    "lifecycle Validate sidecar registration could not cross its durable boundary"
+                );
+                drop(completion);
+                self.close_output_for_restart();
+                return ProductionLifecycleCompletionSelectionV1::RestartRequired;
+            }
+        };
+        self.drive_registered_lifecycle_validate_sidecar(registration, lane_work)
+    }
+
+    fn settle_parked_lifecycle_validate_completion(
+        &mut self,
+    ) -> ProductionLifecycleCompletionSelectionV1 {
+        let Self {
+            owner,
+            services,
+            pending_lifecycle_completion,
+            ..
+        } = self;
+        let Some(completion) =
+            PendingLifecycleCompletionV1::take_validate(pending_lifecycle_completion)
+        else {
+            services
+                .lifecycle_output_guard()
+                .close_admission_for_restart();
+            return ProductionLifecycleCompletionSelectionV1::RestartRequired;
+        };
+        let (dispatch, ack) = completion.into_publication_parts();
+        match owner.coordinator.complete_durable_validate_dispatch(
+            &mut owner.registry,
+            dispatch,
+        ) {
+            Ok(
+                crate::sumeragi::v2_lifecycle_coordinator::DurableValidateCompletionPublication::PublishedValidated(
+                    _,
+                )
+                | crate::sumeragi::v2_lifecycle_coordinator::DurableValidateCompletionPublication::PublishedRejected(
+                    _,
+                ),
+            ) => {
+                ack.acknowledge_after_publication();
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublished
+            }
+            Ok(
+                crate::sumeragi::v2_lifecycle_coordinator::DurableValidateCompletionPublication::DeferredMergeSidecar(
+                    deferred,
+                ),
+            ) => {
+                assert!(pending_lifecycle_completion.is_none());
+                *pending_lifecycle_completion = Some(
+                    PendingLifecycleCompletionV1::DeferredValidate(ack.bind_deferred(deferred)),
+                );
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidateDeferred
+            }
+            Err((error, dispatch)) => {
+                iroha_logger::debug!(
+                    ?error,
+                    "lifecycle Validate publication retained its exact guarded owner"
+                );
+                let Some(completion) =
+                    PreparedLifecycleValidateCompletionV1::from_publication_parts(dispatch, ack)
+                else {
+                    services
+                        .lifecycle_output_guard()
+                        .close_admission_for_restart();
+                    return ProductionLifecycleCompletionSelectionV1::RestartRequired;
+                };
+                assert!(pending_lifecycle_completion.is_none());
+                *pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::Validate(completion));
+                ProductionLifecycleCompletionSelectionV1::LifecycleValidatePublicationRetry
+            }
+        }
+    }
+
     fn settle_parked_certified_fetch_body_persistence(
         &mut self,
     ) -> ProductionLifecycleCompletionSelectionV1 {
@@ -932,6 +1060,17 @@ impl LaunchedProductionLifecycleV1 {
                         self.settle_parked_recovered_sign_completion(),
                     )
                 }
+                PendingLifecycleCompletionV1::Validate(completion) => {
+                    self.pending_lifecycle_completion =
+                        Some(PendingLifecycleCompletionV1::Validate(completion));
+                    self.settle_parked_lifecycle_validate_completion()
+                }
+                PendingLifecycleCompletionV1::DeferredValidate(deferred) => {
+                    self.register_and_drive_lifecycle_validate_sidecar(deferred, lane_work)
+                }
+                PendingLifecycleCompletionV1::RegisteredDeferredValidate(registration) => {
+                    self.drive_registered_lifecycle_validate_sidecar(registration, lane_work)
+                }
             };
             return ProductionLifecycleCompletionPreGateV1::Selected(selected);
         }
@@ -994,6 +1133,13 @@ impl LaunchedProductionLifecycleV1 {
                         selected,
                     ),
                 );
+            }
+            Ok(LifecycleCompletionTakeV1::Validate(completion)) => {
+                assert!(self.pending_lifecycle_completion.is_none());
+                self.pending_lifecycle_completion =
+                    Some(PendingLifecycleCompletionV1::Validate(completion));
+                let selected = self.settle_parked_lifecycle_validate_completion();
+                return ProductionLifecycleCompletionPreGateV1::Selected(selected);
             }
             Ok(LifecycleCompletionTakeV1::CertifiedServe(completion)) => {
                 let selected = match completion

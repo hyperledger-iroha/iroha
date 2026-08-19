@@ -769,9 +769,9 @@ fn durable_validate_volatile_completion_is_atomic_move_only_and_unwired() {
         .split("pub(super) fn complete_durable_validate_dispatch(")
         .nth(1)
         .expect("concrete admission has one completion entrypoint")
-        .split("/// Atomically admit and register one exact adapter effect.")
+        .split("/// Prepare one complete signed effect for mandatory replay-bound admission.")
         .next()
-        .expect("generic admission follows completion entrypoint");
+        .expect("prepared admission boundary follows completion entrypoint");
     for required in [
         "prepare_executed_durable_validate_completion(dispatch)",
         "waiting_durable_validate_record_is_exact",

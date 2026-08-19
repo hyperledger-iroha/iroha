@@ -1,5 +1,204 @@
 use crate::sumeragi::v2_lifecycle_coordinator::ProductionSchedulerInputsError;
 
+#[derive(Clone, Copy)]
+enum StandaloneValidateOriginFixture {
+    LocalBody,
+    RemoteProposal { valid_signature: bool },
+}
+
+#[allow(clippy::too_many_lines)]
+fn standalone_validate_record(
+    fixture: &RecoveryFixture,
+    store: &mut V2BodyStore,
+    view: u64,
+    marker: u8,
+    ordinal: u128,
+    origin: StandaloneValidateOriginFixture,
+) -> LifecycleLedgerRecordV1 {
+    use crate::sumeragi::{
+        v2::AdapterEffect,
+        v2_lifecycle_coordinator::work_registry::{
+            PreparedLocalBodyValidateReplayPreAdmission,
+            PreparedRemoteProposalFetchReplayPreAdmission,
+        },
+        v2_runtime::{
+            LocalProposalEffectOwnership, RuntimeEffectOwnership,
+            bind_adapter_effect_batch_ownership,
+        },
+    };
+
+    let context = fixture.verified.context();
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view,
+    };
+    let leader = context.leader(view);
+    let leader_index = usize::try_from(leader).expect("fixture leader fits usize");
+    let header = BlockHeader::new(
+        NonZeroU64::new(context.height).expect("fixture height is non-zero"),
+        None,
+        None,
+        None,
+        4_000 + u64::from(marker),
+        view,
+    );
+    let block_signature =
+        SignatureOf::try_from_hash(fixture.keys[leader_index].private_key(), header.hash())
+            .expect("sign standalone Validate block");
+    let block = SignedBlock::presigned(
+        BlockSignature::new(u64::from(leader), block_signature),
+        header,
+        Vec::new(),
+    );
+    let body = block
+        .encode_wire()
+        .expect("encode standalone Validate SignedBlockWire");
+    let subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: block.hash(),
+        payload_hash: Hash::new(&body),
+    };
+    let chunks = wire::encode_payload_chunks(context.da_layout, &body)
+        .expect("encode standalone Validate chunks");
+    let manifest = wire::PayloadManifest::derive(
+        context,
+        round,
+        subject,
+        u64::try_from(body.len()).expect("standalone body length fits u64"),
+        &chunks,
+    )
+    .expect("derive standalone Validate manifest");
+    let durable_receipt = store
+        .store(manifest.clone(), body)
+        .expect("fsync standalone Validate body");
+    let tag = EventTag::new(context.height, view, Generation::new(u64::from(marker)));
+    let store_effect = AdapterEffect::StoreBody {
+        tag,
+        round,
+        subject,
+    };
+    let validate_effect = AdapterEffect::ValidateBody {
+        tag,
+        round,
+        subject,
+    };
+    let prepared = match origin {
+        StandaloneValidateOriginFixture::LocalBody => {
+            let store_ownership = bind_adapter_effect_batch_ownership(
+                core::slice::from_ref(&store_effect),
+                vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
+            )
+            .expect("bind standalone local Store owner")
+            .pop()
+            .expect("one standalone local Store owner");
+            let local =
+                LocalProposalEffectOwnership::for_test(store_ownership, &store_effect, &manifest)
+                    .expect("seal standalone local Store replay");
+            let validate_ownership = local
+                .exact_store_task_ownership(&store_effect, &manifest)
+                .expect("project standalone local Store scheduling owner")
+                .rebind_as_inherited_adapter_effect(&validate_effect)
+                .expect("project standalone local Validate owner");
+            let replay = local
+                .project_exact_validate(
+                    &store_effect,
+                    &manifest,
+                    &durable_receipt,
+                    &validate_effect,
+                    &validate_ownership,
+                )
+                .unwrap_or_else(|_| panic!("project standalone local Validate replay"));
+            PreparedLocalBodyValidateReplayPreAdmission::seal_exact_validate(
+                validate_effect,
+                validate_ownership,
+                durable_receipt,
+                replay,
+            )
+            .unwrap_or_else(|_| panic!("seal standalone local Validate pre-admission"))
+            .prepare_lifecycle_admission(fixture.lifecycle_context(), &fixture.verified)
+            .unwrap_or_else(|_| panic!("prepare standalone local Validate admission"))
+        }
+        StandaloneValidateOriginFixture::RemoteProposal { valid_signature } => {
+            let mut proposal = wire::Proposal {
+                round,
+                proposer: leader,
+                subject,
+                manifest: manifest.clone(),
+                justification: wire::ProposalJustification::ParentCommit(
+                    wire::ParentCommitJustification { certificate: None },
+                ),
+                signature: Vec::new(),
+            };
+            proposal.signature = Signature::new(
+                fixture.keys[leader_index].private_key(),
+                &proposal.signature_preimage(),
+            )
+            .payload()
+            .to_vec();
+            if !valid_signature {
+                proposal.signature[0] ^= 1;
+            }
+            let fetch_effect = AdapterEffect::FetchBody {
+                tag,
+                round,
+                subject,
+                manifest: Some(manifest),
+                certified_sources: Vec::new(),
+                certificate: None,
+            };
+            let mut fetch_ownership = bind_adapter_effect_batch_ownership(
+                core::slice::from_ref(&fetch_effect),
+                vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
+            )
+            .expect("bind standalone remote Fetch owner")
+            .pop()
+            .expect("one standalone remote Fetch owner");
+            let store_ownership = fetch_ownership
+                .rebind_as_inherited_adapter_effect(&store_effect)
+                .expect("project standalone remote Store owner");
+            let validate_ownership = store_ownership
+                .rebind_as_inherited_adapter_effect(&validate_effect)
+                .expect("project standalone remote Validate owner");
+            assert!(
+                fetch_ownership
+                    .bind_authenticated_remote_proposal_replay_for_test(proposal, &fetch_effect,)
+            );
+            PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(
+                fetch_effect,
+                fetch_ownership,
+            )
+            .unwrap_or_else(|_| panic!("seal standalone remote Fetch pre-admission"))
+            .project_store(store_effect, store_ownership)
+            .unwrap_or_else(|_| panic!("project standalone remote Store pre-admission"))
+            .bind_durable_body(durable_receipt)
+            .unwrap_or_else(|_| panic!("bind standalone remote durable body"))
+            .project_validate(validate_effect, validate_ownership)
+            .unwrap_or_else(|_| panic!("project standalone remote Validate pre-admission"))
+            .prepare_lifecycle_admission(fixture.lifecycle_context(), &fixture.verified)
+            .unwrap_or_else(|_| panic!("prepare standalone remote Validate admission"))
+        }
+    };
+    let candidate = prepared.candidate().clone();
+    assert_eq!(candidate.work_class, LifecycleWorkClass::Validate);
+    assert_eq!(candidate.stage.kind(), LifecycleStageKind::ValidateBody);
+    assert_eq!(candidate.initial_state, InitialLifecycleState::Ready);
+    let owner = OwnerId::new(candidate.causal_root, ordinal);
+    LifecycleLedgerRecordV1::new(
+        candidate.key,
+        owner,
+        ordinal,
+        candidate.work_class,
+        candidate.stage,
+        None,
+        candidate.reconstruction_source,
+        candidate.payload,
+        candidate.replay_authority,
+        DurableContinuation::None,
+    )
+    .expect("construct standalone Validate LedgerV1 row")
+}
+
 #[test]
 fn complete_tip_terminal_apply_store_join_rejects_store_drift() {
     let fixture = RecoveryFixture::new("complete-tip-predecessor-drift", 0x49);
@@ -364,9 +563,209 @@ fn production_owner_cold_opens_exact_ready_validate_crash_boundary() {
     assert_eq!(owner.live_body_pipeline_counts_for_test(), (0, 0, 1));
     assert!(matches!(
         owner.plan_direct_registry_turn(),
-        Err(ProductionSchedulerInputsError::IoCapacityObservationRequired {
-            ordinal: 3
-        })
+        Err(ProductionSchedulerInputsError::IoCapacityObservationRequired { ordinal: 3 })
+    ));
+}
+
+fn assert_cold_opens_standalone_validate(
+    fixture: &RecoveryFixture,
+    body_store: V2BodyStore,
+    record: LifecycleLedgerRecordV1,
+) {
+    let expected_owner = record.owner();
+    let expected_ordinal = record.ordinal();
+    let expected_authority = record.replay_authority.clone();
+    let ledger = fixture.ledger(vec![record]);
+    let payload_directory = TempDir::new().expect("temporary standalone Validate payload store");
+    let (payload_store, payloads) =
+        fixture.open_empty_serve_payloads(&payload_directory, &body_store);
+    let ledger_directory = TempDir::new().expect("temporary standalone Validate ledger store");
+    let ledger_store = fixture.persist_ledger(&ledger_directory, &ledger);
+    let cut = ledger
+        .into_durable_certified_body_pipeline_storage_recovery_cut(
+            fixture.verified.clone(),
+            ledger_store,
+            body_store,
+        )
+        .expect("authenticate standalone Validate storage cut");
+    let mut owner = cut
+        .open_owner_for_test(payload_store, payloads)
+        .expect("cold-open standalone Validate lifecycle owner");
+    assert!(owner.exact_recovered_body_pipeline_join_for_test());
+    assert_eq!(owner.live_body_pipeline_counts_for_test(), (0, 0, 1));
+    let recovered = &owner.coordinator.records[&expected_ordinal];
+    let recovered_metadata = &owner.coordinator.durable_records[&expected_ordinal];
+    assert_eq!(recovered.owner, expected_owner);
+    assert_eq!(recovered.ordinal, expected_ordinal);
+    assert_eq!(recovered_metadata.replay_authority, expected_authority);
+    assert!(matches!(
+        owner.plan_direct_registry_turn(),
+        Err(ProductionSchedulerInputsError::IoCapacityObservationRequired { ordinal })
+            if ordinal == expected_ordinal
+    ));
+}
+
+#[test]
+fn production_owner_cold_opens_exact_standalone_local_body_validate() {
+    let fixture = RecoveryFixture::new("standalone-local-validate-cold-open", 0x51);
+    let body_directory = TempDir::new().expect("temporary standalone local Validate body store");
+    let mut body_store = fixture.open_store(&body_directory);
+    let record = standalone_validate_record(
+        &fixture,
+        &mut body_store,
+        0,
+        0x61,
+        7,
+        StandaloneValidateOriginFixture::LocalBody,
+    );
+    assert_cold_opens_standalone_validate(&fixture, body_store, record);
+}
+
+#[test]
+fn production_owner_cold_opens_exact_standalone_remote_proposal_validate() {
+    let fixture = RecoveryFixture::new("standalone-remote-validate-cold-open", 0x55);
+    let body_directory = TempDir::new().expect("temporary standalone remote Validate body store");
+    let mut body_store = fixture.open_store(&body_directory);
+    let record = standalone_validate_record(
+        &fixture,
+        &mut body_store,
+        0,
+        0x65,
+        9,
+        StandaloneValidateOriginFixture::RemoteProposal {
+            valid_signature: true,
+        },
+    );
+    assert_cold_opens_standalone_validate(&fixture, body_store, record);
+}
+
+#[test]
+fn standalone_validate_cold_census_rejects_a_foreign_body_store() {
+    let fixture = RecoveryFixture::new("standalone-validate-foreign-body", 0x59);
+    let canonical_directory = TempDir::new().expect("temporary canonical Validate body store");
+    let mut canonical_store = fixture.open_store(&canonical_directory);
+    let record = standalone_validate_record(
+        &fixture,
+        &mut canonical_store,
+        0,
+        0x69,
+        11,
+        StandaloneValidateOriginFixture::LocalBody,
+    );
+    let ledger = fixture.ledger(vec![record]);
+    let foreign_directory = TempDir::new().expect("temporary foreign Validate body store");
+    let foreign_store = fixture.open_store(&foreign_directory);
+    assert!(matches!(
+        ledger.authenticate_durable_certified_body_pipeline_census(
+            &fixture.verified,
+            &foreign_store,
+        ),
+        Err(DurableCertifiedBodyPipelineRecoveryError::BodyFrame(_))
+    ));
+}
+
+#[test]
+fn standalone_validate_cold_census_rejects_a_foreign_owner_root() {
+    let fixture = RecoveryFixture::new("standalone-validate-foreign-owner", 0x5D);
+    let body_directory = TempDir::new().expect("temporary foreign-owner Validate body store");
+    let mut body_store = fixture.open_store(&body_directory);
+    let record = standalone_validate_record(
+        &fixture,
+        &mut body_store,
+        0,
+        0x6D,
+        13,
+        StandaloneValidateOriginFixture::LocalBody,
+    );
+    let foreign_owner = OwnerId::new(record.owner().causal_root(), 12);
+    let foreign = LifecycleLedgerRecordV1::new(
+        record.key().expect("standalone Validate key"),
+        foreign_owner,
+        record.ordinal(),
+        record.work_class().expect("standalone Validate class"),
+        record.stage().expect("standalone Validate stage"),
+        record
+            .terminal()
+            .expect("standalone Validate terminal decode"),
+        foreign_owner.causal_root().digest(),
+        record
+            .durable_payload()
+            .expect("standalone Validate payload"),
+        record.replay_authority,
+        record
+            .continuation()
+            .expect("standalone Validate continuation"),
+    )
+    .expect("construct structurally valid foreign-owner Validate row");
+    let owner_root = unrelated_live_record(
+        fixture.lifecycle_context(),
+        foreign_owner,
+        foreign_owner.first_admission_ordinal(),
+        0x7D,
+    );
+    let ledger = fixture.ledger(vec![owner_root, foreign]);
+    assert!(matches!(
+        ledger.authenticate_durable_certified_body_pipeline_census(&fixture.verified, &body_store,),
+        Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow)
+    ));
+}
+
+#[test]
+fn standalone_validate_cold_census_rejects_an_unauthenticated_proposal() {
+    let fixture = RecoveryFixture::new("standalone-validate-invalid-proposal", 0x61);
+    let body_directory = TempDir::new().expect("temporary invalid-Proposal Validate body store");
+    let mut body_store = fixture.open_store(&body_directory);
+    let record = standalone_validate_record(
+        &fixture,
+        &mut body_store,
+        0,
+        0x71,
+        15,
+        StandaloneValidateOriginFixture::RemoteProposal {
+            valid_signature: false,
+        },
+    );
+    let ledger = fixture.ledger(vec![record]);
+    assert!(matches!(
+        ledger.authenticate_durable_certified_body_pipeline_census(&fixture.verified, &body_store,),
+        Err(DurableCertifiedBodyPipelineRecoveryError::InvalidReplayJoin)
+    ));
+}
+
+#[test]
+fn standalone_validate_cold_census_rejects_a_certified_origin() {
+    let fixture = RecoveryFixture::new("standalone-validate-certified-origin", 0x65);
+    let body_directory = TempDir::new().expect("temporary certified-origin Validate body store");
+    let mut body_store = fixture.open_store(&body_directory);
+    let fetch = fixture.fetch_record(&mut body_store, 0, 0x75, 1, None, false);
+    let seed = fixture.ledger(vec![fetch]);
+    let mut records = seed
+        .authenticate_durable_certified_body_pipeline_census(&fixture.verified, &body_store)
+        .expect("authenticate certified Fetch fixture")
+        .project_ready_validate_records_for_test(&fixture.verified)
+        .expect("project certified Validate fixture");
+    let validate = records.pop().expect("certified fixture has a Validate row");
+    let ordinal = validate.ordinal();
+    let standalone_owner = OwnerId::new(validate.owner().causal_root(), ordinal);
+    let standalone = LifecycleLedgerRecordV1::new(
+        validate.key().expect("certified Validate key"),
+        standalone_owner,
+        ordinal,
+        LifecycleWorkClass::Validate,
+        validate.stage().expect("certified Validate stage"),
+        None,
+        standalone_owner.causal_root().digest(),
+        validate
+            .durable_payload()
+            .expect("certified Validate body frame"),
+        validate.replay_authority,
+        DurableContinuation::None,
+    )
+    .expect("construct standalone certified-origin Validate row");
+    let ledger = fixture.ledger(vec![standalone]);
+    assert!(matches!(
+        ledger.authenticate_durable_certified_body_pipeline_census(&fixture.verified, &body_store,),
+        Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow)
     ));
 }
 
@@ -513,13 +912,14 @@ fn fresh_certified_serve_publishes_exact_ledger_beside_fetch_and_broadcast() {
     let pending = ownership
         .pending_adapter_effect_binding(&broadcast)
         .expect("mint unrelated live Broadcast binding");
+    let prepared = owner
+        .coordinator
+        .prepare_direct_signed_lifecycle_admission(&fixture.verified, broadcast, pending)
+        .expect("unrelated live Broadcast has mandatory replay authority");
     assert!(matches!(
-        owner.coordinator.admit_concrete_adapter_effect(
-            &mut owner.registry,
-            &fixture.verified,
-            broadcast,
-            pending,
-        ),
+        owner
+            .coordinator
+            .admit_prepared_lifecycle(&mut owner.registry, prepared),
         super::super::super::concrete_admission::AdapterEffectAdmissionTransaction::Admitted(
             super::super::super::AdmissionDecision::Admitted { ordinal: 2, .. }
         )

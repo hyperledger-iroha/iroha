@@ -58,6 +58,10 @@ mod schema;
 mod selector;
 #[path = "v2_lifecycle_settlement.rs"]
 mod settlement;
+/// Durable exact-owner registration for lifecycle Validate sidecar waits.
+#[path = "v2_lifecycle_validate_sidecar.rs"]
+#[cfg_attr(not(test), allow(dead_code))]
+mod validate_sidecar;
 /// Restart-only join from authenticated WAL replay into typed lifecycle work.
 #[path = "v2_lifecycle_wal_recovery.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -73,7 +77,8 @@ use authority::AuthenticatedEpisodeAuthority;
 pub(crate) use authority::RolloverSnapshot;
 use body_pipeline_transition::durable_validate_payload_is_exact;
 pub(in crate::sumeragi) use body_pipeline_transition::{
-    SealedInvalidBodyReportProjectionPermit, SealedValidateSignProjectionPermit,
+    SealedInvalidBodyReportProjectionPermit, SealedValidateApplyProjectionPermit,
+    SealedValidateSignProjectionPermit,
 };
 pub(crate) use concrete_admission::LifecycleWorkRegistryHolder;
 #[cfg(test)]
@@ -180,7 +185,8 @@ pub(in crate::sumeragi) use replay_authority::RecoveredDecisionApplyCandidateLin
 pub(super) use replay_authority::SealedLiveWalPersistedEffectV1;
 #[allow(unused_imports, reason = "reviewed replay-evidence namespace")]
 pub(in crate::sumeragi) use replay_authority::{
-    DurableCertifiedFetchPendingMintPermit, DurableValidateReplayEvidenceV1,
+    DurableCertifiedFetchPendingMintPermit, DurableStandaloneValidatePendingMintPermit,
+    DurableValidateReplayEvidenceV1,
     InvalidBodyReportReplayEvidenceV1, LocalBodyPreIntentReplaySealV1,
     LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
     LocalValidateReplayEvidenceV1, RecoveredDecisionApplyReplayLineageV1,
@@ -222,10 +228,10 @@ pub(crate) use schema::{
     AdmissionDecision, AdmissionRejection, AdmissionRequest, CandidateAdmission, CapacityClass,
     CausalRoot, CoordinatorFault, InitialLifecycleState, LeaseId, LifecycleContext,
     LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRecord, LifecycleRound, LifecycleStage,
-    LifecycleStageKind, LifecycleState, LifecycleWorkClass, OwnerId, PhysicalGeometry,
-    PhysicalReplacement, PhysicalSlot, PhysicalSlotId, PredecessorScope, ProducerTurnAdmission,
-    ReadyEvent, SchedulerEpisodeUniverse, SchedulerInputs, SchedulerRank, TerminalOutcome,
-    TurnLease, TurnOutcome, TurnPlan, WaitSource, WaitToken,
+    LifecycleStageKind, LifecycleState, LifecycleValidateDispatchKeyV1, LifecycleWorkClass,
+    OwnerId, PhysicalGeometry, PhysicalReplacement, PhysicalSlot, PhysicalSlotId, PredecessorScope,
+    ProducerTurnAdmission, ReadyEvent, SchedulerEpisodeUniverse, SchedulerInputs, SchedulerRank,
+    TerminalOutcome, TurnLease, TurnOutcome, TurnPlan, WaitSource, WaitToken,
 };
 use schema::{
     CapacityAdmissionWait, CapacityGeometry, DurablePayloadReference, DurableRecordMetadata,
@@ -254,6 +260,10 @@ pub(in crate::sumeragi) use selector::{
     RecoveredDecisionFetchBodyPersistencePreparationErrorV1,
     RecoveredDecisionFetchBodyPersistenceTaskV1, RecoveredDecisionFetchExactDequeueErrorV1,
 };
+pub(in crate::sumeragi) use validate_sidecar::{
+    LifecycleValidateSidecarDriveV1, LifecycleValidateSidecarRegistrationIdentityV1,
+    RegisteredLifecycleValidateSidecarWaitV1,
+};
 #[cfg_attr(
     not(test),
     allow(unused_imports, reason = "reviewed recovered-WAL projection namespace")
@@ -276,7 +286,8 @@ pub(in crate::sumeragi) use work_registry::RecoveredLifecycleSignClassV1;
 pub(in crate::sumeragi) use work_registry::{
     AttemptedProducerTurnV1, ClaimedProducerTurnV1, PreparedRecoveredDecisionApplyDispatch,
     PreparedRecoveredDecisionFetchDispatchV1, PreparedRecoveredLifecycleSignDispatch,
-    ReadyValidateSignPredecessorAuthority, RecoveredDecisionApplyCompletionProjectionPermit,
+    ReadyValidateApplyPredecessorAuthority, ReadyValidateSignPredecessorAuthority,
+    RecoveredDecisionApplyCompletionProjectionPermit,
     RecoveredDecisionApplyDispatchIdentityV1, RecoveredDecisionApplyDispatchKeyV1,
     RecoveredDecisionFetchDispatchIdentityV1, RecoveredDecisionFetchDispatchKeyV1,
     RecoveredLifecycleSignDispatchIdentityV1, RecoveredLifecycleSignDispatchKeyV1,
@@ -296,8 +307,13 @@ pub(crate) use work_registry::{
     RecoveredWalValidateRegistryCut, RecoveredWalValidateRegistryJoinError,
 };
 pub(in crate::sumeragi) use work_registry::{
-    LiveValidateSignRegistryReservation, LiveValidateSignWorkProjectionPermit,
-    PreparedLiveValidateSignRegistryWork,
+    DeferredDurableValidateDispatch, DurableValidateCompletionPublication, DurableValidateDispatch,
+    ExecutedDurableValidateDispatch, LiveValidateApplyRegistryReservation,
+    LiveValidateApplyWorkProjectionPermit, LiveValidateReportRegistryReservation,
+    LiveValidateReportWorkProjectionPermit, LiveValidateSignRegistryReservation,
+    LiveValidateSignWorkProjectionPermit, PreparedLiveValidateApplyRegistryWork,
+    PreparedLiveValidateReportRegistryWork, PreparedLiveValidateSignRegistryWork,
+    PreparedReadyDurableValidateAdapterPreview, ReadyDurableValidateAdapterPreviewError,
 };
 const MAX_PENDING_ADMISSION_WAITS: usize = 64;
 /// Sole allocator and writer of logical Sumeragi lifecycle state.
@@ -442,34 +458,6 @@ impl LifecycleCoordinator {
     /// Return the latched fail-closed condition, when present.
     pub(crate) const fn fault(&self) -> Option<CoordinatorFault> {
         self.fault
-    }
-    /// Project and admit one fixture-owned runtime-bound adapter effect.
-    ///
-    /// Production has no generic adapter admission surface: every live family
-    /// must enter through its sealed, typed owner transaction.
-    #[cfg(test)]
-    fn admit_bound_adapter_effect_for_test(
-        &mut self,
-        verified: &crate::sumeragi::v2::VerifiedHeightContext,
-        effect: &crate::sumeragi::v2::AdapterEffect,
-        ownership: &crate::sumeragi::v2_runtime::RuntimeEffectOwnership,
-    ) -> Result<AdmissionDecision, AdapterEffectAdmissionError> {
-        let pending = ownership
-            .pending_adapter_effect_binding(effect)
-            .ok_or(AdapterEffectAdmissionError::UnboundEffect)?;
-        self.admit_pending_adapter_effect_for_test(verified, effect, &pending)
-    }
-    /// Project and admit one fixture-owned ordinal-free adapter binding.
-    #[cfg(test)]
-    fn admit_pending_adapter_effect_for_test(
-        &mut self,
-        verified: &crate::sumeragi::v2::VerifiedHeightContext,
-        effect: &crate::sumeragi::v2::AdapterEffect,
-        pending: &crate::sumeragi::v2_runtime::PendingRuntimeEffectBinding,
-    ) -> Result<AdmissionDecision, AdapterEffectAdmissionError> {
-        let request =
-            projection::admission_request(self.active_context, verified, effect, pending)?;
-        Ok(self.admit(request))
     }
     /// Project and atomically admit one post-fsync authenticated Certified-Serve request.
     ///
@@ -1203,6 +1191,49 @@ impl LifecycleCoordinator {
         self.active_lease = None;
         self.capacity_generation
             .insert(expected_class, next_generation);
+        true
+    }
+    /// Release an unused rejected-Validate output overlay and park the same row
+    /// on its exact reducer-fence generation.
+    fn park_validate_on_reducer_fence(&mut self, lease: TurnLease, wait: WaitToken) -> bool {
+        if self.fault.is_some()
+            || self.active_lease.as_ref() != Some(&lease)
+            || lease.work_class() != LifecycleWorkClass::Validate
+            || wait.source() != projection::reducer_fence_wait_source(self.active_context)
+            || wait.observed_generation() == u64::MAX
+        {
+            return false;
+        }
+        let mut next = self.stage_durable_transaction();
+        let mut unreserved = lease;
+        if let Some(reservation) = unreserved.output_reservation() {
+            if reservation.class() != CapacityClass::Consensus
+                || reservation.wait_token().observed_generation()
+                    != next.capacity_generation[&CapacityClass::Consensus]
+            {
+                return false;
+            }
+            let Some(generation) =
+                next.capacity_generation[&CapacityClass::Consensus].checked_add(1)
+            else {
+                return false;
+            };
+            next.capacity_generation
+                .insert(CapacityClass::Consensus, generation);
+            unreserved.output_reservation = None;
+            next.active_lease = Some(unreserved.clone());
+        }
+        next.reduce_settle_turn(unreserved.clone(), TurnOutcome::Blocked(wait), None);
+        if next.fault.is_some()
+            || next.active_lease.is_some()
+            || next
+                .records
+                .get(&unreserved.ordinal())
+                .is_none_or(|record| record.state != LifecycleState::Waiting(wait))
+        {
+            return false;
+        }
+        *self = next;
         true
     }
     /// Rebuild records after seeding the ordinal high-water mark.

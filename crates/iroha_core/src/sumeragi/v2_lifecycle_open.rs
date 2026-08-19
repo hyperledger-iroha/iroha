@@ -51,11 +51,6 @@ enum RecoveredWalStartupProjectionV1<'authority> {
         &'authority AuthenticatedRecoveredWalSignProjection,
         &'authority super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
     ),
-    PhaseBroadcastAndSign(
-        &'authority AuthenticatedRecoveredWalSignProjection,
-        &'authority RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
-        &'authority RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
-    ),
     PhaseBroadcastAndNextSign(
         &'authority AuthenticatedRecoveredWalSignProjection,
         &'authority RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
@@ -440,38 +435,6 @@ impl AuthenticatedLifecycleRecoveryCut {
         )?;
         Ok((recovery, body_pipeline))
     }
-    /// Assemble an exact phase Prepare-Broadcast plus follow-on Commit Sign.
-    ///
-    /// The repaired Validate/Prepare lineage, frame-bound pair, and executable
-    /// two-child projection remain one exclusive startup class. Both live
-    /// children splice before the all-row census; unrelated durable carriers
-    /// are preserved and authenticated independently.
-    // TODO: Either wire this combined first-release projection from cold
-    // startup or retire it after proving the split next-Sign form exhaustive.
-    #[expect(
-        dead_code,
-        reason = "first-release cold startup currently emits the split next-Sign carrier; retain the combined recovery constructor until the TODO is resolved"
-    )]
-    #[allow(clippy::result_large_err)]
-    pub(super) fn assemble_storage_only_with_recovered_phase_broadcast_and_sign_and_body_pipeline_startup(
-        ledger: LifecycleLedgerV1,
-        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
-        body_store: &mut V2BodyStore,
-        projection: &AuthenticatedRecoveredWalSignProjection,
-        pair: &RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
-        combined: &RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
-        mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
-    ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
-    {
-        let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
-            ledger,
-            serve_payloads,
-            body_store,
-            RecoveredWalStartupProjectionV1::PhaseBroadcastAndSign(projection, pair, combined),
-            Some(&mut body_pipeline),
-        )?;
-        Ok((recovery, body_pipeline))
-    }
     /// Assemble the same phase pair after executable ownership has split into
     /// its two cold registry carriers.
     #[allow(clippy::result_large_err)]
@@ -802,28 +765,6 @@ impl AuthenticatedLifecycleRecoveryCut {
                 broadcast,
             )
     }
-    /// Revalidate both children of one frame-bound phase Prepare successor.
-    #[expect(
-        dead_code,
-        reason = "first-release cold startup currently emits the split next-Sign carrier; retain exact validation for the combined recovery shape until the TODO is resolved"
-    )]
-    pub(super) fn owns_recovered_phase_broadcast_and_sign(
-        &self,
-        projection: &AuthenticatedRecoveredWalSignProjection,
-        pair: &RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
-        combined: &RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
-    ) -> bool {
-        projection.belongs_to_context(self.context)
-            && pair.exactly_matches_ledger(&self.authenticated_ledger)
-            && recovered_phase_broadcast_and_sign_records(
-                &self.authenticated_ledger,
-                projection,
-                pair,
-                combined,
-            )
-            .is_some()
-            && combined.owns_spliced_candidates(&self.candidates)
-    }
     /// Revalidate the split phase Broadcast and next-Sign carriers.
     pub(super) fn owns_recovered_phase_broadcast_and_next_sign(
         &self,
@@ -854,30 +795,6 @@ impl AuthenticatedLifecycleRecoveryCut {
     ) -> bool {
         control.belongs_to_context(self.context)
             && broadcast.owns_spliced_candidate(&self.candidates)
-    }
-    /// Revalidate both children of one frame-bound control Proposal successor.
-    // TODO: Wire this combined control projection from cold startup or retire it
-    // after proving the split next-Sign form exhaustive.
-    #[expect(
-        dead_code,
-        reason = "the combined control Broadcast-and-Sign cold-start seam remains intentionally dormant"
-    )]
-    pub(super) fn owns_recovered_control_broadcast_and_sign(
-        &self,
-        control: &AuthenticatedRecoveredWalControlProjection,
-        pair: &RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
-        combined: &RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
-    ) -> bool {
-        control.belongs_to_context(self.context)
-            && pair.exactly_matches_ledger(&self.authenticated_ledger)
-            && recovered_control_broadcast_and_sign_records(
-                &self.authenticated_ledger,
-                control,
-                pair,
-                combined,
-            )
-            .is_some()
-            && combined.owns_spliced_candidates(&self.candidates)
     }
     /// Revalidate both already-split carriers of one control-owned durable pair.
     #[cfg_attr(not(test), allow(dead_code))]
@@ -3173,37 +3090,6 @@ fn recovered_control_broadcast_and_sign_records<'ledger>(
         && combined.exactly_matches_fresh_records(ledger.context(), broadcast, next_sign))
     .then_some([parent, broadcast, next_sign])
 }
-fn recovered_phase_broadcast_and_sign_records<'ledger>(
-    ledger: &'ledger LifecycleLedgerV1,
-    projection: &AuthenticatedRecoveredWalSignProjection,
-    pair: &RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
-    combined: &RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
-) -> Option<[&'ledger LifecycleLedgerRecordV1; 4]> {
-    let super::ledger::RecoveredLifecycleSignedBroadcastAndSignParentV1::PhasePrepare {
-        validate_ordinal,
-    } = pair.parent()
-    else {
-        return None;
-    };
-    if !projection.belongs_to_context(ledger.context()) || !pair.exactly_matches_ledger(ledger) {
-        return None;
-    }
-    let record_at = |ordinal| {
-        ledger
-            .records()
-            .binary_search_by_key(&ordinal, LifecycleLedgerRecordV1::ordinal)
-            .ok()
-            .and_then(|index| ledger.records().get(index))
-    };
-    let validate = record_at(validate_ordinal)?;
-    let parent = record_at(pair.parent_ordinal())?;
-    let broadcast = record_at(pair.broadcast_ordinal())?;
-    let next_sign = record_at(pair.next_sign_ordinal())?;
-    (validate.key() == Some(projection.parent_key())
-        && parent.key() == Some(projection.child_key())
-        && combined.exactly_matches_fresh_records(ledger.context(), broadcast, next_sign))
-    .then_some([validate, parent, broadcast, next_sign])
-}
 fn recovered_phase_broadcast_and_next_sign_records<'ledger>(
     ledger: &'ledger LifecycleLedgerV1,
     projection: &AuthenticatedRecoveredWalSignProjection,
@@ -3261,9 +3147,6 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
                     .candidate()
                     .replay_authority_is_exact(ledger.context())
         }
-        RecoveredWalStartupProjectionV1::PhaseBroadcastAndSign(projection, pair, combined) => {
-            recovered_phase_broadcast_and_sign_records(ledger, projection, pair, combined).is_some()
-        }
         RecoveredWalStartupProjectionV1::PhaseBroadcastAndNextSign(
             projection,
             pair,
@@ -3320,25 +3203,6 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
             ) {
                 return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
                     "recovered control Broadcast-and-Sign candidates could not splice atomically",
-                ));
-            }
-        }
-        RecoveredWalStartupProjectionV1::PhaseBroadcastAndSign(projection, pair, combined) => {
-            let Some([_validate, _parent, broadcast, next_sign]) =
-                recovered_phase_broadcast_and_sign_records(ledger, projection, pair, combined)
-            else {
-                return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
-                    "recovered phase Broadcast-and-Sign lost its exact durable pair",
-                ));
-            };
-            if !combined.splice_candidates_from_records(
-                ledger.context(),
-                broadcast,
-                next_sign,
-                &mut candidates,
-            ) {
-                return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
-                    "recovered phase Broadcast-and-Sign candidates could not splice atomically",
                 ));
             }
         }
@@ -3432,15 +3296,6 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
                             &mut candidates,
                         )
                     }
-                    RecoveredWalStartupProjectionV1::PhaseBroadcastAndSign(
-                        _projection,
-                        pair,
-                        combined,
-                    ) if record.ordinal() == pair.broadcast_ordinal()
-                        || record.ordinal() == pair.next_sign_ordinal() =>
-                    {
-                        combined.owns_spliced_candidates(&candidates)
-                    }
                     RecoveredWalStartupProjectionV1::PhaseBroadcastAndNextSign(
                         _projection,
                         pair,
@@ -3506,7 +3361,6 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
                     }
                     RecoveredWalStartupProjectionV1::PhaseVote(_)
                     | RecoveredWalStartupProjectionV1::PhaseBroadcast(_, _)
-                    | RecoveredWalStartupProjectionV1::PhaseBroadcastAndSign(_, _, _)
                     | RecoveredWalStartupProjectionV1::PhaseBroadcastAndNextSign(_, _, _, _)
                     | RecoveredWalStartupProjectionV1::ControlSign(_)
                     | RecoveredWalStartupProjectionV1::ControlBroadcast(_, _)
@@ -3566,16 +3420,6 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
             {
                 return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
                     "repaired frame lost its exact phase-vote Broadcast chain",
-                ));
-            }
-        }
-        RecoveredWalStartupProjectionV1::PhaseBroadcastAndSign(projection, pair, combined) => {
-            if recovered_phase_broadcast_and_sign_records(ledger, projection, pair, combined)
-                .is_none()
-                || !combined.owns_spliced_candidates(&candidates)
-            {
-                return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
-                    "repaired frame has no exact recovered phase Broadcast-and-Sign pair",
                 ));
             }
         }

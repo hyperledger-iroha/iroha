@@ -611,6 +611,11 @@ pub(in crate::sumeragi) enum ProductionRecoveredLifecycleSignedBroadcastRefanout
 pub(in crate::sumeragi) enum ProductionCompletionDispatchV1 {
     /// No physically available row was claimed; every Ready carrier remains unchanged.
     CapacityUnavailable,
+    /// The selected lifecycle Validate now owns one exact durable worker command.
+    ValidateQueued {
+        /// Exact selected lifecycle ordinal.
+        ordinal: u128,
+    },
     /// The selected recovered Apply now owns one dedicated worker command.
     ApplyQueued {
         /// Exact selected lifecycle ordinal.
@@ -637,6 +642,11 @@ pub(in crate::sumeragi) enum ProductionCompletionDispatchV1 {
     /// One ordinary body parent is parked on the adapter reducer fence.
     ReducerFenceWait {
         /// Exact waiting parent ordinal.
+        ordinal: u128,
+    },
+    /// One Validate completion durably advanced without creating a child.
+    ValidateNoSuccessor {
+        /// Exact terminalized Validate ordinal.
         ordinal: u128,
     },
 }
@@ -683,6 +693,7 @@ pub(crate) enum ProductionCompletionReadyWorkV1 {
     Invalid,
 }
 enum AuthenticatedRecoveredCompletionReadyV1 {
+    Validate(AttestedReadyValidateDemand),
     Apply(super::work_registry::ReadyRecoveredDecisionApplyAttestation),
     Sign(super::work_registry::ReadyRecoveredLifecycleSignAttestationV1),
     Fetch(super::work_registry::ReadyRecoveredDecisionFetchAttestationV1),
@@ -716,16 +727,11 @@ fn classify_completion_ready_classes(
     {
         return ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast;
     }
-    if classes
-        .iter()
-        .any(|class| *class == LifecycleWorkClass::Validate)
-    {
-        return ProductionCompletionReadyWorkV1::PassThrough;
-    }
     if classes.iter().all(|class| {
         matches!(
             class,
-            LifecycleWorkClass::Apply
+            LifecycleWorkClass::Validate
+                | LifecycleWorkClass::Apply
                 | LifecycleWorkClass::SignVote
                 | LifecycleWorkClass::SignProposal
                 | LifecycleWorkClass::SignTimeout
@@ -736,14 +742,14 @@ fn classify_completion_ready_classes(
         return ProductionCompletionReadyWorkV1::CompletionIo;
     }
     match classes[0] {
-        LifecycleWorkClass::Apply
+        LifecycleWorkClass::Validate
+        | LifecycleWorkClass::Apply
         | LifecycleWorkClass::SignVote
         | LifecycleWorkClass::SignProposal
         | LifecycleWorkClass::SignTimeout
         | LifecycleWorkClass::Fetch
         | LifecycleWorkClass::Store => ProductionCompletionReadyWorkV1::CompletionIo,
-        LifecycleWorkClass::Validate
-        | LifecycleWorkClass::Broadcast
+        LifecycleWorkClass::Broadcast
         | LifecycleWorkClass::EnterView
         | LifecycleWorkClass::EquivocationReport
         | LifecycleWorkClass::InvalidBodyReport
@@ -1187,6 +1193,177 @@ impl ProductionLifecycleOwnerV1 {
         let inputs = direct_registry_scheduler_inputs(&self.coordinator, &self.registry)?;
         Ok(self.coordinator.plan_turn(inputs))
     }
+    fn publish_ready_validate_outcome(
+        &mut self,
+        executor: &mut V2EffectExecutor<SerializedV2Runtime>,
+        lease: super::TurnLease,
+    ) -> Result<ProductionCompletionDispatchV1, ProductionCompletionDispatchErrorV1> {
+        let ordinal = lease.ordinal();
+        let Some((&slot, _)) = lease.physical_slots().first_key_value() else {
+            return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+        };
+        let execution = match self
+            .registry
+            .registry_mut()
+            .prepare_ready_durable_validate_execution(&lease, slot, &self.verified)
+        {
+            Ok(execution) => execution,
+            Err(_) => {
+                self.rollback_ready_validate_publication(&lease);
+                return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+            }
+        };
+        let preview = match executor.prepare_ready_durable_validate_adapter_preview(execution) {
+            Ok(preview) => preview,
+            Err(error) => {
+                drop(error);
+                self.rollback_ready_validate_publication(&lease);
+                return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+            }
+        };
+        use crate::sumeragi::v2::ReadyDurableValidateAdapterPublicationKind as Kind;
+        match preview.publication_kind() {
+            Kind::ValidatedBusy | Kind::RejectedBusy => {
+                let Some((context_id, generation)) = preview.busy_reducer_fence() else {
+                    drop(preview);
+                    self.rollback_ready_validate_publication(&lease);
+                    return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                };
+                if context_id != self.verified.context().id() {
+                    drop(preview);
+                    self.rollback_ready_validate_publication(&lease);
+                    return Err(ProductionCompletionDispatchErrorV1::InvalidCarrier);
+                }
+                drop(preview);
+                let source =
+                    super::projection::reducer_fence_wait_source(self.coordinator.active_context);
+                let wait = super::WaitToken::new(source, generation);
+                if !self.coordinator.park_validate_on_reducer_fence(lease, wait) {
+                    return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
+                }
+                Ok(ProductionCompletionDispatchV1::ReducerFenceWait { ordinal })
+            }
+            Kind::ValidatedInactive
+            | Kind::ValidatedNoEffect
+            | Kind::RejectedInactive
+            | Kind::RejectedNoEffect => {
+                let transition = match self
+                    .coordinator
+                    .prepare_sealed_validate_no_successor_transition(&lease, preview)
+                {
+                    Ok(transition) => transition,
+                    Err(error) => {
+                        drop(error);
+                        self.rollback_ready_validate_publication(&lease);
+                        return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                    }
+                };
+                if transition.persist_and_publish().is_err() {
+                    return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                }
+                Ok(ProductionCompletionDispatchV1::ValidateNoSuccessor { ordinal })
+            }
+            Kind::ValidatedPersist => {
+                let publication = match preview.seal_live_wal_validate_sign() {
+                    Ok(publication) => publication,
+                    Err(error) => {
+                        drop(error);
+                        self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                        return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                    }
+                };
+                let transition = match self.coordinator.prepare_sealed_validate_sign_transition(
+                    &lease,
+                    &self.verified,
+                    publication,
+                ) {
+                    Ok(transition) => transition,
+                    Err(error) => {
+                        drop(error);
+                        self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                        return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                    }
+                };
+                if transition.persist_and_publish().is_err() {
+                    return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                }
+                Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
+                    parent_ordinal: ordinal,
+                    child: LifecycleWorkClass::SignVote,
+                })
+            }
+            Kind::RejectedReport => {
+                let report = match preview.seal_invalid_body_report_replay() {
+                    Ok(report) => report,
+                    Err(error) => {
+                        drop(error);
+                        self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                        return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                    }
+                };
+                let transition = match self.coordinator.prepare_sealed_validate_report_transition(
+                    &lease,
+                    &self.verified,
+                    report,
+                ) {
+                    Ok(transition) => transition,
+                    Err(error) => {
+                        drop(error);
+                        self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                        return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                    }
+                };
+                if transition.persist_and_publish().is_err() {
+                    return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                }
+                Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
+                    parent_ordinal: ordinal,
+                    child: LifecycleWorkClass::InvalidBodyReport,
+                })
+            }
+            Kind::ValidatedApply => {
+                let publication = match preview.seal_live_wal_validate_apply() {
+                    Ok(publication) => publication,
+                    Err(error) => {
+                        drop(error);
+                        self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                        return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                    }
+                };
+                let transition = match self.coordinator.prepare_sealed_validate_apply_transition(
+                    &lease,
+                    &self.verified,
+                    publication,
+                ) {
+                    Ok(transition) => transition,
+                    Err(error) => {
+                        drop(error);
+                        self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                        return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                    }
+                };
+                if transition.persist_and_publish().is_err() {
+                    return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                }
+                Ok(ProductionCompletionDispatchV1::BodyStageAdvanced {
+                    parent_ordinal: ordinal,
+                    child: LifecycleWorkClass::Apply,
+                })
+            }
+        }
+    }
+    fn rollback_ready_validate_publication(&mut self, lease: &super::TurnLease) {
+        let rolled_back = if lease.output_reservation().is_some() {
+            self.coordinator
+                .rollback_unpublished_reserved_turn(lease, CapacityClass::Consensus)
+        } else {
+            self.coordinator.rollback_unpublished_turn(lease)
+        };
+        assert!(
+            rolled_back,
+            "unpublished Ready Validate claim must roll back exactly once"
+        );
+    }
     fn publish_certified_fetch_store(
         &mut self,
         services: &ProductionV2Services,
@@ -1460,6 +1637,7 @@ impl ProductionLifecycleOwnerV1 {
         }
         let mut authenticated = BTreeMap::new();
         let mut classes = BTreeMap::new();
+        let mut validate_io = BTreeSet::new();
         let mut probes = Vec::with_capacity(exact_ready.len());
         for ordinal in &exact_ready {
             let record = self
@@ -1468,6 +1646,25 @@ impl ProductionLifecycleOwnerV1 {
                 .get(ordinal)
                 .ok_or(ProductionCompletionDispatchErrorV1::InvalidReadyCensus)?;
             let (ready, probe) = match record.work_class {
+                LifecycleWorkClass::Validate => {
+                    let attestation = self
+                        .coordinator
+                        .attest_ready_validate_demand(&self.registry, *ordinal)
+                        .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                    let probe = attestation.requires_io_dispatch().then_some(
+                        RecoveredCompletionCapacityProbeV1::Validate {
+                            ordinal: *ordinal,
+                            key: attestation.dispatch_key(),
+                        },
+                    );
+                    if attestation.requires_io_dispatch() {
+                        validate_io.insert(*ordinal);
+                    }
+                    (
+                        AuthenticatedRecoveredCompletionReadyV1::Validate(attestation),
+                        probe,
+                    )
+                }
                 LifecycleWorkClass::Apply => {
                     let attestation = self
                         .registry
@@ -1574,8 +1771,7 @@ impl ProductionLifecycleOwnerV1 {
                         None,
                     )
                 }
-                LifecycleWorkClass::Validate
-                | LifecycleWorkClass::Broadcast
+                LifecycleWorkClass::Broadcast
                 | LifecycleWorkClass::EnterView
                 | LifecycleWorkClass::EquivocationReport
                 | LifecycleWorkClass::InvalidBodyReport
@@ -1615,10 +1811,15 @@ impl ProductionLifecycleOwnerV1 {
                 .records
                 .get(&ordinal)
                 .ok_or(ProductionCompletionDispatchErrorV1::InvalidReadyCensus)?;
-            let (physical_available, predecessor_debt) = if matches!(
+            let direct_physical = matches!(
                 &ready,
                 AuthenticatedRecoveredCompletionReadyV1::CertifiedBody(_)
-            ) {
+            ) || matches!(
+                &ready,
+                AuthenticatedRecoveredCompletionReadyV1::Validate(attestation)
+                    if !attestation.requires_io_dispatch()
+            );
+            let (physical_available, predecessor_debt) = if direct_physical {
                 (true, 0)
             } else {
                 census
@@ -1628,6 +1829,18 @@ impl ProductionLifecycleOwnerV1 {
             };
             let live_debts = [mode.debt(), predecessor_debt, 0, 0, 0, runner_debt];
             let row = match ready {
+                AuthenticatedRecoveredCompletionReadyV1::Validate(attestation) => {
+                    authenticated_ready_row_with_physical_capacity(
+                        &factory,
+                        record,
+                        Some(attestation),
+                        None,
+                        None,
+                        None,
+                        physical_available,
+                        live_debts,
+                    )
+                }
                 AuthenticatedRecoveredCompletionReadyV1::Apply(attestation) => {
                     authenticated_ready_row_with_physical_capacity(
                         &factory,
@@ -1704,6 +1917,27 @@ impl ProductionLifecycleOwnerV1 {
             return Err(ProductionCompletionDispatchErrorV1::UnexpectedPlan);
         }
         match expected_class {
+            LifecycleWorkClass::Validate => {
+                if !validate_io.contains(&ordinal) {
+                    if let Some(census) = census {
+                        census.complete_without_selection();
+                    }
+                    return self.publish_ready_validate_outcome(executor, lease);
+                }
+                let census = census.ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
+                let reservation = census
+                    .select_validate(ordinal)
+                    .map_err(|_| ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch)?;
+                let dispatch = self
+                    .coordinator
+                    .begin_durable_validate_dispatch(&mut self.registry, lease, &self.verified)
+                    .map_err(|_| ProductionCompletionDispatchErrorV1::DispatchProjection)?;
+                if !reservation.preflight(&dispatch) {
+                    return Err(ProductionCompletionDispatchErrorV1::ReservedOwnerMismatch);
+                }
+                reservation.commit(dispatch);
+                Ok(ProductionCompletionDispatchV1::ValidateQueued { ordinal })
+            }
             LifecycleWorkClass::Apply => {
                 let census = census.ok_or(ProductionCompletionDispatchErrorV1::InvalidCarrier)?;
                 let reservation = census
@@ -1842,8 +2076,7 @@ impl ProductionLifecycleOwnerV1 {
                 }
                 self.publish_durable_store_validate(services, executor, lease)
             }
-            LifecycleWorkClass::Validate
-            | LifecycleWorkClass::Broadcast
+            LifecycleWorkClass::Broadcast
             | LifecycleWorkClass::EnterView
             | LifecycleWorkClass::EquivocationReport
             | LifecycleWorkClass::InvalidBodyReport

@@ -1,7 +1,7 @@
 use super::super::{
     AdmissionDecision, AdmissionRejection, AuthenticatedLifecycleRecoveryCut, LifecycleCoordinator,
-    LifecycleState, RetryAction, RolloverSnapshot, SchedulerInputs, SchedulerReadyInputs, TurnPlan,
-    WaitSource,
+    LifecycleState, LifecycleWorkRegistryHolder, RetryAction, RolloverSnapshot, SchedulerInputs,
+    SchedulerReadyInputs, TurnPlan, WaitSource,
     schema::{CapacityClass, CapacityGeometry},
 };
 use super::*;
@@ -374,6 +374,19 @@ fn candidate(
         &pending,
     )
     .expect("project exact bound adapter coordinates")
+}
+fn prepare_direct_signed(
+    fixture: &Fixture,
+    coordinator: &LifecycleCoordinator,
+    effect: &AdapterEffect,
+    ownership: &RuntimeEffectOwnership,
+) -> super::super::work_registry::PreparedLifecycleAdmissionV1 {
+    let pending = ownership
+        .pending_adapter_effect_binding(effect)
+        .expect("mint exact direct-signed pending owner");
+    coordinator
+        .prepare_direct_signed_lifecycle_admission(&fixture.verified, effect.clone(), pending)
+        .expect("direct-signed fixture retains its canonical replay authority")
 }
 fn certified_validate_candidate(
     fixture: &Fixture,
@@ -2024,22 +2037,33 @@ fn every_adapter_effect_class_and_specialized_phase_projects_ready_one_slot_work
             assert_eq!(projected.key.execution_commitment(), None);
         }
         let mut coordinator = fixture.coordinator();
-        let decision =
-            coordinator.admit_bound_adapter_effect_for_test(&fixture.verified, &effect, &ownership);
         if matches!(
             work_class,
             LifecycleWorkClass::Broadcast | LifecycleWorkClass::EquivocationReport
         ) {
+            let prepared = prepare_direct_signed(&fixture, &coordinator, &effect, &ownership);
+            let mut registry = LifecycleWorkRegistryHolder::empty();
             assert!(matches!(
-                decision,
-                Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+                coordinator.admit_prepared_lifecycle(&mut registry, prepared),
+                super::super::concrete_admission::AdapterEffectAdmissionTransaction::Admitted(
+                    AdmissionDecision::Admitted { ordinal: 1, .. }
+                )
             ));
         } else {
-            assert_eq!(
-                decision,
-                Err(AdapterEffectAdmissionError::UnsupportedReplayAuthority),
-                "authority-free coordinates cannot bypass their sealed replay owner"
-            );
+            let pending = ownership
+                .pending_adapter_effect_binding(&effect)
+                .expect("mint exact unsupported pending owner");
+            assert!(matches!(
+                coordinator.prepare_direct_signed_lifecycle_admission(
+                    &fixture.verified,
+                    effect,
+                    pending,
+                ),
+                Err(
+                    super::super::work_registry::PreparedLifecycleAdmissionErrorV1::Binding(_)
+                )
+            ));
+            assert!(coordinator.records.is_empty());
         }
     }
 }
@@ -2106,21 +2130,21 @@ fn certified_store_and_validate_inherit_authority_but_require_receipt_bound_stag
         expected_commitment
     );
     assert_eq!(store_candidate.causal_root, validate_candidate.causal_root);
-    let mut coordinator = fixture.coordinator();
-    assert_eq!(
-        coordinator.admit_bound_adapter_effect_for_test(&fixture.verified, &store, &store_owner),
-        Err(AdapterEffectAdmissionError::UnsupportedReplayAuthority),
-        "Fetch-to-Store admission requires the receipt-bound body transition"
-    );
-    assert_eq!(
-        coordinator.admit_bound_adapter_effect_for_test(
-            &fixture.verified,
-            &validate,
-            &validate_owner,
-        ),
-        Err(AdapterEffectAdmissionError::UnsupportedReplayAuthority),
-        "Store-to-Validate admission requires the receipt-bound body transition"
-    );
+    let coordinator = fixture.coordinator();
+    for (effect, ownership) in [(&store, &store_owner), (&validate, &validate_owner)] {
+        let pending = ownership
+            .pending_adapter_effect_binding(effect)
+            .expect("mint exact receipt-bound pending owner");
+        assert!(matches!(
+            coordinator.prepare_direct_signed_lifecycle_admission(
+                &fixture.verified,
+                effect.clone(),
+                pending,
+            ),
+            Err(super::super::work_registry::PreparedLifecycleAdmissionErrorV1::Binding(_))
+        ));
+    }
+    assert!(coordinator.records.is_empty());
 }
 #[test]
 fn recovery_cut_consumes_exact_terminal_validate_body_outcome() {
@@ -2290,26 +2314,36 @@ fn coordinator_method_enforces_zero_to_one_retry_and_foreign_owner_rejection() {
     .pop()
     .expect("one foreign projection owner");
     let mut coordinator = fixture.coordinator();
+    let mut registry = LifecycleWorkRegistryHolder::empty();
+    let prepared = prepare_direct_signed(&fixture, &coordinator, &effect, &exact);
     assert!(matches!(
-        coordinator.admit_bound_adapter_effect_for_test(&fixture.verified, &effect, &exact),
-        Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+        coordinator.admit_prepared_lifecycle(&mut registry, prepared),
+        super::super::concrete_admission::AdapterEffectAdmissionTransaction::Admitted(
+            AdmissionDecision::Admitted { ordinal: 1, .. }
+        )
     ));
     assert_eq!(coordinator.records.len(), 1, "0 -> 1 owner admission");
+    let prepared = prepare_direct_signed(&fixture, &coordinator, &effect, &exact);
     assert!(matches!(
-        coordinator.admit_bound_adapter_effect_for_test(&fixture.verified, &effect, &exact),
-        Ok(AdmissionDecision::Retry {
-            ordinal: 1,
-            action: RetryAction::RefanoutEnvelope,
+        coordinator.admit_prepared_lifecycle(&mut registry, prepared),
+        super::super::concrete_admission::AdapterEffectAdmissionTransaction::Returned {
+            decision: AdmissionDecision::Retry {
+                ordinal: 1,
+                action: RetryAction::RefanoutEnvelope,
+                ..
+            },
             ..
-        })
+        }
     ));
     assert_eq!(coordinator.records.len(), 1, "same-owner retry is 1 -> 1");
-    assert_eq!(
-        coordinator.admit_bound_adapter_effect_for_test(&fixture.verified, &effect, &foreign),
-        Ok(AdmissionDecision::Rejected(
-            AdmissionRejection::ForeignOwner
-        ))
-    );
+    let prepared = prepare_direct_signed(&fixture, &coordinator, &effect, &foreign);
+    assert!(matches!(
+        coordinator.admit_prepared_lifecycle(&mut registry, prepared),
+        super::super::concrete_admission::AdapterEffectAdmissionTransaction::Returned {
+            decision: AdmissionDecision::Rejected(AdmissionRejection::ForeignOwner),
+            ..
+        }
+    ));
     assert_eq!(coordinator.records.len(), 1);
 }
 #[test]
@@ -2319,23 +2353,28 @@ fn unbound_and_foreign_context_effects_fail_before_admission() {
         wire::ConsensusMessageV2Payload::Vote(fixture.prepare_vote.clone()),
     ));
     let unbound = RuntimeEffectOwnership::fresh_for_test(fixture.tag, 40);
-    let mut coordinator = fixture.coordinator();
-    assert_eq!(
-        coordinator.admit_bound_adapter_effect_for_test(&fixture.verified, &effect, &unbound),
-        Err(AdapterEffectAdmissionError::UnboundEffect)
-    );
+    let coordinator = fixture.coordinator();
+    assert!(unbound.pending_adapter_effect_binding(&effect).is_none());
     assert!(coordinator.records.is_empty());
     let ownership = bound_ownership(&effect, fixture.tag, 41);
+    let pending = ownership
+        .pending_adapter_effect_binding(&effect)
+        .expect("mint exact foreign-context pending owner");
     let foreign_context = LifecycleContext::new(LifecycleDigest::new([0xFF; 32]), 1);
-    let mut foreign = LifecycleCoordinator::new(
+    let foreign = LifecycleCoordinator::new(
         foreign_context,
         0,
         CapacityGeometry::new(CapacityClass::ALL.map(|class| (class, 64))),
     );
-    assert_eq!(
-        foreign.admit_bound_adapter_effect_for_test(&fixture.verified, &effect, &ownership),
-        Err(AdapterEffectAdmissionError::ForeignContext)
-    );
+    assert!(matches!(
+        foreign.prepare_direct_signed_lifecycle_admission(&fixture.verified, effect, pending),
+        Err(
+            super::super::work_registry::PreparedLifecycleAdmissionErrorV1::Projection {
+                failure: AdapterEffectAdmissionError::ForeignContext,
+                ..
+            }
+        )
+    ));
     assert!(foreign.records.is_empty());
 }
 #[test]
@@ -2429,11 +2468,23 @@ fn all_eight_auxiliary_broadcast_payloads_are_explicitly_rejected() {
     for (ordinal, payload) in (60_u128..).zip(payloads) {
         let effect = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(payload));
         let ownership = bound_ownership(&effect, fixture.tag, ordinal);
-        let mut coordinator = fixture.coordinator();
-        assert_eq!(
-            coordinator.admit_bound_adapter_effect_for_test(&fixture.verified, &effect, &ownership),
-            Err(AdapterEffectAdmissionError::UnsupportedBroadcastPayload)
-        );
+        let coordinator = fixture.coordinator();
+        let pending = ownership
+            .pending_adapter_effect_binding(&effect)
+            .expect("mint exact auxiliary broadcast pending owner");
+        assert!(matches!(
+            coordinator.prepare_direct_signed_lifecycle_admission(
+                &fixture.verified,
+                effect,
+                pending,
+            ),
+            Err(
+                super::super::work_registry::PreparedLifecycleAdmissionErrorV1::Projection {
+                    failure: AdapterEffectAdmissionError::UnsupportedBroadcastPayload,
+                    ..
+                }
+            )
+        ));
         assert!(coordinator.records.is_empty());
     }
 }
@@ -2525,13 +2576,39 @@ fn bound_but_drifted_carriers_fail_closed_without_records() {
         protocol_version: wire::PROTOCOL_VERSION + 1,
         payload: wire::ConsensusMessageV2Payload::Vote(fixture.prepare_vote.clone()),
     });
-    for (ordinal, effect) in (90_u128..).zip([pre_signed, invalid_body, foreign_protocol]) {
+    for (ordinal, effect) in (90_u128..).zip([pre_signed, invalid_body]) {
         let ownership = bound_ownership(&effect, fixture.tag, ordinal);
-        let mut coordinator = fixture.coordinator();
-        assert_eq!(
-            coordinator.admit_bound_adapter_effect_for_test(&fixture.verified, &effect, &ownership),
-            Err(AdapterEffectAdmissionError::InvalidCarrier)
-        );
+        let coordinator = fixture.coordinator();
+        let pending = ownership
+            .pending_adapter_effect_binding(&effect)
+            .expect("mint exact unsupported drifted pending owner");
+        assert!(matches!(
+            coordinator.prepare_direct_signed_lifecycle_admission(
+                &fixture.verified,
+                effect,
+                pending,
+            ),
+            Err(super::super::work_registry::PreparedLifecycleAdmissionErrorV1::Binding(_))
+        ));
         assert!(coordinator.records.is_empty());
     }
+    let ownership = bound_ownership(&foreign_protocol, fixture.tag, 92);
+    let coordinator = fixture.coordinator();
+    let pending = ownership
+        .pending_adapter_effect_binding(&foreign_protocol)
+        .expect("mint exact foreign-protocol pending owner");
+    assert!(matches!(
+        coordinator.prepare_direct_signed_lifecycle_admission(
+            &fixture.verified,
+            foreign_protocol,
+            pending,
+        ),
+        Err(
+            super::super::work_registry::PreparedLifecycleAdmissionErrorV1::Projection {
+                failure: AdapterEffectAdmissionError::InvalidCarrier,
+                ..
+            }
+        )
+    ));
+    assert!(coordinator.records.is_empty());
 }

@@ -6,11 +6,12 @@
 //! source against the verified height context and its owning durable store.
 use super::ledger::{
     DurableCertifiedBodyPipelineLedgerCensusPermit, DurableCertifiedFetchLedgerJoinPermit,
-    LifecycleLedgerRecordV1,
+    DurableStandaloneValidateLedgerJoinPermit, LifecycleLedgerRecordV1,
 };
 use super::{
     body_pipeline_transition::{
-        SealedInvalidBodyReportProjectionPermit, SealedValidateSignProjectionPermit,
+        SealedInvalidBodyReportProjectionPermit, SealedValidateApplyProjectionPermit,
+        SealedValidateSignProjectionPermit,
     },
     projection::{
         AdapterEffectAdmissionError, AuthenticatedDurableBodyFrameRecovery,
@@ -27,9 +28,11 @@ use super::{
     },
     selector::CertifiedFetchCompletionAuthority,
     work_registry::{
-        CertifiedFetchCompletion, ConcreteLifecycleWorkRegistry, DurableStoreBody,
-        DurableValidateBody, InstalledBodyCandidateProjectionPermit,
-        LiveValidateSignWorkProjectionPermit, PreparedLiveValidateSignRegistryWork,
+        BoundAdapterEffectV1, CertifiedFetchCompletion, ConcreteLifecycleWorkRegistry,
+        DurableStoreBody, DurableValidateBody, InstalledBodyCandidateProjectionPermit,
+        LiveValidateApplyWorkProjectionPermit, LiveValidateReportWorkProjectionPermit,
+        LiveValidateSignWorkProjectionPermit, PreparedLiveValidateApplyRegistryWork,
+        PreparedLiveValidateReportRegistryWork, PreparedLiveValidateSignRegistryWork,
         SealedBodySuccessorProjectionPermit,
     },
 };
@@ -78,6 +81,45 @@ pub(in crate::sumeragi) struct LifecycleReplayAuthorityV1 {
     source: LifecycleReplaySourceV1,
 }
 impl LifecycleReplayAuthorityV1 {
+    /// Return whether this canonical authority originated in a live WAL frame.
+    pub(super) fn is_live_wal_origin(&self) -> bool {
+        matches!(&self.source, LifecycleReplaySourceV1::Wal(_))
+    }
+    /// Return whether this canonical authority originated in a locally assembled body.
+    pub(super) fn is_local_body_origin(&self) -> bool {
+        matches!(
+            &self.source,
+            LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
+                origin: BodyPipelineOriginV1::LocalBody(_),
+                ..
+            })
+        )
+    }
+    /// Return whether this canonical authority originated in an authenticated Proposal.
+    pub(super) fn is_remote_proposal_origin(&self) -> bool {
+        matches!(
+            &self.source,
+            LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
+                origin: BodyPipelineOriginV1::Proposal(_),
+                ..
+            })
+        )
+    }
+    /// Return whether this canonical authority is one deterministic invalid-body report.
+    pub(super) fn is_invalid_body_report_origin(&self) -> bool {
+        matches!(
+            &self.source,
+            LifecycleReplaySourceV1::InvalidCertifiedBody(_)
+        )
+    }
+    /// Return whether the complete signed envelope itself is the replay source.
+    pub(super) fn is_direct_signed_origin(&self) -> bool {
+        matches!(
+            &self.source,
+            LifecycleReplaySourceV1::ConsensusBroadcast(_)
+                | LifecycleReplaySourceV1::Equivocation(_)
+        )
+    }
     /// Compare one terminal recovered-Decision Apply replay envelope with the
     /// exact full Kura finality artifact retained by CompleteTip recovery.
     ///
@@ -150,6 +192,55 @@ impl LifecycleReplayAuthorityV1 {
                     _ => unreachable!("BodyFrame payload checked above"),
                 })
         .then_some(CertifiedFetchReplayEvidenceV1 { family })
+    }
+    /// Recover only a standalone local-body or signed-Proposal Validate source.
+    fn recover_durable_standalone_validate(
+        &self,
+        active_context: LifecycleContext,
+        key: LifecycleKey,
+        stage: LifecycleStage,
+        payload: DurablePayloadReference,
+    ) -> Option<RecoveredStandaloneValidateSourceV1> {
+        if stage
+            != LifecycleStage::new(
+                LifecycleStageKind::ValidateBody,
+                PredecessorScope::Independent,
+            )
+            || !matches!(payload, DurablePayloadReference::BodyFrame(_))
+            || self
+                .validate_record(
+                    active_context,
+                    key,
+                    LifecycleWorkClass::Validate,
+                    stage,
+                    payload,
+                )
+                .is_err()
+        {
+            return None;
+        }
+        let (
+            LifecycleReplaySourceV1::BodyPipeline(source),
+            ReplayPayloadBindingV1::BodyFrame(body_frame),
+        ) = (&self.source, &self.payload)
+        else {
+            return None;
+        };
+        if !matches!(
+            &source.origin,
+            BodyPipelineOriginV1::LocalBody(_) | BodyPipelineOriginV1::Proposal(_)
+        ) || body_frame.durable_reference()
+            != match payload {
+                DurablePayloadReference::BodyFrame(reference) => reference,
+                _ => unreachable!("BodyFrame payload checked above"),
+            }
+        {
+            return None;
+        }
+        Some(RecoveredStandaloneValidateSourceV1 {
+            source: source.clone(),
+            body_frame: *body_frame,
+        })
     }
     /// Decode exactly one bounded canonical V1 envelope.
     fn decode_canonical(encoded: &[u8]) -> Result<Self, ReplayAuthorityCodecError> {
@@ -2112,510 +2203,7 @@ fn recovered_next_wal_vote_candidate_shape_is_exact(
             .keys()
             .all(|slot| slot.capacity_class() == Some(super::schema::CapacityClass::Effect))
 }
-/// Non-decodable live authority for one exact fsynced WAL continuation.
-///
-/// Payload-free stages retain their complete canonical V1 envelope. `Apply`
-/// deliberately remains a source-only seal until the closed Validate registry
-/// join supplies its store-authenticated body frame. Neither state exposes a
-/// locator, action, encoded source, or parts API.
-#[derive(PartialEq, Eq)]
-#[must_use = "a live WAL replay seal must remain joined to its persisted continuation"]
-struct LiveWalPersistedReplaySealV1 {
-    wal_identity: LiveWalFrameIdentity,
-    state: LiveWalPersistedReplayStateV1,
-}
-#[derive(PartialEq, Eq)]
-enum LiveWalPersistedReplayStateV1 {
-    Canonical {
-        stage: LifecycleStageKind,
-        authority: LifecycleReplayAuthorityV1,
-    },
-    ApplyPending {
-        context: LifecycleContext,
-        source: WalReplaySourceV1,
-    },
-}
-/// Exact live WAL continuation kept inseparable from its adapter effect.
-///
-/// This move-only envelope is the linear transport returned by the adapter's
-/// future persisted-continuation cut. It exposes only fixed pending-binding
-/// and receipt-bound equality joins; neither the effect nor its replay seal
-/// can be extracted.
-#[must_use = "a sealed live WAL effect has not entered lifecycle pre-admission"]
-pub(in crate::sumeragi) struct SealedLiveWalPersistedEffectV1 {
-    effect: AdapterEffect,
-    replay: LiveWalPersistedReplaySealV1,
-    pending: LiveWalPersistedPendingV1,
-}
-#[derive(PartialEq, Eq)]
-enum LiveWalPersistedPendingV1 {
-    PayloadFree(PendingRuntimeEffectBinding),
-    ValidateSignBound(PendingRuntimeEffectBinding),
-    ApplyPending,
-    ApplyBound(PendingRuntimeEffectBinding),
-}
-impl SealedLiveWalPersistedEffectV1 {
-    /// Consume the adapter's one record-checked live continuation cause.
-    pub(in crate::sumeragi) fn from_exact_live_append(
-        cause: ExactLiveWalPersistedContinuationCause,
-    ) -> Option<Self> {
-        let (wal_identity, effect, pending) = match cause {
-            ExactLiveWalPersistedContinuationCause::PayloadFree {
-                wal_identity,
-                effect,
-                pending,
-            } => (
-                wal_identity,
-                effect,
-                LiveWalPersistedPendingV1::PayloadFree(pending),
-            ),
-            ExactLiveWalPersistedContinuationCause::Apply {
-                wal_identity,
-                effect,
-            } => (
-                wal_identity,
-                effect,
-                LiveWalPersistedPendingV1::ApplyPending,
-            ),
-        };
-        let replay =
-            LiveWalPersistedReplaySealV1::from_exact_persisted_effect(wal_identity, &effect)?;
-        let sealed = Self {
-            effect,
-            replay,
-            pending,
-        };
-        sealed.exactly_matches_effect().then_some(sealed)
-    }
-    /// Replace the frame-derived placeholder owner of one exact vote-sign
-    /// continuation with the predecessor-derived binding sealed by the Ready
-    /// Validate adapter preflight.
-    ///
-    /// The caller cannot provide a WAL identity or effect. Failure returns both
-    /// move-only inputs intact; success keeps the bound pending value nested in
-    /// this replay envelope.
-    #[allow(clippy::result_large_err)]
-    pub(in crate::sumeragi) fn bind_exact_validate_sign_pending(
-        self,
-        pending: PendingRuntimeEffectBinding,
-    ) -> Result<Self, (Self, PendingRuntimeEffectBinding)> {
-        if !matches!(&self.pending, LiveWalPersistedPendingV1::PayloadFree(_))
-            || !matches!(
-                &self.effect,
-                AdapterEffect::Sign {
-                    request: SignRequest::Vote(vote),
-                    ..
-                } if matches!(vote.phase, wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit)
-            )
-            || !pending.exactly_binds_adapter_effect(&self.effect)
-            || !self
-                .replay
-                .exactly_matches_payload_free_effect(&self.effect)
-        {
-            return Err((self, pending));
-        }
-        let Self { effect, replay, .. } = self;
-        Ok(Self {
-            effect,
-            replay,
-            pending: LiveWalPersistedPendingV1::ValidateSignBound(pending),
-        })
-    }
-    /// Recheck the sealed post-append Validate-to-Sign binding without
-    /// releasing its effect or pending owner.
-    pub(in crate::sumeragi) fn exactly_binds_validate_sign_pending(&self) -> bool {
-        matches!(
-            &self.pending,
-            LiveWalPersistedPendingV1::ValidateSignBound(pending)
-                if pending.exactly_binds_adapter_effect(&self.effect)
-        ) && matches!(
-            &self.effect,
-            AdapterEffect::Sign {
-                request: SignRequest::Vote(vote),
-                ..
-            } if matches!(vote.phase, wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit)
-        ) && self
-            .replay
-            .exactly_matches_payload_free_effect(&self.effect)
-    }
-    /// Project the exact replay-authorized Sign child without releasing its
-    /// nested effect or predecessor-derived pending owner.
-    ///
-    /// Only the body-transition module can mint `permit`. In particular this
-    /// path does not repeat ordinary-to-Commit refinement after the opaque
-    /// registered-Prepare capability was consumed before WAL append.
-    pub(in crate::sumeragi) fn project_sealed_validate_sign_candidate(
-        &self,
-        _permit: &SealedValidateSignProjectionPermit,
-        verified: &VerifiedHeightContext,
-    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
-        if !self.exactly_binds_validate_sign_pending() {
-            return Err(AdapterEffectAdmissionError::InvalidCarrier);
-        }
-        let LiveWalPersistedPendingV1::ValidateSignBound(pending) = &self.pending else {
-            return Err(AdapterEffectAdmissionError::InvalidCarrier);
-        };
-        let LiveWalPersistedReplayStateV1::Canonical { authority, stage } = &self.replay.state
-        else {
-            return Err(AdapterEffectAdmissionError::InvalidCarrier);
-        };
-        if !matches!(
-            stage,
-            LifecycleStageKind::SignPrepareVote | LifecycleStageKind::SignCommitVote
-        ) {
-            return Err(AdapterEffectAdmissionError::InvalidCarrier);
-        }
-        let active_context = super::projection::lifecycle_context(verified.context());
-        let projected = super::projection::authority_free_admission_projection(
-            active_context,
-            verified,
-            &self.effect,
-            pending,
-        )?;
-        candidate_from_authorized_projection(
-            active_context,
-            projected,
-            DurablePayloadReference::None,
-            authority.clone(),
-        )
-        .ok_or(AdapterEffectAdmissionError::InvalidCarrier)
-    }
-    /// Consume the exact nested Validate-to-Sign continuation into one closed
-    /// ordinary registry carrier.
-    ///
-    /// The caller receives neither effect nor pending parts. The one-shot
-    /// permit is minted only after the fixed transaction has staged the exact
-    /// child and is ready to reserve its concrete address.
-    #[allow(clippy::result_large_err)]
-    pub(in crate::sumeragi) fn into_live_validate_sign_work(
-        self,
-        permit: LiveValidateSignWorkProjectionPermit,
-    ) -> Result<PreparedLiveValidateSignRegistryWork, Self> {
-        if !self.exactly_binds_validate_sign_pending() {
-            return Err(self);
-        }
-        let Self {
-            effect,
-            replay,
-            pending,
-        } = self;
-        let LiveWalPersistedPendingV1::ValidateSignBound(pending) = pending else {
-            unreachable!("exact live Validate-to-Sign seal retains its bound pending owner")
-        };
-        let LiveWalPersistedReplayStateV1::Canonical {
-            authority: replay_authority,
-            ..
-        } = &replay.state
-        else {
-            unreachable!("exact live Validate-to-Sign seal retains canonical WAL authority")
-        };
-        match PreparedLiveValidateSignRegistryWork::from_exact(
-            permit,
-            effect,
-            pending,
-            replay_authority.clone(),
-        ) {
-            Ok(work) => Ok(work),
-            Err((_error, effect, pending)) => Err(Self {
-                effect,
-                replay,
-                pending: LiveWalPersistedPendingV1::ValidateSignBound(pending),
-            }),
-        }
-    }
-    /// Compare the complete test effect and expected inherited causal key
-    /// without releasing either sealed value.
-    #[cfg(test)]
-    pub(in crate::sumeragi) fn exactly_matches_validate_sign_for_test(
-        &self,
-        effect: &AdapterEffect,
-        causal_key: &iroha_crypto::Hash,
-    ) -> bool {
-        self.effect == *effect
-            && matches!(
-                &self.pending,
-                LiveWalPersistedPendingV1::ValidateSignBound(pending)
-                    if pending.causal_lifecycle_key() == causal_key
-            )
-            && self.exactly_binds_validate_sign_pending()
-    }
-    /// Complete `Apply` only from the exact retained Validate causal owner.
-    ///
-    /// TODO: Co-locate this seal with the work-registry join before production
-    /// admission so the sibling-visible receipt seam can become private. The
-    /// source guard pins its sole production caller in the retained Validate
-    /// completion until then.
-    #[allow(clippy::result_large_err)]
-    pub(super) fn complete_exact_apply(
-        self,
-        predecessor_effect: &AdapterEffect,
-        predecessor_pending: &PendingRuntimeEffectBinding,
-        child_pending: PendingRuntimeEffectBinding,
-        receipt: &DurableBodyReceipt,
-    ) -> Result<Self, (Self, PendingRuntimeEffectBinding)> {
-        if !matches!(&self.pending, LiveWalPersistedPendingV1::ApplyPending)
-            || !predecessor_pending
-                .project_validate_apply_successor(predecessor_effect, &self.effect)
-                .is_some_and(|expected| expected == child_pending)
-        {
-            return Err((self, child_pending));
-        }
-        let Self {
-            effect,
-            replay,
-            pending: LiveWalPersistedPendingV1::ApplyPending,
-        } = self
-        else {
-            unreachable!("preflight admitted only the pending Apply state")
-        };
-        match replay.complete_exact_apply(&effect, receipt) {
-            Ok(replay) => Ok(Self {
-                effect,
-                replay,
-                pending: LiveWalPersistedPendingV1::ApplyBound(child_pending),
-            }),
-            Err(replay) => Err((
-                Self {
-                    effect,
-                    replay,
-                    pending: LiveWalPersistedPendingV1::ApplyPending,
-                },
-                child_pending,
-            )),
-        }
-    }
-    /// Bind completed `Apply` evidence to its exact retained Validate predecessor.
-    pub(super) fn exactly_binds_validated_apply_successor(
-        &self,
-        predecessor_effect: &AdapterEffect,
-        predecessor_pending: &PendingRuntimeEffectBinding,
-        receipt: &DurableBodyReceipt,
-    ) -> bool {
-        matches!(
-            &self.pending,
-            LiveWalPersistedPendingV1::ApplyBound(child_pending)
-                if predecessor_pending
-                    .project_validate_apply_successor(predecessor_effect, &self.effect)
-                    .is_some_and(|expected| &expected == child_pending)
-        ) && self
-            .replay
-            .exactly_matches_apply_effect(&self.effect, receipt)
-    }
-    fn exactly_matches_effect(&self) -> bool {
-        match &self.pending {
-            LiveWalPersistedPendingV1::PayloadFree(pending) => {
-                pending.exactly_binds_adapter_effect(&self.effect)
-                    && self
-                        .replay
-                        .exactly_matches_payload_free_effect(&self.effect)
-            }
-            LiveWalPersistedPendingV1::ValidateSignBound(pending) => {
-                pending.exactly_binds_adapter_effect(&self.effect)
-                    && self
-                        .replay
-                        .exactly_matches_payload_free_effect(&self.effect)
-            }
-            LiveWalPersistedPendingV1::ApplyPending => {
-                self.replay.exactly_matches_persisted_effect(&self.effect)
-            }
-            LiveWalPersistedPendingV1::ApplyBound(_) => false,
-        }
-    }
-    #[cfg(test)]
-    /// Compare this sealed continuation with one exact test effect.
-    pub(in crate::sumeragi) fn exactly_matches_effect_for_test(
-        &self,
-        effect: &AdapterEffect,
-    ) -> bool {
-        self.effect == *effect && self.exactly_matches_effect()
-    }
-}
-impl LiveWalPersistedReplaySealV1 {
-    /// Seal one exact effect released by an acknowledged live WAL append.
-    ///
-    /// This mint accepts the complete opaque runtime identity, never locator
-    /// scalars. Its only production caller is the adapter's closed persisted-
-    /// continuation conversion after matching the exact reducer WAL record.
-    fn from_exact_persisted_effect(
-        wal_identity: LiveWalFrameIdentity,
-        effect: &AdapterEffect,
-    ) -> Option<Self> {
-        let LiveWalReplayProjectionV1 {
-            context,
-            stage,
-            source,
-        } = exact_live_wal_replay_projection(&wal_identity, effect)?;
-        let state = if stage == LifecycleStageKind::ApplyDecision {
-            canonical_wal_source(&source)
-                .then_some(LiveWalPersistedReplayStateV1::ApplyPending { context, source })?
-        } else {
-            let authority = canonical_replay_authority(
-                context,
-                LifecycleReplaySourceV1::Wal(source),
-                stage,
-                ReplayPayloadBindingV1::None,
-            )?;
-            LiveWalPersistedReplayStateV1::Canonical { stage, authority }
-        };
-        let seal = Self {
-            wal_identity,
-            state,
-        };
-        seal.exactly_matches_persisted_effect(effect)
-            .then_some(seal)
-    }
-    /// Recheck the exact locator, action, tag, and payload-free V1 envelope.
-    fn exactly_matches_payload_free_effect(&self, effect: &AdapterEffect) -> bool {
-        matches!(
-            &self.state,
-            LiveWalPersistedReplayStateV1::Canonical { stage, .. }
-                if *stage != LifecycleStageKind::ApplyDecision
-        ) && self.exactly_matches_persisted_effect(effect)
-    }
-    /// Complete only an exact pending `Apply` source with one durable body frame.
-    ///
-    /// The work registry calls this through its closed validated-completion
-    /// join; no public constructor accepts a receipt or body-frame parts.
-    #[allow(clippy::result_large_err)]
-    fn complete_exact_apply(
-        self,
-        effect: &AdapterEffect,
-        receipt: &DurableBodyReceipt,
-    ) -> Result<Self, Self> {
-        let Self {
-            wal_identity,
-            state,
-        } = self;
-        let (context, source) = match state {
-            LiveWalPersistedReplayStateV1::ApplyPending { context, source } => (context, source),
-            other => {
-                return Err(Self {
-                    wal_identity,
-                    state: other,
-                });
-            }
-        };
-        let Some(frame) = durable_body_frame_reference(context, receipt) else {
-            return Err(Self {
-                wal_identity,
-                state: LiveWalPersistedReplayStateV1::ApplyPending { context, source },
-            });
-        };
-        let payload =
-            ReplayPayloadBindingV1::from_payload(DurablePayloadReference::BodyFrame(frame));
-        let Some(authority) = canonical_replay_authority(
-            context,
-            LifecycleReplaySourceV1::Wal(source.clone()),
-            LifecycleStageKind::ApplyDecision,
-            payload,
-        ) else {
-            return Err(Self {
-                wal_identity,
-                state: LiveWalPersistedReplayStateV1::ApplyPending { context, source },
-            });
-        };
-        let completed = Self {
-            wal_identity,
-            state: LiveWalPersistedReplayStateV1::Canonical {
-                stage: LifecycleStageKind::ApplyDecision,
-                authority,
-            },
-        };
-        if completed.exactly_matches_apply_effect(effect, receipt) {
-            Ok(completed)
-        } else {
-            let Self { wal_identity, .. } = completed;
-            Err(Self {
-                wal_identity,
-                state: LiveWalPersistedReplayStateV1::ApplyPending { context, source },
-            })
-        }
-    }
-    /// Recheck the exact live WAL source and receipt-bound `Apply` envelope.
-    fn exactly_matches_apply_effect(
-        &self,
-        effect: &AdapterEffect,
-        receipt: &DurableBodyReceipt,
-    ) -> bool {
-        if !matches!(
-            &self.state,
-            LiveWalPersistedReplayStateV1::Canonical {
-                stage: LifecycleStageKind::ApplyDecision,
-                ..
-            }
-        ) {
-            return false;
-        }
-        let Some(LiveWalReplayProjectionV1 {
-            context,
-            stage: LifecycleStageKind::ApplyDecision,
-            source,
-        }) = exact_live_wal_replay_projection(&self.wal_identity, effect)
-        else {
-            return false;
-        };
-        let Some(frame) = durable_body_frame_reference(context, receipt) else {
-            return false;
-        };
-        let payload =
-            ReplayPayloadBindingV1::from_payload(DurablePayloadReference::BodyFrame(frame));
-        let Some(expected) = canonical_replay_authority(
-            context,
-            LifecycleReplaySourceV1::Wal(source),
-            LifecycleStageKind::ApplyDecision,
-            payload,
-        ) else {
-            return false;
-        };
-        matches!(
-            &self.state,
-            LiveWalPersistedReplayStateV1::Canonical {
-                stage: LifecycleStageKind::ApplyDecision,
-                authority,
-            } if authority == &expected
-        )
-    }
-    fn exactly_matches_persisted_effect(&self, effect: &AdapterEffect) -> bool {
-        let Some(LiveWalReplayProjectionV1 {
-            context,
-            stage,
-            source,
-        }) = exact_live_wal_replay_projection(&self.wal_identity, effect)
-        else {
-            return false;
-        };
-        match &self.state {
-            LiveWalPersistedReplayStateV1::Canonical {
-                stage: retained_stage,
-                authority,
-            } => {
-                *retained_stage == stage
-                    && stage != LifecycleStageKind::ApplyDecision
-                    && canonical_replay_authority(
-                        context,
-                        LifecycleReplaySourceV1::Wal(source),
-                        stage,
-                        ReplayPayloadBindingV1::None,
-                    )
-                    .is_some_and(|expected| &expected == authority)
-            }
-            LiveWalPersistedReplayStateV1::ApplyPending {
-                context: retained_context,
-                source: retained_source,
-            } => {
-                stage == LifecycleStageKind::ApplyDecision
-                    && *retained_context == context
-                    && retained_source == &source
-                    && canonical_wal_source(retained_source)
-            }
-        }
-    }
-}
-struct LiveWalReplayProjectionV1 {
-    context: LifecycleContext,
-    stage: LifecycleStageKind,
-    source: WalReplaySourceV1,
-}
+include!("v2_lifecycle_replay_authority_live_wal.rs");
 /// Canonical inert replay evidence for one exact signed broadcast effect.
 ///
 /// The complete message remains inside the private canonical envelope. The
@@ -3728,11 +3316,11 @@ pub(in crate::sumeragi) struct LocalBodyPreIntentReplaySealV1 {
     store_pending: PendingRuntimeEffectBinding,
 }
 /// Canonical inert Validate evidence inherited only from the exact local Store owner.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 #[must_use = "local Validate replay evidence must remain attached through completion"]
 pub(in crate::sumeragi) struct LocalValidateReplayEvidenceV1 {
     family: LocalBodyPipelineReplayFamilyV1,
-    validate_pending: PendingRuntimeEffectBinding,
+    validate_pending: Arc<PendingRuntimeEffectBinding>,
 }
 /// Inert replay evidence retained beside one exact queued `LocalProposalReady` owner.
 ///
@@ -3743,7 +3331,7 @@ pub(in crate::sumeragi) struct LocalValidateReplayEvidenceV1 {
 #[must_use = "local proposal replay evidence must remain beside its exact runtime handoff"]
 pub(in crate::sumeragi) struct LocalProposalReadyReplayEvidenceV1 {
     family: LocalBodyPipelineReplayFamilyV1,
-    validate_pending: PendingRuntimeEffectBinding,
+    validate_pending: Arc<PendingRuntimeEffectBinding>,
     validated_receipt: ValidatedBodyReceipt,
     command_identity: LocalProposalReadyCommandIdentity,
 }
@@ -3759,7 +3347,7 @@ pub(in crate::sumeragi) struct LocalProposalIntentReplayEvidenceV1 {
     effect: AdapterEffect,
     pending: PendingRuntimeEffectBinding,
 }
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct LocalBodyPipelineReplayFamilyV1 {
     source: BodyPipelineReplaySourceV1,
     body_frame: BodyFrameBindingV1,
@@ -3886,7 +3474,7 @@ impl LocalBodyPreIntentReplaySealV1 {
         debug_assert_eq!(&projected, validate_pending);
         Ok(LocalValidateReplayEvidenceV1 {
             family,
-            validate_pending: projected,
+            validate_pending: Arc::new(projected),
         })
     }
 }
@@ -3905,6 +3493,24 @@ impl LocalValidateReplayEvidenceV1 {
                 LifecycleStageKind::ValidateBody,
             )
     }
+    /// Compare this canonical family with the exact pending owner retained by
+    /// a durable lifecycle Validate carrier.
+    pub(in crate::sumeragi) fn exactly_matches_validate_pending(
+        &self,
+        effect: &AdapterEffect,
+        receipt: &DurableBodyReceipt,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        self.exactly_matches_validate(effect, receipt) && self.validate_pending.as_ref() == pending
+    }
+    /// Revalidate the closed local family against its retained durable frame.
+    pub(super) fn exactly_matches_durable_body(&self, receipt: &DurableBodyReceipt) -> bool {
+        exact_local_body_pipeline_family(&self.family.source, receipt)
+            .is_some_and(|expected| expected == self.family)
+            && self
+                .family
+                .is_exact_for_stage(LifecycleStageKind::ValidateBody)
+    }
     /// Compare one installed Validate task without exposing its pending owner.
     pub(in crate::sumeragi) fn exactly_matches_validate_task(
         &self,
@@ -3914,7 +3520,7 @@ impl LocalValidateReplayEvidenceV1 {
     ) -> bool {
         self.exactly_matches_validate(effect, receipt)
             && ownership.pending_adapter_effect_binding(effect).as_ref()
-                == Some(&self.validate_pending)
+                == Some(self.validate_pending.as_ref())
     }
     /// Consume successful validation into an exact local-proposal handoff.
     #[allow(clippy::result_large_err)]
@@ -4251,11 +3857,18 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredD
     fetch_replay: CertifiedBodyPipelineColdReplayStepV1,
     store_replay: CertifiedBodyPipelineColdReplayStepV1,
 }
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredDurableStandaloneValidateV1
+{
+    candidate: CandidateAdmission,
+    carrier: DurableValidateBody,
+    replay_steps: Vec<CertifiedBodyPipelineColdReplayStepV1>,
+}
 pub(in crate::sumeragi::v2_lifecycle_coordinator) enum AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1
 {
     Fetch(AuthenticatedRecoveredDurableCertifiedFetchV1),
     Store(AuthenticatedRecoveredDurableCertifiedStoreV1),
     Validate(AuthenticatedRecoveredDurableCertifiedValidateV1),
+    StandaloneValidate(AuthenticatedRecoveredDurableStandaloneValidateV1),
 }
 /// Aggregate opaque recovery cut for every live ordinary certified-body row.
 ///
@@ -4374,6 +3987,22 @@ impl AuthenticatedRecoveredDurableCertifiedValidateV1 {
             && self.fetch_replay.ordinal() < self.store_replay.ordinal()
     }
 }
+impl AuthenticatedRecoveredDurableStandaloneValidateV1 {
+    fn is_exact(&self) -> bool {
+        recovered_body_startup_candidate_is_exact(
+            &self.candidate,
+            self.carrier.address(),
+            self.carrier.ready_digest(),
+            LifecycleWorkClass::Validate,
+            LifecycleStageKind::ValidateBody,
+        ) && self.carrier.validates(self.carrier.ready_digest())
+            && matches!(self.replay_steps.as_slice(), [_] | [_, _])
+            && self
+                .replay_steps
+                .iter()
+                .all(|step| step.ordinal() == self.carrier.address().ordinal)
+    }
+}
 fn recovered_body_startup_candidate_is_exact(
     candidate: &CandidateAdmission,
     address: super::work_registry::ConcreteWorkAddress,
@@ -4404,6 +4033,7 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1 {
             Self::Fetch(entry) => &entry.candidate,
             Self::Store(entry) => &entry.candidate,
             Self::Validate(entry) => &entry.candidate,
+            Self::StandaloneValidate(entry) => &entry.candidate,
         }
     }
     fn address(&self) -> super::work_registry::ConcreteWorkAddress {
@@ -4411,6 +4041,7 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1 {
             Self::Fetch(entry) => entry.completion.address(),
             Self::Store(entry) => entry.carrier.address(),
             Self::Validate(entry) => entry.carrier.address(),
+            Self::StandaloneValidate(entry) => entry.carrier.address(),
         }
     }
     fn digest(&self) -> Option<LifecycleDigest> {
@@ -4418,6 +4049,7 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1 {
             Self::Fetch(entry) => entry.completion.ready_digest(),
             Self::Store(entry) => Some(entry.carrier.ready_digest()),
             Self::Validate(entry) => Some(entry.carrier.ready_digest()),
+            Self::StandaloneValidate(entry) => Some(entry.carrier.ready_digest()),
         }
     }
     fn is_exact(&self) -> bool {
@@ -4425,6 +4057,7 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1 {
             Self::Fetch(entry) => entry.is_exact(),
             Self::Store(entry) => entry.is_exact(),
             Self::Validate(entry) => entry.is_exact(),
+            Self::StandaloneValidate(entry) => entry.is_exact(),
         }
     }
     fn into_prepared(
@@ -4446,6 +4079,13 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1 {
             Self::Validate(entry) => {
                 replay_steps.push(entry.fetch_replay);
                 replay_steps.push(entry.store_replay);
+                PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
+                    candidate: Some(entry.candidate),
+                    work: PreparedDurableCertifiedBodyPipelineWorkV1::Validate(entry.carrier),
+                }
+            }
+            Self::StandaloneValidate(entry) => {
+                replay_steps.extend(entry.replay_steps);
                 PreparedDurableCertifiedBodyPipelineStartupEntryV1 {
                     candidate: Some(entry.candidate),
                     work: PreparedDurableCertifiedBodyPipelineWorkV1::Validate(entry.carrier),
@@ -4545,10 +4185,10 @@ impl AuthenticatedRecoveredDurableCertifiedBodyPipelineCensusV1 {
             .into_iter()
             .map(|entry| entry.into_prepared(&mut replay_steps))
             .collect();
-        replay_steps.sort_by_key(CertifiedBodyPipelineColdReplayStepV1::ordinal);
+        replay_steps.sort_by_key(CertifiedBodyPipelineColdReplayStepV1::order_key);
         if replay_steps
             .windows(2)
-            .any(|pair| pair[0].ordinal() >= pair[1].ordinal())
+            .any(|pair| pair[0].order_key() >= pair[1].order_key())
         {
             return None;
         }
@@ -4870,6 +4510,22 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn seal_recovered_durable_cert
 pub(in crate::sumeragi) struct DurableCertifiedFetchPendingMintPermit {
     _linearity: DurableCertifiedFetchPendingMintLinearity,
 }
+/// One-shot proof that a standalone Validate pending owner is reconstructed
+/// only from the exact decoded authority plus authenticated body-store frame.
+pub(in crate::sumeragi) struct DurableStandaloneValidatePendingMintPermit {
+    _linearity: DurableStandaloneValidatePendingMintLinearity,
+}
+struct DurableStandaloneValidatePendingMintLinearity;
+impl Drop for DurableStandaloneValidatePendingMintLinearity {
+    fn drop(&mut self) {}
+}
+impl DurableStandaloneValidatePendingMintPermit {
+    fn new() -> Self {
+        Self {
+            _linearity: DurableStandaloneValidatePendingMintLinearity,
+        }
+    }
+}
 struct DurableCertifiedFetchPendingMintLinearity;
 impl Drop for DurableCertifiedFetchPendingMintLinearity {
     fn drop(&mut self) {}
@@ -4906,6 +4562,21 @@ pub(in crate::sumeragi) enum DurableValidateReplayEvidenceV1 {
     Certified(CertifiedValidateReplayEvidenceV1),
     /// Ordinary body fetched from one exact signed remote Proposal.
     RemoteProposal(RemoteProposalValidateReplayEvidenceV1),
+    /// Body assembled by this node under the exact local manifest owner.
+    LocalBody(LocalValidateReplayEvidenceV1),
+    /// Restart-stable local or Proposal origin reconstructed from LedgerV1 and BodyFrame.
+    RecoveredStandalone(RecoveredStandaloneValidateReplayEvidenceV1),
+}
+#[derive(Clone, Debug)]
+pub(super) struct RecoveredStandaloneValidateSourceV1 {
+    source: BodyPipelineReplaySourceV1,
+    body_frame: BodyFrameBindingV1,
+}
+#[derive(Clone, Debug)]
+pub(super) struct RecoveredStandaloneValidateReplayEvidenceV1 {
+    source: BodyPipelineReplaySourceV1,
+    body_frame: BodyFrameBindingV1,
+    validate_pending: DirectSignedPendingBindingV1,
 }
 /// Canonical non-decodable replay evidence for one invalid certified body report.
 ///
@@ -4918,6 +4589,22 @@ pub(in crate::sumeragi) struct InvalidBodyReportReplayEvidenceV1 {
     authority: LifecycleReplayAuthorityV1,
     validate_origin: DurableValidateReplayEvidenceV1,
     report_pending: DirectSignedPendingBindingV1,
+}
+/// One-shot proof that only sealed invalid-body replay evidence may mint the
+/// mandatory bound effect consumed by the live report registry transaction.
+pub(in crate::sumeragi) struct InvalidBodyReportBoundEffectPermit {
+    _linearity: InvalidBodyReportBoundEffectLinearity,
+}
+struct InvalidBodyReportBoundEffectLinearity;
+impl Drop for InvalidBodyReportBoundEffectLinearity {
+    fn drop(&mut self) {}
+}
+impl InvalidBodyReportBoundEffectPermit {
+    fn new() -> Self {
+        Self {
+            _linearity: InvalidBodyReportBoundEffectLinearity,
+        }
+    }
 }
 include!("v2_lifecycle_replay_authority_certified_serve.rs");
 include!("v2_lifecycle_replay_authority_certified_body.rs");

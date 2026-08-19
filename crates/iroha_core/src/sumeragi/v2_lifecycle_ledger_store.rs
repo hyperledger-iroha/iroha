@@ -129,6 +129,26 @@ pub(in crate::sumeragi) struct LifecycleLedgerStoreV1 {
     max_frame_bytes: u64,
 }
 impl LifecycleLedgerStoreV1 {
+    /// Return the private sibling path reserved for the one lifecycle-owned
+    /// Validate merge-sidecar registration at this height.
+    pub(super) fn validate_sidecar_registration_path(
+        &self,
+    ) -> Result<PathBuf, LifecycleLedgerError> {
+        self.path
+            .parent()
+            .map(|root| root.join("validate-sidecar-registration-v1.norito"))
+            .ok_or_else(|| {
+                LifecycleLedgerError::Io(
+                    "lifecycle ledger has no parent for Validate sidecar registration".to_owned(),
+                )
+            })
+    }
+
+    /// Return the immutable context sealed into this exact store handle.
+    pub(super) const fn lifecycle_context(&self) -> LifecycleContext {
+        self.context
+    }
+
     fn is_authorized_complete_tip_predecessor_target(
         &self,
         complete_tip: &crate::sumeragi::v2_recovery::RecoveredCompleteTipActivationAuthority,

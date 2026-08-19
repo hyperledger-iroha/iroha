@@ -613,12 +613,15 @@ impl LifecycleLedgerV1 {
             DurableContinuation::None,
         )
     }
-    /// Authenticate every live ordinary certified-body stage against this frame.
+    /// Authenticate every live ordinary durable-body stage against this frame.
     ///
     /// Unlike the consuming storage-cut constructor, this internal phase keeps
     /// the ledger and body store borrowed. Recovered-WAL startup uses it only
     /// after the exact Validate-to-Sign repair is fsynced, so the resulting
     /// census is bound to the final frame which the coordinator will open.
+    /// Certified Fetch/Store chains retain their exact terminal parents;
+    /// LocalBody and authenticated-Proposal Validate work instead rebinds as
+    /// a canonical standalone owner rooted at its own admission ordinal.
     pub(super) fn authenticate_durable_certified_body_pipeline_startup(
         &self,
         verified: &VerifiedHeightContext,
@@ -697,6 +700,44 @@ impl LifecycleLedgerV1 {
             };
             if record.continuation() != Some(DurableContinuation::None) {
                 return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow);
+            }
+            let standalone_validate_origin = record.work_class()
+                == Some(LifecycleWorkClass::Validate)
+                && (record.replay_authority.is_local_body_origin()
+                    || record.replay_authority.is_remote_proposal_origin());
+            if standalone_validate_origin {
+                let owner = record.owner();
+                let has_foreign_owner_history = owner.first_admission_ordinal() != record.ordinal()
+                    || self.records.iter().any(|candidate| {
+                        candidate.ordinal() != record.ordinal() && candidate.owner() == owner
+                    });
+                let has_incoming_continuation = self.records.iter().any(|candidate| {
+                    candidate
+                        .continuation()
+                        .and_then(DurableContinuation::successor_parts)
+                        .is_some_and(|(_, successor)| successor == record.ordinal())
+                });
+                if has_foreign_owner_history || has_incoming_continuation {
+                    return Err(DurableCertifiedBodyPipelineRecoveryError::InvalidLedgerRow);
+                }
+                let authenticated = record
+                    .authenticate_durable_standalone_validate_origin(verified, || {
+                        projection::authenticate_durable_body_frame_recovery(
+                            self.context(),
+                            store,
+                            reference,
+                        )
+                    })?
+                    .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidReplayJoin)?;
+                if !live_ordinals.insert(record.ordinal()) {
+                    return Err(DurableCertifiedBodyPipelineRecoveryError::AmbiguousCensus);
+                }
+                entries.push(
+                    AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1::StandaloneValidate(
+                        authenticated,
+                    ),
+                );
+                continue;
             }
             let (fetch, store_parent) = match record.work_class() {
                 Some(LifecycleWorkClass::Fetch) => (record, None),
@@ -801,7 +842,8 @@ impl LifecycleLedgerV1 {
     /// Consume this exact opened ledger and body store into one body-pipeline cut.
     ///
     /// Authentication censes every live ordinary BodyFrame-backed pipeline row before
-    /// either storage owner is moved. Success retains both owners and the
+    /// either storage owner is moved. This includes parent-linked certified
+    /// work and canonical standalone LocalBody/Proposal Validate work. Success retains both owners and the
     /// verified context beside the opaque census, preventing a caller from
     /// reminting individual rows or swapping a foreign store before the future
     /// coordinator-open/registry-install transaction consumes the whole cut.

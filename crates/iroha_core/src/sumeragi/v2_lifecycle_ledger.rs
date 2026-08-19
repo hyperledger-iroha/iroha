@@ -7,9 +7,12 @@ use super::projection::{AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameR
 use super::replay_authority::{
     AuthenticatedRecoveredDurableCertifiedBodyPipelineCensusV1,
     AuthenticatedRecoveredDurableCertifiedBodyPipelineEntryV1,
-    AuthenticatedRecoveredDurableCertifiedFetchV1, CertifiedServeTerminalReplayAuthorityPairV1,
+    AuthenticatedRecoveredDurableCertifiedFetchV1,
+    AuthenticatedRecoveredDurableStandaloneValidateV1, CertifiedServeTerminalReplayAuthorityPairV1,
     LifecycleReplayAuthorityV1, RecoveredDecisionApplyCandidateLineageV1,
-    authenticate_recovered_durable_certified_fetch, recovered_decision_body_continuation_is_exact,
+    authenticate_recovered_durable_certified_fetch,
+    authenticate_recovered_durable_standalone_validate,
+    recovered_decision_body_continuation_is_exact,
     seal_recovered_durable_certified_body_pipeline_census, signed_broadcast_continuation_is_exact,
 };
 use super::schema::{
@@ -821,6 +824,23 @@ impl DurableCertifiedFetchLedgerJoinPermit {
         }
     }
 }
+/// One-shot proof that decoded standalone Validate replay data remains
+/// enclosed by its exact opened LedgerV1 row while joining the authenticated
+/// body-store frame.
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct DurableStandaloneValidateLedgerJoinPermit {
+    _linearity: DurableStandaloneValidateLedgerJoinLinearity,
+}
+struct DurableStandaloneValidateLedgerJoinLinearity;
+impl Drop for DurableStandaloneValidateLedgerJoinLinearity {
+    fn drop(&mut self) {}
+}
+impl DurableStandaloneValidateLedgerJoinPermit {
+    fn new() -> Self {
+        Self {
+            _linearity: DurableStandaloneValidateLedgerJoinLinearity,
+        }
+    }
+}
 /// One-shot proof that the recovery projection contains every live ordinary
 /// certified-body pipeline row selected from one exact opened LedgerV1.
 pub(in crate::sumeragi::v2_lifecycle_coordinator) struct DurableCertifiedBodyPipelineLedgerCensusPermit
@@ -1039,6 +1059,46 @@ impl LifecycleLedgerRecordV1 {
         };
         authenticate_recovered_durable_certified_fetch(
             DurableCertifiedFetchLedgerJoinPermit::new(),
+            verified,
+            key,
+            self.owner(),
+            self.ordinal(),
+            stage,
+            self.reconstruction_source(),
+            payload,
+            &self.replay_authority,
+            authenticate_body,
+        )
+    }
+    /// Authenticate this standalone Validate row's exact LocalBody or signed
+    /// remote-Proposal source before opening its retained body-store frame.
+    fn authenticate_durable_standalone_validate_origin<F>(
+        &self,
+        verified: &VerifiedHeightContext,
+        authenticate_body: F,
+    ) -> Result<
+        Option<AuthenticatedRecoveredDurableStandaloneValidateV1>,
+        DurableBodyFrameRecoveryError,
+    >
+    where
+        F: FnOnce() -> Result<AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameRecoveryError>,
+    {
+        let Some(key) = self.key() else {
+            return Ok(None);
+        };
+        let Some(stage) = self.stage() else {
+            return Ok(None);
+        };
+        let Some(payload) = self.durable_payload() else {
+            return Ok(None);
+        };
+        let Some(()) = (self.work_class() == Some(LifecycleWorkClass::Validate)
+            && self.reconstruction_source() == self.owner().causal_root().digest())
+        .then_some(()) else {
+            return Ok(None);
+        };
+        authenticate_recovered_durable_standalone_validate(
+            DurableStandaloneValidateLedgerJoinPermit::new(),
             verified,
             key,
             self.owner(),

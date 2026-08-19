@@ -590,7 +590,52 @@
     #[cfg(feature = "bls")]
     #[allow(clippy::too_many_lines)]
     fn durable_validate_fixture_at_view(marker: u8, view: wire::View) -> DurableValidateFixture {
-        let (verified, context) = verified_store_context(marker);
+        durable_validate_fixture_at_view_with_parent(marker, view, None)
+    }
+
+    #[cfg(feature = "bls")]
+    #[allow(clippy::too_many_lines)]
+    fn durable_validate_fixture_at_view_with_parent(
+        marker: u8,
+        view: wire::View,
+        parent_block_hash: Option<HashOf<BlockHeader>>,
+    ) -> DurableValidateFixture {
+        let (mut verified, mut context) = verified_store_context(marker);
+        if let Some(parent_block_hash) = parent_block_hash.as_ref() {
+            let predecessor_context = context.clone();
+            let predecessor_proofs = verified.proofs_of_possession().to_vec();
+            let parent_round = wire::ConsensusRound {
+                context_id: predecessor_context.id(),
+                height: predecessor_context.height,
+                view: 0,
+            };
+            context.height = predecessor_context.height + 1;
+            context.parent_commit_qc = Some(wire::QuorumCertificate {
+                round: parent_round,
+                proposal_round: parent_round,
+                phase: wire::GlobalPhase::Commit,
+                subject: wire::BlockSubject {
+                    parent_block_hash: None,
+                    block_hash: *parent_block_hash,
+                    payload_hash: Hash::new([marker, 0xD1]),
+                },
+                execution_commitment: wire::ExecutionCommitment::without_topups_or_merge_carrier(
+                    Hash::new([marker, 0xD2]),
+                    Hash::new([marker, 0xD3]),
+                    Hash::new([marker, 0xD4]),
+                    1,
+                    Hash::new([marker, 0xD5]),
+                ),
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xD6],
+            });
+            verified = VerifiedHeightContext::successor_fixture_for_test(
+                context.clone(),
+                predecessor_proofs.clone(),
+                predecessor_context,
+                predecessor_proofs,
+            );
+        }
         let keys = durable_store_keys(marker);
         let round = wire::ConsensusRound {
             context_id: context.id(),
@@ -606,7 +651,7 @@
         let leader_index = usize::try_from(leader).expect("durable Validate leader index");
         let header = BlockHeader::new(
             NonZeroU64::new(round.height).expect("non-zero durable Validate height"),
-            None,
+            parent_block_hash,
             None,
             None,
             1_000,
@@ -623,7 +668,7 @@
             .encode_wire()
             .expect("encode durable Validate fixture body");
         let subject = wire::BlockSubject {
-            parent_block_hash: None,
+            parent_block_hash,
             block_hash: block.hash(),
             payload_hash: Hash::new(&canonical_wire),
         };
@@ -821,6 +866,18 @@
     }
 
     #[cfg(feature = "bls")]
+    fn exact_detached_validation_merge_reference(
+        durable: &DurableBodyReceipt,
+    ) -> CertifiedMergeLedgerReference {
+        let mut reference = detached_validation_merge_reference(durable);
+        reference.merge_qc.carrier_parent_hash = durable
+            .subject()
+            .parent_block_hash
+            .expect("sidecar Validate fixture retains a carrier parent");
+        reference
+    }
+
+    #[cfg(feature = "bls")]
     fn durable_validate_store_fixture(
         marker: u8,
     ) -> (
@@ -856,7 +913,34 @@
         V2BodyStore,
         DurableBodyReceipt,
     ) {
-        let mut fixture = durable_validate_fixture_at_view(marker, view);
+        let fixture = durable_validate_fixture_at_view(marker, view);
+        durable_validate_store_fixture_from_fixture(fixture, execution_commitment)
+    }
+
+    #[cfg(feature = "bls")]
+    fn durable_validate_sidecar_store_fixture(
+        marker: u8,
+    ) -> (
+        DurableValidateFixture,
+        TempDir,
+        V2BodyStore,
+        DurableBodyReceipt,
+    ) {
+        let parent = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new([marker, 0xE1]));
+        let fixture = durable_validate_fixture_at_view_with_parent(marker, 2, Some(parent));
+        durable_validate_store_fixture_from_fixture(fixture, None)
+    }
+
+    #[cfg(feature = "bls")]
+    fn durable_validate_store_fixture_from_fixture(
+        mut fixture: DurableValidateFixture,
+        execution_commitment: Option<wire::ExecutionCommitment>,
+    ) -> (
+        DurableValidateFixture,
+        TempDir,
+        V2BodyStore,
+        DurableBodyReceipt,
+    ) {
         let directory = TempDir::new().expect("temporary detached Validate body store");
         let mut store = V2BodyStore::open(directory.path(), fixture.verified.context().clone())
             .expect("open detached Validate body store");
@@ -1055,8 +1139,25 @@
         marker: u8,
         view: wire::View,
     ) -> WaitingDurableValidateFixture {
-        let (mut fixture, directory, store, durable) =
-            durable_validate_store_fixture_at_view(marker, view);
+        waiting_durable_validate_fixture_from_store(durable_validate_store_fixture_at_view(
+            marker, view,
+        ))
+    }
+
+    #[cfg(feature = "bls")]
+    fn waiting_durable_validate_sidecar_fixture(marker: u8) -> WaitingDurableValidateFixture {
+        waiting_durable_validate_fixture_from_store(durable_validate_sidecar_store_fixture(marker))
+    }
+
+    #[cfg(feature = "bls")]
+    fn waiting_durable_validate_fixture_from_store(
+        (mut fixture, directory, store, durable): (
+            DurableValidateFixture,
+            TempDir,
+            V2BodyStore,
+            DurableBodyReceipt,
+        ),
+    ) -> WaitingDurableValidateFixture {
         let mut coordinator = claimed_durable_validate_coordinator(&fixture);
         let mut holder = take_dispatch_registry(&mut fixture);
         let dispatch = coordinator

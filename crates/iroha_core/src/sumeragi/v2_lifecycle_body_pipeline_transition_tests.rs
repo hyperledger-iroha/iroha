@@ -12,6 +12,18 @@ mod tests {
         },
         v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
     };
+    /// Test-only view of the pure staged reducer copy. Production callers must
+    /// retain one of the sealed registry-and-adapter publication owners.
+    struct PreparedBodyStageTransition<'a> {
+        _coordinator: &'a mut LifecycleCoordinator,
+        staged: LifecycleCoordinator,
+        edge: DurableContinuationEdge,
+        parent_ordinal: u128,
+        child_ordinal: u128,
+        owner: OwnerId,
+        child_slot: PhysicalSlotId,
+        child_digest: super::super::LifecycleDigest,
+    }
     pub(super) struct FetchStoreFixture {
         coordinator: LifecycleCoordinator,
         lease: TurnLease,

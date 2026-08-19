@@ -4101,6 +4101,19 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         self.runtime
             .prepare_durable_store_validate(tag, round, subject, receipt)
     }
+    /// Preview one registry-owned Ready Validate outcome through the serialized adapter.
+    pub(in crate::sumeragi) fn prepare_ready_durable_validate_adapter_preview<'registry>(
+        &mut self,
+        execution: super::v2_lifecycle_coordinator::PreparedReadyDurableValidateExecution<
+            'registry,
+        >,
+    ) -> Result<
+        super::v2_lifecycle_coordinator::PreparedReadyDurableValidateAdapterPreview<'registry, '_>,
+        super::v2_lifecycle_coordinator::ReadyDurableValidateAdapterPreviewError<'registry>,
+    > {
+        self.runtime
+            .prepare_ready_durable_validate_adapter_preview(execution)
+    }
     /// Preview one exact lifecycle-owned signature on the serialized adapter.
     pub(in crate::sumeragi) fn prepare_recovered_lifecycle_sign_completion(
         &mut self,

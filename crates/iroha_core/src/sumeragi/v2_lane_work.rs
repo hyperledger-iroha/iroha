@@ -10000,6 +10000,16 @@ impl V2LaneWorkAdapter {
         }
         Ok(disposition)
     }
+    /// Register one lifecycle-owned Validate dependency without transferring
+    /// it into the generic executor deferral census.
+    pub(in crate::sumeragi) fn defer_missing_lifecycle_validate_sidecar(
+        &mut self,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        reference: CertifiedMergeLedgerReference,
+    ) -> Result<MergeSidecarDeferralDisposition, V2LaneWorkError> {
+        self.defer_missing_merge_sidecar_with_priority(round, subject, reference, false, true)
+    }
     fn defer_missing_merge_sidecar_with_priority(
         &mut self,
         round: wire::ConsensusRound,
@@ -10087,8 +10097,18 @@ impl V2LaneWorkAdapter {
         }
         let committed_height = u64::try_from(self.state.committed_height())
             .map_err(|_| V2LaneWorkError::StateHeightMismatch)?;
-        let deferred = if lifecycle_owned {
+        let deferred = if lifecycle_owned && decided {
             self.merge_sidecars.defer_lifecycle_decided_block(
+                subject.block_hash,
+                round.height,
+                reference.merge_qc.view,
+                reference,
+                &self.local_peer,
+                committed_height,
+                Instant::now(),
+            )
+        } else if lifecycle_owned {
+            self.merge_sidecars.defer_lifecycle_block(
                 subject.block_hash,
                 round.height,
                 reference.merge_qc.view,
