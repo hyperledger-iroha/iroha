@@ -3756,7 +3756,9 @@ fn five_validator_joiner_config_scales_body_ingress_and_passes_actual_admission(
     );
     genesis_config.insert(
         "expected_hash".into(),
-        TomlValue::String(Hash::new(b"Taira joiner admission fixture").to_string()),
+        TomlValue::String(
+            "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E".to_owned(),
+        ),
     );
     let mut streaming_config = Table::new();
     streaming_config.insert(
