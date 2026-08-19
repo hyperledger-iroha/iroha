@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compose an unsigned, public-input-only NEVO overlay for a fresh Taira genesis.
 
-The composer accepts only two canonical public account identifiers and two
+The composer accepts only four canonical public account identifiers and two
 BLAKE3 token hashes. It never accepts raw bearer tokens, private keys, seeds,
 or signing commands. The checked-in generic Taira genesis is read-only: every
 successful run writes a distinct unsigned genesis plus a deterministic review
@@ -36,13 +36,15 @@ except ModuleNotFoundError as error:
     import taira_constants
 
 
-PUBLIC_INPUT_SCHEMA = "iroha.taira.nevo-reset-public-inputs.v1"
-REVIEW_SCHEMA = "iroha.taira.nevo-reset-review.v1"
+PUBLIC_INPUT_SCHEMA = "iroha.taira.nevo-reset-public-inputs.v2"
+REVIEW_SCHEMA = "iroha.taira.nevo-reset-review.v2"
 EXPECTED_PUBLIC_INPUT_FIELDS = frozenset(
     {
         "schema",
         "onboarding_authority_account_id",
         "api_signer_account_id",
+        "dpn_inori_account_id",
+        "dpn_epr_guard_account_id",
         "is2_onboarding_token_hash",
         "dpn_onboarding_token_hash",
     }
@@ -71,6 +73,12 @@ DPN_DATASPACE_ID = 10
 IS2_DATASPACE_ALIAS = "is2"
 IS2_DATASPACE_ID = 8_477_022_798_449_861_195
 NEVO_DOMAIN = "nevo.dpn"
+UNIVERSAL_DATASPACE_ALIAS = "universal"
+UNIVERSAL_DATASPACE_ID = 0
+ADMIN_ACCOUNT_ALIAS = "admin@universal"
+INORI_ACCOUNT_ALIAS = "inori@universal"
+EPR_GUARD_ACCOUNT_ALIAS = "source_guard@universal"
+CONTRACT_DEPLOYMENT_PERMISSION = "CanRegisterSmartContractCode"
 FEE_ASSET_ALIAS = "xor#universal"
 ACCOUNT_FUNDING_AMOUNT = "1000000"
 ALIAS_POLICY_VERSION = 2
@@ -171,6 +179,8 @@ class PublicInputs:
 
     onboarding_authority_account_id: str
     api_signer_account_id: str
+    dpn_inori_account_id: str
+    dpn_epr_guard_account_id: str
     is2_onboarding_token_hash: str
     dpn_onboarding_token_hash: str
 
@@ -181,6 +191,8 @@ class PublicInputs:
             "schema": PUBLIC_INPUT_SCHEMA,
             "onboarding_authority_account_id": self.onboarding_authority_account_id,
             "api_signer_account_id": self.api_signer_account_id,
+            "dpn_inori_account_id": self.dpn_inori_account_id,
+            "dpn_epr_guard_account_id": self.dpn_epr_guard_account_id,
             "is2_onboarding_token_hash": self.is2_onboarding_token_hash,
             "dpn_onboarding_token_hash": self.dpn_onboarding_token_hash,
         }
@@ -506,10 +518,15 @@ def _public_inputs_from_payload(payload: Any, context: str) -> PublicInputs:
         fail(f"public input schema must be exactly `{PUBLIC_INPUT_SCHEMA}`")
     onboarding = payload["onboarding_authority_account_id"]
     api_signer = payload["api_signer_account_id"]
+    dpn_inori = payload["dpn_inori_account_id"]
+    dpn_epr_guard = payload["dpn_epr_guard_account_id"]
     _decode_taira_ed25519_account(onboarding, "onboarding authority account")
     _decode_taira_ed25519_account(api_signer, "API signer account")
-    if onboarding == api_signer:
-        fail("onboarding authority and API signer accounts must be distinct")
+    _decode_taira_ed25519_account(dpn_inori, "DPN Inori account")
+    _decode_taira_ed25519_account(dpn_epr_guard, "DPN EPR guard account")
+    public_accounts = (onboarding, api_signer, dpn_inori, dpn_epr_guard)
+    if len(set(public_accounts)) != len(public_accounts):
+        fail("all four public NEVO accounts must be pairwise distinct")
     is2_hash = _validate_token_hash(
         payload["is2_onboarding_token_hash"], "is2 onboarding token hash"
     )
@@ -521,6 +538,8 @@ def _public_inputs_from_payload(payload: Any, context: str) -> PublicInputs:
     return PublicInputs(
         onboarding_authority_account_id=onboarding,
         api_signer_account_id=api_signer,
+        dpn_inori_account_id=dpn_inori,
+        dpn_epr_guard_account_id=dpn_epr_guard,
         is2_onboarding_token_hash=is2_hash,
         dpn_onboarding_token_hash=dpn_hash,
     )
@@ -724,6 +743,22 @@ def _ensure_alias_target(instruction: dict[str, Any]) -> tuple[str, str] | None:
             kind,
             str(domain.get("canonical_name")) if isinstance(domain, dict) else "invalid",
         )
+    if kind == "account_alias":
+        alias = body.get("alias")
+        canonical = alias.get("canonical_name") if isinstance(alias, dict) else None
+        if not isinstance(canonical, dict):
+            return (kind, "invalid")
+        label = canonical.get("label")
+        domain = canonical.get("domain")
+        dataspace = canonical.get("dataspace")
+        if (
+            not isinstance(label, str)
+            or (domain is not None and not isinstance(domain, str))
+            or not isinstance(dataspace, str)
+        ):
+            return (kind, "invalid")
+        parent = f"{domain}.{dataspace}" if domain is not None else dataspace
+        return (kind, f"{label}@{parent}")
     return (kind, "unknown")
 
 
@@ -731,11 +766,16 @@ def _validate_pristine_overlay_target(genesis: dict[str, Any], inputs: PublicInp
     target_accounts = {
         inputs.onboarding_authority_account_id,
         inputs.api_signer_account_id,
+        inputs.dpn_inori_account_id,
+        inputs.dpn_epr_guard_account_id,
     }
     forbidden_alias_targets = {
         ("dataspace", DPN_DATASPACE_ALIAS),
         ("dataspace", IS2_DATASPACE_ALIAS),
         ("domain", NEVO_DOMAIN),
+        ("account_alias", ADMIN_ACCOUNT_ALIAS),
+        ("account_alias", INORI_ACCOUNT_ALIAS),
+        ("account_alias", EPR_GUARD_ACCOUNT_ALIAS),
     }
     for instruction in _instructions(genesis):
         if not isinstance(instruction, dict):
@@ -830,7 +870,37 @@ def _ensure_domain(owner: str, asset_definition_id: str) -> dict[str, Any]:
     }
 
 
-def _grant_permission(destination: str, name: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _ensure_account_alias(
+    alias_literal: str, target_account: str, asset_definition_id: str
+) -> dict[str, Any]:
+    label, separator, dataspace = alias_literal.partition("@")
+    if not separator or not label or dataspace != UNIVERSAL_DATASPACE_ALIAS:
+        fail("internal NEVO account alias must be a two-segment universal alias")
+    return {
+        "EnsureAlias": {
+            "intent": {
+                "kind": "account_alias",
+                "intent": {
+                    "alias": {
+                        "canonical_name": {
+                            "label": label,
+                            "domain": None,
+                            "dataspace": dataspace,
+                        },
+                        "dataspace_id": UNIVERSAL_DATASPACE_ID,
+                    },
+                    "target_account": target_account,
+                    "provision": {"kind": "existing", "value": None},
+                    "role": {"kind": "primary", "value": None},
+                },
+            },
+            "acquisition": {"term_years": 1, "pricing_class_hint": None},
+            "quote_guard": _quote_guard(asset_definition_id),
+        }
+    }
+
+
+def _grant_permission(destination: str, name: str, payload: Any) -> dict[str, Any]:
     return {
         "Grant": {
             "Permission": {
@@ -850,20 +920,42 @@ def _enroll_beneficiary(config: BaseConfig, beneficiary: str) -> dict[str, Any]:
     }
 
 
+def _dpn_permission_grants(
+    inputs: PublicInputs,
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return (
+        (inputs.api_signer_account_id, ("DpnAdmin", "DpnUser")),
+        (
+            inputs.dpn_inori_account_id,
+            ("DpnInori", "DpnSettlement", "DpnUser"),
+        ),
+        (inputs.dpn_epr_guard_account_id, ("DpnEprGuard",)),
+    )
+
+
 def nevo_overlay_instructions(inputs: PublicInputs, config: BaseConfig) -> list[dict[str, Any]]:
     """Return the exact deterministic height-1 NEVO overlay instruction list."""
 
     authority = inputs.onboarding_authority_account_id
     api_signer = inputs.api_signer_account_id
+    dpn_inori = inputs.dpn_inori_account_id
+    dpn_epr_guard = inputs.dpn_epr_guard_account_id
     asset = config.fee_asset_definition_id
     instructions = [
         _register_account(authority, "nevo_taira_onboarding_authority"),
-        _register_account(api_signer, "nevo_dpn_api_signer"),
+        _register_account(api_signer, "nevo_dpn_contract_admin_api_signer"),
+        _register_account(dpn_inori, "nevo_dpn_inori_controller"),
+        _register_account(dpn_epr_guard, "nevo_dpn_epr_source_guard"),
         _mint_fee_asset(asset, authority),
         _mint_fee_asset(asset, api_signer),
+        _mint_fee_asset(asset, dpn_inori),
+        _mint_fee_asset(asset, dpn_epr_guard),
         _ensure_dataspace(DPN_DATASPACE_ALIAS, DPN_DATASPACE_ID, authority, asset),
         _ensure_dataspace(IS2_DATASPACE_ALIAS, IS2_DATASPACE_ID, authority, asset),
         _ensure_domain(authority, asset),
+        _ensure_account_alias(ADMIN_ACCOUNT_ALIAS, api_signer, asset),
+        _ensure_account_alias(INORI_ACCOUNT_ALIAS, dpn_inori, asset),
+        _ensure_account_alias(EPR_GUARD_ACCOUNT_ALIAS, dpn_epr_guard, asset),
     ]
     instructions.extend(
         [
@@ -877,9 +969,17 @@ def nevo_overlay_instructions(inputs: PublicInputs, config: BaseConfig) -> list[
                 "CanEnrollFeeSponsorProgram",
                 {"program_id": _program_object(config)},
             ),
-            _enroll_beneficiary(config, authority),
-            _enroll_beneficiary(config, api_signer),
+            _grant_permission(api_signer, CONTRACT_DEPLOYMENT_PERMISSION, None),
         ]
+    )
+    for account_id, permissions in _dpn_permission_grants(inputs):
+        instructions.extend(
+            _grant_permission(account_id, permission, None)
+            for permission in permissions
+        )
+    instructions.extend(
+        _enroll_beneficiary(config, account_id)
+        for account_id in (authority, api_signer, dpn_inori, dpn_epr_guard)
     )
     return instructions
 
@@ -943,6 +1043,8 @@ def build_review_manifest(
         "public_identities": {
             "onboarding_authority_account_id": inputs.onboarding_authority_account_id,
             "api_signer_account_id": inputs.api_signer_account_id,
+            "dpn_inori_account_id": inputs.dpn_inori_account_id,
+            "dpn_epr_guard_account_id": inputs.dpn_epr_guard_account_id,
         },
         "credential_hash_bindings": [
             {
@@ -965,6 +1067,39 @@ def build_review_manifest(
             "fee_asset_definition_id": config.fee_asset_definition_id,
             "account_funding_amount": ACCOUNT_FUNDING_AMOUNT,
             "fee_sponsor_program_id": config.fee_sponsor_program_id,
+            "fee_sponsor_beneficiaries": [
+                inputs.onboarding_authority_account_id,
+                inputs.api_signer_account_id,
+                inputs.dpn_inori_account_id,
+                inputs.dpn_epr_guard_account_id,
+            ],
+            "account_aliases": [
+                {
+                    "alias": ADMIN_ACCOUNT_ALIAS,
+                    "target_account_id": inputs.api_signer_account_id,
+                    "role": "primary",
+                },
+                {
+                    "alias": INORI_ACCOUNT_ALIAS,
+                    "target_account_id": inputs.dpn_inori_account_id,
+                    "role": "primary",
+                },
+                {
+                    "alias": EPR_GUARD_ACCOUNT_ALIAS,
+                    "target_account_id": inputs.dpn_epr_guard_account_id,
+                    "role": "primary",
+                },
+            ],
+            "contract_deployment_permission_grant": {
+                "account_id": inputs.api_signer_account_id,
+                "permission": CONTRACT_DEPLOYMENT_PERMISSION,
+                "payload": None,
+            },
+            "dpn_permission_grants": [
+                {"account_id": account_id, "permissions": list(permissions)}
+                for account_id, permissions in _dpn_permission_grants(inputs)
+            ],
+            "dpn_settlement_holder_account_id": inputs.dpn_inori_account_id,
             "ensure_alias_derived_owner_permissions": [
                 "CanManageAccountAlias",
                 "CanDelegateAccountAliasResolution",
@@ -994,6 +1129,8 @@ def _public_inputs_from_review(review: Any) -> PublicInputs:
     if not isinstance(identities, dict) or set(identities) != {
         "onboarding_authority_account_id",
         "api_signer_account_id",
+        "dpn_inori_account_id",
+        "dpn_epr_guard_account_id",
     }:
         fail("NEVO review public identities are not exact")
     bindings = review.get("credential_hash_bindings")
@@ -1015,6 +1152,8 @@ def _public_inputs_from_review(review: Any) -> PublicInputs:
             "onboarding_authority_account_id"
         ],
         "api_signer_account_id": identities["api_signer_account_id"],
+        "dpn_inori_account_id": identities["dpn_inori_account_id"],
+        "dpn_epr_guard_account_id": identities["dpn_epr_guard_account_id"],
         "is2_onboarding_token_hash": token_hashes[0],
         "dpn_onboarding_token_hash": token_hashes[1],
     }

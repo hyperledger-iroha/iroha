@@ -259,6 +259,20 @@ def test_taira_kagemusha_release_docs_preserve_both_production_boundaries() -> N
     assert "execution_policy_hash" in readme
     assert "/usr/local/libexec/iroha-taira-release-controller-v1" in readme
     assert 'prepare-reset -- \\\n' in readme
+    assert "--genesis-native-verifier" in readme
+    assert "--trusted-genesis-native-verifier-sha256" in readme
+    for activation_field in (
+        "genesis_native_verifier_sha256",
+        "genesis_external_signer_sha256",
+        "genesis_artifact_linkage_sha256",
+        "nevo_review_sha256",
+        "reviewed_unsigned_genesis_sha256",
+        "pre_sign_rendered_genesis_sha256",
+        "native_verifier_peer_config_set_sha256",
+        "bound_genesis_manifest_sha256",
+        "signed_genesis_sha256",
+    ):
+        assert f'"{activation_field}"' in readme
     assert 'GENESIS="${SIGNED_GENESIS}"' in readme
     assert 'IROHAD_BIN="${IROHAD_BIN:?' in readme
     assert (

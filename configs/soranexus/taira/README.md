@@ -760,10 +760,11 @@ runtime-only secret storage.
 Use `scripts/compose_taira_nevo_reset_genesis.py` for that public-only
 composition. Copy
 `configs/soranexus/taira/nevo-reset-public-inputs.example.json` to an
-owner-private path and replace every placeholder with two distinct canonical
-Taira Ed25519 account IDs and two distinct `blake3:` token hashes. The composer
-does not accept raw tokens, private-key fields, or an existing output path; it
-also refuses any output path that aliases the checked-in generic genesis.
+owner-private path and replace every placeholder with four pairwise-distinct
+canonical Taira Ed25519 account IDs and two distinct `blake3:` token hashes.
+The composer does not accept raw tokens, private-key fields, or an existing
+output path; it also refuses any output path that aliases the checked-in generic
+genesis.
 
 ```bash
 python3 scripts/compose_taira_nevo_reset_genesis.py \
@@ -780,13 +781,17 @@ cargo iroha-fast -- run -p iroha_kagami --bin kagami -- genesis validate \
 ```
 
 Review both new files and their recorded hashes before passing the unsigned
-genesis to the existing external-signer workflow. The three declarative alias
-intents provision the DPN/is2 roots and `nevo.dpn`; they also derive the exact
-manage/delegate/resolve owner bundle. The API signer receives no alias or
-publishing capability at genesis. Contract-specific permissions, contract
-deployment, and application factoring-policy initialization remain reviewed
-post-genesis steps. Token hashes bind the later validator configuration and
-appear only in the review record, never in the genesis itself.
+genesis to the existing external-signer workflow. Six declarative alias intents
+provision the DPN/is2 roots, `nevo.dpn`, and the exact `admin@universal`,
+`inori@universal`, and `source_guard@universal` account aliases; they also derive
+the exact manage/delegate/resolve owner bundle. Genesis directly grants the
+null-payload DPN permissions to those three exact accounts, with `DpnSettlement`
+held only by the Inori controller. The API/admin account also receives the
+genesis-only `CanRegisterSmartContractCode` permission required for the reviewed
+post-reset contract deployment. Contract deployment and application
+factoring-policy initialization remain reviewed post-genesis steps. Token hashes
+bind the later validator configuration and appear only in the review record,
+never in the genesis itself.
 
 The protected public-input directory must then contain that reviewed unsigned
 genesis as `genesis.json` and its byte-matching review as
@@ -883,6 +888,8 @@ sudo -n "${TAIRA_CONTROLLER_COMMAND}" run "${CONTROLLER_COMMON[@]}" \
   --privacy-release-dir /absolute/private/path/authenticated-privacy-release \
   --genesis-external-signer /absolute/reviewed/path/genesis-external-signer \
   --trusted-genesis-external-signer-sha256 "${GENESIS_SIGNER_SHA256}" \
+  --genesis-native-verifier /absolute/reviewed/path/kagami \
+  --trusted-genesis-native-verifier-sha256 "${GENESIS_NATIVE_VERIFIER_SHA256}" \
   --onboarding-token-hash-tool /absolute/reviewed/path/onboarding-token-hash-tool \
   --kagemusha-release-root /srv/iroha-kagemusha/taira-v4-r1 \
   --kagemusha-activation-authority "${ACTIVATION_AUTHORITY}" \
@@ -2244,9 +2251,14 @@ already admitted executable at
 bundle stays mode `0700`, owned by `administrator:staff`, and retains the exact
 `taira-exact2f-reset-bundle` layout. Its reset manifest must bind the executable
 SHA-256, signed genesis, four config hashes, and four empty storage trees. The
-controller reuses the main reset controller's bundle validator, additionally
-requires `nevo.dpn` in the unsigned genesis, and hash-detects the retired test
-namespace without keeping that namespace literal in source.
+controller reuses the main reset controller's bundle validator and a pinned
+source-matched Kagami verifier. The verifier binds the exact NEVO review bytes,
+reviewed unsigned genesis, public validator roster, ordered four-config digest
+set, renderer-only pre-sign transform, config-bound manifest, canonical signed
+wire, signer and expected hash; it then re-executes full genesis validation and
+restages the signed consensus context under every peer config. The controller
+also requires `nevo.dpn` in the unsigned genesis and hash-detects the retired
+test namespace without keeping that namespace literal in source.
 
 Create an owner-only activation manifest beneath
 `/Users/administrator/apps/dpn-test/taira/reset-manifests/` with mode `0600`:
@@ -2267,6 +2279,19 @@ Create an owner-only activation manifest beneath
   "reset_manifest_sha256": "<lowercase SHA-256>",
   "binary": "/Users/administrator/apps/dpn-test/taira/releases/<release>/iroha3d",
   "binary_sha256": "<lowercase SHA-256>",
+  "genesis_native_verifier": "/Users/administrator/apps/dpn-test/taira/releases/<release>/kagami",
+  "genesis_native_verifier_sha256": "<lowercase SHA-256>",
+  "genesis_external_signer_sha256": "<lowercase SHA-256>",
+  "genesis_public_key": "<canonical Ed25519 multihash>",
+  "genesis_expected_hash": "<64 lowercase hex characters>",
+  "genesis_artifact_linkage_sha256": "<lowercase SHA-256>",
+  "nevo_review_sha256": "<lowercase SHA-256>",
+  "reviewed_unsigned_genesis_sha256": "<lowercase SHA-256>",
+  "pre_sign_rendered_genesis_sha256": "<lowercase SHA-256>",
+  "native_verifier_peer_config_set_sha256": "<lowercase SHA-256>",
+  "bound_genesis_manifest_sha256": "<lowercase SHA-256>",
+  "signed_genesis_sha256": "<lowercase SHA-256>",
+  "local_reviewed_inputs_identity_sha256": "<lowercase SHA-256>",
   "source_commit": "<full lowercase Iroha commit>",
   "dpn_validator_release_commit": "<full lowercase DPN commit>",
   "limits": {
@@ -2277,6 +2302,38 @@ Create an owner-only activation manifest beneath
     "poll_interval_seconds": 1
   }
 }
+```
+
+The active same-host testnet activation uses
+`local_reviewed_inputs_identity_sha256`. A production-authority reset instead
+uses `privacy_native_verifier_sha256`; the activation must contain exactly one
+of those two mode bindings, matching the reset manifest's
+`privacy_bootstrap_release.schema`.
+
+For that same-host testnet bundle, invoke the sealed `prepare-reset` operation
+with the reviewed local five-file input set instead of a production privacy
+release. The two modes are mutually exclusive:
+
+```bash
+sudo -n "${TAIRA_CONTROLLER_COMMAND}" run "${CONTROLLER_COMMON[@]}" \
+  prepare-reset -- \
+  --source-bundle "${LOCAL_RESET_SOURCE_BUNDLE}" \
+  --source-bundle-sha256 "${LOCAL_RESET_SOURCE_BUNDLE_SHA256}" \
+  --local-testnet-reviewed-input-dir "${LOCAL_REVIEWED_INPUT_DIR}" \
+  --local-testnet-reviewed-inputs-sha256 "${LOCAL_REVIEWED_INPUTS_SHA256}" \
+  --genesis-external-signer "${GENESIS_EXTERNAL_SIGNER}" \
+  --trusted-genesis-external-signer-sha256 "${GENESIS_SIGNER_SHA256}" \
+  --genesis-native-verifier "${GENESIS_NATIVE_VERIFIER}" \
+  --trusted-genesis-native-verifier-sha256 "${GENESIS_NATIVE_VERIFIER_SHA256}" \
+  --onboarding-token-hash-tool "${ONBOARDING_TOKEN_HASH_TOOL}" \
+  --irohad-sha256 "${IROHAD_SHA256}" \
+  --source-commit "${SOURCE_COMMIT}" \
+  --dpn-validator-release-commit "${DPN_VALIDATOR_RELEASE_COMMIT}" \
+  --cargo-lock-sha256 "${CARGO_LOCK_SHA256}" \
+  --workspace-source-manifest-sha256 "${WORKSPACE_SOURCE_MANIFEST_SHA256}" \
+  --controller-manifest "${TAIRA_CONTROLLER_ROOT}/authority-controller-v1.json" \
+  --controller-digest "${EXPECTED_CONTROLLER_DIGEST}" \
+  --output-bundle "${LOCAL_RESET_BUNDLE}"
 ```
 
 The default invocation is read-only and prints the exact manifest-bound

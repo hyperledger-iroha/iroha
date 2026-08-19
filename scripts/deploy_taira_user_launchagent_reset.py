@@ -35,9 +35,11 @@ import urllib.parse
 import urllib.request
 
 try:
+    from scripts import compose_taira_nevo_reset_genesis as nevo_composer
     from scripts import deploy_taira_v21_reset as reset_bundle
     from scripts.operator_http_headers import load_operator_context_from_file
 except ModuleNotFoundError:  # Direct execution sets sys.path to scripts/.
+    import compose_taira_nevo_reset_genesis as nevo_composer
     import deploy_taira_v21_reset as reset_bundle
     from operator_http_headers import load_operator_context_from_file
 
@@ -81,9 +83,27 @@ MANIFEST_KEYS = frozenset(
         "reset_manifest_sha256",
         "binary",
         "binary_sha256",
+        "genesis_native_verifier",
+        "genesis_native_verifier_sha256",
+        "genesis_external_signer_sha256",
+        "genesis_public_key",
+        "genesis_expected_hash",
+        "genesis_artifact_linkage_sha256",
+        "nevo_review_sha256",
+        "reviewed_unsigned_genesis_sha256",
+        "pre_sign_rendered_genesis_sha256",
+        "native_verifier_peer_config_set_sha256",
+        "bound_genesis_manifest_sha256",
+        "signed_genesis_sha256",
         "source_commit",
         "dpn_validator_release_commit",
         "limits",
+    }
+)
+PRIVACY_INPUT_ACTIVATION_KEYS = frozenset(
+    {
+        "privacy_native_verifier_sha256",
+        "local_reviewed_inputs_identity_sha256",
     }
 )
 LIMIT_KEYS = frozenset(
@@ -112,6 +132,8 @@ MAX_PLIST_BYTES = 1024 * 1024
 MAX_CONFIG_BYTES = 4 * 1024 * 1024
 MAX_HTTP_BYTES = 2 * 1024 * 1024
 MAX_BINARY_BYTES = 1024 * 1024 * 1024
+MAX_GENESIS_BYTES = 64 * 1024 * 1024
+MAX_VERIFIER_OUTPUT_BYTES = 2 * 1024 * 1024
 MIN_FREE_BYTES = 16 * 1024 * 1024 * 1024
 GENERATION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,95}\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -174,6 +196,20 @@ class Activation:
     reset_manifest_sha256: str
     binary: Path
     binary_sha256: str
+    genesis_native_verifier: Path
+    genesis_native_verifier_sha256: str
+    genesis_external_signer_sha256: str
+    genesis_public_key: str
+    genesis_expected_hash: str
+    genesis_artifact_linkage_sha256: str
+    nevo_review_sha256: str
+    reviewed_unsigned_genesis_sha256: str
+    pre_sign_rendered_genesis_sha256: str
+    native_verifier_peer_config_set_sha256: str
+    bound_genesis_manifest_sha256: str
+    signed_genesis_sha256: str
+    privacy_native_verifier_sha256: str | None
+    local_reviewed_inputs_identity_sha256: str | None
     source_commit: str
     dpn_validator_release_commit: str
     limits: Limits
@@ -236,6 +272,8 @@ class ResetPlan:
     archive_dir: Path
     log_dir: Path
     binary_identity: tuple[int, int, int, int, int, int]
+    genesis_native_verifier_identity: tuple[int, int, int, int, int, int]
+    validator_artifact_inventory: Mapping[str, Mapping[str, object]]
 
 
 def canonical_json(value: object) -> bytes:
@@ -303,6 +341,22 @@ def require_sha256(value: object, label: str) -> str:
     if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
         fail(f"{label} must be one lowercase SHA-256")
     return value
+
+
+def _require_genesis_public_key(value: object) -> str:
+    if (
+        not isinstance(value, str)
+        or reset_bundle.GENESIS_PUBLIC_KEY_RE.fullmatch(value) is None
+    ):
+        fail("genesis_public_key must be one canonical Ed25519 public multihash")
+    return value
+
+
+def _require_genesis_expected_hash(value: object) -> str:
+    digest = require_sha256(value, "genesis_expected_hash")
+    if int(digest, 16) == 0:
+        fail("genesis_expected_hash must be nonzero")
+    return digest
 
 
 def require_commit(value: object, label: str) -> str:
@@ -478,7 +532,12 @@ def load_activation(path: Path, layout: Layout = PRODUCTION_LAYOUT) -> Activatio
         raise ResetError("activation manifest is not valid UTF-8 JSON") from error
     if not isinstance(payload, dict):
         fail("activation manifest must be one JSON object")
-    require_exact_keys(payload, MANIFEST_KEYS, "activation manifest")
+    privacy_input_keys = set(payload) & PRIVACY_INPUT_ACTIVATION_KEYS
+    if (
+        len(privacy_input_keys) != 1
+        or set(payload) != MANIFEST_KEYS | privacy_input_keys
+    ):
+        fail("activation manifest schema is not exact")
     if (
         payload.get("schema") != SCHEMA
         or payload.get("uid") != UID
@@ -491,10 +550,16 @@ def load_activation(path: Path, layout: Layout = PRODUCTION_LAYOUT) -> Activatio
         fail("activation generation is not canonical")
     bundle_value = payload.get("bundle")
     binary_value = payload.get("binary")
-    if not isinstance(bundle_value, str) or not isinstance(binary_value, str):
+    verifier_value = payload.get("genesis_native_verifier")
+    if (
+        not isinstance(bundle_value, str)
+        or not isinstance(binary_value, str)
+        or not isinstance(verifier_value, str)
+    ):
         fail("activation candidate paths must be strings")
     bundle = Path(bundle_value)
     binary = Path(binary_value)
+    genesis_native_verifier = Path(verifier_value)
     bundle_parts = relative_descendant(
         bundle,
         layout.reset_bundles,
@@ -507,15 +572,27 @@ def load_activation(path: Path, layout: Layout = PRODUCTION_LAYOUT) -> Activatio
         "candidate binary",
         minimum_parts=2,
     )
+    verifier_parts = relative_descendant(
+        genesis_native_verifier,
+        layout.releases,
+        "candidate native genesis verifier",
+        minimum_parts=2,
+    )
     if (
         len(bundle_parts) != 1
         or bundle_parts[0] != generation
         or len(binary_parts) != 2
         or binary_parts[-1] != "iroha3d"
+        or verifier_parts != (*binary_parts[:-1], "kagami")
     ):
-        fail("candidate reset bundle or binary path shape is not exact")
+        fail("candidate reset bundle, binary, or native verifier path shape is not exact")
     require_no_symlink_ancestry(bundle, layout.taira_root, "candidate reset bundle")
     require_no_symlink_ancestry(binary, layout.taira_root, "candidate binary")
+    require_no_symlink_ancestry(
+        genesis_native_verifier,
+        layout.taira_root,
+        "candidate native genesis verifier",
+    )
     limits = payload.get("limits")
     if not isinstance(limits, dict):
         fail("activation limits must be one object")
@@ -563,6 +640,63 @@ def load_activation(path: Path, layout: Layout = PRODUCTION_LAYOUT) -> Activatio
         ),
         binary=binary,
         binary_sha256=require_sha256(payload.get("binary_sha256"), "binary_sha256"),
+        genesis_native_verifier=genesis_native_verifier,
+        genesis_native_verifier_sha256=require_sha256(
+            payload.get("genesis_native_verifier_sha256"),
+            "genesis_native_verifier_sha256",
+        ),
+        genesis_external_signer_sha256=require_sha256(
+            payload.get("genesis_external_signer_sha256"),
+            "genesis_external_signer_sha256",
+        ),
+        genesis_public_key=_require_genesis_public_key(
+            payload.get("genesis_public_key")
+        ),
+        genesis_expected_hash=_require_genesis_expected_hash(
+            payload.get("genesis_expected_hash")
+        ),
+        genesis_artifact_linkage_sha256=require_sha256(
+            payload.get("genesis_artifact_linkage_sha256"),
+            "genesis_artifact_linkage_sha256",
+        ),
+        nevo_review_sha256=require_sha256(
+            payload.get("nevo_review_sha256"), "nevo_review_sha256"
+        ),
+        reviewed_unsigned_genesis_sha256=require_sha256(
+            payload.get("reviewed_unsigned_genesis_sha256"),
+            "reviewed_unsigned_genesis_sha256",
+        ),
+        pre_sign_rendered_genesis_sha256=require_sha256(
+            payload.get("pre_sign_rendered_genesis_sha256"),
+            "pre_sign_rendered_genesis_sha256",
+        ),
+        native_verifier_peer_config_set_sha256=require_sha256(
+            payload.get("native_verifier_peer_config_set_sha256"),
+            "native_verifier_peer_config_set_sha256",
+        ),
+        bound_genesis_manifest_sha256=require_sha256(
+            payload.get("bound_genesis_manifest_sha256"),
+            "bound_genesis_manifest_sha256",
+        ),
+        signed_genesis_sha256=require_sha256(
+            payload.get("signed_genesis_sha256"), "signed_genesis_sha256"
+        ),
+        privacy_native_verifier_sha256=(
+            require_sha256(
+                payload.get("privacy_native_verifier_sha256"),
+                "privacy_native_verifier_sha256",
+            )
+            if "privacy_native_verifier_sha256" in privacy_input_keys
+            else None
+        ),
+        local_reviewed_inputs_identity_sha256=(
+            require_sha256(
+                payload.get("local_reviewed_inputs_identity_sha256"),
+                "local_reviewed_inputs_identity_sha256",
+            )
+            if "local_reviewed_inputs_identity_sha256" in privacy_input_keys
+            else None
+        ),
         source_commit=require_commit(payload.get("source_commit"), "source_commit"),
         dpn_validator_release_commit=require_commit(
             payload.get("dpn_validator_release_commit"),
@@ -921,12 +1055,512 @@ class LaunchctlOps:
             fail(f"LaunchAgents did not stop within the bound: {sorted(pending)}")
 
 
+def _artifact_canonical_json(value: object) -> bytes:
+    return (
+        json.dumps(
+            value,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _ordered_sha256_set(digests: Sequence[str]) -> str:
+    return hashlib.sha256(("\n".join(digests) + "\n").encode("ascii")).hexdigest()
+
+
+def _require_exact_json_object(
+    path: Path,
+    maximum: int,
+    label: str,
+) -> tuple[dict[str, object], bytes]:
+    raw, _ = read_regular(
+        path,
+        maximum,
+        label,
+        owner_uid=UID,
+        exact_mode=0o600,
+    )
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ResetError(f"{label} is not strict UTF-8 JSON") from error
+    if not isinstance(value, dict):
+        fail(f"{label} must be one JSON object")
+    return value, raw
+
+
+def _validate_validator_artifact_inventory(
+    bundle: Path,
+    raw_inventory: object,
+) -> dict[str, dict[str, object]]:
+    if not isinstance(raw_inventory, dict) or set(raw_inventory) != set(SLUGS):
+        fail("reset manifest validator artifact inventory is not exact")
+    inventory: dict[str, dict[str, object]] = {}
+    allowed_prefixes = ("codec/", "configs/", "manifests/", "runtime/")
+    for slug in SLUGS:
+        raw_rows = raw_inventory.get(slug)
+        if not isinstance(raw_rows, dict) or set(raw_rows) != {"directories", "files"}:
+            fail(f"reset manifest artifact inventory is malformed: {slug}")
+        raw_directories = raw_rows.get("directories")
+        raw_files = raw_rows.get("files")
+        if (
+            not isinstance(raw_directories, list)
+            or not all(isinstance(path, str) for path in raw_directories)
+            or raw_directories != sorted(set(raw_directories))
+            or not isinstance(raw_files, dict)
+            or "config.toml" not in raw_files
+        ):
+            fail(f"reset manifest artifact inventory rows are malformed: {slug}")
+        directories: list[str] = []
+        for relative in raw_directories:
+            if (
+                not isinstance(relative, str)
+                or Path(relative).is_absolute()
+                or ".." in Path(relative).parts
+                or "storage" in Path(relative).parts
+                or not Path(relative).parts
+                or Path(relative).parts[0]
+                not in {"codec", "configs", "manifests", "runtime"}
+            ):
+                fail(f"reset manifest artifact directory is not admitted: {slug}/{relative}")
+            directories.append(relative)
+        rows: dict[str, str] = {}
+        for relative, digest in raw_files.items():
+            if (
+                not isinstance(relative, str)
+                or Path(relative).is_absolute()
+                or ".." in Path(relative).parts
+                or "storage" in Path(relative).parts
+                or (
+                    relative != "config.toml"
+                    and not relative.startswith(allowed_prefixes)
+                )
+            ):
+                fail(f"reset manifest artifact path is not admitted: {slug}/{relative}")
+            rows[relative] = require_sha256(
+                digest,
+                f"validator artifact {slug}/{relative}",
+            )
+        inventory[slug] = {"directories": directories, "files": rows}
+    _rehash_validator_artifact_inventory(bundle, inventory)
+    return inventory
+
+
+def _candidate_artifact_paths(root: Path) -> tuple[set[str], set[str]]:
+    paths: set[str] = set()
+    directory_paths: set[str] = set()
+    for current, directories, files in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        relative_directory = current_path.relative_to(root)
+        retained: list[str] = []
+        for name in directories:
+            path = current_path / name
+            relative = (relative_directory / name).as_posix()
+            info = path.lstat()
+            if current_path == root and name == "storage":
+                if (
+                    stat.S_ISLNK(info.st_mode)
+                    or not stat.S_ISDIR(info.st_mode)
+                    or any(path.iterdir())
+                ):
+                    fail("candidate peer-root storage is not one empty real directory")
+                continue
+            if name == "storage":
+                fail(f"candidate artifact tree contains nested storage: {relative}")
+            if (
+                stat.S_ISLNK(info.st_mode)
+                or not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != UID
+                or stat.S_IMODE(info.st_mode) != 0o700
+            ):
+                fail(f"candidate artifact directory is unsafe: {relative}")
+            directory_paths.add(relative)
+            retained.append(name)
+        directories[:] = retained
+        for name in files:
+            path = current_path / name
+            relative = (relative_directory / name).as_posix()
+            if relative.startswith("storage/"):
+                fail("candidate storage contains a bootstrap artifact")
+            paths.add(relative)
+            if path.is_symlink():
+                fail(f"candidate artifact is a symlink: {relative}")
+    return paths, directory_paths
+
+
+def _rehash_validator_artifact_inventory(
+    bundle: Path,
+    inventory: Mapping[str, Mapping[str, object]],
+) -> None:
+    for slug in SLUGS:
+        root = bundle / "rendered" / slug
+        expected = inventory.get(slug)
+        if expected is None:
+            fail(f"candidate bootstrap artifact inventory changed: {slug}")
+        expected_files = expected.get("files")
+        expected_directories = expected.get("directories")
+        actual_files, actual_directories = _candidate_artifact_paths(root)
+        if (
+            not isinstance(expected_files, Mapping)
+            or not isinstance(expected_directories, list)
+            or actual_files != set(expected_files)
+            or actual_directories != set(expected_directories)
+        ):
+            fail(f"candidate bootstrap artifact inventory changed: {slug}")
+        for relative, digest in expected_files.items():
+            actual, _ = hash_regular(
+                root / relative,
+                MAX_GENESIS_BYTES,
+                f"candidate bootstrap artifact {slug}/{relative}",
+                owner_uid=UID,
+                exact_mode=0o600,
+            )
+            if actual != digest:
+                fail(f"candidate bootstrap artifact changed: {slug}/{relative}")
+
+
+def _require_nevo_genesis_integrity(
+    activation: Activation,
+    manifest: Mapping[str, object],
+) -> tuple[dict[str, object], dict[str, dict[str, object]]]:
+    linkage = manifest.get("genesis_artifact_linkage")
+    if not isinstance(linkage, dict):
+        fail("reset manifest genesis artifact linkage is absent")
+    linkage_keys = {
+        "schema",
+        "review_sha256",
+        "reviewed_unsigned_genesis_sha256",
+        "validator_roster_sha256",
+        "pre_sign_rendered_genesis_sha256",
+        "bound_genesis_manifest_sha256",
+        "signed_genesis_sha256",
+        "genesis_expected_hash",
+        "genesis_public_key",
+        "external_signer_sha256",
+        "native_genesis_verifier_sha256",
+        "native_genesis_verifier_receipt_sha256",
+        "native_verifier_peer_config_set_sha256",
+    }
+    privacy_release = manifest.get("privacy_bootstrap_release")
+    if not isinstance(privacy_release, Mapping):
+        fail("reset manifest privacy bootstrap release is absent")
+    if privacy_release.get("schema") == "iroha.taira.signed_privacy_reset.v1":
+        privacy_binding_key = "privacy_native_verifier_sha256"
+        privacy_binding_value = activation.privacy_native_verifier_sha256
+        if activation.local_reviewed_inputs_identity_sha256 is not None:
+            fail("production reset activation claims local-testnet reviewed inputs")
+    elif (
+        privacy_release.get("schema")
+        == "iroha.taira.local_testnet_reviewed_reset.v1"
+    ):
+        privacy_binding_key = "local_reviewed_inputs_identity_sha256"
+        privacy_binding_value = activation.local_reviewed_inputs_identity_sha256
+        if activation.privacy_native_verifier_sha256 is not None:
+            fail("local-testnet reset activation claims production verifier authority")
+    else:
+        fail("reset manifest privacy bootstrap release schema is unsupported")
+    if privacy_binding_value is None:
+        fail("activation lacks its exact privacy input-mode binding")
+    linkage_keys.add(privacy_binding_key)
+    if set(linkage) != linkage_keys:
+        fail("reset manifest genesis artifact linkage schema is not exact")
+    if linkage.get("schema") != "iroha.taira.nevo-genesis-artifact-linkage.v1":
+        fail("reset manifest genesis artifact linkage version is unsupported")
+    linkage_sha256 = hashlib.sha256(_artifact_canonical_json(linkage)).hexdigest()
+    if (
+        linkage_sha256 != manifest.get("genesis_artifact_linkage_sha256")
+        or linkage_sha256 != activation.genesis_artifact_linkage_sha256
+    ):
+        fail("genesis artifact linkage differs from activation")
+
+    file_bindings = (
+        (
+            "review_sha256",
+            activation.nevo_review_sha256,
+            activation.bundle / "nevo-reset.review.json",
+            MAX_GENESIS_BYTES,
+        ),
+        (
+            "reviewed_unsigned_genesis_sha256",
+            activation.reviewed_unsigned_genesis_sha256,
+            activation.bundle / "genesis.reviewed-unsigned.json",
+            MAX_GENESIS_BYTES,
+        ),
+        (
+            "pre_sign_rendered_genesis_sha256",
+            activation.pre_sign_rendered_genesis_sha256,
+            activation.bundle / "genesis.pre-sign-rendered.json",
+            MAX_GENESIS_BYTES,
+        ),
+        (
+            "bound_genesis_manifest_sha256",
+            activation.bound_genesis_manifest_sha256,
+            activation.bundle / "genesis.json",
+            MAX_GENESIS_BYTES,
+        ),
+        (
+            "signed_genesis_sha256",
+            activation.signed_genesis_sha256,
+            activation.bundle / "genesis.signed.nrt",
+            MAX_GENESIS_BYTES,
+        ),
+    )
+    observed: dict[str, str] = {}
+    for field, activated, path, maximum in file_bindings:
+        digest, _ = hash_regular(
+            path,
+            maximum,
+            f"genesis linkage {field}",
+            owner_uid=UID,
+            exact_mode=0o600,
+        )
+        if linkage.get(field) != digest or activated != digest:
+            fail(f"genesis linkage file differs from activation: {field}")
+        observed[field] = digest
+    validator_roster_sha256, _ = hash_regular(
+        activation.bundle / "validator-roster.toml",
+        MAX_GENESIS_BYTES,
+        "genesis linkage validator roster",
+        owner_uid=UID,
+        exact_mode=0o600,
+    )
+    if (
+        linkage.get("validator_roster_sha256") != validator_roster_sha256
+        or manifest.get("validator_roster_sha256") != validator_roster_sha256
+    ):
+        fail("genesis linkage validator roster differs from the exact bundle")
+    scalar_bindings = {
+        "genesis_expected_hash": (
+            "genesis_expected_hash",
+            activation.genesis_expected_hash,
+        ),
+        "genesis_public_key": ("genesis_public_key", activation.genesis_public_key),
+        "external_signer_sha256": (
+            "genesis_external_signer_sha256",
+            activation.genesis_external_signer_sha256,
+        ),
+        "native_genesis_verifier_sha256": (
+            "genesis_native_verifier_sha256",
+            activation.genesis_native_verifier_sha256,
+        ),
+        "native_verifier_peer_config_set_sha256": (
+            "native_verifier_peer_config_set_sha256",
+            activation.native_verifier_peer_config_set_sha256,
+        ),
+    }
+    for field, (manifest_field, activated) in scalar_bindings.items():
+        if linkage.get(field) != activated or manifest.get(manifest_field) != activated:
+            fail(f"genesis linkage scalar differs from activation: {field}")
+    if (
+        require_sha256(linkage.get(privacy_binding_key), privacy_binding_key)
+        != privacy_binding_value
+        or manifest.get(privacy_binding_key) != privacy_binding_value
+    ):
+        fail("privacy input-mode binding differs from activation")
+
+    receipt = manifest.get("genesis_native_verifier_receipt")
+    receipt_sha256 = manifest.get("genesis_native_verifier_receipt_sha256")
+    if not isinstance(receipt, dict) or not isinstance(receipt_sha256, str):
+        fail("reset manifest lacks the native genesis verifier receipt")
+    require_sha256(receipt_sha256, "native genesis verifier receipt SHA-256")
+    if (
+        hashlib.sha256(_artifact_canonical_json(receipt)).hexdigest()
+        != receipt_sha256
+        or linkage.get("native_genesis_verifier_receipt_sha256")
+        != receipt_sha256
+    ):
+        fail("native genesis verifier receipt digest is not linked")
+    config_manifest = manifest.get("configs")
+    if not isinstance(config_manifest, Mapping) or set(config_manifest) != set(SLUGS):
+        fail("reset manifest peer config digest set is not exact")
+    peer_config_sha256: list[str] = []
+    for slug in SLUGS:
+        digest, _ = hash_regular(
+            activation.bundle / "rendered" / slug / "config.toml",
+            MAX_GENESIS_BYTES,
+            f"native verifier peer config {slug}",
+            owner_uid=UID,
+            exact_mode=0o600,
+        )
+        if config_manifest.get(slug) != digest:
+            fail(f"reset manifest peer config digest changed: {slug}")
+        peer_config_sha256.append(digest)
+    peer_config_set_sha256 = _ordered_sha256_set(peer_config_sha256)
+    if peer_config_set_sha256 != activation.native_verifier_peer_config_set_sha256:
+        fail("native verifier peer config set differs from activation")
+    expected_receipt = {
+        "schema": "iroha.kagami.prepared-genesis-verification.v2",
+        "status": "verified",
+        "reviewed_manifest_sha256": observed[
+            "reviewed_unsigned_genesis_sha256"
+        ],
+        "validator_roster_sha256": validator_roster_sha256,
+        "bound_manifest_sha256": observed["bound_genesis_manifest_sha256"],
+        "pre_sign_manifest_sha256": observed[
+            "pre_sign_rendered_genesis_sha256"
+        ],
+        "signed_genesis_sha256": observed["signed_genesis_sha256"],
+        "peer_config_sha256": peer_config_sha256,
+        "peer_config_set_sha256": peer_config_set_sha256,
+        "genesis_public_key": activation.genesis_public_key,
+        "expected_hash": activation.genesis_expected_hash,
+        "validator_count": PEER_COUNT,
+        "reviewed_transform_passed": True,
+        "allowed_transform_passed": True,
+        "staged_context_passed": True,
+        "full_core_validation_passed": True,
+    }
+    if receipt != expected_receipt:
+        fail("native genesis verifier receipt does not describe this exact bundle")
+
+    reviewed, reviewed_raw = _require_exact_json_object(
+        activation.bundle / "genesis.reviewed-unsigned.json",
+        MAX_GENESIS_BYTES,
+        "reviewed unsigned NEVO genesis",
+    )
+    del reviewed
+    review, review_raw = _require_exact_json_object(
+        activation.bundle / "nevo-reset.review.json",
+        MAX_GENESIS_BYTES,
+        "NEVO reset review",
+    )
+    try:
+        nevo_composer.verify_reviewed_payloads(
+            unsigned_genesis_bytes=reviewed_raw,
+            review_bytes=review_raw,
+            base_genesis_bytes=nevo_composer._read_bounded_regular(
+                nevo_composer.CHECKED_IN_TAIRA_GENESIS,
+                nevo_composer.MAX_BASE_GENESIS_BYTES,
+                "sealed canonical Taira genesis",
+            ),
+            base_config_bytes=nevo_composer._read_bounded_regular(
+                nevo_composer.REPO_ROOT / "configs/soranexus/taira/config.toml",
+                nevo_composer.MAX_BASE_CONFIG_BYTES,
+                "sealed canonical Taira config",
+            ),
+        )
+    except (KeyError, nevo_composer.CompositionError) as error:
+        raise ResetError(f"NEVO review cannot be deterministically recomposed: {error}") from error
+    if review.get("unsigned_genesis_sha256") != observed[
+        "reviewed_unsigned_genesis_sha256"
+    ]:
+        fail("NEVO review does not hash the exact reviewed unsigned genesis")
+
+    inventory = _validate_validator_artifact_inventory(
+        activation.bundle,
+        manifest.get("validator_artifact_inventory"),
+    )
+    return expected_receipt, inventory
+
+
+def _run_native_genesis_verifier(
+    activation: Activation,
+    expected_receipt: Mapping[str, object],
+) -> tuple[int, int, int, int, int, int]:
+    verifier_sha, verifier_info = hash_regular(
+        activation.genesis_native_verifier,
+        MAX_BINARY_BYTES,
+        "candidate native genesis verifier",
+        owner_uid=UID,
+    )
+    if (
+        verifier_sha != activation.genesis_native_verifier_sha256
+        or not stat.S_ISREG(verifier_info.st_mode)
+        or stat.S_IMODE(verifier_info.st_mode) & 0o111 == 0
+    ):
+        fail("candidate native genesis verifier differs from activation")
+    command = [
+        str(activation.genesis_native_verifier),
+        "genesis",
+        "validate-prepared",
+        "--reviewed-manifest",
+        str(activation.bundle / "genesis.reviewed-unsigned.json"),
+        "--validator-roster",
+        str(activation.bundle / "validator-roster.toml"),
+        "--bound-manifest",
+        str(activation.bundle / "genesis.json"),
+        "--pre-sign-manifest",
+        str(activation.bundle / "genesis.pre-sign-rendered.json"),
+        "--signed-genesis",
+        str(activation.bundle / "genesis.signed.nrt"),
+    ]
+    for slug in SLUGS:
+        command.extend(
+            (
+                "--peer-config",
+                str(activation.bundle / "rendered" / slug / "config.toml"),
+            )
+        )
+    command.extend(
+        (
+            "--genesis-public-key",
+            activation.genesis_public_key,
+            "--expected-hash",
+            activation.genesis_expected_hash,
+        )
+    )
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=120,
+            env={
+                "HOME": str(activation.bundle),
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PATH": "/usr/bin:/bin",
+                "TMPDIR": str(activation.bundle),
+            },
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ResetError("native genesis verifier could not run") from error
+    if (
+        completed.returncode != 0
+        or len(completed.stdout) > MAX_VERIFIER_OUTPUT_BYTES
+        or len(completed.stderr) > MAX_VERIFIER_OUTPUT_BYTES
+    ):
+        fail("native genesis verifier refused the candidate bundle")
+    try:
+        receipt = json.loads(completed.stdout)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ResetError("native genesis verifier emitted an invalid receipt") from error
+    if receipt != expected_receipt:
+        fail("native genesis verifier receipt changed at user-controller preflight")
+    verifier_sha_after, verifier_info_after = hash_regular(
+        activation.genesis_native_verifier,
+        MAX_BINARY_BYTES,
+        "candidate native genesis verifier",
+        owner_uid=UID,
+    )
+    if (
+        verifier_sha_after != verifier_sha
+        or metadata_identity(verifier_info_after) != metadata_identity(verifier_info)
+    ):
+        fail("candidate native genesis verifier changed during preflight")
+    return metadata_identity(verifier_info)
+
+
 def build_plan(
     activation: Activation,
     *,
     layout: Layout = PRODUCTION_LAYOUT,
     launchctl: LaunchctlOps | None = None,
     validate_bundle_fn: Callable[..., Any] = reset_bundle.validate_bundle,
+    validate_genesis_integrity_fn: Callable[
+        [Activation, Mapping[str, object]],
+        tuple[dict[str, object], dict[str, dict[str, object]]],
+    ] = _require_nevo_genesis_integrity,
+    run_native_genesis_verifier_fn: Callable[
+        [Activation, Mapping[str, object]],
+        tuple[int, int, int, int, int, int],
+    ] = _run_native_genesis_verifier,
 ) -> ResetPlan:
     if launchctl is not None:
         launchctl.require_initial_cohort()
@@ -977,9 +1611,16 @@ def build_plan(
     ):
         fail("candidate binary does not match its executable manifest binding")
     require_nevo_bundle(activation.bundle, bundle_plan.peers)
+    native_verifier_receipt, validator_artifact_inventory = (
+        validate_genesis_integrity_fn(activation, bundle_plan.manifest)
+    )
+    genesis_native_verifier_identity = run_native_genesis_verifier_fn(
+        activation,
+        native_verifier_receipt,
+    )
     network_hash = bundle_plan.manifest.get("genesis_expected_hash")
-    if not isinstance(network_hash, str):
-        fail("reset manifest lacks its genesis expected hash")
+    if network_hash != activation.genesis_expected_hash:
+        fail("reset manifest genesis expected hash differs from activation")
     network_id = reset_bundle.validator_renderer._format_literal(
         "hash", network_hash.upper()
     )
@@ -1054,6 +1695,8 @@ def build_plan(
         archive_dir=archive_dir,
         log_dir=log_dir,
         binary_identity=metadata_identity(binary_info),
+        genesis_native_verifier_identity=genesis_native_verifier_identity,
+        validator_artifact_inventory=validator_artifact_inventory,
     )
 
 
@@ -1494,6 +2137,15 @@ def require_candidate_inputs_unchanged(plan: ResetPlan) -> None:
     reset_bundle.require_mutable_bundle_identities(
         plan.bundle_plan, phase="before user reset"
     )
+    receipt, inventory = _require_nevo_genesis_integrity(
+        plan.activation,
+        plan.bundle_plan.manifest,
+    )
+    if inventory != plan.validator_artifact_inventory:
+        fail("candidate validator artifact inventory changed after planning")
+    verifier_identity = _run_native_genesis_verifier(plan.activation, receipt)
+    if verifier_identity != plan.genesis_native_verifier_identity:
+        fail("candidate native genesis verifier identity changed after planning")
 
 
 def require_plan_unchanged(plan: ResetPlan) -> None:
@@ -1790,6 +2442,18 @@ def plan_projection(plan: ResetPlan) -> dict[str, object]:
         "bundle": str(plan.activation.bundle),
         "binary": str(plan.activation.binary),
         "binary_sha256": plan.activation.binary_sha256,
+        "genesis_native_verifier": str(plan.activation.genesis_native_verifier),
+        "genesis_native_verifier_sha256": (
+            plan.activation.genesis_native_verifier_sha256
+        ),
+        "genesis_external_signer_sha256": (
+            plan.activation.genesis_external_signer_sha256
+        ),
+        "genesis_public_key": plan.activation.genesis_public_key,
+        "genesis_expected_hash": plan.activation.genesis_expected_hash,
+        "genesis_artifact_linkage_sha256": (
+            plan.activation.genesis_artifact_linkage_sha256
+        ),
         "archive": str(plan.archive_dir),
         "candidate_logs": str(plan.log_dir),
         "candidate_plists": {

@@ -483,13 +483,45 @@ fn append_npos_bootstrap(
     }
     Ok(builder)
 }
-fn load_peer_config(config_path: &Path) -> Result<actual::Root, color_eyre::eyre::Error> {
-    let mut source = TomlSource::from_file(config_path).map_err(|err| {
+pub(super) fn load_peer_config(
+    config_path: &Path,
+) -> Result<actual::Root, color_eyre::eyre::Error> {
+    let source = TomlSource::from_file(config_path).map_err(|err| {
         eyre!(
             "failed to read peer config at {}: {err}",
             config_path.display()
         )
     })?;
+    load_peer_config_source(config_path, source)
+}
+
+/// Parse a peer config from the exact bytes already hashed by an admission caller.
+pub(super) fn load_peer_config_bytes(
+    config_path: &Path,
+    config_bytes: &[u8],
+) -> Result<actual::Root, color_eyre::eyre::Error> {
+    let source_text = std::str::from_utf8(config_bytes).map_err(|error| {
+        eyre!(
+            "peer config at {} is not UTF-8: {error}",
+            config_path.display()
+        )
+    })?;
+    let table = source_text.parse::<toml::Table>().map_err(|error| {
+        eyre!(
+            "failed to parse peer config TOML at {}: {error}",
+            config_path.display()
+        )
+    })?;
+    load_peer_config_source(
+        config_path,
+        TomlSource::new(config_path.to_path_buf(), table),
+    )
+}
+
+fn load_peer_config_source(
+    config_path: &Path,
+    mut source: TomlSource,
+) -> Result<actual::Root, color_eyre::eyre::Error> {
     // Checked-in signing profiles are deliberately not runnable before their exact signed block
     // exists. The signing path needs the remaining consensus-policy projection to construct that
     // block, so replace only the explicit non-hash sentinel in this in-memory copy. The normal
@@ -514,7 +546,7 @@ fn load_peer_config(config_path: &Path) -> Result<actual::Root, color_eyre::eyre
         )
     })
 }
-fn ensure_peer_config_matches_manifest(
+pub(super) fn ensure_peer_config_matches_manifest(
     config: &actual::Root,
     manifest: &RawGenesisTransaction,
 ) -> Result<(), color_eyre::eyre::Error> {

@@ -9,6 +9,7 @@ mod generate;
 mod normalize;
 mod npos;
 mod pop;
+mod prepared;
 pub mod profile;
 mod sign;
 pub use sign::{
@@ -49,6 +50,8 @@ pub enum Args {
     Generate(generate::Args),
     /// Validate a genesis JSON file and report invalid identifiers
     Validate(validate::Args),
+    /// Verify one exact bound-manifest/signed-genesis/signer/hash bundle
+    ValidatePrepared(prepared::Args),
     /// Produce a BLS PoP (Proof-of-Possession) for a consensus key (BLS-normal)
     Pop(pop::Args),
     /// Embed one or more PoPs into a genesis JSON manifest (inline `topology` entries carrying `pop_hex`)
@@ -62,6 +65,7 @@ impl<T: Write> RunArgs<T> for Args {
             Args::Sign(args) => args.run(writer),
             Args::Generate(args) => args.run(writer),
             Args::Validate(args) => args.run(writer),
+            Args::ValidatePrepared(args) => args.run(writer),
             Args::Pop(args) => args.run(writer),
             Args::EmbedPop(args) => args.run(writer),
             Args::Normalize(args) => args.run(writer),

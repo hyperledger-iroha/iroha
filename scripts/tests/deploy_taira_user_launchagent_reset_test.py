@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -52,6 +53,7 @@ def activation_payload(
     generation: str = "nevo-reset-1",
 ) -> dict[str, object]:
     binary = layout.releases / "candidate-release/iroha3d"
+    verifier = binary.with_name("kagami")
     return {
         "schema": module.SCHEMA,
         "generation": generation,
@@ -62,6 +64,23 @@ def activation_payload(
         "reset_manifest_sha256": "1" * 64,
         "binary": str(binary),
         "binary_sha256": hashlib.sha256(b"candidate-binary").hexdigest(),
+        "genesis_native_verifier": str(verifier),
+        "genesis_native_verifier_sha256": hashlib.sha256(
+            b"candidate-native-verifier"
+        ).hexdigest(),
+        "genesis_external_signer_sha256": "4" * 64,
+        "genesis_public_key": (
+            "ed0120403BA31890B09C40B7108A0AC1319D27C10FE5442027CF8333C5C3A09CBB0343"
+        ),
+        "genesis_expected_hash": NEW_HASH,
+        "genesis_artifact_linkage_sha256": "5" * 64,
+        "nevo_review_sha256": "6" * 64,
+        "reviewed_unsigned_genesis_sha256": "7" * 64,
+        "pre_sign_rendered_genesis_sha256": "a" * 64,
+        "native_verifier_peer_config_set_sha256": "b" * 64,
+        "bound_genesis_manifest_sha256": "8" * 64,
+        "signed_genesis_sha256": "9" * 64,
+        "local_reviewed_inputs_identity_sha256": "c" * 64,
         "source_commit": "2" * 40,
         "dpn_validator_release_commit": "3" * 40,
         "limits": {
@@ -115,6 +134,8 @@ def build_fixture(tmp_path: Path) -> tuple[module.Layout, module.Activation, Sim
     payload = activation_payload(layout)
     candidate_binary = Path(str(payload["binary"]))
     private_file(candidate_binary, b"candidate-binary", executable=True)
+    candidate_verifier = Path(str(payload["genesis_native_verifier"]))
+    private_file(candidate_verifier, b"candidate-native-verifier", executable=True)
     bundle = Path(str(payload["bundle"]))
     private_dir(bundle)
     private_file(bundle / "genesis.json", b'{"domain":"nevo.dpn"}\n')
@@ -202,6 +223,10 @@ def build_plan_fixture(
         layout=layout,
         launchctl=launchctl,  # type: ignore[arg-type]
         validate_bundle_fn=validate_bundle,
+        validate_genesis_integrity_fn=lambda _activation, _manifest: ({}, {}),
+        run_native_genesis_verifier_fn=lambda _activation, _receipt: (
+            module.metadata_identity(activation.genesis_native_verifier.lstat())
+        ),
     )
     return layout, plan, captured, launchctl
 
@@ -284,6 +309,10 @@ def test_build_plan_rejects_retired_namespace_in_any_public_projection(tmp_path:
             activation,
             layout=layout,
             validate_bundle_fn=lambda *_args, **_kwargs: bundle_plan,
+            validate_genesis_integrity_fn=lambda _activation, _manifest: ({}, {}),
+            run_native_genesis_verifier_fn=lambda _activation, _receipt: (
+                module.metadata_identity(activation.genesis_native_verifier.lstat())
+            ),
         )
 
 
@@ -304,6 +333,10 @@ def test_build_plan_rejects_missing_nevo_genesis(tmp_path: Path) -> None:
             activation,
             layout=layout,
             validate_bundle_fn=lambda *_args, **_kwargs: bundle_plan,
+            validate_genesis_integrity_fn=lambda _activation, _manifest: ({}, {}),
+            run_native_genesis_verifier_fn=lambda _activation, _receipt: (
+                module.metadata_identity(activation.genesis_native_verifier.lstat())
+            ),
         )
 
 
@@ -316,7 +349,203 @@ def test_build_plan_requires_four_fresh_candidate_storage_directories(tmp_path: 
             activation,
             layout=layout,
             validate_bundle_fn=lambda *_args, **_kwargs: bundle_plan,
+            validate_genesis_integrity_fn=lambda _activation, _manifest: ({}, {}),
+            run_native_genesis_verifier_fn=lambda _activation, _receipt: (
+                module.metadata_identity(activation.genesis_native_verifier.lstat())
+            ),
         )
+
+
+def test_genesis_integrity_binds_review_signed_verifier_and_all_peer_artifacts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _layout, activation, bundle_plan = build_fixture(tmp_path)
+    bundle = bundle_plan.root
+    reviewed = b'{"domain":"nevo.dpn","reviewed":true}\n'
+    pre_sign = b'{"domain":"nevo.dpn","rendered":true}\n'
+    bound = b'{"bound":true,"domain":"nevo.dpn"}\n'
+    signed = b"exact-signed-nevo-genesis"
+    review = module.canonical_json(
+        {"unsigned_genesis_sha256": hashlib.sha256(reviewed).hexdigest()}
+    )
+    private_file(bundle / "genesis.reviewed-unsigned.json", reviewed)
+    private_file(bundle / "genesis.pre-sign-rendered.json", pre_sign)
+    private_file(bundle / "nevo-reset.review.json", review)
+    private_file(bundle / "genesis.json", bound)
+    private_file(bundle / "genesis.signed.nrt", signed)
+    inventory = {
+        peer.slug: {
+            "directories": [],
+            "files": {
+                "config.toml": hashlib.sha256(peer.config.read_bytes()).hexdigest()
+            },
+        }
+        for peer in bundle_plan.peers
+    }
+    peer_config_sha256 = [
+        hashlib.sha256(peer.config.read_bytes()).hexdigest()
+        for peer in bundle_plan.peers
+    ]
+    peer_config_set_sha256 = module._ordered_sha256_set(peer_config_sha256)
+    validator_roster_sha256 = hashlib.sha256(
+        (bundle / "validator-roster.toml").read_bytes()
+    ).hexdigest()
+    activation = dataclasses.replace(
+        activation,
+        nevo_review_sha256=hashlib.sha256(review).hexdigest(),
+        reviewed_unsigned_genesis_sha256=hashlib.sha256(reviewed).hexdigest(),
+        pre_sign_rendered_genesis_sha256=hashlib.sha256(pre_sign).hexdigest(),
+        native_verifier_peer_config_set_sha256=peer_config_set_sha256,
+        bound_genesis_manifest_sha256=hashlib.sha256(bound).hexdigest(),
+        signed_genesis_sha256=hashlib.sha256(signed).hexdigest(),
+    )
+    receipt = {
+        "schema": "iroha.kagami.prepared-genesis-verification.v2",
+        "status": "verified",
+        "reviewed_manifest_sha256": activation.reviewed_unsigned_genesis_sha256,
+        "validator_roster_sha256": validator_roster_sha256,
+        "bound_manifest_sha256": activation.bound_genesis_manifest_sha256,
+        "pre_sign_manifest_sha256": activation.pre_sign_rendered_genesis_sha256,
+        "signed_genesis_sha256": activation.signed_genesis_sha256,
+        "peer_config_sha256": peer_config_sha256,
+        "peer_config_set_sha256": activation.native_verifier_peer_config_set_sha256,
+        "genesis_public_key": activation.genesis_public_key,
+        "expected_hash": activation.genesis_expected_hash,
+        "validator_count": module.PEER_COUNT,
+        "reviewed_transform_passed": True,
+        "allowed_transform_passed": True,
+        "staged_context_passed": True,
+        "full_core_validation_passed": True,
+    }
+    receipt_sha = hashlib.sha256(module._artifact_canonical_json(receipt)).hexdigest()
+    linkage = {
+        "schema": "iroha.taira.nevo-genesis-artifact-linkage.v1",
+        "review_sha256": activation.nevo_review_sha256,
+        "reviewed_unsigned_genesis_sha256": (
+            activation.reviewed_unsigned_genesis_sha256
+        ),
+        "validator_roster_sha256": validator_roster_sha256,
+        "pre_sign_rendered_genesis_sha256": (
+            activation.pre_sign_rendered_genesis_sha256
+        ),
+        "bound_genesis_manifest_sha256": (
+            activation.bound_genesis_manifest_sha256
+        ),
+        "signed_genesis_sha256": activation.signed_genesis_sha256,
+        "genesis_expected_hash": activation.genesis_expected_hash,
+        "genesis_public_key": activation.genesis_public_key,
+        "external_signer_sha256": activation.genesis_external_signer_sha256,
+        "native_genesis_verifier_sha256": (
+            activation.genesis_native_verifier_sha256
+        ),
+        "native_genesis_verifier_receipt_sha256": receipt_sha,
+        "native_verifier_peer_config_set_sha256": (
+            activation.native_verifier_peer_config_set_sha256
+        ),
+        "local_reviewed_inputs_identity_sha256": (
+            activation.local_reviewed_inputs_identity_sha256
+        ),
+    }
+    linkage_sha = hashlib.sha256(module._artifact_canonical_json(linkage)).hexdigest()
+    activation = dataclasses.replace(
+        activation,
+        genesis_artifact_linkage_sha256=linkage_sha,
+    )
+    manifest = {
+        **{
+            field: linkage[field]
+            for field in (
+                "genesis_expected_hash",
+                "genesis_public_key",
+                "external_signer_sha256",
+                "native_genesis_verifier_sha256",
+            )
+        },
+        "genesis_artifact_linkage": linkage,
+        "genesis_artifact_linkage_sha256": linkage_sha,
+        "genesis_native_verifier_receipt": receipt,
+        "genesis_native_verifier_receipt_sha256": receipt_sha,
+        "native_verifier_peer_config_set_sha256": (
+            activation.native_verifier_peer_config_set_sha256
+        ),
+        "validator_roster_sha256": validator_roster_sha256,
+        "configs": {
+            peer.slug: digest
+            for peer, digest in zip(bundle_plan.peers, peer_config_sha256)
+        },
+        "validator_artifact_inventory": inventory,
+        "privacy_bootstrap_release": {
+            "schema": "iroha.taira.local_testnet_reviewed_reset.v1"
+        },
+        "local_reviewed_inputs_identity_sha256": (
+            activation.local_reviewed_inputs_identity_sha256
+        ),
+    }
+    manifest["genesis_external_signer_sha256"] = manifest.pop(
+        "external_signer_sha256"
+    )
+    manifest["genesis_native_verifier_sha256"] = manifest.pop(
+        "native_genesis_verifier_sha256"
+    )
+    monkeypatch.setattr(
+        module.nevo_composer,
+        "verify_reviewed_payloads",
+        lambda **_kwargs: {},
+    )
+
+    accepted_receipt, accepted_inventory = module._require_nevo_genesis_integrity(
+        activation,
+        manifest,
+    )
+    assert accepted_receipt == receipt
+    assert accepted_inventory == inventory
+
+    captured: list[str] = []
+
+    def fake_run(command, **_kwargs):  # type: ignore[no-untyped-def]
+        captured.extend(command)
+        return SimpleNamespace(
+            returncode=0,
+            stdout=module.canonical_json(receipt),
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    module._run_native_genesis_verifier(activation, receipt)
+    assert captured.count("--peer-config") == module.PEER_COUNT
+    assert captured[captured.index("--reviewed-manifest") + 1] == str(
+        bundle / "genesis.reviewed-unsigned.json"
+    )
+    assert captured[captured.index("--validator-roster") + 1] == str(
+        bundle / "validator-roster.toml"
+    )
+    assert [
+        captured[index + 1]
+        for index, value in enumerate(captured)
+        if value == "--peer-config"
+    ] == [str(peer.config) for peer in bundle_plan.peers]
+
+    private_file(bundle_plan.peers[1].config, b"mutated-config")
+    with pytest.raises(module.ResetError, match="peer config digest changed"):
+        module._require_nevo_genesis_integrity(activation, manifest)
+
+
+def test_candidate_artifact_walk_rejects_nested_storage_and_symlink_directories(
+    tmp_path: Path,
+) -> None:
+    root = private_dir(tmp_path / "peer")
+    private_dir(root / "storage")
+    runtime = private_dir(root / "runtime")
+    private_dir(runtime / "storage")
+    with pytest.raises(module.ResetError, match="nested storage"):
+        module._candidate_artifact_paths(root)
+
+    (runtime / "storage").rmdir()
+    target = private_dir(tmp_path / "target")
+    (runtime / "linked").symlink_to(target, target_is_directory=True)
+    with pytest.raises(module.ResetError, match="directory is unsafe"):
+        module._candidate_artifact_paths(root)
 
 
 def test_predecessor_refuses_symlinked_storage(tmp_path: Path) -> None:
@@ -668,6 +897,16 @@ def test_apply_automatically_rolls_back_a_candidate_qc_failure(
         module.reset_bundle,
         "require_mutable_bundle_identities",
         lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        module,
+        "_require_nevo_genesis_integrity",
+        lambda _activation, _manifest: ({}, {}),
+    )
+    monkeypatch.setattr(
+        module,
+        "_run_native_genesis_verifier",
+        lambda _activation, _receipt: plan.genesis_native_verifier_identity,
     )
     ops = RollbackOps()
     health = CandidateFailureHealth()

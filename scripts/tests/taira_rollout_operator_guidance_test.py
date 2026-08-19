@@ -233,6 +233,8 @@ def test_rollout_bundle_has_no_backend_offline_proof_prerequisite() -> None:
         assert obsolete not in workflow
     assert "prepare_taira_offline_reset_bundle.py" not in workflow
     assert "prepare-reset" in workflow
+    assert workflow.count("--genesis-native-verifier") >= 2
+    assert workflow.count("--trusted-genesis-native-verifier-sha256") >= 2
     assert "TAIRA_MACOS_OFFLINE_GENESIS_PATH" not in workflow
     assert "TAIRA_MACOS_KAGEMUSHA_RELEASE_BUNDLE_PATH" not in workflow
 

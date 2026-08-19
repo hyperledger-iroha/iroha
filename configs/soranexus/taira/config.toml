@@ -325,7 +325,7 @@ liquidity_profile = "tier1"
 volatility_class = "stable"
 
 [genesis]
-public_key = "ed0120CEF83A365F125EF1CB8F040290A4C5D23561A24CC4C6782AC07506C77003AF00"
+public_key = "ed0120403BA31890B09C40B7108A0AC1319D27C10FE5442027CF8333C5C3A09CBB0343"
 expected_hash_file = "/run/iroha/genesis.expected_hash"
 
 [streaming]

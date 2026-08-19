@@ -27,6 +27,8 @@ FOREIGN_NETWORK_ID = (
 PUBLIC_TEST_KEYS = (
     bytes.fromhex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"),
     bytes.fromhex("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c"),
+    bytes.fromhex("fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025"),
+    bytes.fromhex("ec172b93ad5e563bf4932c70e1245034c35467ef2efd4d64ebf819683467e2bf"),
 )
 
 
@@ -166,6 +168,12 @@ def _release_payloads() -> dict[str, bytes]:
         ),
         api_signer_account_id=composer._encode_taira_i105_account(
             composer.ED25519_SINGLE_CONTROLLER_PREFIX + PUBLIC_TEST_KEYS[1]
+        ),
+        dpn_inori_account_id=composer._encode_taira_i105_account(
+            composer.ED25519_SINGLE_CONTROLLER_PREFIX + PUBLIC_TEST_KEYS[2]
+        ),
+        dpn_epr_guard_account_id=composer._encode_taira_i105_account(
+            composer.ED25519_SINGLE_CONTROLLER_PREFIX + PUBLIC_TEST_KEYS[3]
         ),
         is2_onboarding_token_hash=f"blake3:{_sha256(b'synthetic-is2-token-hash')}",
         dpn_onboarding_token_hash=f"blake3:{_sha256(b'synthetic-dpn-token-hash')}",

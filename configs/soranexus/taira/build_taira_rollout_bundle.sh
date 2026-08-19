@@ -27,6 +27,7 @@ PRIVACY_BOOTSTRAP_CONFIG="$PRIVACY_BOOTSTRAP_CONFIG_TEMPLATE"
 PRIVACY_BOOTSTRAP_GENESIS="$PRIVACY_BOOTSTRAP_GENESIS_TEMPLATE"
 PRIVACY_BOOTSTRAP_BROKER_PUBLIC=""
 NEVO_RESET_REVIEW=""
+native_recomposition_passed=false
 privacy_release_input_snapshot_dir=""
 privacy_composer_tmp_dir=""
 privacy_evidence_tmp_dir=""
@@ -835,6 +836,7 @@ if [[ "$PROFILE" == "release" ]]; then
   composed_config="${privacy_composer_tmp_dir}/config.toml"
   composed_genesis="${privacy_composer_tmp_dir}/genesis.json"
   composed_broker_public="${privacy_composer_tmp_dir}/bootle_lantern_broker_public.json"
+  composer_status="${privacy_composer_tmp_dir}/render-status.json"
 
   "$kagami_path" privacy-bootstrap emit-taira-v1 \
     --instructions-output "$activation_instructions" \
@@ -850,7 +852,26 @@ if [[ "$PROFILE" == "release" ]]; then
     --plan-output "$composed_plan" \
     --config-output "$composed_config" \
     --genesis-output "$composed_genesis" \
-    --broker-public-output "$composed_broker_public"
+    --broker-public-output "$composed_broker_public" \
+    >"$composer_status"
+
+  python3 -I -S - "$composer_status" "$composed_genesis" <<'PY'
+import hashlib
+import json
+import sys
+
+with open(sys.argv[1], encoding="ascii") as source:
+    status = json.load(source)
+with open(sys.argv[2], "rb") as source:
+    genesis_sha256 = hashlib.sha256(source.read()).hexdigest()
+if (
+    status.get("status") != "rendered"
+    or status.get("native_recomposition_passed") is not True
+    or status.get("genesis_sha256") != genesis_sha256
+):
+    raise SystemExit("native NEVO recomposition status is absent or not output-bound")
+PY
+  native_recomposition_passed=true
 
   compare_composed_privacy_input() {
     local label="$1"
@@ -1193,6 +1214,7 @@ PRIVACY_BOOTSTRAP_BROKER_PUBLIC_PATH="$privacy_bootstrap_broker_public_relative_
 PRIVACY_BOOTSTRAP_BROKER_PUBLIC_SHA256="$privacy_bootstrap_broker_public_sha256" \
 NEVO_RESET_REVIEW_PATH="$nevo_reset_review_relative_path" \
 NEVO_RESET_REVIEW_SHA256="$nevo_reset_review_sha256" \
+NATIVE_RECOMPOSITION_PASSED="$native_recomposition_passed" \
 VALIDATOR_BINARY_SHA256="$validator_binary_sha256" \
 BOOTLE_LANTERN_BROKER_BINARY_SHA256="$bootle_lantern_broker_binary_sha256" \
 PRIVACY_RUNNER_BINARY_SHA256="$privacy_runner_binary_sha256" \
@@ -1204,6 +1226,9 @@ import os
 import re
 
 status = os.environ.get("GIT_STATUS", "")
+native_recomposition_passed = os.environ["NATIVE_RECOMPOSITION_PASSED"] == "true"
+if native_recomposition_passed != (os.environ["PROFILE_NAME"] == "release"):
+    raise SystemExit("native NEVO recomposition state differs from the build profile")
 
 digest_names = (
     "WORKSPACE_SOURCE_MANIFEST_SHA256",
@@ -1268,7 +1293,7 @@ privacy_bootstrap_release = None
 if os.environ["PROFILE_NAME"] == "release":
     privacy_bootstrap_release = {
         "schema": "iroha.taira.privacy-bootstrap-release-bundle.v1",
-        "native_recomposition_passed": True,
+        "native_recomposition_passed": native_recomposition_passed,
         "bundled_release_validation_passed": True,
         "secret_free": True,
         "plan": {

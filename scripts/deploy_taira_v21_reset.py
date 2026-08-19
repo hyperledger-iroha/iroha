@@ -192,7 +192,10 @@ P2P_PORTS = tuple(33_337 + index for index in range(PEER_COUNT))
 TOP_LEVEL_NAMES = {
     "base-config.toml",
     "genesis.json",
+    "genesis.pre-sign-rendered.json",
+    "genesis.reviewed-unsigned.json",
     "genesis.signed.nrt",
+    "nevo-reset.review.json",
     "rendered",
     "reset-manifest.json",
     "validator-roster.toml",

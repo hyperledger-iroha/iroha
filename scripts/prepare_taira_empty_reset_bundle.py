@@ -84,7 +84,11 @@ SOURCE_VALIDATOR_NAMES = {
     "runtime",
     "storage",
 }
-OUTPUT_TOP_LEVEL_NAMES = SOURCE_TOP_LEVEL_NAMES - {"validator-secrets.toml"}
+OUTPUT_TOP_LEVEL_NAMES = (SOURCE_TOP_LEVEL_NAMES - {"validator-secrets.toml"}) | {
+    "genesis.pre-sign-rendered.json",
+    "genesis.reviewed-unsigned.json",
+    "nevo-reset.review.json",
+}
 STATIC_TREES = ("codec", "configs")
 RUNTIME_SIDECARS = (
     "onboarding-signer.key",
@@ -100,6 +104,28 @@ MAX_NATIVE_TOOL_BYTES = 512 * 1024 * 1024
 MAX_SOURCE_BUNDLE_FILES = 16_384
 MAX_SOURCE_BUNDLE_BYTES = 2 * 1024 * 1024 * 1024
 SOURCE_BUNDLE_DIGEST_SCHEMA = "iroha.taira.private-reset-source.inventory.v1"
+LOCAL_TESTNET_SOURCE_CLOSURE_SCHEMA = (
+    "iroha.taira.local-testnet-reset-source-closure.v1"
+)
+LOCAL_TESTNET_SOURCE_CLOSURE_FILES = (
+    "configs/soranexus/taira/config.toml",
+    "configs/soranexus/taira/genesis.json",
+    "configs/soranexus/taira/privacy_bootstrap_plan.json",
+    "scripts/compose_taira_nevo_reset_genesis.py",
+    "scripts/extract_authenticated_taira_privacy_release.py",
+    "scripts/inspect_taira_local_reset_source_closure.py",
+    "scripts/prepare_taira_empty_reset_bundle.py",
+    "scripts/release_artifact_contract.py",
+    "scripts/release_manifest_signing.py",
+    "scripts/render_taira_validator_bundle.py",
+    "scripts/seal_taira_release_controllers.py",
+    "scripts/taira_authority_client.py",
+    "scripts/taira_constants.py",
+    "scripts/taira_privacy_protocol_receipt.py",
+    "scripts/taira_privacy_rollout_contract.py",
+    "scripts/taira_release_authority.py",
+    "scripts/taira_rollout_admission.py",
+)
 GENESIS_PUBLIC_KEY_RE = re.compile(r"ed0120[0-9A-F]{64}")
 KAGEMUSHA_IMMUTABLE_ACTIVATION_PERMISSIONS = frozenset(
     {
@@ -124,6 +150,53 @@ def fail(message: str) -> NoReturn:
 
 def sha256(path: Path) -> str:
     return stable_hash_path(path).sha256
+
+
+def _ordered_sha256_set(digests: Sequence[str]) -> str:
+    """Hash one exact ordered digest list using the native verifier framing."""
+
+    return hashlib.sha256(("\n".join(digests) + "\n").encode("ascii")).hexdigest()
+
+
+def local_testnet_source_closure() -> tuple[dict[str, object], str]:
+    """Return the exact user-owned source closure and its review identity."""
+
+    if tuple(sorted(set(LOCAL_TESTNET_SOURCE_CLOSURE_FILES))) != (
+        LOCAL_TESTNET_SOURCE_CLOSURE_FILES
+    ):
+        raise AssertionError("local-testnet source closure inventory is not exact")
+    repository = SCRIPT_DIR.parent.resolve(strict=True)
+    rows: list[dict[str, object]] = []
+    for relative in LOCAL_TESTNET_SOURCE_CLOSURE_FILES:
+        identity = stable_hash_path(
+            repository / relative,
+            max_size=MAX_NATIVE_TOOL_BYTES,
+        )
+        rows.append(
+            {
+                "path": relative,
+                "sha256": identity.sha256,
+                "size": identity.size,
+            }
+        )
+    manifest: dict[str, object] = {
+        "schema": LOCAL_TESTNET_SOURCE_CLOSURE_SCHEMA,
+        "files": rows,
+    }
+    digest = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
+    return manifest, digest
+
+
+def _require_local_testnet_source_closure(
+    expected_sha256: str,
+) -> tuple[dict[str, object], str]:
+    expected = require_sha256(
+        expected_sha256, "local-testnet source closure SHA-256"
+    )
+    manifest, observed = local_testnet_source_closure()
+    if observed != expected:
+        fail("local-testnet source closure differs from its operator-reviewed SHA-256")
+    return manifest, observed
 
 
 def _require_kagemusha_activation_authority_permissions(
@@ -595,6 +668,116 @@ def _load_authenticated_privacy_release(
     return payloads, manifest, hashlib.sha256(manifest_payload).hexdigest()
 
 
+LOCAL_REVIEW_SCHEMA = "iroha.taira.local_testnet_reviewed_inputs.v1"
+LOCAL_TESTNET_REVIEWED_INPUTS = {
+    name: privacy_release.PRIVACY_INPUTS[name]
+    for name in (
+        "privacy_bootstrap_plan.json",
+        "config.toml",
+        "genesis.json",
+        "nevo-reset.review.json",
+    )
+}
+
+
+def _inspect_local_testnet_reviewed_inputs(
+    root: Path,
+    *,
+    source_commit: str,
+    dpn_validator_release_commit: str,
+    cargo_lock_sha256: str,
+    workspace_source_manifest_sha256: str,
+) -> tuple[dict[str, bytes], dict[str, object], str]:
+    """Bind an issuer-disabled local reset without asserting production authority."""
+
+    require_private_directory(root)
+    expected_names = set(LOCAL_TESTNET_REVIEWED_INPUTS)
+    try:
+        inventory = scan_inventory_paths(root)
+    except ReleaseArtifactError as exc:
+        raise RuntimeError(
+            f"cannot inspect local-testnet reviewed inputs: {exc}"
+        ) from exc
+    if inventory != sorted(expected_names):
+        fail("local-testnet reviewed input inventory is not exactly four files")
+    payloads: dict[str, bytes] = {}
+    rows: dict[str, object] = {}
+    for name, contract in LOCAL_TESTNET_REVIEWED_INPUTS.items():
+        payload = read_private_file(root / name, int(contract["max_bytes"]))
+        payloads[name] = payload
+        rows[name] = {
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "size": len(payload),
+        }
+    checked_config = nevo_composer._read_bounded_regular(
+        nevo_composer.REPO_ROOT / "configs/soranexus/taira/config.toml",
+        nevo_composer.MAX_BASE_CONFIG_BYTES,
+        "sealed local-testnet Taira config",
+    )
+    checked_plan = nevo_composer._read_bounded_regular(
+        nevo_composer.REPO_ROOT
+        / "configs/soranexus/taira/privacy_bootstrap_plan.json",
+        int(LOCAL_TESTNET_REVIEWED_INPUTS["privacy_bootstrap_plan.json"]["max_bytes"]),
+        "sealed local-testnet privacy staging plan",
+    )
+    if payloads["config.toml"] != checked_config:
+        fail("local-testnet reset config is not the exact issuer-disabled source template")
+    if payloads["privacy_bootstrap_plan.json"] != checked_plan:
+        fail("local-testnet reset plan is not the exact staging source template")
+    try:
+        plan = json.loads(checked_plan)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("sealed local-testnet privacy staging plan is invalid") from exc
+    if not isinstance(plan, dict) or plan.get("network_id", object()) is not None:
+        fail("local-testnet reset plan must retain a null staging network_id")
+    config = renderer._load_toml(root / "config.toml")
+    torii = config.get("torii")
+    issuer = (
+        torii.get("privacy_bootle_lantern_issuer")
+        if isinstance(torii, dict)
+        else None
+    )
+    if not isinstance(issuer, dict) or issuer.get("enabled") is not False:
+        fail("local-testnet reset must keep Bootle/Lantern issuance disabled")
+    _validate_authenticated_nevo_release(payloads)
+    manifest: dict[str, object] = {
+        "schema": LOCAL_REVIEW_SCHEMA,
+        "authority_claim": "none-user-authorized-same-host-testnet",
+        "source": {
+            "commit": source_commit,
+            "dpn_validator_release_commit": dpn_validator_release_commit,
+            "cargo_lock_sha256": cargo_lock_sha256,
+            "workspace_source_manifest_sha256": workspace_source_manifest_sha256,
+        },
+        "privacy_inputs": rows,
+    }
+    manifest_bytes = canonical_json_bytes(manifest)
+    return payloads, manifest, hashlib.sha256(manifest_bytes).hexdigest()
+
+
+def _load_local_testnet_reviewed_inputs(
+    root: Path,
+    *,
+    expected_sha256: str,
+    source_commit: str,
+    dpn_validator_release_commit: str,
+    cargo_lock_sha256: str,
+    workspace_source_manifest_sha256: str,
+) -> tuple[dict[str, bytes], dict[str, object], str]:
+    payloads, manifest, observed_sha256 = _inspect_local_testnet_reviewed_inputs(
+        root,
+        source_commit=source_commit,
+        dpn_validator_release_commit=dpn_validator_release_commit,
+        cargo_lock_sha256=cargo_lock_sha256,
+        workspace_source_manifest_sha256=workspace_source_manifest_sha256,
+    )
+    if observed_sha256 != require_sha256(
+        expected_sha256, "local-testnet reviewed input identity SHA-256"
+    ):
+        fail("local-testnet reviewed inputs differ from the operator-inspected identity")
+    return payloads, manifest, observed_sha256
+
+
 def _validate_authenticated_nevo_release(
     payloads: dict[str, bytes],
 ) -> dict[str, Any]:
@@ -1002,7 +1185,7 @@ def _sign_genesis(
             ) from exc
         if (
             re.fullmatch(r"[0-9a-f]{64}\n", expected_text) is None
-            or int(expected_text[-3:-1], 16) & 1 == 0
+            or expected_text == "0" * 64 + "\n"
         ):
             fail("external genesis signer emitted a noncanonical genesis expected hash")
         return expected_text[:-1]
@@ -1011,6 +1194,157 @@ def _sign_genesis(
         stdout_path.unlink(missing_ok=True)
         stderr_path.unlink(missing_ok=True)
         expected_hash_path.unlink(missing_ok=True)
+
+
+def _verify_signed_genesis(
+    *,
+    native_verifier: Path,
+    trusted_native_verifier_sha256: str,
+    reviewed_manifest: Path,
+    validator_roster: Path,
+    bound_manifest: Path,
+    pre_sign_manifest: Path,
+    signed_genesis: Path,
+    peer_configs: Sequence[Path],
+    genesis_public_key: str,
+    expected_hash: str,
+    temporary_root: Path,
+) -> dict[str, object]:
+    """Run the pinned Iroha semantic/signer/hash/full-core verifier."""
+
+    if len(peer_configs) != PEER_COUNT:
+        fail("native genesis verifier requires the exact four peer configs")
+    if tuple(path.parent.name for path in peer_configs) != SLUGS:
+        fail("native genesis verifier peer configs are not in exact roster order")
+
+    identity = _executable_identity(native_verifier, "native genesis verifier")
+    if identity[0] != trusted_native_verifier_sha256:
+        fail("native genesis verifier differs from its trusted SHA-256")
+    verifier_snapshot = temporary_root / "genesis-native-verifier.snapshot"
+    stdout_path = temporary_root / "genesis-native-verifier.stdout"
+    stderr_path = temporary_root / "genesis-native-verifier.stderr"
+    snapshot_identity = _snapshot_executable(
+        native_verifier,
+        verifier_snapshot,
+        identity,
+        "native genesis verifier",
+    )
+    try:
+        command = [
+            str(verifier_snapshot),
+            "genesis",
+            "validate-prepared",
+            "--reviewed-manifest",
+            str(reviewed_manifest),
+            "--validator-roster",
+            str(validator_roster),
+            "--bound-manifest",
+            str(bound_manifest),
+            "--pre-sign-manifest",
+            str(pre_sign_manifest),
+            "--signed-genesis",
+            str(signed_genesis),
+        ]
+        for peer_config in peer_configs:
+            command.extend(("--peer-config", str(peer_config)))
+        command.extend(
+            (
+                "--genesis-public-key",
+                genesis_public_key,
+                "--expected-hash",
+                expected_hash,
+            )
+        )
+        with (
+            _exclusive_binary_output(stdout_path) as stdout,
+            _exclusive_binary_output(stderr_path) as stderr,
+        ):
+            completed = subprocess.run(
+                command,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=stdout,
+                stderr=stderr,
+                timeout=120,
+                umask=0o077,
+                env={
+                    "HOME": str(temporary_root),
+                    "LANG": "C",
+                    "LC_ALL": "C",
+                    "PATH": "/usr/bin:/bin",
+                    "TMPDIR": str(temporary_root),
+                },
+            )
+            stdout.flush()
+            stderr.flush()
+            os.fsync(stdout.fileno())
+            os.fsync(stderr.fileno())
+        if _executable_identity(native_verifier, "native genesis verifier") != identity:
+            fail("native genesis verifier changed during verification")
+        if (
+            _executable_identity(
+                verifier_snapshot, "native genesis verifier snapshot"
+            )
+            != snapshot_identity
+        ):
+            fail("native genesis verifier snapshot changed during verification")
+        for path in (stdout_path, stderr_path):
+            require_private_regular_file(path)
+            if path.lstat().st_size > MAX_GENESIS_SIGNER_OUTPUT_BYTES:
+                fail("native genesis verifier emitted oversized diagnostics")
+        if completed.returncode != 0:
+            fail(
+                "native genesis verifier refused the externally signed bundle "
+                f"with exit status {completed.returncode}"
+            )
+        receipt_payload = read_private_file(
+            stdout_path, MAX_GENESIS_SIGNER_OUTPUT_BYTES
+        )
+        receipt = _strict_json(receipt_payload, "native genesis verifier receipt")
+        if set(receipt) != {
+            "schema",
+            "status",
+            "reviewed_manifest_sha256",
+            "validator_roster_sha256",
+            "bound_manifest_sha256",
+            "pre_sign_manifest_sha256",
+            "signed_genesis_sha256",
+            "peer_config_sha256",
+            "peer_config_set_sha256",
+            "genesis_public_key",
+            "expected_hash",
+            "validator_count",
+            "reviewed_transform_passed",
+            "allowed_transform_passed",
+            "staged_context_passed",
+            "full_core_validation_passed",
+        }:
+            fail("native genesis verifier receipt schema is not exact")
+        peer_config_sha256 = [sha256(path) for path in peer_configs]
+        if receipt != {
+            "schema": "iroha.kagami.prepared-genesis-verification.v2",
+            "status": "verified",
+            "reviewed_manifest_sha256": sha256(reviewed_manifest),
+            "validator_roster_sha256": sha256(validator_roster),
+            "bound_manifest_sha256": sha256(bound_manifest),
+            "pre_sign_manifest_sha256": sha256(pre_sign_manifest),
+            "signed_genesis_sha256": sha256(signed_genesis),
+            "peer_config_sha256": peer_config_sha256,
+            "peer_config_set_sha256": _ordered_sha256_set(peer_config_sha256),
+            "genesis_public_key": genesis_public_key,
+            "expected_hash": expected_hash,
+            "validator_count": PEER_COUNT,
+            "reviewed_transform_passed": True,
+            "allowed_transform_passed": True,
+            "staged_context_passed": True,
+            "full_core_validation_passed": True,
+        }:
+            fail("native genesis verifier receipt differs from the exact signed bundle")
+        return receipt
+    finally:
+        verifier_snapshot.unlink(missing_ok=True)
+        stdout_path.unlink(missing_ok=True)
+        stderr_path.unlink(missing_ok=True)
 
 
 def _privacy_projection(config_path: Path) -> dict[str, Any]:
@@ -1081,6 +1415,74 @@ def _chmod_private_tree(root: Path) -> None:
             os.chmod(path, 0o600)
 
 
+def _validator_artifact_inventory(output: Path) -> dict[str, dict[str, object]]:
+    """Seal every non-storage validator file that can affect first bootstrap."""
+
+    inventory: dict[str, dict[str, object]] = {}
+    for slug in SLUGS:
+        peer = output / "rendered" / slug
+        try:
+            paths = scan_inventory_paths(peer)
+        except ReleaseArtifactError as exc:
+            raise RuntimeError(f"cannot inspect rendered validator {slug}: {exc}") from exc
+        if "config.toml" not in paths or any(
+            path == "storage" or path.startswith("storage/") for path in paths
+        ):
+            fail(f"rendered {slug} inventory lacks config or contains storage bytes")
+        allowed = ("codec/", "configs/", "manifests/", "runtime/")
+        if any(path != "config.toml" and not path.startswith(allowed) for path in paths):
+            fail(f"rendered {slug} contains an unclassified bootstrap artifact")
+        rows: dict[str, str] = {}
+        for relative in paths:
+            try:
+                info = stable_hash_relative(
+                    peer,
+                    relative,
+                    max_size=MAX_PRIVATE_FILE_BYTES,
+                )
+            except ReleaseArtifactError as exc:
+                raise RuntimeError(
+                    f"cannot seal rendered validator artifact {slug}/{relative}: {exc}"
+                ) from exc
+            if info.mode != 0o600 or info.link_count != 1:
+                fail(f"rendered validator artifact custody differs: {slug}/{relative}")
+            rows[relative] = info.sha256
+        directories: list[str] = []
+        for current, names, _files in os.walk(peer, followlinks=False):
+            current_path = Path(current)
+            relative_current = current_path.relative_to(peer)
+            retained: list[str] = []
+            for name in names:
+                path = current_path / name
+                relative = (relative_current / name).as_posix()
+                info = path.lstat()
+                if name == "storage":
+                    if relative != "storage" or current_path != peer:
+                        fail(f"rendered {slug} has a nested storage directory: {relative}")
+                    if not stat.S_ISDIR(info.st_mode):
+                        fail(f"rendered {slug} has an unsafe storage directory")
+                    continue
+                if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                    fail(f"rendered {slug} has an unsafe artifact directory: {relative}")
+                if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+                    fail(f"rendered {slug} artifact directory custody differs: {relative}")
+                if Path(relative).parts[0] not in {
+                    "codec",
+                    "configs",
+                    "manifests",
+                    "runtime",
+                }:
+                    fail(f"rendered {slug} has an unclassified artifact directory: {relative}")
+                directories.append(relative)
+                retained.append(name)
+            names[:] = retained
+        inventory[slug] = {
+            "directories": sorted(directories),
+            "files": rows,
+        }
+    return inventory
+
+
 def prepare(args: argparse.Namespace) -> dict[str, object]:
     irohad_sha256 = require_sha256(args.irohad_sha256, "irohad SHA-256")
     source_bundle_sha256 = require_sha256(
@@ -1094,28 +1496,64 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
     workspace_source_manifest_sha256 = require_sha256(
         args.workspace_source_manifest_sha256, "workspace source manifest SHA-256"
     )
-    controller_digest = require_sha256(
-        args.controller_digest, "sealed release controller digest"
-    )
-    controller_manifest = args.controller_manifest
-    expected_controller_manifest = _sealed_controller_manifest_path()
-    if controller_manifest != expected_controller_manifest:
-        fail("controller manifest is not the sibling of the sealed reset controller")
-    try:
-        controller_seal.verify(
-            controller_manifest.parent,
-            controller_digest,
-            "macos",
-            source_commit,
+    production_privacy_mode = args.privacy_release_dir is not None
+    local_testnet_privacy_mode = args.local_testnet_reviewed_input_dir is not None
+    if production_privacy_mode == local_testnet_privacy_mode:
+        fail(
+            "select exactly one of --privacy-release-dir or "
+            "--local-testnet-reviewed-input-dir"
         )
-    except controller_seal.ControllerSealError as exc:
-        raise RuntimeError(f"sealed release controller differs: {exc}") from exc
-    controller_manifest_sha256 = stable_hash_path(
-        controller_manifest, max_size=MAX_RESET_MANIFEST_BYTES
-    ).sha256
+    if production_privacy_mode and args.local_testnet_reviewed_inputs_sha256 is not None:
+        fail("production privacy mode cannot accept a local-testnet review digest")
+    controller_digest: str | None = None
+    controller_manifest_sha256: str | None = None
+    local_source_closure: dict[str, object] | None = None
+    local_source_closure_sha256: str | None = None
+    if production_privacy_mode:
+        if args.local_testnet_source_closure_sha256 is not None:
+            fail("production privacy mode cannot claim a local-testnet source closure")
+        if args.controller_manifest is None or args.controller_digest is None:
+            fail("production privacy mode requires the sealed release controller pair")
+        controller_digest = require_sha256(
+            args.controller_digest, "sealed release controller digest"
+        )
+        controller_manifest = args.controller_manifest
+        expected_controller_manifest = _sealed_controller_manifest_path()
+        if controller_manifest != expected_controller_manifest:
+            fail("controller manifest is not the sibling of the sealed reset controller")
+        try:
+            controller_seal.verify(
+                controller_manifest.parent,
+                controller_digest,
+                "macos",
+                source_commit,
+            )
+        except controller_seal.ControllerSealError as exc:
+            raise RuntimeError(f"sealed release controller differs: {exc}") from exc
+        controller_manifest_sha256 = stable_hash_path(
+            controller_manifest, max_size=MAX_RESET_MANIFEST_BYTES
+        ).sha256
+    else:
+        if args.local_testnet_reviewed_inputs_sha256 is None:
+            fail("local-testnet reviewed inputs require their inspected SHA-256 identity")
+        if args.local_testnet_source_closure_sha256 is None:
+            fail("local-testnet reset requires its operator-reviewed source closure SHA-256")
+        if args.controller_manifest is not None or args.controller_digest is not None:
+            fail("local-testnet reset cannot claim a production release controller")
+        local_source_closure, local_source_closure_sha256 = (
+            _require_local_testnet_source_closure(
+                args.local_testnet_source_closure_sha256
+            )
+        )
     source = args.source_bundle
     output = args.output_bundle
-    privacy_root = args.privacy_release_dir
+    privacy_root = (
+        args.privacy_release_dir
+        if production_privacy_mode
+        else args.local_testnet_reviewed_input_dir
+    )
+    if privacy_root is None:
+        raise AssertionError("privacy input mode invariant")
     require_private_directory(source)
     trusted_genesis_signer_sha256 = require_sha256(
         args.trusted_genesis_external_signer_sha256,
@@ -1126,12 +1564,31 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
     )
     if genesis_signer_identity[0] != trusted_genesis_signer_sha256:
         fail("external genesis signer differs from its trusted SHA-256")
+    trusted_genesis_native_verifier_sha256 = require_sha256(
+        args.trusted_genesis_native_verifier_sha256,
+        "native genesis verifier SHA-256",
+    )
+    genesis_native_verifier_identity = _executable_identity(
+        args.genesis_native_verifier, "native genesis verifier"
+    )
+    if genesis_native_verifier_identity[0] != trusted_genesis_native_verifier_sha256:
+        fail("native genesis verifier differs from its trusted SHA-256")
     token_hash_tool_identity = _executable_identity(
         args.onboarding_token_hash_tool,
         "native onboarding-token hash tool",
     )
-    if args.genesis_external_signer == args.onboarding_token_hash_tool:
-        fail("external genesis signer and onboarding-token hash tool must be distinct")
+    native_tools = {
+        args.genesis_external_signer,
+        args.genesis_native_verifier,
+        args.onboarding_token_hash_tool,
+    }
+    native_tool_hashes = {
+        trusted_genesis_signer_sha256,
+        trusted_genesis_native_verifier_sha256,
+        str(token_hash_tool_identity[0]),
+    }
+    if len(native_tools) != 3 or len(native_tool_hashes) != 3:
+        fail("external signer, native verifier, and token-hash tool must be distinct")
     if not output.is_absolute():
         fail("output bundle must be an absolute path")
     if output.exists() or output.is_symlink():
@@ -1142,15 +1599,27 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
     free_bytes_before_copy = require_minimum_free_space(
         output.parent, args.minimum_free_bytes
     )
-    privacy_payloads, authenticated_manifest, authenticated_manifest_sha = (
-        _load_authenticated_privacy_release(
-            privacy_root,
-            source_commit=source_commit,
-            dpn_validator_release_commit=dpn_validator_release_commit,
-            cargo_lock_sha256=cargo_lock_sha256,
-            workspace_source_manifest_sha256=workspace_source_manifest_sha256,
+    if production_privacy_mode:
+        privacy_payloads, authenticated_manifest, authenticated_manifest_sha = (
+            _load_authenticated_privacy_release(
+                privacy_root,
+                source_commit=source_commit,
+                dpn_validator_release_commit=dpn_validator_release_commit,
+                cargo_lock_sha256=cargo_lock_sha256,
+                workspace_source_manifest_sha256=workspace_source_manifest_sha256,
+            )
         )
-    )
+    else:
+        privacy_payloads, authenticated_manifest, authenticated_manifest_sha = (
+            _load_local_testnet_reviewed_inputs(
+                privacy_root,
+                expected_sha256=str(args.local_testnet_reviewed_inputs_sha256),
+                source_commit=source_commit,
+                dpn_validator_release_commit=dpn_validator_release_commit,
+                cargo_lock_sha256=cargo_lock_sha256,
+                workspace_source_manifest_sha256=workspace_source_manifest_sha256,
+            )
+        )
     nevo_review = _validate_authenticated_nevo_release(privacy_payloads)
     kagemusha_activation_authority: str | None = None
     kagemusha_release_policy_sha256: str | None = None
@@ -1206,6 +1675,24 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             )
         )
         write_private_file(output / "base-config.toml", privacy_payloads["config.toml"])
+        write_private_file(
+            output / "genesis.reviewed-unsigned.json",
+            privacy_payloads["genesis.json"],
+        )
+        write_private_file(
+            output / "nevo-reset.review.json",
+            privacy_payloads["nevo-reset.review.json"],
+        )
+        release_config = renderer._load_toml(output / "base-config.toml")
+        genesis_table = release_config.get("genesis")
+        genesis_public_key = (
+            genesis_table.get("public_key") if isinstance(genesis_table, dict) else None
+        )
+        if (
+            not isinstance(genesis_public_key, str)
+            or GENESIS_PUBLIC_KEY_RE.fullmatch(genesis_public_key) is None
+        ):
+            fail("reviewed release config lacks one canonical Ed25519 genesis public key")
         rendered = output / "rendered"
 
         with tempfile.TemporaryDirectory(
@@ -1282,6 +1769,10 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 fail("renderer emitted unsafe external genesis signing guidance")
             signing_command.unlink()
             os.chmod(rendered / "genesis.json", 0o600)
+            write_private_file(
+                output / "genesis.pre-sign-rendered.json",
+                read_private_file(rendered / "genesis.json", 64 * 1024 * 1024),
+            )
             expected_hash = _sign_genesis(
                 external_signer=args.genesis_external_signer,
                 trusted_external_signer_sha256=trusted_genesis_signer_sha256,
@@ -1304,7 +1795,6 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                     kagemusha_activation_authority,
                 )
             write_private_file(output / "genesis.json", bound_genesis)
-
             written = renderer.render_bundle(
                 output / "base-config.toml",
                 output / "validator-roster.toml",
@@ -1332,6 +1822,23 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 != token_hash_snapshot_identity
             ):
                 fail("native onboarding-token hash tool changed during rendering")
+            native_genesis_verifier_receipt = _verify_signed_genesis(
+                native_verifier=args.genesis_native_verifier,
+                trusted_native_verifier_sha256=(
+                    trusted_genesis_native_verifier_sha256
+                ),
+                reviewed_manifest=output / "genesis.reviewed-unsigned.json",
+                validator_roster=output / "validator-roster.toml",
+                bound_manifest=output / "genesis.json",
+                pre_sign_manifest=output / "genesis.pre-sign-rendered.json",
+                signed_genesis=output / "genesis.signed.nrt",
+                peer_configs=tuple(
+                    rendered / slug / "config.toml" for slug in SLUGS
+                ),
+                genesis_public_key=genesis_public_key,
+                expected_hash=expected_hash,
+                temporary_root=temporary,
+            )
 
         config_hashes = _validate_rendered_configs(output, expected_hash)
         _validate_rendered_nevo_bindings(output, nevo_review)
@@ -1342,28 +1849,121 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 include_qualification_seal=True,
             )
         )
-        release_config = renderer._load_toml(output / "base-config.toml")
-        genesis_table = release_config.get("genesis")
-        genesis_public_key = (
-            genesis_table.get("public_key") if isinstance(genesis_table, dict) else None
-        )
-        if (
-            not isinstance(genesis_public_key, str)
-            or GENESIS_PUBLIC_KEY_RE.fullmatch(genesis_public_key) is None
-        ):
-            fail(
-                "reviewed release config lacks one canonical Ed25519 genesis public key"
-            )
-
         for slug in SLUGS:
             storage = rendered / slug / "storage"
             storage.mkdir(mode=0o700)
             if any(storage.iterdir()):
                 fail(f"new storage is not empty: {storage}")
 
+        validator_artifact_inventory = _validator_artifact_inventory(output)
+        reviewed_unsigned_sha256 = sha256(output / "genesis.reviewed-unsigned.json")
+        pre_sign_rendered_sha256 = sha256(
+            output / "genesis.pre-sign-rendered.json"
+        )
+        bound_genesis_sha256 = sha256(output / "genesis.json")
+        signed_genesis_sha256 = sha256(output / "genesis.signed.nrt")
+        nevo_review_sha256 = sha256(output / "nevo-reset.review.json")
+        privacy_native_verifier_sha256 = (
+            str(authenticated_manifest["authority"]["native_verifier_sha256"])
+            if production_privacy_mode
+            else None
+        )
+        native_genesis_verifier_receipt_sha256 = hashlib.sha256(
+            canonical_json_bytes(native_genesis_verifier_receipt)
+        ).hexdigest()
+        genesis_artifact_linkage = {
+            "schema": "iroha.taira.nevo-genesis-artifact-linkage.v1",
+            "review_sha256": nevo_review_sha256,
+            "reviewed_unsigned_genesis_sha256": reviewed_unsigned_sha256,
+            "validator_roster_sha256": sha256(
+                output / "validator-roster.toml"
+            ),
+            "pre_sign_rendered_genesis_sha256": pre_sign_rendered_sha256,
+            "bound_genesis_manifest_sha256": bound_genesis_sha256,
+            "signed_genesis_sha256": signed_genesis_sha256,
+            "genesis_expected_hash": expected_hash,
+            "genesis_public_key": genesis_public_key,
+            "external_signer_sha256": trusted_genesis_signer_sha256,
+            "native_genesis_verifier_sha256": (
+                trusted_genesis_native_verifier_sha256
+            ),
+            "native_genesis_verifier_receipt_sha256": (
+                native_genesis_verifier_receipt_sha256
+            ),
+            "native_verifier_peer_config_set_sha256": (
+                native_genesis_verifier_receipt["peer_config_set_sha256"]
+            ),
+        }
+        if production_privacy_mode:
+            genesis_artifact_linkage["privacy_native_verifier_sha256"] = (
+                privacy_native_verifier_sha256
+            )
+        else:
+            genesis_artifact_linkage["local_reviewed_inputs_identity_sha256"] = (
+                authenticated_manifest_sha
+            )
+        genesis_artifact_linkage_sha256 = hashlib.sha256(
+            canonical_json_bytes(genesis_artifact_linkage)
+        ).hexdigest()
+
         input_rows = authenticated_manifest["privacy_inputs"]
         if not isinstance(input_rows, dict):
             fail("authenticated privacy release input bindings changed")
+        reviewed_inputs = {
+            name: {
+                "sha256": input_rows[name]["sha256"],
+                "size": input_rows[name]["size"],
+            }
+            for name in (
+                privacy_release.PRIVACY_INPUTS
+                if production_privacy_mode
+                else LOCAL_TESTNET_REVIEWED_INPUTS
+            )
+        }
+        nevo_reset_record = {
+            "schema": nevo_review["schema"],
+            "sha256": hashlib.sha256(
+                privacy_payloads["nevo-reset.review.json"]
+            ).hexdigest(),
+            "public_inputs_sha256": nevo_review["public_inputs_sha256"],
+            "unsigned_genesis_sha256": nevo_review["unsigned_genesis_sha256"],
+            "public_identities": nevo_review["public_identities"],
+            "credential_hash_bindings": nevo_review["credential_hash_bindings"],
+        }
+        privacy_bootstrap_release: dict[str, object] = {
+            "schema": (
+                "iroha.taira.signed_privacy_reset.v1"
+                if production_privacy_mode
+                else "iroha.taira.local_testnet_reviewed_reset.v1"
+            ),
+            "reviewed_inputs": reviewed_inputs,
+            "bound_genesis_manifest_sha256": bound_genesis_sha256,
+            "signed_genesis_sha256": signed_genesis_sha256,
+            "validator_config_sha256": config_hashes,
+            "nevo_reset_review": nevo_reset_record,
+        }
+        if production_privacy_mode:
+            privacy_bootstrap_release.update(
+                {
+                    "designated_issuer_validator": SLUGS[0],
+                    "authenticated_snapshot_manifest_sha256": authenticated_manifest_sha,
+                    "rollout_manifest_sha256": authenticated_manifest[
+                        "rollout_manifest_sha256"
+                    ],
+                    "linux_archive": authenticated_manifest["linux_archive"],
+                    "authority": authenticated_manifest["authority"],
+                }
+            )
+        else:
+            privacy_bootstrap_release.update(
+                {
+                    "authority_claim": "none-user-authorized-same-host-testnet",
+                    "issuer_state": "disabled-no-broker",
+                    "post_genesis_issuer_enablement_required": True,
+                    "reviewed_inputs_identity_sha256": authenticated_manifest_sha,
+                    "source": authenticated_manifest["source"],
+                }
+            )
         manifest = {
             key: source_manifest[key]
             for key in (
@@ -1382,21 +1982,34 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 "dpn_validator_release_commit": dpn_validator_release_commit,
                 "cargo_lock_sha256": cargo_lock_sha256,
                 "workspace_source_manifest_sha256": workspace_source_manifest_sha256,
-                "release_controller": {
-                    "digest": controller_digest,
-                    "manifest_sha256": controller_manifest_sha256,
-                    "platform": "macos",
-                },
                 "source_reset_bundle_sha256": authenticated_source_sha256,
                 "irohad_sha256": irohad_sha256,
                 "onboarding_token_hash_tool_sha256": token_hash_tool_identity[0],
+                "genesis_external_signer_sha256": trusted_genesis_signer_sha256,
+                "genesis_native_verifier_sha256": (
+                    trusted_genesis_native_verifier_sha256
+                ),
                 "genesis_public_key": genesis_public_key,
                 "genesis_expected_hash": expected_hash,
-                "signed_genesis_sha256": sha256(output / "genesis.signed.nrt"),
+                "signed_genesis_sha256": signed_genesis_sha256,
+                "validator_roster_sha256": genesis_artifact_linkage[
+                    "validator_roster_sha256"
+                ],
+                "pre_sign_rendered_genesis_sha256": pre_sign_rendered_sha256,
+                "native_verifier_peer_config_set_sha256": (
+                    native_genesis_verifier_receipt["peer_config_set_sha256"]
+                ),
                 "unsigned_genesis_sha256": sha256(output / "genesis.json"),
-                "bound_genesis_manifest_sha256": sha256(output / "genesis.json"),
+                "bound_genesis_manifest_sha256": bound_genesis_sha256,
+                "genesis_artifact_linkage": genesis_artifact_linkage,
+                "genesis_artifact_linkage_sha256": genesis_artifact_linkage_sha256,
+                "genesis_native_verifier_receipt": native_genesis_verifier_receipt,
+                "genesis_native_verifier_receipt_sha256": (
+                    native_genesis_verifier_receipt_sha256
+                ),
                 "base_config_sha256": sha256(output / "base-config.toml"),
                 "configs": config_hashes,
+                "validator_artifact_inventory": validator_artifact_inventory,
                 "receipt_signers": receipt_signers,
                 "governance_manifests": {
                     slug: sha256(rendered / slug / "manifests/governance.manifest.json")
@@ -1412,44 +2025,44 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 "prewarmed_storage_sha256": {
                     slug: hashlib.sha256().hexdigest() for slug in SLUGS
                 },
-                "privacy_bootstrap_release": {
-                    "schema": "iroha.taira.signed_privacy_reset.v1",
-                    "authenticated_snapshot_manifest_sha256": authenticated_manifest_sha,
-                    "rollout_manifest_sha256": authenticated_manifest[
-                        "rollout_manifest_sha256"
-                    ],
-                    "linux_archive": authenticated_manifest["linux_archive"],
-                    "authority": authenticated_manifest["authority"],
-                    "reviewed_inputs": {
-                        name: {
-                            "sha256": input_rows[name]["sha256"],
-                            "size": input_rows[name]["size"],
-                        }
-                        for name in privacy_release.PRIVACY_INPUTS
-                    },
-                    "designated_issuer_validator": SLUGS[0],
-                    "bound_genesis_manifest_sha256": sha256(output / "genesis.json"),
-                    "signed_genesis_sha256": sha256(output / "genesis.signed.nrt"),
-                    "validator_config_sha256": config_hashes,
-                    "nevo_reset_review": {
-                        "schema": nevo_review["schema"],
-                        "sha256": hashlib.sha256(
-                            privacy_payloads["nevo-reset.review.json"]
-                        ).hexdigest(),
-                        "public_inputs_sha256": nevo_review[
-                            "public_inputs_sha256"
-                        ],
-                        "unsigned_genesis_sha256": nevo_review[
-                            "unsigned_genesis_sha256"
-                        ],
-                        "public_identities": nevo_review["public_identities"],
-                        "credential_hash_bindings": nevo_review[
-                            "credential_hash_bindings"
-                        ],
-                    },
-                },
+                "privacy_bootstrap_release": privacy_bootstrap_release,
             }
         )
+        if production_privacy_mode:
+            if controller_digest is None or controller_manifest_sha256 is None:
+                raise AssertionError("production controller identity invariant")
+            manifest["release_controller"] = {
+                "digest": controller_digest,
+                "manifest_sha256": controller_manifest_sha256,
+                "platform": "macos",
+            }
+            manifest["privacy_native_verifier_sha256"] = (
+                privacy_native_verifier_sha256
+            )
+        else:
+            if (
+                local_source_closure is None
+                or local_source_closure_sha256 is None
+                or args.local_testnet_source_closure_sha256 is None
+            ):
+                raise AssertionError("local-testnet source closure invariant")
+            current_closure, current_closure_sha256 = (
+                _require_local_testnet_source_closure(
+                    args.local_testnet_source_closure_sha256
+                )
+            )
+            if (
+                current_closure != local_source_closure
+                or current_closure_sha256 != local_source_closure_sha256
+            ):
+                fail("local-testnet source closure changed during bundle preparation")
+            manifest["local_testnet_source_closure"] = {
+                **local_source_closure,
+                "sha256": local_source_closure_sha256,
+            }
+            manifest["local_reviewed_inputs_identity_sha256"] = (
+                authenticated_manifest_sha
+            )
         if args.kagemusha_release_root is not None:
             manifest["kagemusha_release_root"] = str(args.kagemusha_release_root)
             manifest["kagemusha_release_policy_sha256"] = (
@@ -1479,7 +2092,7 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
-        result = {
+        result: dict[str, object] = {
             "bundle": str(output),
             "empty_storage_sha256": hashlib.sha256().hexdigest(),
             "free_bytes_before_copy": free_bytes_before_copy,
@@ -1487,8 +2100,13 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             "irohad_sha256": irohad_sha256,
             "peer_count": PEER_COUNT,
             "privacy_snapshot_manifest_sha256": authenticated_manifest_sha,
-            "controller_digest": controller_digest,
         }
+        if production_privacy_mode:
+            result["controller_digest"] = controller_digest
+        else:
+            result["local_testnet_source_closure_sha256"] = (
+                local_source_closure_sha256
+            )
         if args.kagemusha_release_root is not None:
             result["kagemusha_release_root"] = str(args.kagemusha_release_root)
             result["kagemusha_release_policy_sha256"] = (
@@ -1512,9 +2130,14 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--source-bundle", type=Path, required=True)
     parser.add_argument("--source-bundle-sha256", required=True)
-    parser.add_argument("--privacy-release-dir", type=Path, required=True)
+    parser.add_argument("--privacy-release-dir", type=Path)
+    parser.add_argument("--local-testnet-reviewed-input-dir", type=Path)
+    parser.add_argument("--local-testnet-reviewed-inputs-sha256")
+    parser.add_argument("--local-testnet-source-closure-sha256")
     parser.add_argument("--genesis-external-signer", type=Path, required=True)
     parser.add_argument("--trusted-genesis-external-signer-sha256", required=True)
+    parser.add_argument("--genesis-native-verifier", type=Path, required=True)
+    parser.add_argument("--trusted-genesis-native-verifier-sha256", required=True)
     parser.add_argument("--onboarding-token-hash-tool", type=Path, required=True)
     parser.add_argument(
         "--kagemusha-release-root",
@@ -1538,8 +2161,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--dpn-validator-release-commit", required=True)
     parser.add_argument("--cargo-lock-sha256", required=True)
     parser.add_argument("--workspace-source-manifest-sha256", required=True)
-    parser.add_argument("--controller-manifest", type=Path, required=True)
-    parser.add_argument("--controller-digest", required=True)
+    parser.add_argument("--controller-manifest", type=Path)
+    parser.add_argument("--controller-digest")
     parser.add_argument(
         "--minimum-free-bytes",
         type=int,
