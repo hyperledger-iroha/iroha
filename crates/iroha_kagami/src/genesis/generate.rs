@@ -605,27 +605,26 @@ pub fn generate_default(
 ) -> color_eyre::Result<RawGenesisTransaction> {
     let genesis_account_id = AccountId::new(genesis_public_key.clone());
     let meta = Metadata::default();
-    let wonderland_name: Name = "wonderland".parse()?;
+    let localnet_name: Name = "localnet".parse()?;
     let universal_dataspace: Name = "universal".parse()?;
-    let wonderland_domain =
-        DomainId::try_new(wonderland_name.as_ref(), universal_dataspace.as_ref())?;
+    let localnet_domain = DomainId::try_new(localnet_name.as_ref(), universal_dataspace.as_ref())?;
     let garden_of_live_flowers_name: Name = "garden_of_live_flowers".parse()?;
     let garden_of_live_flowers_domain = DomainId::try_new(
         garden_of_live_flowers_name.as_ref(),
         universal_dataspace.as_ref(),
     )?;
     let rose_asset_definition_id =
-        AssetDefinitionId::derive_from_components(wonderland_domain.clone(), "rose".parse()?);
+        AssetDefinitionId::derive_from_components(localnet_domain.clone(), "rose".parse()?);
     let cabbage_asset_definition_id = AssetDefinitionId::derive_from_components(
         garden_of_live_flowers_domain.clone(),
         "cabbage".parse()?,
     );
-    let mut wonderland = builder.domain_with_metadata(wonderland_domain.clone(), meta.clone());
+    let mut localnet = builder.domain_with_metadata(localnet_domain.clone(), meta.clone());
     if genesis_account_id != *ALICE_ID {
-        wonderland = wonderland
+        localnet = localnet
             .account_with_metadata(ALICE_ID.expect_single_signatory().clone(), meta.clone());
     }
-    let mut builder = wonderland
+    let mut builder = localnet
         .asset("rose".parse()?, NumericSpec::default())
         .finish_domain()
         .domain(garden_of_live_flowers_domain.clone())
@@ -642,7 +641,7 @@ pub fn generate_default(
     );
     let register_account_permission = Permission::new(
         <CanRegisterAccount as iroha_executor_data_model::permission::Permission>::name(),
-        Json::from_raw_json(format!("{{\"domain\":\"{}\"}}", wonderland_domain))?,
+        Json::from_raw_json(format!("{{\"domain\":\"{}\"}}", localnet_domain))?,
     );
     let grant_permission_to_set_parameters =
         Grant::account_permission(CanSetParameters, ALICE_ID.clone());

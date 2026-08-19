@@ -155,7 +155,7 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
         let out_dir = Text::new("Output directory?")
             .with_default(&default_out_dir)
             .prompt()?;
-        let extra_accounts: u16 = CustomType::new("Extra accounts (in wonderland)?")
+        let extra_accounts: u16 = CustomType::new("Extra localnet accounts?")
             .with_default(0u16)
             .prompt()?;
         let mut assets: Vec<AssetSpec> = Vec::new();
@@ -168,7 +168,7 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
                 .prompt()?;
             for i in 0..count {
                 let default_id =
-                    canonical_asset_definition_literal("wonderland", &format!("asset{i}"));
+                    canonical_asset_definition_literal("localnet", &format!("asset{i}"));
                 let id = Text::new("Asset definition id (Base58)")
                     .with_default(&default_id)
                     .prompt()?;

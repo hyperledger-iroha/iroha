@@ -179,7 +179,7 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 
   Default value: `1337`
 * `-o`, `--out-dir <DIR>` — Output directory for configs/genesis/scripts
-* `--extra-accounts <EXTRA_ACCOUNTS>` — Extra accounts to pre-register (in wonderland)
+* `--extra-accounts <EXTRA_ACCOUNTS>` — Extra localnet accounts to pre-register
 
   Default value: `0`
 * `--sample-asset` — Register the optional sample asset and mint to the default account. The built-in Kagemusha asset is always emitted

@@ -109,7 +109,7 @@ pub struct LocalnetOptions {
     pub base_p2p_port: u16,
     /// Output directory for configs, scripts, and genesis.
     pub out_dir: PathBuf,
-    /// Additional wonderland accounts to pre-register beyond Alice.
+    /// Additional localnet accounts to pre-register beyond Alice.
     pub extra_accounts: u16,
     /// Additional asset specs to register and optionally mint on top of the built-in localnet asset set.
     pub assets: Vec<AssetSpec>,
@@ -560,7 +560,7 @@ const LOCALNET_FEE_SPONSOR_PER_BENEFICIARY_EPOCH: u64 = 50_000_000;
 const LOCALNET_FEE_SPONSOR_RESERVE_FLOOR: u64 = 10_000_000;
 const LOCALNET_FEE_SPONSOR_EPOCH_BLOCKS: u64 = 3_600;
 const LOCALNET_ONBOARDING_CREDENTIAL_ID: &str = "local-dev";
-const LOCALNET_OPERATOR_ALIAS: &str = "operator@wonderland.universal";
+const LOCALNET_OPERATOR_ALIAS: &str = "operator@localnet.universal";
 const LOCALNET_ALIAS_SETUP_INTENT_FILE: &str = "alias-setup.intent.json";
 const LOCALNET_ALIAS_SETUP_PAYER_BALANCE: u64 = 10;
 const LOCALNET_ALIAS_SETUP_POLICY_VERSION: u16 = 1;
@@ -582,12 +582,12 @@ const LOCALNET_NEXUS_DOMAIN: &str = "nexus.universal";
 const LOCALNET_IVM_DOMAIN: &str = "ivm.universal";
 const LOCALNET_UNIVERSAL_DOMAIN: &str = "universal.universal";
 const LOCALNET_STAKE_ASSET_NAME: &str = "xor";
-const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland.universal";
+const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "localnet.universal";
 pub(crate) const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
 const LOCALNET_REQUESTED_ASSET_INITIAL_QUANTITY: u64 = 1_000_000_000;
 const LOCALNET_KAGEMUSHA_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
 const LOCALNET_KAGEMUSHA_ASSET_NAME: &str = "usd";
-const LOCALNET_KAGEMUSHA_ASSET_ALIAS: &str = "usd#wonderland.universal";
+const LOCALNET_KAGEMUSHA_ASSET_ALIAS: &str = "usd#localnet.universal";
 const LOCALNET_KAGEMUSHA_INITIAL_QUANTITY: u64 = 100;
 const LOCALNET_GAS_ACCOUNT_SEED: &[u8] = b"localnet-gas-account";
 /// Minimum faucet reserve before startup auto-mints a replenishment.
@@ -928,7 +928,7 @@ pub struct Args {
     /// Output directory for configs/genesis/scripts.
     #[arg(long, short, value_name = "DIR")]
     out_dir: PathBuf,
-    /// Extra accounts to pre-register (in wonderland).
+    /// Extra localnet accounts to pre-register.
     #[arg(long, default_value_t = 0)]
     extra_accounts: u16,
     /// Register the optional sample asset and mint to the default account.
@@ -4845,7 +4845,7 @@ fn copy_rans_tables(out_dir: &Path) -> Result<PathBuf> {
     }
     Ok(canonical_seed_path)
 }
-const CLIENT_ACCOUNT_DOMAIN: &str = "wonderland.universal";
+const CLIENT_ACCOUNT_DOMAIN: &str = "localnet.universal";
 const CLIENT_ACCOUNT_PUBLIC: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 #[cfg(test)]
