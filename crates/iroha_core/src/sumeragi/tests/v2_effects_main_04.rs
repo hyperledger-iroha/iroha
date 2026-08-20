@@ -170,7 +170,8 @@ fn live_lifecycle_validation_marker_promotes_idempotently_and_authorizes_vote_si
         .expect("body store service")
         .store(fixture.manifest.clone(), fixture.body.clone())
         .expect("persist exact body fixture");
-    let validated = validate_durable_body_fixture(&mut services, &fixture.manifest, durable.clone());
+    let validated =
+        validate_durable_body_fixture(&mut services, &fixture.manifest, durable.clone());
     let key = (fixture.manifest.round, fixture.manifest.subject);
     assert!(
         executor
@@ -178,18 +179,23 @@ fn live_lifecycle_validation_marker_promotes_idempotently_and_authorizes_vote_si
             .insert(key, (fixture.manifest.clone(), durable.clone()))
             .is_none()
     );
-    assert!(executor.durable_bodies.insert(key, durable.clone()).is_none());
+    assert!(
+        executor
+            .durable_bodies
+            .insert(key, durable.clone())
+            .is_none()
+    );
     assert!(executor.validated_bodies.is_empty());
 
     executor
-        .record_lifecycle_validated_body(
-            ReadyValidatedExecutorCatalogAuthorityV1::for_test(validated.clone()),
-        )
+        .record_lifecycle_validated_body(ReadyValidatedExecutorCatalogAuthorityV1::for_test(
+            validated.clone(),
+        ))
         .expect("promote one live fsynced validation marker");
     executor
-        .record_lifecycle_validated_body(
-            ReadyValidatedExecutorCatalogAuthorityV1::for_test(validated.clone()),
-        )
+        .record_lifecycle_validated_body(ReadyValidatedExecutorCatalogAuthorityV1::for_test(
+            validated.clone(),
+        ))
         .expect("exact live marker retry is idempotent");
     assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
 

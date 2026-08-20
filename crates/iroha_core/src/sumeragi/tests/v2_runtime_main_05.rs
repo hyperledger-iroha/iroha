@@ -714,11 +714,10 @@ fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and
         .expect("bind the exact local Validate predecessor");
     let ready_lifecycle_ordinal = validate_ownership.owner().lifecycle_ordinal();
 
-    let unrelated = wire::ConsensusMessageV2::new(
-        wire::ConsensusMessageV2Payload::QuorumCertificate(
+    let unrelated =
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
             signed_runtime_quorum_certificate(&context, &keys, 0x92),
-        ),
-    );
+        ));
     runtime
         .enqueue_network(unrelated)
         .expect("queue one unrelated authenticated command");
@@ -798,7 +797,7 @@ fn ready_validate_local_publication_preserves_unrelated_queued_ingress_order_and
     );
     let ready = &runtime.ingress.commands[1];
     assert!(matches!(
-        ready.command,
+        &ready.command,
         AdapterCommand::LocalProposalReady { .. }
     ));
     let ready_physical = ready
