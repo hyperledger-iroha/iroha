@@ -1,5 +1,5 @@
 #[test]
-fn recovered_wal_vote_sign_seal_is_move_only_exact_and_unwired() {
+fn recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired() {
     let source = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let (production, _) = source
         .split_once("\n#[cfg(test)]\nmod tests {")

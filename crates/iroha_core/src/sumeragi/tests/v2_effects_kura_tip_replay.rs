@@ -510,7 +510,7 @@ fn mismatched_kura_completion_fails_closed_before_application_ack() {
             &mut services,
         )
         .expect("local proposal");
-    complete_local_proposal_chain(&mut executor, &mut services);
+    complete_local_proposal_fixture(&mut executor, &mut services);
     let commit = fixture.qc(wire::GlobalPhase::Commit);
     executor
         .consume_effects(
@@ -1345,9 +1345,12 @@ fn authenticated_genesis_satisfies_later_view_fetch_through_normal_body_pipeline
             &mut services,
         )
         .expect("enter ordinary deterministic validation");
-    assert_eq!(services.validation_tasks.len(), 1);
-    assert_eq!(services.validation_tasks[0].round(), round);
-    assert_eq!(services.validation_tasks[0].subject(), subject);
+    assert_eq!(executor.pending_durable_validate_admissions.len(), 1);
+    assert!(
+        executor
+            .pending_durable_validate_admissions
+            .contains_key(&(round, subject))
+    );
     assert!(executor.validated_bodies.is_empty());
 }
 #[test]
@@ -1636,7 +1639,7 @@ fn apply_retransmissions_reuse_one_work_slot() {
             &mut services,
         )
         .expect("local proposal");
-    complete_local_proposal_chain(&mut executor, &mut services);
+    complete_local_proposal_fixture(&mut executor, &mut services);
     let certificate = fixture.qc(wire::GlobalPhase::Commit);
     let effect = AdapterEffect::Apply {
         tag: tag(0),
@@ -1687,7 +1690,10 @@ fn apply_retransmissions_reuse_one_work_slot() {
         .expect("an exact duplicate decision carrier retains the live Apply owner");
     assert_eq!(services.apply_tasks.len(), 10);
     assert_eq!(services.apply_tasks[9].id(), id);
-    assert_eq!(services.apply_tasks[9].lifecycle_ordinal(), lifecycle_ordinal);
+    assert_eq!(
+        services.apply_tasks[9].lifecycle_ordinal(),
+        lifecycle_ordinal
+    );
     assert!(!executor.status().fail_closed);
     let mut conflicting = fixture.qc(wire::GlobalPhase::Commit);
     conflicting.execution_commitment = wire::ExecutionCommitment::without_topups_or_merge_carrier(
@@ -1726,7 +1732,7 @@ fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write(
             &mut services,
         )
         .expect("local proposal");
-    complete_local_proposal_chain(&mut executor, &mut services);
+    complete_local_proposal_fixture(&mut executor, &mut services);
     let certificate = fixture.qc(wire::GlobalPhase::Commit);
     let effect = AdapterEffect::Apply {
         tag: tag(0),
@@ -1776,12 +1782,19 @@ fn apply_retransmission_after_durable_finality_does_not_schedule_a_second_write(
         &artifact
     );
     assert!(!executor.status().fail_closed);
+    let conflicting_apply_ownership = bound_test_apply_ownership(
+        tag(1),
+        fixture.manifest.subject,
+        &certificate,
+        tag(1),
+        u128::MAX - 1,
+    );
     assert!(matches!(
         executor.begin_apply(
             tag(1),
             fixture.manifest.subject,
             certificate,
-            RuntimeEffectOwnership::fresh_for_test(tag(1), u128::MAX - 1),
+            conflicting_apply_ownership,
             &mut services,
         ),
         Err(EffectExecutorError::Contract(reason))

@@ -69,6 +69,7 @@ REQUIRED_SOURCE_PATHS = (
     "crates/iroha_sumeragi_core/src/verus_proofs/production_kernel_tail.rs",
     "crates/iroha_core/src/sumeragi/v2.rs",
     "crates/iroha_core/src/sumeragi/v2_authenticated_recovered_adapter_startup_impl.rs",
+    "crates/iroha_core/src/sumeragi/v2_ready_durable_validate_adapter_preview.rs",
     "crates/iroha_core/src/sumeragi/status.rs",
     "crates/iroha_core/src/sumeragi/v2_apply.rs",
     "crates/iroha_core/src/sumeragi/v2_block_sync.rs",

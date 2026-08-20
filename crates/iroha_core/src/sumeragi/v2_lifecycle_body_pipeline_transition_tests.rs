@@ -1,7 +1,5 @@
 #[cfg(all(test, feature = "bls"))]
 mod tests {
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
-    use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
     use super::super::projection;
     use super::*;
     use crate::sumeragi::{
@@ -12,6 +10,8 @@ mod tests {
         },
         v2_runtime::{RuntimeEffectOwnership, bind_adapter_effect_batch_ownership},
     };
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
     /// Test-only view of the pure staged reducer copy. Production callers must
     /// retain one of the sealed registry-and-adapter publication owners.
     struct PreparedBodyStageTransition<'a> {
@@ -281,7 +281,7 @@ mod tests {
         .pop()
         .expect("one certified Fetch owner");
         let fetch_pending = fetch_owner
-            .pending_adapter_effect_binding(&fetch_effect)
+            .exact_pending_adapter_effect_binding(&fetch_effect)
             .expect("mint sealed certified Fetch binding");
         let fetch_digest = digest_from_hash(fetch_pending.exact_effect_identity());
         let store_pending = fetch_pending
@@ -453,7 +453,7 @@ mod tests {
                     )
                 );
                 let fetch_pending = fetch_owner
-                    .pending_adapter_effect_binding(&fetch_effect)
+                    .exact_pending_adapter_effect_binding(&fetch_effect)
                     .expect("mint sealed remote-Proposal Fetch binding");
                 let fetch_replay = fetch_owner
                     .exact_remote_proposal_fetch_replay(&fetch_effect)
@@ -1196,17 +1196,19 @@ mod tests {
         );
         let foreign_store_owner = bind_adapter_effect_batch_ownership(
             core::slice::from_ref(&store_effect),
-            vec![RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
-                foreign_owner_tag,
-                99,
-                b"foreign Store-to-Validate lineage",
-            )],
+            vec![
+                RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                    foreign_owner_tag,
+                    99,
+                    b"foreign Store-to-Validate lineage",
+                ),
+            ],
         )
         .expect("bind foreign Store owner")
         .pop()
         .expect("one foreign Store owner");
         let foreign_store_pending = foreign_store_owner
-            .pending_adapter_effect_binding(&store_effect)
+            .exact_pending_adapter_effect_binding(&store_effect)
             .expect("mint foreign Store pending binding");
         let foreign_validate_pending = foreign_store_pending
             .project_store_validate_successor(&store_effect, &validate_effect)

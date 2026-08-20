@@ -56,7 +56,7 @@ execution or release receipts.
   volatile index/worktree counts are deliberately not treated as release
   identity; only a later signed, detached, source-sealed candidate may supply
   that evidence.
-- The bound static inventory contains exactly 91 corridor legs, 865/865
+- The bound static inventory contains exactly 91 corridor legs, 864/864
   production tests across 43 modules, 530/530 G-UNIT rows, and four mandatory
   G-4P gates. The grouped fixture pin validates. The recursive SDK resolver
   enumerates 1,400 grouped and 1,402 diagnostics paths at the exact hashes in
@@ -1808,8 +1808,9 @@ regression rejects a legacy merge-share version while leaving the signing guard
 unauthorized. It replaced one required release-corridor selector without changing
 the then-current count; the autonomous-retirement regression added here raised
 that checkpoint to 857 tests. The retired-attempt, mixed-carrier, and two-link
-cold-restart rows plus the two predecessor-durability handoff rows bring the
-current production inventory to 865 tests while
+cold-restart rows plus the two predecessor-durability handoff rows, followed by
+retirement of the dormant generic persisted-continuation regression, leave the
+current production inventory at 864 tests while
 the G-UNIT inventory contains 530 tests. Source binding is not an execution receipt.
 The finalized predecessor remains active while the shared ordinary/PendingKura
 preflight rehydrates late canonical lane ownership, services bounded
@@ -1882,7 +1883,7 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The mutable source inventory is internally count-consistent. The production
-inventory contains exactly 865 tests across 43 modules, including 446
+inventory contains exactly 864 tests across 43 modules, including 446
 source-sealed ownership/regression names. The duplicate inline V2 core network
 simulations are retired; the standalone `iroha_sumeragi_core` harness remains. The three Kura recovery
 regressions and governance-unlock audit are retained beside the prior source-bound closure.
@@ -1917,7 +1918,7 @@ checkpoint also passed `cargo check -p iroha_core --lib`; later focused reruns
 covered startup binding, B/A/B recovery, the 18 Kura replica tests, and four
 configuration tests. These are historical partial results, not fresh archived
 execution of all 530 required tests. This reconciliation claims no immutable-
-candidate Cargo run or full matrix execution: the 865 production, 530 G-UNIT,
+candidate Cargo run or full matrix execution: the 864 production, 530 G-UNIT,
 and 56-control counts are mutable-development source inventory only. `G-UNIT`
 remains Open until the exact no-skip suites run through the compliant isolated
 wrapper and their logs and candidate identity are archived.
@@ -2142,7 +2143,7 @@ marker must be classified here before release.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 865-production-test,
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 864-production-test,
   530-G-UNIT-test, and 56-control counts, SDK group counts, recursive closure
   shapes, and 27-action formal extraction partition are mutable-development
   inventories only. Historical focused Rust and direct SDK subsets do not

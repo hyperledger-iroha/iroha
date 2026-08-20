@@ -6,16 +6,18 @@ fn pending_binding_with_distinct_root(
 ) -> PendingRuntimeEffectBinding {
     bind_adapter_effect_batch_ownership(
         core::slice::from_ref(effect),
-        vec![RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
-            tag,
-            ordinal,
-            semantic_identity,
-        )],
+        vec![
+            RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                tag,
+                ordinal,
+                semantic_identity,
+            ),
+        ],
     )
     .expect("bind replay fixture with a distinct semantic root")
     .pop()
     .expect("one distinct-root replay fixture owner")
-    .pending_adapter_effect_binding(effect)
+    .exact_pending_adapter_effect_binding(effect)
     .expect("mint exact distinct-root pending binding")
 }
 #[test]
@@ -1113,7 +1115,7 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
     .pop()
     .expect("one local Store owner");
     let store_pending = store_ownership
-        .pending_adapter_effect_binding(&store_effect)
+        .exact_pending_adapter_effect_binding(&store_effect)
         .expect("local Store owner projects one pending seal");
     let validate_effect = AdapterEffect::ValidateBody {
         tag,
@@ -1204,10 +1206,10 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
         .rebind_as_inherited_adapter_effect(&validate_effect)
         .expect("local Store root rebinds to its exact Validate effect");
     let second_store_pending = store_ownership
-        .pending_adapter_effect_binding(&store_effect)
+        .exact_pending_adapter_effect_binding(&store_effect)
         .expect("local Store root retains its exact pending projection");
     let second_validate_pending = validate_ownership
-        .pending_adapter_effect_binding(&validate_effect)
+        .exact_pending_adapter_effect_binding(&validate_effect)
         .expect("local Validate root retains its exact pending projection");
     let exact_validate =
         LocalBodyPreIntentReplaySealV1::for_test(&store_effect, second_store_pending, &manifest)
@@ -1221,12 +1223,12 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
             )
             .expect("exact local Store evidence advances to Validate");
     let validated_receipt = ValidatedBodyReceipt::for_test(receipt.clone());
-    let command_identity = LocalProposalReadyCommandIdentity::from_exact_handoff(
+    let command_identity = LocalProposalReadyCommandIdentity::from_exact_pending_handoff(
         tag,
         &manifest,
         &receipt,
         &validated_receipt,
-        &validate_ownership,
+        &second_validate_pending,
     )
     .expect("exact Validate completion has one inert command identity");
     let ready = exact_validate
@@ -1248,11 +1250,13 @@ fn local_body_pre_intent_seal_rejects_owner_manifest_frame_and_stage_substitutio
         .expect("local Validate root rebinds to exact ProposalIntent");
     let foreign_ownership = bind_adapter_effect_batch_ownership(
         core::slice::from_ref(&proposal_intent),
-        vec![RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
-            tag,
-            72,
-            b"foreign local proposal intent owner",
-        )],
+        vec![
+            RuntimeEffectOwnership::fresh_for_test_with_semantic_identity(
+                tag,
+                72,
+                b"foreign local proposal intent owner",
+            ),
+        ],
     )
     .expect("bind foreign ProposalIntent owner")
     .pop()
@@ -1848,14 +1852,14 @@ fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_min
             .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
             .count(),
         3,
-        "only recovered Proposal-Prepare, generic persistence, and sealed Ready-Sign cuts mint live replay authority"
+        "only recovered Proposal-Prepare, sealed Ready-Sign, and Decision-Apply cuts mint live replay authority"
     );
     assert_eq!(
         adapter
             .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
             .count(),
-        3,
-        "the same three closed post-fsync cuts derive frame-bound placeholder owners"
+        2,
+        "only recovered Proposal-Prepare and sealed Ready-Sign derive frame-bound pending owners"
     );
     let recovered_proposal_prepare = adapter
         .split("pub(in crate::sumeragi) fn append_recovered_lifecycle_proposal_prepare_wal(")
@@ -1897,31 +1901,9 @@ fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_min
     );
     assert!(ready_sign.contains("LiveWalFrameIdentity::from_append_receipt("));
     assert!(ready_sign.contains("bind_exact_validate_sign_pending(child_pending)"));
-    let generic = adapter
-        .split("fn drive_exact_persisted_continuation(")
-        .nth(1)
-        .expect("generic exact persisted cut exists")
-        .split("fn live_wal_record_exactly_owns_effect(")
-        .next()
-        .expect("generic exact persisted cut is bounded");
-    assert_eq!(
-        generic
-            .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
-            .count(),
-        1
-    );
-    assert_eq!(
-        generic
-            .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
-            .count(),
-        1
-    );
-    assert_eq!(
-        adapter
-            .matches("drive_exact_persisted_continuation(")
-            .count(),
-        1,
-        "the inert live cut has no production caller yet"
+    assert!(
+        !adapter.contains("drive_exact_persisted_continuation"),
+        "the retired generic persisted-continuation driver must stay absent"
     );
     assert_eq!(runtime.matches("fn from_exact_live_wal_append(").count(), 1);
     assert_eq!(

@@ -1439,6 +1439,7 @@ SHARED_TLC_RESULT_CONTRACT_CALLERS = (
     "scripts/formal/check_sumeragi_v2_replay_trace.sh",
     "scripts/formal/run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
     "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh",
+    "scripts/formal/run_sumeragi_v2_durable_validate_lifecycle_mutations.sh",
     "scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh",
     "scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh",
     "scripts/formal/run_sumeragi_v2_certificate_ref_recovery_mutation.sh",
@@ -1487,7 +1488,10 @@ SHARED_TLC_RESULT_CONTRACT_SHA256 = {
         "47175c5815cb5073b5ef97cc5f23d2609d15f4cf6caae6068633250c648d79ba"
     ),
     "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh": (
-        "381c2beba6ec3130ad1102de87dd09739022a5c36c1ead3bd6589cf45be0f7f9"
+        "d163bc19b62ed9f23e4f08433a7bb8080407cb8d31b9666ccf5c5d9491034ca6"
+    ),
+    "scripts/formal/run_sumeragi_v2_durable_validate_lifecycle_mutations.sh": (
+        "43eeb61545f5c9caa5365ee97f61fed4f56cd574ac09ca70d848d41b5ca36f6e"
     ),
     "scripts/formal/run_sumeragi_v2_apply_authority_mutation.sh": (
         "a69da1a117bb8e6f3a73d5c6ce99eb88286b1372b59238e0da2ccf555eeafb0e"
@@ -1590,6 +1594,13 @@ SHARED_TLC_RESULT_BRANCH_PROFILES = {
         0,
     ),
     "scripts/formal/run_sumeragi_v2_applied_phase_admission_mutations.sh": (
+        1,
+        5,
+        0,
+        0,
+        0,
+    ),
+    "scripts/formal/run_sumeragi_v2_durable_validate_lifecycle_mutations.sh": (
         1,
         5,
         0,
@@ -1808,6 +1819,13 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
             1,
             1,
         ),
+        "scripts/formal/run_sumeragi_v2_durable_validate_lifecycle_mutations.sh": (
+            1,
+            1,
+            1,
+            1,
+            1,
+        ),
         "scripts/formal/check_sumeragi_v2_replay_trace.sh": (0, 0, 0, 0, 0),
         "scripts/formal/run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh": (
             1,
@@ -1883,10 +1901,10 @@ SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES.update(
     }
 )
 SHARED_TLC_RESULT_BRANCH_PROFILES_SHA256 = (
-    "46293c847caed684dce380f362780cc0ea8ff9ed0145dd00399dbd2b8470e527"
+    "63e10407bdfc8f5dc5d2ade6ea41439ff5a701dd919c4d16fde37e49b58db7bf"
 )
 SHARED_TLC_RESULT_ASSERTION_SITE_PROFILES_SHA256 = (
-    "483e384582b49f4c514036a744865b24d97f2973ce3dd10b14fdf66982a53c68"
+    "fa1b830be143960116f2c56e30ce5a70c6be0ae52245803d6389fb84a638a582"
 )
 LIVENESS_OWNERSHIP_MUTATION_SHA256 = {
     "SumeragiV2Revision4CertifiedFenceReservation.tla": (

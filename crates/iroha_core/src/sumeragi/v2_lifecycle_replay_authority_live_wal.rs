@@ -24,9 +24,9 @@ enum LiveWalPersistedReplayStateV1 {
 /// Exact live WAL continuation kept inseparable from its adapter effect.
 ///
 /// This move-only envelope is the linear transport returned by the adapter's
-/// future persisted-continuation cut. It exposes only fixed pending-binding
-/// and receipt-bound equality joins; neither the effect nor its replay seal
-/// can be extracted.
+/// specialized post-fsync cuts. It exposes only fixed pending-binding and
+/// receipt-bound equality joins; neither the effect nor its replay seal can be
+/// extracted.
 #[must_use = "a sealed live WAL effect has not entered lifecycle pre-admission"]
 pub(in crate::sumeragi) struct SealedLiveWalPersistedEffectV1 {
     effect: AdapterEffect,
@@ -138,7 +138,9 @@ impl SealedLiveWalPersistedEffectV1 {
             &self.replay.state,
             LiveWalPersistedReplayStateV1::Canonical { stage, .. }
                 if *stage == LifecycleStageKind::ApplyDecision
-        ) && self.replay.exactly_matches_apply_effect(&self.effect, receipt)
+        ) && self
+            .replay
+            .exactly_matches_apply_effect(&self.effect, receipt)
     }
     /// Project the exact WAL-owned Apply child with its retained BodyFrame.
     pub(in crate::sumeragi) fn project_sealed_validate_apply_candidate(
@@ -320,10 +322,8 @@ impl SealedLiveWalPersistedEffectV1 {
     }
     /// Complete `Apply` only from the exact retained Validate causal owner.
     ///
-    /// TODO: Co-locate this seal with the work-registry join before production
-    /// admission so the sibling-visible receipt seam can become private. The
-    /// source guard pins its sole production caller in the retained Validate
-    /// completion until then.
+    /// The work-registry Validate join is its sole production caller and keeps
+    /// the receipt-bound completion private to that atomic transition.
     #[allow(clippy::result_large_err)]
     pub(super) fn complete_exact_apply(
         self,
@@ -363,23 +363,6 @@ impl SealedLiveWalPersistedEffectV1 {
             )),
         }
     }
-    /// Bind completed `Apply` evidence to its exact retained Validate predecessor.
-    pub(super) fn exactly_binds_validated_apply_successor(
-        &self,
-        predecessor_effect: &AdapterEffect,
-        predecessor_pending: &PendingRuntimeEffectBinding,
-        receipt: &DurableBodyReceipt,
-    ) -> bool {
-        matches!(
-            &self.pending,
-            LiveWalPersistedPendingV1::ApplyBound(child_pending)
-                if predecessor_pending
-                    .project_validate_apply_successor(predecessor_effect, &self.effect)
-                    .is_some_and(|expected| &expected == child_pending)
-        ) && self
-            .replay
-            .exactly_matches_apply_effect(&self.effect, receipt)
-    }
     fn exactly_matches_effect(&self) -> bool {
         match &self.pending {
             LiveWalPersistedPendingV1::PayloadFree(pending) => {
@@ -399,14 +382,6 @@ impl SealedLiveWalPersistedEffectV1 {
             }
             LiveWalPersistedPendingV1::ApplyBound(_) => false,
         }
-    }
-    #[cfg(test)]
-    /// Compare this sealed continuation with one exact test effect.
-    pub(in crate::sumeragi) fn exactly_matches_effect_for_test(
-        &self,
-        effect: &AdapterEffect,
-    ) -> bool {
-        self.effect == *effect && self.exactly_matches_effect()
     }
 }
 impl LiveWalPersistedReplaySealV1 {

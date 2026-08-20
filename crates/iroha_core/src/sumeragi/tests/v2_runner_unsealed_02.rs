@@ -233,40 +233,6 @@ fn first_same_subject_lock_from_prior_view_retires_unlocked_work() {
     assert!(state.pending_events.is_none());
 }
 #[test]
-fn late_old_rejection_cannot_arm_non_empty_retry_for_replacement_lock() {
-    let (context, _) = context();
-    let tag = EventTag::new(context.height, 5, Generation::new(12));
-    let subject_a = proposal_subject(b"rejected old A");
-    let subject_b = proposal_subject(b"current B");
-    let owner_a = proposal_owner(&context, tag, Some((2, subject_a)), None);
-    let owner_b = proposal_owner(&context, tag, Some((4, subject_b)), None);
-    let proposal_round = wire::ConsensusRound {
-        context_id: context.id(),
-        height: context.height,
-        view: tag.view(),
-    };
-    let mut state = LocalProposalState {
-        submitted: Some((owner_a, subject_a)),
-        ..LocalProposalState::default()
-    };
-    assert_eq!(
-        state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_a,),
-        LocalValidationDisposition::Ignored
-    );
-    assert_eq!(state.non_empty_retry, None);
-    state.submitted = Some((owner_b, subject_b));
-    assert_eq!(
-        state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
-        LocalValidationDisposition::RetryNonEmpty
-    );
-    assert_eq!(state.non_empty_retry, Some(owner_b));
-    state.submitted = Some((owner_b, subject_b));
-    assert_eq!(
-        state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
-        LocalValidationDisposition::FatalNonEmpty
-    );
-}
-#[test]
 fn decision_retires_local_work_before_prepared_delivery() {
     let (context, _) = context();
     let tag = EventTag::new(context.height, 6, Generation::new(13));

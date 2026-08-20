@@ -641,7 +641,7 @@ fn pending_validate_binding_for_test(
         .expect("bind one certified Fetch fixture")
         .pop()
         .expect("one certified Fetch fixture owner")
-        .pending_adapter_effect_binding(&fetch)
+        .exact_pending_adapter_effect_binding(&fetch)
         .expect("certified Fetch fixture mints one pending binding");
         fetch_binding
             .project_certified_fetch_store_successor(&fetch, &store)
@@ -654,7 +654,7 @@ fn pending_validate_binding_for_test(
         .expect("bind one ordinary Store fixture")
         .pop()
         .expect("one ordinary Store fixture owner")
-        .pending_adapter_effect_binding(&store)
+        .exact_pending_adapter_effect_binding(&store)
         .expect("ordinary Store fixture mints one pending binding")
     };
     let validate_binding = store_binding
@@ -844,7 +844,9 @@ fn recovered_next_wal_vote_projection_is_exact_and_fail_closed() {
         "a substituted Sign effect cannot reuse the retained replay evidence"
     );
 }
-crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(recovered_next_wal_vote_projection_surface_is_affine_and_closed);
+crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
+    recovered_next_wal_vote_projection_surface_is_affine_and_closed
+);
 #[test]
 fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
     let (context, keys) = authenticated_runtime_context();
@@ -904,7 +906,7 @@ fn pending_certified_fetch_derives_exact_ordinal_free_body_successors() {
     )
     .expect("bind one exact certified Fetch");
     let pending = bound[0]
-        .pending_adapter_effect_binding(&fetch)
+        .exact_pending_adapter_effect_binding(&fetch)
         .expect("certified Fetch mints one pending binding");
     let store = AdapterEffect::StoreBody {
         tag,
@@ -1036,7 +1038,7 @@ fn pending_validate_projects_only_the_exact_commit_authorized_apply_successor() 
     .expect("bind one ordinary Store")
     .pop()
     .expect("one ordinary Store owner")
-    .pending_adapter_effect_binding(&store)
+    .exact_pending_adapter_effect_binding(&store)
     .expect("ordinary Store mints one pending binding");
     let local_validate = local_store
         .project_store_validate_successor(&store, &validate)
@@ -1081,7 +1083,7 @@ fn pending_validate_projects_only_the_exact_commit_authorized_apply_successor() 
     .expect("bind one Prepare-certified Fetch")
     .pop()
     .expect("one Prepare-certified Fetch owner")
-    .pending_adapter_effect_binding(&fetch)
+    .exact_pending_adapter_effect_binding(&fetch)
     .expect("Prepare-certified Fetch mints one pending binding");
     let prepare_store = prepare_fetch
         .project_certified_fetch_store_successor(&fetch, &store)

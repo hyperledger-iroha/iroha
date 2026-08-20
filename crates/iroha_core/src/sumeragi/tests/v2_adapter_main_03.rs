@@ -449,198 +449,6 @@ fn persistence_macro_step_budgets_have_exact_four_effect_maximum() {
         "local TC formation is the four-effect persistence witness"
     );
 }
-#[test]
-#[allow(clippy::too_many_lines)]
-fn exact_live_wal_cut_seals_all_six_real_persisted_continuations() {
-    {
-        let directory = TempDir::new().expect("temporary proposal WAL directory");
-        let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader adapter");
-        assert!(startup.is_empty());
-        let leader = adapter.wire_context.leader(0);
-        let wire::ConsensusMessageV2Payload::Proposal(proposal) =
-            proposal(&adapter.wire_context, leader, subject(0xD1)).payload
-        else {
-            unreachable!("proposal fixture")
-        };
-        let (_, validated) =
-            validated_receipts_for_manifest(&adapter.wire_context, &proposal.manifest);
-        let context = adapter.wire_context.clone();
-        let manifest = adapter
-            .registry
-            .manifest_to_core(&proposal.manifest, &context)
-            .expect("register local proposal manifest");
-        let round = adapter
-            .registry
-            .round_to_core(proposal.round, &context)
-            .expect("convert local proposal round");
-        adapter
-            .registry
-            .register_execution_commitment(
-                round,
-                manifest.subject(),
-                validated.execution_commitment(),
-            )
-            .expect("register local proposal execution result");
-        adapter.active_subject = Some((round, manifest.subject()));
-        let tag = adapter.current_tag();
-        let persist = only_pending_persist(
-            adapter
-                .reducer
-                .step(reducer::Event::LocalProposalReady { tag, manifest })
-                .expect("stage real ProposalIntent"),
-        );
-        drive_live_wal_fixture(&mut adapter, persist, LiveWalOwnedStage::SignProposal);
-    }
-    {
-        let directory = TempDir::new().expect("temporary Prepare WAL directory");
-        let (mut adapter, startup) = open_test(&directory).expect("open Prepare adapter");
-        assert!(startup.is_empty());
-        let (tag, manifest, _durable, validated) =
-            advance_direct_validation_fixture_to_durable(&mut adapter, 0xD2);
-        let round = reducer::Round::new(manifest.round.height, manifest.round.view);
-        let subject = reducer::Subject::new(Hash::new(manifest.subject.encode()).into());
-        adapter
-            .registry
-            .register_execution_commitment(round, subject, validated.execution_commitment())
-            .expect("register Prepare execution result");
-        let persist = only_pending_persist(
-            adapter
-                .reducer
-                .step(reducer::Event::ValidationCompleted {
-                    tag,
-                    round,
-                    subject,
-                    valid: true,
-                })
-                .expect("stage real PrepareIntent"),
-        );
-        drive_live_wal_fixture(&mut adapter, persist, LiveWalOwnedStage::SignPrepare);
-    }
-    {
-        let directory = TempDir::new().expect("temporary Commit WAL directory");
-        let (mut adapter, startup) = open_test(&directory).expect("open Commit adapter");
-        assert!(startup.is_empty());
-        let (tag, manifest, _durable, validated) =
-            advance_direct_validation_fixture_to_durable(&mut adapter, 0xD3);
-        let prepare = wire::QuorumCertificate {
-            round: manifest.round,
-            proposal_round: manifest.round,
-            phase: wire::GlobalPhase::Prepare,
-            subject: manifest.subject,
-            execution_commitment: validated.execution_commitment(),
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![0xD3; 96],
-        };
-        let observed = adapter
-            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
-                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
-                    prepare,
-                )),
-            ))
-            .expect("durably observe exact PrepareQC");
-        assert!(observed.effects().is_empty());
-        let round = reducer::Round::new(manifest.round.height, manifest.round.view);
-        let subject = reducer::Subject::new(Hash::new(manifest.subject.encode()).into());
-        adapter
-            .registry
-            .register_execution_commitment(round, subject, validated.execution_commitment())
-            .expect("register Commit execution result");
-        let persist = only_pending_persist(
-            adapter
-                .reducer
-                .step(reducer::Event::ValidationCompleted {
-                    tag,
-                    round,
-                    subject,
-                    valid: true,
-                })
-                .expect("stage real LockAndCommit"),
-        );
-        drive_live_wal_fixture(&mut adapter, persist, LiveWalOwnedStage::SignCommit);
-    }
-    {
-        let directory = TempDir::new().expect("temporary timeout WAL directory");
-        let (mut adapter, startup) = open_test(&directory).expect("open timeout adapter");
-        assert!(startup.is_empty());
-        let tag = adapter.current_tag();
-        let persist = only_pending_persist(
-            adapter
-                .reducer
-                .step(reducer::Event::TimeoutElapsed { tag })
-                .expect("stage real TimeoutIntent"),
-        );
-        drive_live_wal_fixture(&mut adapter, persist, LiveWalOwnedStage::SignTimeout);
-    }
-    {
-        let directory = TempDir::new().expect("temporary EnterView WAL directory");
-        let (mut adapter, startup) = open_test(&directory).expect("open EnterView adapter");
-        assert!(startup.is_empty());
-        let round = wire::ConsensusRound {
-            context_id: adapter.wire_context.id(),
-            height: adapter.wire_context.height,
-            view: adapter.current_tag().view(),
-        };
-        let certificate = wire::TimeoutCertificate {
-            round,
-            groups: vec![wire::TimeoutVoteGroup {
-                highest_prepare_qc: None,
-                signers: vec![0, 1, 2],
-                aggregate_signature: vec![0xD4; 96],
-            }],
-        };
-        let context = adapter.wire_context.clone();
-        let certificate = adapter
-            .registry
-            .tc_to_core(&certificate, &context)
-            .expect("convert exact timeout certificate");
-        let tag = adapter.current_tag();
-        let persist = only_pending_persist(
-            adapter
-                .reducer
-                .step(reducer::Event::TimeoutCertificateReceived { tag, certificate })
-                .expect("stage real InstallTimeout"),
-        );
-        drive_live_wal_fixture(&mut adapter, persist, LiveWalOwnedStage::EnterView);
-    }
-    {
-        let directory = TempDir::new().expect("temporary Apply WAL directory");
-        let (mut adapter, startup) = open_test(&directory).expect("open Apply adapter");
-        assert!(startup.is_empty());
-        let (tag, manifest, _durable, validated) =
-            advance_direct_validation_fixture_to_durable(&mut adapter, 0xD5);
-        let sign = adapter
-            .validation_succeeded(tag, manifest.round, manifest.subject, &validated)
-            .expect("durably validate exact Apply body");
-        assert!(matches!(
-            sign.effects(),
-            [AdapterEffect::Sign {
-                request: SignRequest::Vote(vote),
-                ..
-            }] if vote.phase == wire::GlobalPhase::Prepare
-        ));
-        let decision = wire::QuorumCertificate {
-            round: manifest.round,
-            proposal_round: manifest.round,
-            phase: wire::GlobalPhase::Commit,
-            subject: manifest.subject,
-            execution_commitment: validated.execution_commitment(),
-            signers: vec![0, 1, 2],
-            aggregate_signature: vec![0xD5; 96],
-        };
-        let context = adapter.wire_context.clone();
-        let certificate = adapter
-            .registry
-            .qc_to_core(&decision, &context)
-            .expect("convert exact CommitQC Decision");
-        let persist = only_pending_persist(
-            adapter
-                .reducer
-                .step(reducer::Event::QuorumCertificateReceived { tag, certificate })
-                .expect("stage real Decision"),
-        );
-        drive_live_wal_fixture(&mut adapter, persist, LiveWalOwnedStage::Apply);
-    }
-}
 #[cfg(feature = "bls")]
 #[test]
 fn recovered_timeout_signature_preview_is_exact_and_drop_inert() {
@@ -1521,7 +1329,7 @@ include!("v2_adapter_04_wal_recovery.rs");
 include!("v2_adapter_04b_lifecycle_startup.rs");
 include!("v2_adapter_05_direct_lifecycle.rs");
 #[test]
-fn recovered_wal_sign_status_publication_is_exact_last_and_unwired() {
+fn recovered_wal_test_fixture_publishes_status_last_and_owner_factory_stays_closed() {
     let source = crate::sumeragi::v2_lifecycle_coordinator::reviewed_v2_adapter_source_for_test();
     let body_store_source = include_str!("../v2_body_store.rs");
     let (production, _) = source
@@ -1536,7 +1344,7 @@ fn recovered_wal_sign_status_publication_is_exact_last_and_unwired() {
         .0;
     assert!(
         publication.contains("#[cfg(test)]"),
-        "the superseded parts-based publication remains test-only"
+        "the focused recovered-WAL status fixture must remain test-only"
     );
     for required in [
         "struct PublishedRecoveredWalLifecycleStartup<'registry>",

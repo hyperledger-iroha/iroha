@@ -51,9 +51,12 @@ let removed = self.pending_fetches.remove(&work_id);
 if let Some(certified) = plan.certified {
     self.commit_certified_fetch_retirement(certified);
 }
+if retires_proposal_replay {
+    self.remote_proposal_replay.remove(&key);
+}
 Ok(())
 """,
-        "pending Fetch retirement must release its certified request only after runtime and local ownership",
+        "pending Fetch retirement must release its certified request and exact Proposal replay only after runtime and local ownership",
         errors,
     )
     _require_rust_item_token_sha256(
@@ -238,9 +241,20 @@ self.pending_fetches.remove(&plan.work_id);
 if let Some(retirement) = plan.certified_retirement {
     self.commit_certified_fetch_retirement(retirement);
 }
+if advances_proposal_replay {
+    let Some(RemoteProposalReplayStageV1::Fetch { replay, .. }) =
+        self.remote_proposal_replay.remove(&key)
+    else {
+        unreachable!("preflighted Proposal Fetch replay remains installed")
+    };
+    let previous = self
+        .remote_proposal_replay
+        .insert(key, RemoteProposalReplayStageV1::BodyAvailable(replay));
+    debug_assert!(previous.is_none());
+}
 Ok(())
 """,
-        "local Fetch and certified-request retirement must follow runtime publication",
+        "local Fetch and certified-request retirement and Proposal replay advancement must follow runtime publication",
         errors,
     )
     if commit_fetch_completion is not None:

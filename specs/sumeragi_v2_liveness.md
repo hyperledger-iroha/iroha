@@ -1341,7 +1341,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97`.
+`23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad`.
 Nine of those legs execute the separate 530-test G-UNIT focus inventory. Its
 canonical source-derived inventory contains 531 TSV lines and has SHA-256
 `e7eb7d609b110a421297d740f0a69cc2b01f2083731d29ca604826849bb36474`.
@@ -1601,7 +1601,7 @@ data-model module legs. Immediately before completion publication, the runner
 also revalidates the source-bound localnet binary bundle. The data-model modules are
 discovered and executed against `iroha_data_model`; they cannot fall through to
 the `iroha_core` runner.
-The current 865-test inventory is a mechanically checked
+The current 864-test inventory is a mechanically checked
 source contract, not execution evidence; the
 complete inventory must still run as one clean committed, detached,
 source-sealed release leg before it becomes release evidence.
@@ -1970,8 +1970,10 @@ of the duplicate inline network-simulation rows, the historical inventory
 contained 856 tests across 40 modules and 89 legs. The four exact retired-
 attempt, mixed-carrier, cold-restart, and autonomous-output-retirement
 regressions plus the ordinary and record-backed autonomous predecessor-
-durability rows and the three producer-publication-fence race rows bring the
-current inventory to 865 tests across 43 modules. The new rows require the
+durability rows and the three producer-publication-fence race rows produced the
+865-test checkpoint across 43 modules. Retiring the dormant generic persisted-
+continuation regression brings the current inventory to 864 tests across the
+same modules. The retained rows require the
 post-preflight fence to serialize same-wire retransmission and unrelated append
 producers through the durable publication boundary, while a dropped unpublished
 dequeue must release the fence without consuming its target.
@@ -2343,7 +2345,7 @@ without terminal validation it cannot publish external completion.
 
 On success, the private invocation publishes its exact aggregate receipt. That
 receipt binds the 91 pre-network corridor legs and
-their exact 865-test production inventory, the separate 530-test G-UNIT
+their exact 864-test production inventory, the separate 530-test G-UNIT
 inventory, semantic test names/counts, commands, logs, the exact source-bound
 prebuilt localnet binary bundle and attestation, and resolved tool identities.
 Formal evidence includes the completion, pinned harness lock and toolchain,

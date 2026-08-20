@@ -186,10 +186,10 @@ required|executor_mint|validated_bodies.get(&key) != Some(&validated)|next-Vote 
 required|executor_mint|durable_bodies.get(&key) != Some(durable)|next-Vote executor mint omitted durable_bodies.get(&key) != Some(durable)
 required|executor_mint|recovered_bodies.get(&key)|next-Vote executor mint omitted recovered_bodies.get(&key)
 required|executor_mint|RecoveredLifecycleNextVoteBodyAuthorityMintPermitV1::new()|next-Vote executor mint omitted RecoveredLifecycleNextVoteBodyAuthorityMintPermitV1::new()
-region|service_mint|worker|after|fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(|before|/// Publish the live completion owner
+region|service_mint|worker|after|fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(|before|/// Publish the completion owner only through
 required|service_mint|self.recovered_lifecycle_next_vote_body_executor_permit(executor)?|next-Vote service mint omitted self.recovered_lifecycle_next_vote_body_executor_permit(executor)?
 required|service_mint|.prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)|next-Vote service mint omitted .prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)
-region|phase_projection|wal_recovery|after|impl DurableAuthenticatedWalVoteLifecycleRepair {|before|/// Reconstruct a durable signed child only through this exact phase-vote WAL owner.
+region|phase_projection|wal_recovery|after|impl DurableAuthenticatedWalVoteLifecycleRepair {|before|/// Bind the durable vote child back to this exact WAL Sign for cold replay.
 required|phase_projection|project_authenticated_signed_broadcast_and_sign|phase-vote combined projection omitted project_authenticated_signed_broadcast_and_sign
 required|phase_projection|next_sign.matches_verified_height(verified)|phase-vote combined projection omitted next_sign.matches_verified_height(verified)
 required|phase_projection|next_sign.matches_phase_vote_repair(self)|phase-vote combined projection omitted next_sign.matches_phase_vote_repair(self)
@@ -234,11 +234,11 @@ required|cold_next_sign|self.is_exact(verified)|cold next-Sign projection omitte
 required|cold_next_sign|RecoveredLifecycleSignBroadcastProjectionPermitV1|cold next-Sign projection omitted RecoveredLifecycleSignBroadcastProjectionPermitV1
 required|cold_next_sign|self.seal.effect.clone()|cold next-Sign projection omitted self.seal.effect.clone()
 end
-case|direct_validation_preview_surface_is_closed_move_only_and_unwired
+case|direct_validation_preview_surface_is_closed_move_only_and_lifecycle_wired
 region|production|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
-count|production|prepare_direct_validation_succeeded(|3|only the private definition, recovered-Decision fast-forward, and sealed Ready bridge may name the preview
+count|production|prepare_direct_validation_succeeded(|4|only the private definition, recovered-Decision fast-forward, sealed Ready bridge, and cfg(test) sealed settlement helper may name the preview
 region|recovered_fast_forward|adapter|after|fn prepare_recovered_decision_apply_fast_forward(|before|/// Preview a certified Fetch completion directly
-count|recovered_fast_forward|prepare_direct_validation_succeeded(|1|the third preview call stays sealed inside recovered-Decision replay
+count|recovered_fast_forward|prepare_direct_validation_succeeded(|1|the recovered-Decision preview call stays sealed inside replay
 region|tokens|adapter|at|enum DirectValidationSucceededStutter|before|/// Opaque staged adapter state for the fixed recovered Decision body fast-forward.
 region|tokens|adapter|at|impl PreparedDirectValidationSucceededApply<'_>|before|// READY_DURABLE_VALIDATE_ADAPTER_PREVIEW_BEGIN
 required|tokens|struct PreparedDirectValidationSucceededBusy<'a>|missing direct-validation token struct PreparedDirectValidationSucceededBusy<'a>
@@ -285,7 +285,7 @@ forbidden|method|LifecycleCoordinator|inert direct-validation preview invokes fo
 forbidden|method|v2_runtime|inert direct-validation preview invokes forbidden machinery v2_runtime
 forbidden|method|.commit(|inert direct-validation preview invokes forbidden machinery .commit(
 end
-case|direct_validation_failed_surface_is_closed_move_only_and_unwired
+case|direct_validation_failed_surface_is_closed_move_only_and_lifecycle_wired
 region|production|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
 count|production|prepare_direct_validation_failed(|2|only the private definition and sealed Ready-carrier bridge may name the preview
 region|tokens|adapter|at|enum DirectValidationFailedStutter|before|/// Exact idempotent disposition of one direct successful-validation preview
@@ -326,7 +326,7 @@ end
 case|apply_worker_request_has_no_runtime_ownership_sidecar
 region|task|effects|after|pub(crate) struct ApplyTask {|before|impl ApplyTask {
 region|pending|effects|after|struct PendingApply {|before|struct ReadyBody {
-region|preflight|effects|after|fn preflight_pending_application_owner(|before|fn preflight_deferred_work_owner(
+region|preflight|effects|after|fn preflight_pending_application_owner(|before|fn begin_apply<S: V2EffectServices>(
 region|completion|effects|after|pub(crate) fn complete_application|before|/// Current bounded operational status.
 required|task|authorized_owner_tag: EventTag|ApplyTask omitted authorized_owner_tag: EventTag
 required|task|lifecycle_ordinal: u128|ApplyTask omitted lifecycle_ordinal: u128
@@ -338,6 +338,7 @@ end
 case|local_body_replay_authority_is_linear_nondecode_and_closed_to_fixed_joins
 region|production|replay_authority|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|local|replay_authority|after|pub(in crate::sumeragi) struct LocalBodyPreIntentReplaySealV1|before|/// Selector-authenticated origin awaiting one exact durable body-frame binding.
+region|derive_local_pre_intent|replay_authority|last|#[derive(|before|pub(in crate::sumeragi) struct LocalBodyPreIntentReplaySealV1 {
 region|runtime|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|executor|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
 required|local|store_pending: PendingRuntimeEffectBinding|local replay authority omitted store_pending: PendingRuntimeEffectBinding
@@ -352,8 +353,8 @@ required|local|exactly_matches_proposal_intent(|local replay authority omitted e
 required|local|exactly_matches_proposal_intent_effect(|local replay authority omitted exactly_matches_proposal_intent_effect(
 required|local|fn bind_proposal_intent(|local replay authority omitted fn bind_proposal_intent(
 required|local|BodyPipelineOriginV1::LocalBody(manifest.clone())|local replay authority omitted BodyPipelineOriginV1::LocalBody(manifest.clone())
-forbidden|local|#[derive(Clone|local replay authority exposed or reserved #[derive(Clone
-forbidden|local|#[derive(Copy|local replay authority exposed or reserved #[derive(Copy
+forbidden|derive_local_pre_intent|Clone|local body pre-intent seal became cloneable
+forbidden|derive_local_pre_intent|Copy|local body pre-intent seal became copyable
 forbidden|local|Decode|local replay authority exposed or reserved Decode
 forbidden|local|pub(in crate::sumeragi) fn source(|local replay authority exposed or reserved pub(in crate::sumeragi) fn source(
 forbidden|local|pub(in crate::sumeragi) fn receipt(|local replay authority exposed or reserved pub(in crate::sumeragi) fn receipt(
@@ -369,11 +370,11 @@ forbidden|local|is_zero()|local replay authority exposed or reserved is_zero()
 count|runtime|LocalBodyReplayMintPermit::new()|1|local body replay mint permit count drifted
 count|runtime|LocalProposalEffectOwnership::from_exact_assemble_body(|2|only the active-view and fresh local producer branches mint the composite
 required|executor|local_store_replay: BTreeMap<EffectWorkId, LocalProposalEffectOwnership>|executor omitted local replay cut local_store_replay: BTreeMap<EffectWorkId, LocalProposalEffectOwnership>
-required|executor|local_validate_replay: BTreeMap<EffectWorkId, LocalValidateReplayEvidenceV1>|executor omitted local replay cut local_validate_replay: BTreeMap<EffectWorkId, LocalValidateReplayEvidenceV1>
+required|executor|pending_durable_validate_admissions:|executor omitted lifecycle-owned durable Validate admission cut
 required|executor|BTreeMap<LocalProposalReadyCommandIdentity, LocalProposalReadyReplayEvidenceV1>|executor omitted local replay cut BTreeMap<LocalProposalReadyCommandIdentity, LocalProposalReadyReplayEvidenceV1>
 required|executor|BTreeMap<LocalProposalReadyCommandIdentity, LocalProposalIntentReplayEvidenceV1>|executor omitted local replay cut BTreeMap<LocalProposalReadyCommandIdentity, LocalProposalIntentReplayEvidenceV1>
 required|executor|.project_exact_validate(|executor omitted local replay cut .project_exact_validate(
-required|executor|.complete_local_proposal(|executor omitted local replay cut .complete_local_proposal(
+required|executor|handoff.publish_into_runtime(&mut self.runtime)|executor omitted lifecycle local-ready publication cut
 required|executor|.bind_proposal_intent(|executor omitted local replay cut .bind_proposal_intent(
 required|executor|plan_local_proposal_replay_consumptions(|executor omitted local replay cut plan_local_proposal_replay_consumptions(
 required|executor|retire_local_proposal_ready_replay(|executor omitted local replay cut retire_local_proposal_ready_replay(
@@ -558,7 +559,7 @@ required|registry|Arc::ptr_eq(&serve.replay_evidence, &producer.replay_evidence)
 required|registry|broadcast.pairs_exact_next_sign(next_address, next_digest)|fresh Serve whole-census preflight omitted broadcast.pairs_exact_next_sign(next_address, next_digest)
 required|registry|!paired_next_vote_addresses.is_subset(&exact_next_vote_addresses)|fresh Serve whole-census preflight omitted !paired_next_vote_addresses.is_subset(&exact_next_vote_addresses)
 required|registry|replay_authority: LifecycleReplayAuthorityV1|fresh Serve whole-census preflight omitted replay_authority: LifecycleReplayAuthorityV1
-required|registry|ConcreteLifecycleWork::from_authorized_exact(effect, pending, replay_authority)|fresh Serve whole-census preflight omitted ConcreteLifecycleWork::from_authorized_exact(effect, pending, replay_authority)
+required|registry|ConcreteLifecycleWork::from_authorized_exact(effect, pending, authority)|fresh Serve whole-census preflight omitted ConcreteLifecycleWork::from_authorized_exact(effect, pending, authority)
 required|registry|replay_authority == &metadata.replay_authority|fresh Serve whole-census preflight omitted replay_authority == &metadata.replay_authority
 required|registry|ConcreteLifecycleWorkKind::CertifiedFetchCompletion(completion)|fresh Serve whole-census preflight omitted ConcreteLifecycleWorkKind::CertifiedFetchCompletion(completion)
 required|registry|ConcreteLifecycleWorkKind::DurableStoreBody(store)|fresh Serve whole-census preflight omitted ConcreteLifecycleWorkKind::DurableStoreBody(store)
@@ -733,7 +734,7 @@ region|derive_remote_proposal_stored_evidence|replay_authority|last|#[derive(|be
 region|derive_remote_proposal_validate_evidence|replay_authority|last|#[derive(|before|pub(in crate::sumeragi) struct RemoteProposalValidateReplayEvidenceV1 {
 region|remote|replay_authority|after|pub(in crate::sumeragi) struct RemoteProposalFetchReplayEvidenceV1|before|/// Move-only pre-intent replay seal for one exact local
 region|runtime|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
-region|outside|ledger|begin|-|end|-
+region|outside|ledger|begin|-|before|pub(crate) mod tests {
 region|outside|worker|begin|-|end|-
 region|outside|runner|begin|-|end|-
 required|remote|RemoteProposalStoreReplayEvidenceV1|remote Proposal replay wrapper omitted RemoteProposalStoreReplayEvidenceV1
@@ -855,14 +856,13 @@ forbidden|derive_durable_validate_evidence|Encode|runtime seal DurableValidateRe
 forbidden|derive_invalid_body_report_evidence|Decode|runtime seal InvalidBodyReportReplayEvidenceV1 became codec-constructible
 forbidden|derive_invalid_body_report_evidence|Encode|runtime seal InvalidBodyReportReplayEvidenceV1 became codec-constructible
 end
-case|live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_mints
+case|live_wal_replay_seal_is_linear_nondecodable_and_has_only_specialized_production_mints
 region|production|replay_authority|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|live|replay_authority|after|struct LiveWalPersistedReplaySealV1|before|/// Canonical inert replay evidence for one exact signed broadcast effect.
 region|adapter|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|runtime|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|work_registry|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|ready_sign|adapter|after|// READY_DURABLE_VALIDATE_LIVE_SIGN_BEGIN|before|// READY_DURABLE_VALIDATE_LIVE_SIGN_END
-region|generic|adapter|after|fn drive_exact_persisted_continuation(|before|fn live_wal_record_exactly_owns_effect(
 region|outside|ledger|begin|-|end|-
 region|outside|effects|begin|-|end|-
 region|outside|worker|begin|-|end|-
@@ -873,7 +873,7 @@ required|live|LiveWalPersistedPendingV1::ValidateSignBound|live WAL seal omitted
 required|live|LiveWalPersistedPendingV1::ApplyPending|live WAL seal omitted LiveWalPersistedPendingV1::ApplyPending
 required|live|LiveWalPersistedPendingV1::ApplyBound|live WAL seal omitted LiveWalPersistedPendingV1::ApplyBound
 required|live|from_exact_live_append(\n        cause: ExactLiveWalPersistedContinuationCause|live WAL seal omitted from_exact_live_append(\n        cause: ExactLiveWalPersistedContinuationCause
-required|live|exactly_binds_payload_free_pending(&self)|live WAL seal omitted exactly_binds_payload_free_pending(&self)
+required|live|LiveWalPersistedPendingV1::PayloadFree(pending) => {\n                pending.exactly_binds_adapter_effect(&self.effect)|live WAL seal omitted exact payload-free pending binding
 required|live|bind_exact_validate_sign_pending(|live WAL seal omitted bind_exact_validate_sign_pending(
 required|live|exactly_binds_validate_sign_pending(&self)|live WAL seal omitted exactly_binds_validate_sign_pending(&self)
 required|live|project_validate_apply_successor(predecessor_effect, &self.effect)|live WAL seal omitted project_validate_apply_successor(predecessor_effect, &self.effect)
@@ -897,93 +897,46 @@ forbidden|live|RecoveredWalFrameIdentity|live WAL seal exposed or reserved forbi
 forbidden|live|!= [0; 32]|live WAL seal exposed or reserved forbidden surface != [0; 32]
 forbidden|live|== [0; 32]|live WAL seal exposed or reserved forbidden surface == [0; 32]
 forbidden|live|is_zero()|live WAL seal exposed or reserved forbidden surface is_zero()
-count|adapter|SealedLiveWalPersistedEffectV1::from_exact_live_append(|3|only the three closed post-fsync cuts mint live replay authority
-count|adapter|PendingRuntimeEffectBinding::from_exact_live_wal_append(|3|the same three closed post-fsync cuts derive frame-bound placeholder owners
+count|adapter|SealedLiveWalPersistedEffectV1::from_exact_live_append(|3|only recovered Proposal-Prepare, Ready-Validate Sign, and Decision Apply mint live replay authority
+count|adapter|PendingRuntimeEffectBinding::from_exact_live_wal_append(|2|only recovered Proposal-Prepare and Ready-Validate Sign derive frame-bound pending owners
 count|ready_sign|SealedLiveWalPersistedEffectV1::from_exact_live_append(|1|sealed Ready-Sign must mint exactly one live replay authority
 count|ready_sign|PendingRuntimeEffectBinding::from_exact_live_wal_append(|1|sealed Ready-Sign must derive exactly one frame-bound placeholder owner
 required|ready_sign|LiveWalFrameIdentity::from_append_receipt(|sealed Ready-Sign lost its append receipt identity
 required|ready_sign|bind_exact_validate_sign_pending(child_pending)|sealed Ready-Sign lost its exact Validate-Sign pending bind
-count|generic|SealedLiveWalPersistedEffectV1::from_exact_live_append(|1|generic persisted cut must mint exactly one live replay authority
-count|generic|PendingRuntimeEffectBinding::from_exact_live_wal_append(|1|generic persisted cut must derive exactly one frame-bound placeholder owner
-count|adapter|drive_exact_persisted_continuation(|1|the inert live cut has no production caller yet
+forbidden|adapter|fn drive_exact_persisted_continuation(|retired generic persisted-continuation driver returned
 count|runtime|fn from_exact_live_wal_append(|1|runtime must expose exactly one live WAL pending-binding constructor
 count|work_registry|.complete_exact_apply(|1|only the retained Validate completion supplies an Apply receipt
 forbidden|adapter|RecoveredWalFrameIdentity::for_test|production adapter retained a test-only recovered WAL frame identity
 forbidden|outside|SealedLiveWalPersistedEffectV1|live WAL replay authority escaped its closed production boundary: SealedLiveWalPersistedEffectV1
-forbidden|outside|drive_exact_persisted_continuation|live WAL replay authority escaped its closed production boundary: drive_exact_persisted_continuation
 end
-case|live_wal_pre_admission_surface_is_closed_and_has_one_apply_join
+case|live_validate_wal_pre_admissions_are_closed_and_scheduler_owned
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
-region|token|registry|after|pub(super) struct PreparedLiveWalReplayPreAdmission<'a>|before|/// Move-only Validate projection sealed under its closed durable Store parent.
-region|outside|ledger|begin|-|end|-
-region|outside|effects|begin|-|end|-
-region|outside|worker|begin|-|end|-
-region|outside|runner|begin|-|end|-
-required|token|_persisted: SealedLiveWalPersistedEffectV1|live WAL token omitted {required}
-required|token|LiveWalReplayPreAdmissionOrigin<'a>|live WAL token omitted {required}
-required|token|PayloadFree|live WAL token omitted {required}
-required|token|Apply(PreparedValidatedBodyCompletion<'a>)|live WAL token omitted {required}
-required|token|seal_payload_free(\n        persisted: SealedLiveWalPersistedEffectV1|live WAL token omitted {required}
-required|token|persisted.exactly_binds_payload_free_pending()|live WAL token omitted {required}
-required|production|pub(super) fn seal_live_wal_apply(|live WAL Apply join omitted {required}
-required|production|retained_validated_receipt_is_exact()|live WAL Apply join omitted {required}
-required|production|exactly_binds_validated_apply_successor|live WAL Apply join omitted {required}
-required|production|retained_apply_join_is_exact(&persisted)|live WAL Apply join omitted {required}
-forbidden|token|#[derive(Clone|live WAL token exposed forbidden surface {forbidden}
-forbidden|token|Option<SealedLiveWalPersistedEffectV1>|live WAL token exposed forbidden surface {forbidden}
-forbidden|token|pub(super) fn effect(|live WAL token exposed forbidden surface {forbidden}
-forbidden|token|pub(super) fn pending(|live WAL token exposed forbidden surface {forbidden}
-forbidden|token|pub(super) fn receipt(|live WAL token exposed forbidden surface {forbidden}
-forbidden|token|pub(super) fn source(|live WAL token exposed forbidden surface {forbidden}
-forbidden|token|into_parts|live WAL token exposed forbidden surface {forbidden}
-forbidden|token|fn install(|live WAL token exposed forbidden surface {forbidden}
-forbidden|token|fn commit(|live WAL token exposed forbidden surface {forbidden}
-count|production|.complete_exact_apply(|1|only the fixed retained-Validate join supplies an Apply receipt
-count|production|.seal_live_wal_apply(|0|the inert prerequisite has no production admission caller
-forbidden|outside|PreparedLiveWalReplayPreAdmission|live WAL pre-admission must remain registry-private
+region|scheduler|scheduler_inputs|begin|-|end|-
+required|production|struct PreparedReadyDurableValidatePersistedSignPreAdmission|live Validate-to-Sign pre-admission omitted its closed registry/adapter owner
+required|production|struct PreparedReadyDurableValidateApplyPreAdmission|live Validate-to-Apply pre-admission omitted its closed registry/adapter owner
+required|production|pub(super) fn seal_live_wal_validate_sign(|live Validate-to-Sign pre-admission omitted its exact WAL join
+required|production|pub(super) fn seal_live_wal_validate_apply(|live Validate-to-Apply pre-admission omitted its exact WAL join
+required|production|validate_sign_predecessor_authority()|live Validate-to-Sign join omitted its installed predecessor authority
+required|production|validate_apply_predecessor_authority()|live Validate-to-Apply join omitted its installed predecessor authority
+forbidden|production|PreparedLiveWalReplayPreAdmission|retired generic live-WAL pre-admission wrapper returned
+forbidden|production|PreparedValidatedBodyCompletion|retired validated-body completion wrapper returned
+forbidden|production|LiveWalReplayPreAdmissionOrigin|retired generic live-WAL origin discriminator returned
+required|scheduler|preview.seal_live_wal_validate_sign()|scheduler omitted the closed Validate-to-Sign WAL join
+required|scheduler|preview.seal_live_wal_validate_apply()|scheduler omitted the closed Validate-to-Apply WAL join
 end
-case|direct_signed_replay_pre_admission_surface_is_move_only_inert_and_unwired
+case|direct_signed_replay_legacy_wrapper_is_absent
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
-region|token|registry|after|pub(super) struct PreparedDirectSignedReplayPreAdmission {|before|/// Closed concrete form of one fsynced recovered WAL `Sign` successor.
-region|declaration|registry|after|pub(super) struct PreparedDirectSignedReplayPreAdmission {|before|}
-region|callers|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
-region|callers|selector|begin|-|end|-
-region|callers|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod tests {
-region|callers|effects|begin|-|before|\n#[cfg(test)]\nmod tests {
-region|callers|worker|begin|-|end|-
-region|callers|runner|begin|-|end|-
-required|token|effect: AdapterEffect|direct signed pre-admission token omitted {required}
-required|token|pending: PendingRuntimeEffectBinding|direct signed pre-admission token omitted {required}
-required|token|replay_evidence: DirectSignedReplayEvidenceV1|direct signed pre-admission token omitted {required}
-required|token|Broadcast(SignedBroadcastReplayEvidenceV1)|direct signed pre-admission token omitted {required}
-required|token|ReportEquivocation(SignedEquivocationReplayEvidenceV1)|direct signed pre-admission token omitted {required}
-required|token|pub(super) fn seal_exact(|direct signed pre-admission token omitted {required}
-required|token|SignedBroadcastReplayEvidenceV1::from_exact_effect(&effect, &pending)|direct signed pre-admission token omitted {required}
-required|token|SignedEquivocationReplayEvidenceV1::from_exact_effect(&effect, &pending)|direct signed pre-admission token omitted {required}
-required|token|evidence.exactly_matches_effect(&self.effect, &self.pending)|direct signed pre-admission token omitted {required}
-required|token|_effect: AdapterEffect|direct signed pre-admission token omitted {required}
-required|token|_pending: PendingRuntimeEffectBinding|direct signed pre-admission token omitted {required}
-forbidden|declaration|Option<|direct signed token declaration must be closed
-forbidden|declaration|derive(Clone|direct signed token declaration must remain move-only
-forbidden|declaration|derive(Debug|direct signed token declaration must remain opaque
-forbidden|token|fn new(|direct signed pre-admission token acquired forbidden authority {forbidden}
-forbidden|token|fn from_parts(|direct signed pre-admission token acquired forbidden authority {forbidden}
-forbidden|token|fn into_parts(|direct signed pre-admission token acquired forbidden authority {forbidden}
-forbidden|token|fn effect(|direct signed pre-admission token acquired forbidden authority {forbidden}
-forbidden|token|fn pending(|direct signed pre-admission token acquired forbidden authority {forbidden}
-forbidden|token|fn replay_evidence(|direct signed pre-admission token acquired forbidden authority {forbidden}
-forbidden|token|fn install(|direct signed pre-admission token acquired forbidden authority {forbidden}
-forbidden|token|fn commit(|direct signed pre-admission token acquired forbidden authority {forbidden}
-forbidden|token|ConcreteLifecycleWorkRegistry|direct signed pre-admission token acquired forbidden authority {forbidden}
-forbidden|token|.entries|direct signed pre-admission token acquired forbidden authority {forbidden}
-forbidden|token|PendingAdapter {|direct signed pre-admission token acquired forbidden authority {forbidden}
-count|production|pub(super) fn seal_exact(|1|the token has one exact seal
-count|production|PreparedDirectSignedReplayPreAdmission::seal_exact(|0|the inert token must have no production caller
-forbidden|callers|PreparedDirectSignedReplayPreAdmission|direct signed pre-admission must remain registry-private
+region|replay|replay_authority|begin|-|before|\n#[cfg(test)]\nmod tests {
+forbidden|production|PreparedDirectSignedReplayPreAdmission|retired direct-signed registry wrapper returned
+forbidden|production|DirectSignedReplayEvidenceV1|retired aggregate direct-signed evidence returned
+forbidden|replay|PreparedDirectSignedReplayPreAdmission|retired direct-signed registry wrapper escaped into replay authority
+forbidden|replay|DirectSignedReplayEvidenceV1|retired aggregate direct-signed evidence returned
+required|replay|struct SignedBroadcastReplayEvidenceV1|closed signed-Broadcast evidence was removed with the retired aggregate wrapper
+required|replay|struct SignedEquivocationReplayEvidenceV1|closed signed-equivocation evidence was removed with the retired aggregate wrapper
 end
-case|remote_proposal_replay_pre_admission_is_closed_exact_and_unwired
+case|remote_proposal_replay_pre_admission_is_closed_exact_and_live
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
-region|token|registry|after|pub(super) struct PreparedRemoteProposalFetchReplayPreAdmission {|before|/// Closed concrete form of one fsynced recovered WAL `Sign` successor.
+region|token|registry|after|pub(in crate::sumeragi) struct PreparedRemoteProposalFetchReplayPreAdmission {|before|/// Closed concrete form of one fsynced recovered WAL `Sign` successor.
 region|callers|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|callers|selector|begin|-|end|-
 region|callers|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -997,13 +950,13 @@ required|token|replay_evidence: RemoteProposalFetchReplayEvidenceV1|remote Propo
 required|token|replay_evidence: RemoteProposalStoreReplayEvidenceV1|remote Proposal replay token omitted {required}
 required|token|replay_evidence: RemoteProposalStoredReplayEvidenceV1|remote Proposal replay token omitted {required}
 required|token|replay_evidence: RemoteProposalValidateReplayEvidenceV1|remote Proposal replay token omitted {required}
-required|token|pub(super) fn seal_exact_fetch(|remote Proposal replay token omitted {required}
+required|token|pub(in crate::sumeragi) fn seal_exact_fetch(|remote Proposal replay token omitted {required}
 required|token|ownership.exact_remote_proposal_fetch_replay(&effect)|remote Proposal replay token omitted {required}
-required|token|pub(super) fn project_store(|remote Proposal replay token omitted {required}
+required|token|pub(in crate::sumeragi) fn project_store(|remote Proposal replay token omitted {required}
 required|token|.project_exact_store(&effect, &pending)|remote Proposal replay token omitted {required}
-required|token|pub(super) fn bind_durable_body(|remote Proposal replay token omitted {required}
+required|token|pub(in crate::sumeragi) fn bind_durable_body(|remote Proposal replay token omitted {required}
 required|token|.bind_durable_body(&effect, &durable_receipt)|remote Proposal replay token omitted {required}
-required|token|pub(super) fn project_validate(|remote Proposal replay token omitted {required}
+required|token|pub(in crate::sumeragi) fn project_validate(|remote Proposal replay token omitted {required}
 required|token|.project_exact_validate(|remote Proposal replay token omitted {required}
 required|token|fn into_durable_validate_carrier(|remote Proposal replay token omitted {required}
 required|token|replay_evidence: DurableValidateReplayEvidenceV1::remote_proposal(|remote Proposal replay token omitted {required}
@@ -1027,10 +980,10 @@ forbidden|token|.entries|remote Proposal replay token exposed forbidden surface 
 forbidden|token|!= [0; 32]|remote Proposal replay token exposed forbidden surface {forbidden}
 forbidden|token|== [0; 32]|remote Proposal replay token exposed forbidden surface {forbidden}
 forbidden|token|is_zero()|remote Proposal replay token exposed forbidden surface {forbidden}
-count|production|PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(|0|the inert remote Proposal token has no production admission caller
-forbidden|callers|PreparedRemoteProposalFetchReplayPreAdmission|remote Proposal pre-admission must remain registry-private
+count|production|PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(|0|the registry declaration must not self-invoke the remote Proposal mint
+count|callers|PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(|1|remote Proposal pre-admission must have exactly one production executor caller
 end
-case|invalid_body_replay_pre_admission_is_closed_exact_and_unwired
+case|invalid_body_replay_pre_admission_is_closed_exact_and_lifecycle_owned
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|token|registry|after|pub(super) struct PreparedInvalidBodyReportReplayPreAdmission|before|/// Ownership-preserving failure from the fixed Ready Validate adapter join.
 region|outside|ledger|begin|-|end|-
@@ -1077,12 +1030,13 @@ count|production|adapter.seal_invalid_body_report_replay(|1|only the fixed Ready
 forbidden|outside|PreparedInvalidBodyReportReplayPreAdmission|invalid-body replay pre-admission must remain registry-private
 forbidden|outside|InvalidBodyReportReplayEvidenceV1|invalid-body replay evidence must remain outside downstream callers
 end
-case|live_validate_sign_join_is_linear_opaque_and_unwired_from_runner
+case|live_validate_sign_join_is_linear_opaque_and_scheduler_owned
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|authority|registry|after|pub(in crate::sumeragi) struct ReadyValidateSignPredecessorAuthority|before|impl<'a> ReadyValidatedAdapterAuthority<'a>
 region|join|registry|after|pub(super) fn seal_live_wal_validate_sign(|before|/// Consume only the exact Ready/rejected report preview
 region|callers|effects|begin|-|end|-
 region|callers|worker|begin|-|end|-
+region|callers|scheduler_inputs|begin|-|end|-
 region|callers|runner|begin|-|end|-
 required|authority|_linearity: ReadyValidateSignPredecessorLinearity|Validate Sign predecessor authority omitted {required}
 required|authority|impl Drop for ReadyValidateSignPredecessorLinearity|Validate Sign predecessor authority omitted {required}
@@ -1110,8 +1064,7 @@ forbidden|join|fn into_parts(|fixed live Sign join exposed {forbidden}
 forbidden|join|fn commit(|fixed live Sign join exposed {forbidden}
 forbidden|join|fn install(|fixed live Sign join exposed {forbidden}
 count|production|adapter.bind_validate_sign_predecessor(predecessor)|1|only the fixed Ready registry join binds the adapter Sign predecessor
-forbidden|callers|seal_live_wal_validate_sign|live Validate Sign join must remain runner-inert
-forbidden|callers|PreparedReadyDurableValidatePersistedSignPreAdmission|live Validate Sign carrier must remain runner-inert
+count|callers|.seal_live_wal_validate_sign()|1|live Validate Sign join must have exactly one production scheduler caller
 end
 case|registry_remains_inert_and_scheduler_free
 region|prefix|registry|begin|-|before|#[cfg(test)]
@@ -1129,7 +1082,7 @@ forbidden|prefix|producer_debts:|registry acquired forbidden scheduler authority
 forbidden|prefix|fn plan(|registry acquired forbidden scheduler authority: {forbidden}
 forbidden|prefix|fn settle_turn(|registry acquired forbidden scheduler authority: {forbidden}
 forbidden|prefix|reserve_one|registry acquired forbidden scheduler authority: {forbidden}
-count|coordinator|work_registry::|6|only the six reviewed opaque registry authority import groups may cross the module boundary
+count|coordinator|work_registry::|7|only the seven reviewed opaque registry authority import groups may cross the module boundary
 required|coordinator|LiveValidateSignRegistryReservation|coordinator registry imports lost the opaque live Validate reservation
 required|coordinator|LiveValidateSignWorkProjectionPermit|coordinator registry imports lost the sealed live Validate projection permit
 required|coordinator|PreparedLiveValidateSignRegistryWork|coordinator registry imports lost the prepared live Validate work carrier
@@ -1231,6 +1184,7 @@ region|fetch_execution|registry_recovery_impl|after|impl<'a> PreparedCertifiedFe
 region|callers|selector|begin|-|end|-
 region|callers|effects|begin|-|end|-
 region|callers|worker|begin|-|end|-
+region|callers|scheduler_inputs|begin|-|end|-
 required|carrier|address: ConcreteWorkAddress|Store carrier omitted {required}
 required|carrier|effect: AdapterEffect|Store carrier omitted {required}
 required|carrier|pending: PendingRuntimeEffectBinding|Store carrier omitted {required}
@@ -1281,25 +1235,21 @@ required|fetch_execution|let Some(ready_projection) = completion.replay_evidence
 required|fetch_execution|let expected_manifest_hash = ready_projection.expected_manifest_hash();|parent manifest authority lost its authenticated projection transfer
 required|fetch_execution|expected_manifest_hash,|Store successor lost transferred parent manifest authority
 forbidden|fetch_execution|durable_body.manifest_hash()|parent manifest authority must not be re-read from the body receipt
-count|production|fn prepare_durable_store_execution(|1|the inert Store preflight must have no production caller
-forbidden|callers|prepare_durable_store_execution|the inert Store preflight must remain unwired outside the registry
+count|production|fn prepare_durable_store_execution(|1|the sealed Store preflight definition count drifted
+count|callers|prepare_durable_store_execution|1|the sealed Store preflight must have exactly one production scheduler caller
 end
-case|durable_validate_execution_surface_is_closed_borrow_bound_and_inert
+case|durable_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|carrier|registry|after|struct DurableValidateBody {|before|impl DurableValidateBody
 region|validation|registry|after|impl DurableValidateBody {|before|struct DurableValidateCompletion {
 region|common_work|registry|after|impl ConcreteLifecycleWork {|before|pub(super) enum CertifiedFetchCompletionError
 region|live_sign_work|registry|after|pub(in crate::sumeragi) struct PreparedLiveValidateSignRegistryWork {|before|/// Closed pre-mutation failure inventory for certified-Fetch conversion.
 region|preparation|registry_recovery_impl|after|pub(super) fn prepare_durable_validate_execution(|before|pub(super) fn classify_ready_validate_carrier(
-region|execution_impl|registry_recovery|after|impl<'a> PreparedDurableValidateExecution<'a>|before|impl<'a> PreparedValidatedBodyCompletion<'a>
-region|completion|registry_recovery|after|pub(super) struct PreparedValidatedBodyCompletion<'a>|before|pub(super) struct PreparedLiveWalReplayPreAdmission<'a>
-region|completion_impl|registry_recovery|after|impl<'a> PreparedValidatedBodyCompletion<'a>|end|-
+region|execution_impl|registry_recovery|after|impl PreparedDurableValidateExecution<'_>|end|-
 region|validate_successor|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'registry, 'adapter> {|before|/// Move-only Store projection sealed under its closed Fetch parent
-region|callers|selector|begin|-|end|-
-region|callers|coordinator|begin|-|end|-
-region|callers|effects|begin|-|end|-
-region|callers|worker|begin|-|end|-
-region|callers|runner|begin|-|end|-
+region|scheduler|scheduler_inputs|begin|-|end|-
+region|worker_path|worker|begin|-|end|-
+region|turn_driver|turn_driver|begin|-|end|-
 required|carrier|address: ConcreteWorkAddress|Validate carrier omitted {required}
 required|carrier|effect: AdapterEffect|Validate carrier omitted {required}
 required|carrier|pending: PendingRuntimeEffectBinding|Validate carrier omitted {required}
@@ -1324,22 +1274,23 @@ count|common_work|ConcreteLifecycleWorkKind::DurableValidateBody|6|Validate carr
 count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalSign|4|recovered Sign must remain exhaustive in validation, address, causal-root, and effect-borrow paths
 count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch|4|recovered Decision Fetch must remain exhaustive in validation, address, causal-root, and typed-effect rejection paths
 required|common_work|let ConcreteLifecycleWorkKind::PendingAdapter {|generic adapter recovery must reject every closed carrier through exhaustive destructuring
-required|common_work|closed lifecycle work requires its future typed consumer|generic adapter recovery lost its fail-stop rejection for closed carriers
+required|common_work|closed lifecycle work requires its dedicated typed consumer|generic adapter recovery lost its fail-stop rejection for closed carriers
 required|production|pub(super) struct ConcreteLifecycleWork {|concrete lifecycle work lost its registry-private declaration
 forbidden|production|pub(in crate::sumeragi) struct ConcreteLifecycleWork {|concrete lifecycle work escaped registry-private visibility
-required|live_sign_work|work: ConcreteLifecycleWork|opaque live Sign work omitted {required}
-required|live_sign_work|_permit: LiveValidateSignWorkProjectionPermit|opaque live Sign work omitted {required}
-required|live_sign_work|ConcreteLifecycleWork::from_authorized_exact(effect, pending, replay_authority)|opaque live Sign work omitted {required}
-required|live_sign_work|self.work.validate_exact()|opaque live Sign work omitted {required}
-required|live_sign_work|self.work.digest() == digest|opaque live Sign work omitted {required}
-required|live_sign_work|self.work.causal_root() == owner.causal_root()|opaque live Sign work omitted {required}
-required|live_sign_work|ConcreteLifecycleWorkKind::PendingAdapter|opaque live Sign work omitted {required}
+required|live_sign_work|admission: PreparedLifecycleAdmissionV1|opaque live Sign work omitted its unified admission owner
+required|live_sign_work|BoundAdapterEffectV1::bind_live_wal(effect, pending, replay_authority)|opaque live Sign work omitted its exact live-WAL binding
+required|live_sign_work|prepare_exact_bound_lifecycle_admission(permit.candidate, bound)|opaque live Sign work bypassed unified admission preparation
+required|live_sign_work|live_wal_admission_parts(&self.admission)|opaque live Sign work omitted closed admission validation
+required|live_sign_work|.validates(lifecycle_admission_candidate_context(candidate))|opaque live Sign work omitted unified admission validation
+required|live_sign_work|candidate.causal_root == owner.causal_root()|opaque live Sign work changed its inherited owner
+required|live_sign_work|digest_from_hash(bound.pending.exact_effect_identity())|opaque live Sign work changed its exact digest
 required|live_sign_work|SignRequest::Vote(vote)|opaque live Sign work omitted {required}
 required|live_sign_work|wire::GlobalPhase::Prepare \p wire::GlobalPhase::Commit|opaque live Sign work omitted {required}
 required|live_sign_work|ConcreteWorkAddress::new(owner, ordinal, slot)|opaque live Sign work omitted {required}
 required|live_sign_work|PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)|opaque live Sign work omitted {required}
-required|live_sign_work|reservation.install_live_sign(self.work)|opaque live Sign work omitted {required}
-forbidden|live_sign_work|pub work:|opaque live Sign work exposes forbidden surface {forbidden}
+required|live_sign_work|reservation.install_live_sign(into_live_wal_concrete(self.admission))|opaque live Sign work omitted {required}
+forbidden|live_sign_work|pub admission:|opaque live Sign work exposes forbidden surface {forbidden}
+forbidden|live_sign_work|work: ConcreteLifecycleWork|opaque live Sign work retained the bypassed concrete carrier
 forbidden|live_sign_work|derive(Clone|opaque live Sign work exposes forbidden surface {forbidden}
 forbidden|live_sign_work|into_parts|opaque live Sign work exposes forbidden surface {forbidden}
 forbidden|live_sign_work|fn effect(|opaque live Sign work exposes forbidden surface {forbidden}
@@ -1372,16 +1323,14 @@ forbidden|preparation|into_parts|durable Validate preparation acquired forbidden
 forbidden|preparation|for_test|durable Validate preparation acquired forbidden authority: {forbidden}
 required|execution_impl|pub(super) fn adapter_preview_inputs|durable Validate execution omitted {required}
 required|execution_impl|pub(super) fn durable_body_receipt|durable Validate execution omitted {required}
+required|execution_impl|pub(super) fn matches_durable_payload|durable Validate execution omitted {required}
 required|execution_impl|pub(super) fn expected_manifest_hash|durable Validate execution omitted {required}
 required|execution_impl|pub(super) fn durable_validation_wait_source|durable Validate execution omitted {required}
 required|execution_impl|pub(super) fn seal_waiting_dispatch|durable Validate execution omitted {required}
 required|execution_impl|pub(super) fn detach|durable Validate execution omitted {required}
-required|execution_impl|pub(super) fn bind_validated_receipt|durable Validate execution omitted {required}
 required|execution_impl|AdapterEffect::ValidateBody|durable Validate execution omitted {required}
 required|execution_impl|self.durable_validate().expected_manifest_hash|durable Validate execution omitted {required}
-required|execution_impl|validate_validated_receipt_authority|durable Validate execution omitted {required}
-required|execution_impl|validated_body_completion_digest|durable Validate execution omitted {required}
-count|execution_impl|pub(super) fn |8|Validate token may expose only preview coordinates, the fixed durable-payload equality oracle, durable authorities, sealed wait dispatch, owned detach, and success binding
+count|execution_impl|pub(super) fn |7|Validate token may expose only preview coordinates, durable-payload equality, durable authority, sealed wait dispatch, and owned detach
 forbidden|execution_impl|fn commit(|durable Validate token acquired forbidden authority: {forbidden}
 forbidden|execution_impl|.insert(|durable Validate token acquired forbidden authority: {forbidden}
 forbidden|execution_impl|.remove(|durable Validate token acquired forbidden authority: {forbidden}
@@ -1389,20 +1338,6 @@ forbidden|execution_impl|into_parts|durable Validate token acquired forbidden au
 forbidden|execution_impl|for_test|durable Validate token acquired forbidden authority: {forbidden}
 forbidden|execution_impl|fn new(|durable Validate token acquired forbidden authority: {forbidden}
 forbidden|execution_impl|durable_body_receipt().manifest_hash()|durable Validate token acquired forbidden authority: {forbidden}
-required|completion|&'a mut ConcreteLifecycleWorkRegistry|validated completion lost exclusive registry borrow
-required|completion|incumbent_digest: LifecycleDigest|validated completion lost incumbent digest
-required|completion|replacement_digest: LifecycleDigest|validated completion lost replacement digest
-required|completion|validated_receipt: ValidatedBodyReceipt|validated completion lost validated receipt
-forbidden|completion|derive(Clone|validated completion must remain move-only
-required|completion_impl|pub(super) const fn adapter_preview_inputs|validated completion omitted adapter preview inputs
-required|completion_impl|pub(super) const fn validated_receipt|validated completion omitted validated receipt borrow
-required|completion_impl|pub(super) const fn incumbent_digest|validated completion omitted incumbent digest
-required|completion_impl|pub(super) const fn replacement_digest|validated completion omitted replacement digest
-forbidden|completion_impl|fn commit(|validated completion acquired forbidden authority: {forbidden}
-forbidden|completion_impl|.insert(|validated completion acquired forbidden authority: {forbidden}
-forbidden|completion_impl|.remove(|validated completion acquired forbidden authority: {forbidden}
-forbidden|completion_impl|into_parts|validated completion acquired forbidden authority: {forbidden}
-forbidden|completion_impl|for_test|validated completion acquired forbidden authority: {forbidden}
 required|validate_successor|registry: &'registry mut ConcreteLifecycleWorkRegistry|Store-to-Validate lineage token omitted {required}
 required|validate_successor|store_address: ConcreteWorkAddress|Store-to-Validate lineage token omitted {required}
 required|validate_successor|validate_effect: AdapterEffect|Store-to-Validate lineage token omitted {required}
@@ -1412,8 +1347,15 @@ required|validate_successor|durable_body: DurableBodyReceipt|Store-to-Validate l
 required|validate_successor|expected_manifest_hash: HashOf<wire::PayloadManifest>|Store-to-Validate lineage token omitted {required}
 required|validate_successor|adapter: crate::sumeragi::v2::PreparedDurableStoreValidateAdapterV1<'adapter>|Store-to-Validate lineage token omitted {required}
 forbidden|validate_successor|derive(Clone|Store-to-Validate lineage token must remain move-only
-count|production|prepare_durable_validate_execution(|1|the inert Validate preflight must have no production caller
-forbidden|callers|prepare_durable_validate_execution|the inert Validate preflight must remain unwired outside the registry
+count|production|prepare_durable_validate_execution(|1|the registry must expose exactly one durable Validate preflight
+required|scheduler|.begin_durable_validate_dispatch(&mut self.registry, lease, &self.verified)|the lifecycle scheduler omitted the durable Validate dispatch join
+required|scheduler|reservation.commit(dispatch)|the lifecycle scheduler omitted exact Validate queue publication
+required|worker_path|V2IoCommand::LifecycleValidate(task)|the bounded worker omitted lifecycle Validate execution
+required|worker_path|.validate_candidate(&context, body)|the bounded worker omitted deterministic candidate validation
+required|worker_path|V2IoCompletion::LifecycleValidate(Box::new(|the bounded worker omitted typed Validate completion
+required|turn_driver|PendingLifecycleCompletionV1::take_validate(|the turn driver omitted guarded Validate completion ownership
+required|turn_driver|.complete_durable_validate_dispatch(|the turn driver omitted atomic Validate completion publication
+required|turn_driver|ack.acknowledge_after_publication()|the turn driver omitted post-publication worker acknowledgement
 end
 case|recovered_wal_sign_open_is_opaque_precommit_checked_and_runner_inert
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -1484,16 +1426,17 @@ required|borrowed|PreparedLifecycleCoordinatorOpen|borrowed recovery open lost i
 forbidden|runner_surface|open_coordinator_from_verified|runner surface exposed recovered Sign open authority open_coordinator_from_verified
 forbidden|runner_surface|OpenedRecoveredWalSignLifecycleCut|runner surface exposed recovered Sign open authority OpenedRecoveredWalSignLifecycleCut
 end
-case|durable_validate_async_handoff_surface_is_move_only_scheduler_free_and_inert
+case|durable_validate_async_handoff_surface_is_move_only_and_scheduler_owned
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|declarations|registry|after|// DURABLE_VALIDATE_ASYNC_HANDOFF_DECLARATIONS_BEGIN|before|// DURABLE_VALIDATE_ASYNC_HANDOFF_DECLARATIONS_END
 region|implementation|registry|after|// DURABLE_VALIDATE_ASYNC_HANDOFF_IMPLEMENTATION_BEGIN|before|// DURABLE_VALIDATE_ASYNC_HANDOFF_IMPLEMENTATION_END
-region|reattachment|registry|after|pub(super) fn reattach_durable_validate_execution(|before|pub(super) fn borrow_for_lease(
+region|reattachment|registry|after|pub(super) fn reattach_durable_validate_execution(|before|pub(super) fn prepare_executed_durable_validate_completion(
 region|caller|selector|begin|-|end|-
-region|caller|coordinator|begin|-|end|-
 region|caller|effects|begin|-|end|-
-region|caller|worker|begin|-|end|-
 region|caller|runner|begin|-|end|-
+region|scheduler|scheduler_inputs|begin|-|end|-
+region|worker_path|worker|begin|-|end|-
+region|turn_driver|turn_driver|begin|-|end|-
 required|declarations|struct DetachedDurableValidateExecution|detached Validate declarations omitted struct DetachedDurableValidateExecution
 required|declarations|address: ConcreteWorkAddress|detached Validate declarations omitted address: ConcreteWorkAddress
 required|declarations|incumbent_digest: LifecycleDigest|detached Validate declarations omitted incumbent_digest: LifecycleDigest
@@ -1569,8 +1512,12 @@ count|production|pub(super) fn reattach_durable_validate_execution(|1|detached V
 count|production|.detach()|1|production registry must detach a durable Validate exactly once
 forbidden|caller|DetachedDurableValidateExecution|detached Validate handoff escaped its closed registry surface: DetachedDurableValidateExecution
 forbidden|caller|reattach_durable_validate_execution|detached Validate handoff escaped its closed registry surface: reattach_durable_validate_execution
+required|scheduler|.begin_durable_validate_dispatch(|scheduler omitted the sealed durable Validate handoff
+required|worker_path|V2IoCommand::LifecycleValidate(task)|worker omitted the typed durable Validate command
+required|worker_path|.validate_candidate(&context, body)|worker omitted deterministic durable Validate execution
+required|turn_driver|.complete_durable_validate_dispatch(|turn driver omitted exact durable Validate reattachment and publication
 end
-case|durable_validate_wait_dispatch_is_move_only_single_entry_and_unwired
+case|durable_validate_wait_dispatch_is_move_only_and_scheduler_owned
 region|registry_production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|declarations|registry|after|// DURABLE_VALIDATE_WAIT_DISPATCH_DECLARATIONS_BEGIN|before|// DURABLE_VALIDATE_WAIT_DISPATCH_DECLARATIONS_END
 region|implementation|registry|after|// DURABLE_VALIDATE_WAIT_DISPATCH_IMPLEMENTATION_BEGIN|before|// DURABLE_VALIDATE_WAIT_DISPATCH_IMPLEMENTATION_END
@@ -1578,12 +1525,13 @@ region|concrete_production|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod
 region|entrypoint|concrete_admission|after|pub(super) fn begin_durable_validate_dispatch(|before|/// Atomically publish one exact executable Validate result across the
 region|claimed_helper|concrete_admission|after|fn claimed_durable_validate_record_is_exact(|before|fn staged_durable_validate_wait_is_exact(
 region|staged_helper|concrete_admission|after|fn staged_durable_validate_wait_is_exact(|before|fn concrete_work_location(
-region|projection|projection|after|pub(super) fn durable_validation_wait_source(|before|pub(super) fn reducer_fence_wait_source
+region|projection|projection|after|pub(super) fn durable_validation_wait_source(|before|pub(in crate::sumeragi) fn reducer_fence_wait_source
 region|caller|selector|begin|-|end|-
-region|caller|coordinator|begin|-|end|-
 region|caller|effects|begin|-|end|-
-region|caller|worker|begin|-|end|-
 region|caller|runner|begin|-|end|-
+region|scheduler|scheduler_inputs|begin|-|end|-
+region|worker_path|worker|begin|-|end|-
+region|turn_driver|turn_driver|begin|-|end|-
 required|declarations|struct DurableValidateWakeAuthority|wait-dispatch declaration omitted struct DurableValidateWakeAuthority
 required|declarations|wait_token: WaitToken|wait-dispatch declaration omitted wait_token: WaitToken
 required|declarations|struct DurableValidateDispatch|wait-dispatch declaration omitted struct DurableValidateDispatch
@@ -1596,7 +1544,7 @@ forbidden|declarations|BodyValidationTask|wait-dispatch declaration acquired leg
 forbidden|declarations|RuntimeEffectOwnership|wait-dispatch declaration acquired legacy authority: RuntimeEffectOwnership
 forbidden|declarations|RuntimeLifecycleOrdinalSource|wait-dispatch declaration acquired legacy authority: RuntimeLifecycleOrdinalSource
 forbidden|declarations|lifecycle_ordinal|wait-dispatch declaration acquired legacy authority: lifecycle_ordinal
-count|implementation|pub(super) fn execute|1|wait-dispatch implementation must expose one execution entry
+count|implementation|pub(in crate::sumeragi) fn execute|1|wait-dispatch implementation must expose one worker execution entry
 required|implementation|request.execute(body_store, validator)|wait-dispatch execution lost its detached request
 required|implementation|Err((error, Self { request, wake }))|wait-dispatch execution lost its recoverable error return
 forbidden|implementation|EffectWorkId|wait-dispatch execution acquired forbidden authority: EffectWorkId
@@ -1607,7 +1555,6 @@ forbidden|implementation|ReadyEvent|wait-dispatch execution acquired forbidden a
 forbidden|implementation|replace_before_publication|wait-dispatch execution acquired forbidden authority: replace_before_publication
 forbidden|implementation|persist_durable_projection|wait-dispatch execution acquired forbidden authority: persist_durable_projection
 forbidden|implementation|fn commit(|wait-dispatch execution acquired forbidden authority: fn commit(
-count|registry_production|pub(super) fn execute|1|the outer dispatch must be the sole externally visible validation execution path
 count|registry_production|projection::durable_validation_wait_source(|1|only the sealed registry preflight may call the raw wait projection
 count|concrete_production|pub(super) fn begin_durable_validate_dispatch(|1|concrete admission must expose one durable Validate dispatch entrypoint
 required|entrypoint|claimed_durable_validate_record_is_exact|dispatch entrypoint omitted claimed_durable_validate_record_is_exact
@@ -1654,11 +1601,20 @@ required|projection|lifecycle_key|durable validation wait projection omitted lif
 required|projection|lifecycle_stage|durable validation wait projection omitted lifecycle_stage
 forbidden|caller|begin_durable_validate_dispatch|durable Validate wait dispatch escaped its closed caller surface: begin_durable_validate_dispatch
 forbidden|caller|DurableValidateDispatch|durable Validate wait dispatch escaped its closed caller surface: DurableValidateDispatch
+required|scheduler|.select_validate(ordinal)|scheduler omitted exact Validate capacity reservation
+required|scheduler|.begin_durable_validate_dispatch(&mut self.registry, lease, &self.verified)|scheduler omitted Waiting-state durable Validate dispatch
+required|scheduler|reservation.commit(dispatch)|scheduler omitted exact Validate FIFO publication
+required|worker_path|V2IoCommand::LifecycleValidate(task)|worker omitted typed Validate dispatch execution
+required|worker_path|V2IoCompletion::LifecycleValidate(Box::new(|worker omitted typed Validate completion publication
+required|worker_path|.complete_lifecycle_validate(|worker omitted exact completion-key retention
+required|turn_driver|PendingLifecycleCompletionV1::take_validate(|turn driver omitted guarded Validate completion ownership
+required|turn_driver|.complete_durable_validate_dispatch(|turn driver omitted atomic Waiting-to-Ready publication
 end
-case|durable_validate_volatile_completion_is_atomic_move_only_and_unwired
+case|durable_validate_volatile_completion_is_atomic_move_only_and_scheduler_owned
 region|registry_production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
-region|carrier|registry|after|struct DurableValidateCompletion {|before|/// Closed, move-only replay-evidence preflight for one directly signed effect.
-region|deferred_derive|registry|last|#[derive(|before|pub(super) struct DeferredDurableValidateDispatch
+region|carrier|registry|after|struct DurableValidateCompletion {|before|impl DurableValidateCompletion {
+region|carrier|registry|after|impl DurableValidateCompletion {|before|// DURABLE_VALIDATE_COMPLETION_CARRIER_END
+region|deferred_derive|registry|last|#[derive(|before|pub(in crate::sumeragi) struct DeferredDurableValidateDispatch
 region|prepared_derive|registry|last|#[derive(|before|pub(super) struct PreparedExecutedDurableValidateCompletion<'a>
 region|staged_derive|registry|last|#[derive(|before|pub(super) struct StagedDurableValidateCompletion<'a>
 region|rejected_digest|registry|after|fn rejected_body_completion_digest(|before|fn durable_validate_outcome_kind(
@@ -1667,14 +1623,15 @@ region|declarations|registry|after|// DURABLE_VALIDATE_VOLATILE_COMPLETION_DECLA
 region|implementation|registry|after|// DURABLE_VALIDATE_VOLATILE_COMPLETION_IMPLEMENTATION_BEGIN|before|// DURABLE_VALIDATE_VOLATILE_COMPLETION_IMPLEMENTATION_END
 region|commit|registry|after|pub(super) fn commit(mut self)|before|impl Drop for StagedDurableValidateCompletion
 region|concrete_production|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod tests {
-region|entrypoint|concrete_admission|after|pub(super) fn complete_durable_validate_dispatch(|before|/// Atomically admit and register one exact adapter effect.
+region|entrypoint|concrete_admission|after|pub(super) fn complete_durable_validate_dispatch(|before|/// Prepare one complete signed effect for mandatory replay-bound admission.
 region|waiting_exact|concrete_admission|after|fn waiting_durable_validate_record_is_exact(|before|fn staged_durable_validate_ready_is_exact(
 region|caller|adapter|begin|-|end|-
 region|caller|selector|begin|-|end|-
-region|caller|coordinator|begin|-|end|-
 region|caller|effects|begin|-|end|-
-region|caller|worker|begin|-|end|-
 region|caller|runner|begin|-|end|-
+region|scheduler|scheduler_inputs|begin|-|end|-
+region|worker_path|worker|begin|-|end|-
+region|turn_driver|turn_driver|begin|-|end|-
 required|carrier|address: ConcreteWorkAddress|Validate completion carrier omitted address: ConcreteWorkAddress
 required|carrier|incumbent: DurableValidateBody|Validate completion carrier omitted incumbent: DurableValidateBody
 required|carrier|incumbent_digest: LifecycleDigest|Validate completion carrier omitted incumbent_digest: LifecycleDigest
@@ -1701,7 +1658,7 @@ required|validated_authority|statement.proposal_round() != *round|shared validat
 required|validated_authority|statement.subject() != Some(*subject)|shared validated authority helper omitted statement.subject() != Some(*subject)
 required|validated_authority|.execution_commitment()|shared validated authority helper omitted .execution_commitment()
 required|validated_authority|DurableValidateExecutionError::ConflictingValidationCommitment|shared validated authority helper omitted DurableValidateExecutionError::ConflictingValidationCommitment
-count|registry_production|validate_validated_receipt_authority(|9|carrier validation, classification, binding, reattachment, Ready preflight, recovery, and fixed adapter joins must share one helper
+count|registry_production|validate_validated_receipt_authority(|7|carrier validation, classification, reattachment, Ready preflight, recovery fixture, and fixed adapter join must share one helper
 required|declarations|struct DurableValidateCompletionAuthority|volatile completion declarations omitted struct DurableValidateCompletionAuthority
 required|declarations|lifecycle_key: LifecycleKey|volatile completion declarations omitted lifecycle_key: LifecycleKey
 required|declarations|lifecycle_stage: LifecycleStage|volatile completion declarations omitted lifecycle_stage: LifecycleStage
@@ -1721,7 +1678,7 @@ forbidden|declarations|RuntimeEffectOwnership|volatile completion declarations a
 forbidden|declarations|RuntimeLifecycleOrdinalSource|volatile completion declarations acquired legacy scheduler authority: RuntimeLifecycleOrdinalSource
 forbidden|declarations|SchedulerRank|volatile completion declarations acquired legacy scheduler authority: SchedulerRank
 forbidden|declarations|TurnPlan|volatile completion declarations acquired legacy scheduler authority: TurnPlan
-forbidden|deferred_derive|Clone|pub(super) struct DeferredDurableValidateDispatch must remain move-only
+forbidden|deferred_derive|Clone|DeferredDurableValidateDispatch must remain move-only
 forbidden|prepared_derive|Clone|pub(super) struct PreparedExecutedDurableValidateCompletion<'a> must remain move-only
 forbidden|staged_derive|Clone|pub(super) struct StagedDurableValidateCompletion<'a> must remain move-only
 required|implementation|pub(super) fn stage_executable_carrier|volatile completion implementation omitted pub(super) fn stage_executable_carrier
@@ -1729,7 +1686,7 @@ required|implementation|ConcreteLifecycleWorkKind::DurableValidateBody(incumbent
 required|implementation|ConcreteLifecycleWorkKind::DurableValidateCompletion(completion)|volatile completion implementation omitted ConcreteLifecycleWorkKind::DurableValidateCompletion(completion)
 required|implementation|impl Drop for StagedDurableValidateCompletion<'_>|volatile completion implementation omitted impl Drop for StagedDurableValidateCompletion<'_>
 required|implementation|drop(self.restore())|volatile completion implementation omitted drop(self.restore())
-required|implementation|pub(super) fn missing_reference|volatile completion implementation omitted pub(super) fn missing_reference
+required|implementation|pub(in crate::sumeragi) fn missing_reference|volatile completion implementation omitted pub(in crate::sumeragi) fn missing_reference
 count|implementation|pub(super) fn commit(|1|volatile completion implementation must expose one guarded commit
 required|commit|self.armed = false;|post-swap guard commit must disarm itself
 required|commit|self.publication|post-swap guard commit must return its publication
@@ -1783,6 +1740,12 @@ required|waiting_exact|durable_validate_payload_is_exact(record.key, metadata.pa
 required|waiting_exact|authority.matches_durable_payload(metadata.payload)|waiting completion exactness omitted authority.matches_durable_payload(metadata.payload)
 forbidden|caller|complete_durable_validate_dispatch|durable Validate completion escaped its closed caller surface: complete_durable_validate_dispatch
 forbidden|caller|DurableValidateCompletionPublication|durable Validate completion escaped its closed caller surface: DurableValidateCompletionPublication
+required|scheduler|reservation.commit(dispatch)|scheduler omitted exact lifecycle Validate queue publication
+required|worker_path|V2IoCompletion::LifecycleValidate(Box::new(|worker omitted the guarded lifecycle Validate result
+required|turn_driver|PendingLifecycleCompletionV1::take_validate(|turn driver omitted guarded lifecycle Validate completion ownership
+required|turn_driver|completion.into_publication_parts()|turn driver omitted the sealed dispatch/ack split
+required|turn_driver|.complete_durable_validate_dispatch(|turn driver omitted atomic completion publication
+required|turn_driver|ack.acknowledge_after_publication()|turn driver acknowledged lifecycle Validate before publication
 end
 case|certified_fetch_dequeue_commit_requires_the_durable_token
 region|production|registry|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -1878,9 +1841,9 @@ region|adapter_preview|adapter|after|pub(in crate::sumeragi) fn prepare_recovere
 region|runtime|runtime|begin|-|end|-
 region|executor|effects|begin|-|end|-
 region|settlement|launch|after|fn settle_recovered_decision_apply_completion_owner(|before|/// Fail-stop failure while consuming the recovered lifecycle owner
-region|completion_dispatch|turn_driver|after|if self.recovered_decision_fetch_body_completion.is_some() {|before|let selected = match self.owner.classify_completion_ready_work() {
+region|completion_dispatch|turn_driver|at|match self.services.take_next_lifecycle_completion() {|before|Ok(LifecycleCompletionTakeV1::Sign(completion)) => {
 region|deferred_retry|launch|after|impl RetainedRecoveredDecisionApplyDeferredV1|before|/// Fail-stop class while durably terminalizing
-region|drive|launch|after|fn drive_recovered_decision_apply_deferred(|before|/// Exercise recovered Apply dispatch
+region|drive|launch|after|fn drive_recovered_decision_apply_deferred(|before|/// Settle one already-classified recovered Apply completion.
 region|exact_request|lane_work|after|fn dispatch_next_recovered_apply_sidecar_request(|before|#[cfg(test)]
 required|completion_projection|self.exact_body_binding()|completion projection omitted self.exact_body_binding()
 required|completion_projection|key.matches_carrier(self.context, self.installed_digest())|completion projection omitted key.matches_carrier(self.context, self.installed_digest())
@@ -2089,8 +2052,9 @@ end
 case|terminal_validate_outcome_catalog_cut_is_opaque_and_move_only
 region|implementation|body_store|after|impl RecoveredTerminalValidateOutcomeCatalogCut<'_>|before|impl Drop for RecoveredTerminalValidateOutcomeCatalogCut<'_>
 region|whole|body_store|begin|-|end|-
-count|implementation|pub(super) fn |2|terminal outcome catalog cut must expose exactly two methods
+count|implementation|pub(super) fn |3|terminal outcome catalog cut must expose exactly three methods
 required|implementation|fn select_exact_terminal_validate(|terminal outcome catalog cut lost exact selection
+required|implementation|fn select_exact_invalid_body_report(|terminal outcome catalog cut lost exact invalid-body-report selection
 required|implementation|fn commit_selected(mut self)|terminal outcome catalog cut lost consuming commit
 forbidden|implementation|pub(super) fn receipt|catalog cut must not expose {forbidden}
 forbidden|implementation|pub(super) fn outcome|catalog cut must not expose {forbidden}
@@ -2131,7 +2095,7 @@ case|combined_recovered_sign_staging_is_two_child_affine_and_inert
 region|reducer|body_pipeline|after|fn stage_recovered_lifecycle_sign_broadcast_and_sign_transition(|before|#[allow(clippy::too_many_arguments
 region|entry|body_pipeline|after|pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_transition|before|/// Stage the sole live post-WAL Validate-to-Sign transaction.
 region|publication|body_pipeline|after|impl PreparedRecoveredLifecycleSignBroadcastAndSignTransition<'_, '_, '_>|before|fn map_sealed_successor_projection_error(
-region|publication_tail|body_pipeline|at|successor.commit_after_publication()|before|fn map_sealed_successor_projection_error(
+region|publication_tail|body_pipeline|last|successor.commit_after_publication()|before|fn map_sealed_successor_projection_error(
 region|adapter_commit|adapter|after|fn commit_after_durable_broadcast_and_sign(self)|before|/// Borrow-bound adapter successor for one registry-owned recovered Apply
 region|vote_adapter_commit|adapter|after|fn commit_after_durable_vote_broadcast_and_sign(self)|before|/// Borrow-bound adapter successor for one registry-owned recovered Apply
 region|registry_prepare|registry|after|pub(super) fn prepare_recovered_lifecycle_sign_broadcast_and_sign_successor|before|impl<'adapter> PreparedRecoveredLifecycleSignBroadcastSuccessor<'_, 'adapter>
@@ -2204,9 +2168,10 @@ region|callers|runner|begin|-|end|-
 region|callers|worker|begin|-|end|-
 region|callers|runtime|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|callers|coordinator|begin|-|before|\n#[cfg(test)]\nmod tests {
-region|publication|body_pipeline|after|pub(super) fn persist_and_publish(|before|\n}\ninclude!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
+region|callers|scheduler_inputs|begin|-|end|-
+region|publication|body_pipeline|last|pub(super) fn persist_and_publish(|before|\n}\ninclude!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
 region|post_fsync|body_pipeline|last|*coordinator = staged|before|\n}\ninclude!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
-region|exact_fsync|body_pipeline|after|pub(super) fn persist_and_publish(|before|\n}\ninclude!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
+region|exact_fsync|body_pipeline|last|pub(super) fn persist_and_publish(|before|\n}\ninclude!("v2_lifecycle_body_pipeline_transition_static_tests.rs");
 region|ledger_production|ledger|begin|-|before|pub(crate) mod tests {
 order|authorized|3|stage_durable_transaction|reduce_settle_body_parent_for_continuation|reduce_admit|the same-class Effect branch must stage first, release capacity, then admit its child
 required|authorized|candidate.replay_authority_is_exact(coordinator.active_context)|authorized transition core omitted {required}
@@ -2219,8 +2184,8 @@ forbidden|authorized|projection::durable_body_frame_reference|authorized transit
 forbidden|authorized|candidate.payload =|authorized transition core reopened raw authority through {forbidden}
 forbidden|authorized|PendingRuntimeEffectBinding|authorized transition core reopened raw authority through {forbidden}
 forbidden|authorized|AdapterEffect|authorized transition core reopened raw authority through {forbidden}
-required|fetch|PreparedCertifiedFetchStoreSuccessor<'registry>|sealed Fetch-to-Store entrypoint lost its successor
-required|store|PreparedDurableStoreValidateSuccessor<'registry>|sealed Store-to-Validate entrypoint lost its successor
+required|fetch|PreparedCertifiedFetchStoreSuccessor<'registry, 'adapter>|sealed Fetch-to-Store entrypoint lost its successor
+required|store|PreparedDurableStoreValidateSuccessor<'registry, 'adapter>|sealed Store-to-Validate entrypoint lost its successor
 required|fetch|project_for_body_transition(lease, verified)|sealed Fetch-to-Store entrypoint lost its body projection
 required|store|project_for_body_transition(lease, verified)|sealed Store-to-Validate entrypoint lost its body projection
 required|fetch|PreparedSealedBodyStageTransition|sealed Fetch-to-Store entrypoint lost its prepared transition
@@ -2286,9 +2251,9 @@ forbidden|bls_tests|prepare_validate_apply_transition(|BLS transition fixture re
 forbidden|bls_tests|.prepare_body_stage_transition(|BLS transition fixture reopened raw authority through {forbidden}
 required|bls_tests|prepare_authorized_body_transition(|BLS transition fixture lost its authorized transition
 required|bls_tests|exact_live_wal_body_successor_candidate_for_test(|BLS transition fixture lost its exact live-WAL successor
-required|production|PreparedSealedBodyStageTransition<'coordinator, 'registry>|sealed transition carrier is missing
-required|production|_successor: SealedBodyStageSuccessor<'registry>|sealed transition lost successor ownership
-required|production|&'a mut LifecycleCoordinator|sealed transition lost its coordinator borrow
+required|production|PreparedSealedBodyStageTransition<'coordinator, 'registry, 'adapter>|sealed transition carrier is missing
+required|production|successor: SealedBodyStageSuccessor<'registry, 'adapter>|sealed transition lost successor ownership
+required|production|coordinator: &'coordinator mut LifecycleCoordinator|sealed transition lost its coordinator borrow
 required|production|DurableContinuationEdge::FetchToStore|Fetch-to-Store continuation edge is missing
 required|production|DurableContinuationEdge::StoreToValidate|Store-to-Validate continuation edge is missing
 required|production|DurableContinuationEdge::ValidateToApply|Validate-to-Apply continuation edge is missing
@@ -2326,10 +2291,11 @@ forbidden|production|fn staged(|inert transition acquired forbidden authority: {
 forbidden|production|ConcreteLifecycleWorkRegistry|inert transition acquired forbidden authority: {forbidden}
 forbidden|production|RuntimeEffectOwnership|inert transition acquired forbidden authority: {forbidden}
 forbidden|production|legacy_ordinal|inert transition acquired forbidden authority: {forbidden}
-forbidden|callers|prepare_sealed_fetch_store_transition|body-frame transition became production-wired through {unwired}
-forbidden|callers|prepare_sealed_store_validate_transition|body-frame transition became production-wired through {unwired}
-forbidden|callers|prepare_sealed_validate_no_successor_transition|body-frame transition became production-wired through {unwired}
-forbidden|callers|prepare_sealed_validate_report_transition|body-frame transition became production-wired through {unwired}
+count|callers|prepare_sealed_fetch_store_transition|1|sealed Fetch-to-Store transition must have exactly one production scheduler caller
+count|callers|prepare_sealed_store_validate_transition|1|sealed Store-to-Validate transition must have exactly one production scheduler caller
+count|callers|prepare_sealed_validate_no_successor_transition|1|sealed Validate no-successor transition must have exactly one production scheduler caller
+count|callers|prepare_sealed_validate_report_transition|1|sealed Validate report transition must have exactly one production scheduler caller
+count|callers|prepare_sealed_validate_sign_transition|1|sealed Validate Sign transition must have exactly one production scheduler caller
 order|publication|4|prepare_registry_publication(|persist_exact_staged_successor(&staged)|*coordinator = staged|registry.publish_after_ledger_fsync()|live Validate-to-Sign publication order drifted
 forbidden|post_fsync|?|post-fsync publication acquired fallible work through {forbidden}
 forbidden|post_fsync|return Err|post-fsync publication acquired fallible work through {forbidden}
@@ -2410,15 +2376,15 @@ region|whole|lifecycle_open|begin|-|end|-
 region|production|lifecycle_open|begin|-|end|-
 required|assembler|ledger: LifecycleLedgerV1|assembler omitted {required}
 required|assembler|serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut|assembler omitted {required}
-required|assembler|validate_storage_only_recovery(&ledger, &serve_payloads)|assembler omitted {required}
 required|assembler|_authenticated_ledger: ledger|assembler omitted {required}
 required|assembler|_serve_payloads: serve_payloads|assembler omitted {required}
 required|assembler|authenticated_ledger: ledger|assembler omitted {required}
-required|assembler|assemble_storage_only_with_recovered_wal_sign(|assembler omitted {required}
+required|assembler|assemble_storage_only_with_body_pipeline_startup(|assembler omitted {required}
+required|assembler|assemble_storage_only_with_recovered_wal_sign_and_body_pipeline_startup(|assembler omitted {required}
+required|assembler|assemble_storage_only_with_terminal_validate_outcomes(|assembler omitted {required}
 required|assembler|projection: &AuthenticatedRecoveredWalSignProjection|assembler omitted {required}
-required|assembler|assemble_storage_only_recovered_wal_candidates(|assembler omitted {required}
-required|assembler|assemble_storage_only_with_body_validation_outcomes(|assembler omitted {required}
-required|assembler|assemble_storage_only_with_recovered_wal_sign_and_body_validation_outcomes(|assembler omitted {required}
+required|assembler|body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1|assembler omitted {required}
+required|assembler|Some(&mut body_pipeline)|assembler omitted {required}
 required|assembler|detach_terminal_validate_outcome_catalog()|assembler omitted {required}
 required|assembler|select_exact_terminal_validate(claim)|assembler omitted {required}
 required|assembler|catalog.commit_selected()|assembler omitted {required}
@@ -2453,8 +2419,14 @@ required|whole|#[cfg(test)]\n    pub(super) fn from_authenticated_parts(|raw aut
 required|whole|&self.authenticated_ledger == opened|storage-only recovery lost opened-ledger exactness
 required|whole|if !recovery.authenticates_opened_ledger(&ledger)|storage-only recovery lost ledger authentication
 required|whole|projection.repaired_pair_is_exact(ledger.context(), ledger.records())|storage-only recovery lost repaired-pair exactness
-count|production|assemble_storage_only_with_recovered_wal_sign(|1|post-repair assembly must remain inside the future consuming installed-cut join
-count|production|assemble_storage_only_with_body_validation_outcomes(|1|terminal Validate storage assembly has one sealed production entry point
+forbidden|whole|fn assemble_storage_only(|retired body-free storage-only probe returned
+forbidden|whole|fn assemble_storage_only_with_body_validation_outcomes(|retired terminal-outcome-only storage probe returned
+forbidden|whole|fn assemble_storage_only_with_recovered_wal_sign(|retired recovered-WAL-only storage probe returned
+forbidden|whole|fn assemble_storage_only_with_recovered_wal_sign_and_body_validation_outcomes(|retired combined recovered-WAL storage probe returned
+forbidden|whole|fn validate_storage_only_recovery(|retired body-free storage validator returned
+forbidden|whole|fn assemble_storage_only_recovered_wal_candidates(|retired recovered-WAL candidate assembler returned
+count|production|assemble_storage_only_with_body_pipeline_startup(|1|ordinary recovery has one body-pipeline storage factory
+count|production|assemble_storage_only_with_recovered_wal_sign_and_body_pipeline_startup(|1|recovered phase-vote recovery has one body-pipeline storage factory
 end
 case|certified_fetch_completion_source_keeps_the_durable_cut_ordered
 region|transaction|selector|after|pub(crate) fn complete_certified_fetch_body_persistence(|before|fn publish_certified_fetch_ready_authority(

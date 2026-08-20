@@ -27,12 +27,11 @@ use super::{
         CertifiedStoreReplayEvidenceV1, CertifiedValidateReplayEvidenceV1,
         DurableCertifiedFetchReplayProjectionV1, DurableValidateReplayEvidenceV1,
         InvalidBodyReportBoundEffectPermit, LifecycleReplayAuthorityV1,
-        LocalValidateReplayEvidenceV1,
-        PreparedDurableCertifiedBodyPipelineStartupV1, PreparedDurableCertifiedBodyPipelineWorkV1,
+        LocalValidateReplayEvidenceV1, PreparedDurableCertifiedBodyPipelineStartupV1,
+        PreparedDurableCertifiedBodyPipelineWorkV1, PreparedLifecycleLocalProposalReadyV1,
         RecoveredLifecycleNextWalVoteCandidateProjectionV1, RemoteProposalFetchReplayEvidenceV1,
         RemoteProposalStoreReplayEvidenceV1, RemoteProposalStoredReplayEvidenceV1,
         RemoteProposalValidateReplayEvidenceV1, SealedLiveWalPersistedEffectV1,
-        SignedBroadcastReplayEvidenceV1, SignedEquivocationReplayEvidenceV1,
         exact_direct_signed_admission_authority,
     },
     schema::{DurablePayloadReference, DurableRecordMetadata},
@@ -759,7 +758,7 @@ use crate::sumeragi::{
     v2_core::EventTag,
     v2_runtime::{
         PendingRuntimeEffectBinding, RuntimeCandidateSemanticStatement, RuntimeEffectOwnership,
-        reconstruct_recovered_wal_vote_successor,
+        RuntimeLifecycleOwner, reconstruct_recovered_wal_vote_successor,
     },
     v2_transport::AuthenticatedCertifiedBodyRequest,
 };
@@ -854,7 +853,7 @@ impl InstalledBodyCandidateProjectionPermit {
 ///
 /// This permit is distinct from installed-carrier projection: the successor is
 /// still nested under its exact parent registry borrow and cannot be installed
-/// or admitted independently of the future composite transaction.
+/// or admitted independently of the owning composite transaction.
 pub(in crate::sumeragi) struct SealedBodySuccessorProjectionPermit {
     _linearity: SealedBodySuccessorProjectionLinearity,
 }
@@ -1917,13 +1916,14 @@ impl DurableValidateCompletion {
             && installed_digest != self.incumbent_digest
     }
 }
+// DURABLE_VALIDATE_COMPLETION_CARRIER_END
 include!("v2_lifecycle_work_registry_pre_admission.rs");
 /// Closed concrete form of one fsynced recovered WAL `Sign` successor.
 ///
 /// The complete durable logical repair and detached validated predecessor stay
 /// together in this carrier. No effect, pending binding, validation receipt,
-/// or durable receipt can be extracted from it; the future typed Sign
-/// executor must consume this closed variant as a whole.
+/// or durable receipt can be extracted from it; the typed Sign executor
+/// consumes this closed variant as a whole.
 struct DurableRecoveredWalSignWork {
     repair: DurableAuthenticatedWalVoteLifecycleRepair,
     validation: DetachedRecoveredValidateCompletion,
@@ -3188,7 +3188,7 @@ impl DurableRecoveredWalSignWork {
     }
 }
 /// Whether one concrete registry row is still an executable adapter effect or
-/// a closed durable carrier awaiting its future typed consumer. Installed
+/// a closed durable carrier awaiting its dedicated typed consumer. Installed
 /// move-only carriers remain inline, so exact-address admission introduces no
 /// later heap-allocation fail-stop cut before the carrier's typed consumer.
 #[allow(variant_size_differences, clippy::large_enum_variant)]
@@ -3273,8 +3273,9 @@ impl ConcreteLifecycleWork {
             Err(validate)
         }
     }
-    /// Consume one exact effect and ordinal-free binding into registry work.
-    pub(super) fn from_exact(
+    /// Build one direct-signed registry carrier for closed admission tests.
+    #[cfg(test)]
+    pub(super) fn from_direct_signed_fixture_for_test(
         effect: AdapterEffect,
         pending: PendingRuntimeEffectBinding,
     ) -> Result<Self, (RegistryError, AdapterEffect, PendingRuntimeEffectBinding)> {
@@ -3478,13 +3479,13 @@ impl ConcreteLifecycleWork {
         self.digest
     }
     /// Recover one still-pending adapter pair after a failed or deferred transaction.
-    /// A closed lifecycle carrier requires its future typed consumer and fails stop here.
+    /// A closed lifecycle carrier requires its dedicated typed consumer and fails stop here.
     pub(super) fn into_pair(self) -> (AdapterEffect, PendingRuntimeEffectBinding) {
         let ConcreteLifecycleWorkKind::PendingAdapter {
             effect, pending, ..
         } = self.kind
         else {
-            panic!("closed lifecycle work requires its future typed consumer")
+            panic!("closed lifecycle work requires its dedicated typed consumer")
         };
         (effect, pending)
     }
@@ -3522,6 +3523,8 @@ impl ConcreteLifecycleWork {
         matches!(&self.kind, ConcreteLifecycleWorkKind::PendingAdapter { .. })
     }
 }
+
+include!("v2_lifecycle_work_registry_output.rs");
 /// One completely preflighted Certified-Serve/ProducerTurn carrier batch.
 ///
 /// Construction first checks every supplied replay pair and the complete live
@@ -4434,218 +4437,7 @@ impl Drop for StagedCertifiedServeTerminalProducer<'_> {
         drop(replacement);
     }
 }
-/// One-shot authority for turning the replay-sealed invalid-body effect into
-/// closed registry work inside its fixed publication transaction.
-pub(in crate::sumeragi) struct LiveValidateReportWorkProjectionPermit {
-    _linearity: LiveValidateReportWorkProjectionLinearity,
-}
-struct LiveValidateReportWorkProjectionLinearity;
-impl Drop for LiveValidateReportWorkProjectionLinearity {
-    fn drop(&mut self) {}
-}
-impl LiveValidateReportWorkProjectionPermit {
-    fn new() -> Self {
-        Self {
-            _linearity: LiveValidateReportWorkProjectionLinearity,
-        }
-    }
-}
-/// Opaque ordinary invalid-body report row prepared from canonical rejection evidence.
-///
-/// The mandatory-bound owner remains intact until the exclusive parent/child
-/// registry reservation installs it after LedgerV1 fsync.
-#[must_use = "prepared live invalid-body report has not entered its reserved registry row"]
-pub(in crate::sumeragi) struct PreparedLiveValidateReportRegistryWork {
-    bound: BoundAdapterEffectV1,
-}
-impl PreparedLiveValidateReportRegistryWork {
-    /// Accept only the bound owner minted by invalid-body replay evidence.
-    pub(super) fn from_bound(
-        _permit: LiveValidateReportWorkProjectionPermit,
-        bound: BoundAdapterEffectV1,
-    ) -> Self {
-        debug_assert!(bound.validates());
-        debug_assert!(matches!(
-            &bound.replay_origin,
-            BoundAdapterReplayOriginV1::InvalidBodyReport(_)
-        ));
-        debug_assert!(matches!(
-            &bound.effect,
-            AdapterEffect::ReportInvalidCertifiedBody { .. }
-        ));
-        Self { bound }
-    }
-    /// Match the staged report row, including exact owner, digest, and slot.
-    pub(in crate::sumeragi) fn validates_publication(
-        &self,
-        owner: OwnerId,
-        ordinal: u128,
-        slot: PhysicalSlotId,
-        digest: LifecycleDigest,
-    ) -> bool {
-        let Some(address) = ConcreteWorkAddress::new(owner, ordinal, slot) else {
-            return false;
-        };
-        self.bound.validates()
-            && matches!(
-                &self.bound.replay_origin,
-                BoundAdapterReplayOriginV1::InvalidBodyReport(authority)
-                    if authority.is_invalid_body_report_origin()
-            )
-            && matches!(
-                &self.bound.effect,
-                AdapterEffect::ReportInvalidCertifiedBody { .. }
-            )
-            && digest == digest_from_hash(self.bound.pending.exact_effect_identity())
-            && owner.causal_root()
-                == super::CausalRoot::new(digest_from_hash(
-                    self.bound.pending.causal_lifecycle_key(),
-                ))
-            && address.slot == PhysicalSlotId::for_capacity(CapacityClass::Consensus, 0)
-    }
-    /// Consume the bound owner into ordinary concrete work after all checks.
-    fn into_concrete(self) -> ConcreteLifecycleWork {
-        let BoundAdapterEffectV1 {
-            effect,
-            pending,
-            replay_origin,
-        } = self.bound;
-        let BoundAdapterReplayOriginV1::InvalidBodyReport(authority) = replay_origin else {
-            unreachable!("prepared report work retained another replay origin")
-        };
-        ConcreteLifecycleWork::from_authorized_exact(effect, pending, authority)
-            .expect("mandatory-bound invalid-body report remains exact")
-    }
-}
-/// One-shot authority for consuming the body-frame-completed live WAL Apply
-/// seal into closed registry work.
-pub(in crate::sumeragi) struct LiveValidateApplyWorkProjectionPermit {
-    _linearity: LiveValidateApplyWorkProjectionLinearity,
-}
-struct LiveValidateApplyWorkProjectionLinearity;
-impl Drop for LiveValidateApplyWorkProjectionLinearity {
-    fn drop(&mut self) {}
-}
-impl LiveValidateApplyWorkProjectionPermit {
-    fn new() -> Self {
-        Self {
-            _linearity: LiveValidateApplyWorkProjectionLinearity,
-        }
-    }
-}
-/// Opaque ordinary Apply row prepared from its completed live WAL replay seal.
-#[must_use = "prepared live Apply work has not entered its reserved registry row"]
-pub(in crate::sumeragi) struct PreparedLiveValidateApplyRegistryWork {
-    work: ConcreteLifecycleWork,
-}
-impl PreparedLiveValidateApplyRegistryWork {
-    /// Close exact effect/pending/WAL authority without exposing concrete work.
-    pub(super) fn from_exact(
-        _permit: LiveValidateApplyWorkProjectionPermit,
-        effect: AdapterEffect,
-        pending: PendingRuntimeEffectBinding,
-        replay_authority: LifecycleReplayAuthorityV1,
-    ) -> Result<Self, (RegistryError, AdapterEffect, PendingRuntimeEffectBinding)> {
-        ConcreteLifecycleWork::from_authorized_exact(effect, pending, replay_authority)
-            .map(|work| Self { work })
-    }
-    /// Match the exact staged Apply row and inherited causal owner.
-    pub(in crate::sumeragi) fn validates_publication(
-        &self,
-        owner: OwnerId,
-        ordinal: u128,
-        slot: PhysicalSlotId,
-        digest: LifecycleDigest,
-    ) -> bool {
-        let Some(address) = ConcreteWorkAddress::new(owner, ordinal, slot) else {
-            return false;
-        };
-        self.work.validate_exact()
-            && self.work.digest() == digest
-            && self.work.causal_root() == owner.causal_root()
-            && matches!(
-                &self.work.kind,
-                ConcreteLifecycleWorkKind::PendingAdapter {
-                    effect: AdapterEffect::Apply { .. },
-                    replay_authority,
-                    ..
-                } if replay_authority.is_live_wal_origin()
-            )
-            && address.slot == PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)
-    }
-    /// Consume this closed row into its prevalidated exclusive reservation.
-    pub(in crate::sumeragi) fn install_into(
-        self,
-        reservation: LiveValidateApplyRegistryReservation<'_>,
-    ) {
-        reservation.install_live_apply(self.work);
-    }
-}
-/// Opaque ordinary Sign row prepared from the post-WAL continuation seal.
-///
-/// The concrete carrier never crosses this wrapper's API. Its fixed oracle
-/// binds the sealed pending causal root and exact child address before fsync;
-/// the only consuming operation is installation through the retained live
-/// parent/child reservation.
-#[must_use = "prepared live Sign work has not entered its reserved registry row"]
-pub(in crate::sumeragi) struct PreparedLiveValidateSignRegistryWork {
-    work: ConcreteLifecycleWork,
-}
-impl PreparedLiveValidateSignRegistryWork {
-    /// Close exact effect/pending authority without exposing concrete work.
-    pub(super) fn from_exact(
-        _permit: LiveValidateSignWorkProjectionPermit,
-        effect: AdapterEffect,
-        pending: PendingRuntimeEffectBinding,
-        replay_authority: LifecycleReplayAuthorityV1,
-    ) -> Result<Self, (RegistryError, AdapterEffect, PendingRuntimeEffectBinding)> {
-        ConcreteLifecycleWork::from_authorized_exact(effect, pending, replay_authority)
-            .map(|work| Self { work })
-    }
-    /// Revalidate the still-closed effect/pending binding.
-    pub(in crate::sumeragi) fn validates_exact(&self) -> bool {
-        self.work.validate_exact()
-    }
-    /// Match the exact staged Sign row, including its inherited causal owner.
-    pub(in crate::sumeragi) fn validates_publication(
-        &self,
-        owner: OwnerId,
-        ordinal: u128,
-        slot: PhysicalSlotId,
-        digest: LifecycleDigest,
-    ) -> bool {
-        let Some(address) = ConcreteWorkAddress::new(owner, ordinal, slot) else {
-            return false;
-        };
-        self.work.validate_exact()
-            && self.work.digest() == digest
-            && self.work.causal_root() == owner.causal_root()
-            && matches!(
-                &self.work.kind,
-                ConcreteLifecycleWorkKind::PendingAdapter {
-                    effect:
-                        AdapterEffect::Sign {
-                            request: SignRequest::Vote(vote),
-                            ..
-                        },
-                    ..
-                } if matches!(
-                    vote.phase,
-                    wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit
-                )
-            )
-            && address.owner == owner
-            && address.ordinal == ordinal
-            && address.slot == PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)
-    }
-    /// Consume this closed row into its prevalidated exclusive reservation.
-    pub(in crate::sumeragi) fn install_into(
-        self,
-        reservation: LiveValidateSignRegistryReservation<'_>,
-    ) {
-        reservation.install_live_sign(self.work);
-    }
-}
+include!("v2_lifecycle_work_registry_live_validate_children.rs");
 /// Closed pre-mutation failure inventory for certified-Fetch conversion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CertifiedFetchCompletionError {
@@ -4725,8 +4517,6 @@ pub(super) enum DurableValidateExecutionError {
     InvalidValidationReceipt,
     /// Existing Prepare/Commit authority disagrees with deterministic validation.
     ConflictingValidationCommitment,
-    /// The completion digest would not replace the incumbent physical identity.
-    InvalidValidationCompletionDigest,
 }
 /// Closed failure inventory for preparing one Ready Validate completion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4796,8 +4586,8 @@ pub(super) struct PreparedDurableStoreExecution<'a> {
 /// Borrow-bound execution authority for one closed durable Validate carrier.
 ///
 /// Preparation and drop mutate nothing. The exclusive registry borrow keeps
-/// the exact Validate address stable while a future validation service and
-/// reducer seam inspect its durable body authority.
+/// the exact Validate address stable while the lifecycle validation service
+/// and reducer seam inspect its durable body authority.
 #[must_use = "a prepared durable Validate execution still owns its registry cut"]
 #[cfg_attr(not(test), allow(dead_code))]
 pub(super) struct PreparedDurableValidateExecution<'a> {

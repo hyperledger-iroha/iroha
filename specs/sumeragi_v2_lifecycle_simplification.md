@@ -231,8 +231,9 @@ payload when required and the signature. None has a parts or payload accessor.
 Generic completion draining parks this family without acknowledgement. The
 owner-only extraction removes the exact completion-position accounting entry
 but keeps the dedicated command index `CompletionPending`, and dropping the
-opaque guard closes output for restart. Settlement is intentionally absent
-until each Signed successor family has a WAL-ahead, restart-closed transaction.
+opaque guard closes output for restart. Owner-only settlement now rejoins each
+Signed successor family through its WAL-ahead, restart-closed transaction
+before the worker acknowledgement is retired.
 The Apply attestation exposes only its typed bounded-I/O demand and an opaque
 exact-position dispatch key. It is rejected before row construction or lease
 mutation until the worker capacity cut is present. Validate completion debts
@@ -240,17 +241,20 @@ are derived internally from a sealed
 `DirectRegistryCompletion` origin: these carriers have no I/O admission,
 fair-ingress occurrence, selector episode, lane/source position, or outer
 runner reach. No caller supplies the resulting zero components, and the raw
-snapshot remains test-only. Execute-body Validate is explicitly rejected
-because it still needs an I/O-capacity and runner observation. Every Ready
-class without one of those closed registry attestations is likewise a typed,
-mutation-free rejection. An empty authenticated census plans `Idle`.
+snapshot remains test-only. Execute-body Validate carries an
+`AttestedReadyValidateDemand`; the production scheduler reserves its exact I/O
+capacity, claims the row, publishes the lifecycle-owned worker command, and
+retains command and completion ownership until guarded replacement
+publication. Every Ready class without one of the closed registry attestations
+is a typed, mutation-free rejection. An empty authenticated census plans
+`Idle`.
 
 The reservation is transient and never enters LifecycleLedgerV1. Dropping a
 consumer or failing before the typed commit leaves it visible on the active
-lease. Generic settlement rejects such a lease fail-closed: the future sole
-rejected-Validate transaction must either consume the reservation into its
-one invalid-body report without an intermediate generation change, or release
-it on a typed non-report branch and advance Consensus generation exactly once.
+lease. Generic settlement rejects such a lease fail-closed. The sealed
+rejected-Validate transaction consumes the reservation into exactly one
+invalid-body report without an intermediate generation change, or releases it
+on a typed non-report branch and advances Consensus generation exactly once.
 The guarded production-owner certified-Fetch method consumes the prepared
 fair-ingress selector into the same composite transaction that owns its exact
 lane/source positions. The reified move-only Completion/Runtime/Ingress cursor
@@ -532,8 +536,8 @@ its lifecycle-owned no-clock state and transfers its verified successor into
 the same lifecycle loop. No second batch or post-dequeue implementation
 remains.
 
-The queue-only final CAS now exists behind that sealed boundary, but it is not
-exposed from `PreparedLifecycleIngressSelector` and has no production caller.
+The queue-only final CAS is private to the consuming Phase-B transaction and is
+not exposed from `PreparedLifecycleIngressSelector`.
 The cut binds an unforgeable process-local queue identity and its move-only
 witness must agree with the enclosing expected lifecycle context and selected
 physical ordinal. Commit reacquires `service_lock`, snapshots the exact
@@ -552,23 +556,22 @@ change, or queue substitution rejects without dequeuing. Exact success uses a
 single factored production tail for durable leader-wire binding, Certified-Serve
 physical drain, lane/global counters and indexes, source rotation, and the
 runtime physical cut. Consuming the witness makes this queue transition
-one-shot. It still cannot claim a response family, reserve runtime/service
-capacity, or act without the future output-permitted `v2_effects` transaction.
-That future wrapper must consume the complete prepared selector, finish the
-last candidate equality probe while its immutable family carriers are retained,
-then release every retained inbound `Arc` before invoking the queue commit; the
-shared production dequeue tail rejects a selected envelope with another strong
-owner rather than cloning physical ownership.
+one-shot. It cannot independently claim a response family or reserve
+runtime/service capacity; the output-permitted `v2_effects` transaction owns
+those authorities. That transaction consumes the complete prepared selector,
+finishes the last candidate equality probe while its immutable family carriers
+are retained, then releases every retained inbound `Arc` before invoking the
+queue commit. The shared production dequeue tail rejects a selected envelope
+with another strong owner rather than cloning physical ownership.
 
-An inert late-response readiness join is now sealed and module-private beside
-that queue witness; no sibling production module can invoke it before the
-consuming transaction exists.
-It borrows, rather than consumes, the complete
+The late-response readiness join is sealed and module-private beside that queue
+witness; only the consuming Phase-B transaction invokes it. It borrows, rather
+than consumes, the complete
 `PreparedLifecycleIngressSelector`, and only the queue-selected occurrence may
 enter it. A request-fenced response which is not the lowest authenticated
 physical winner of its exact signed-request family is rejected; it cannot
 borrow the winner's candidate. The borrowed preparation retains the complete
-selected queue-minted context, digest, and physical ordinal for the future
+selected queue-minted context, digest, and physical ordinal for the final
 queue CAS; the readiness join first proves that exact identity is the family
 winner, then binds the exact request hash, executor-authenticated response
 candidate, its sealed
@@ -710,10 +713,12 @@ key and the admitted `OwnerId`, resolves only an exact lease-advertised slot,
 and is one-shot on execution. Lease removal returns the complete move-only
 effect-plus-pending token rather than a bare effect, so a `Blocked` or
 `Replenished` settlement can restore the incumbent without reminting causal
-authority. It owns no admission, readiness, rank, retry,
-wait, generation, capacity, lease, or ordinal state. The registry remains inert
-until the same atomic production switch removes the old runtime allocator and
-scheduler; it is not a dual-mode execution path.
+authority. It owns no admission, readiness, rank, retry, wait, generation,
+capacity, lease, or ordinal state. The production coordinator and scheduler own
+those resources and install, remove, or restore the exact registry row only
+through the durable lifecycle transaction. The retired runtime allocator and
+validation scheduler have no production path, so this registry is not a
+dual-mode executor.
 
 The concrete admission seam consumes the complete effect and its move-only
 pending binding. It first projects and stages the digest-only coordinator
@@ -766,10 +771,12 @@ Fetch lease on one context-scoped external reducer-fence source. The adapter
 owns that source's monotone generation and advances it whenever pending
 persistence, awaiting-signature, or replay-fence authority changes. Generation
 `u64::MAX` is permanently reserved as invalid; exhaustion fails closed before
-either a wait token or a reducer mutation is exposed. Idempotent, superseded,
-and deferred-conflict results retain the same exclusive adapter
-borrow until the future transaction gives them their typed settlement, so they
-cannot become check-then-use classifications.
+either a wait token or a reducer mutation is exposed. Applied, blocked, and
+inactive previews remain inside the live completion transaction. Applied
+persists the exact Store successor before commit; blocked parks the exact
+reducer-fence generation; duplicate, superseded, and no-match classifications
+fail closed and roll back the unpublished claim. No classification escapes as a
+check-then-use decision.
 
 An applied preview is valid only when the cloned reducer emits exactly one
 `StoreBody` whose tag, round, and subject all equal the input `BodyAvailable`.
@@ -854,9 +861,9 @@ non-Busy outcome retains the staged reducer. The report path round-trips its
 core certificate through the wire registry and rejects any phase, proposal
 round, subject, or carrier mismatch. These move-only tokens expose no commit,
 WAL append, deferred-completion, serviced-candidate, producer-continuation, or
-lifecycle mutation surface; the future composite transaction must consume the
-selected rejected-validation carrier and publish its diagnostic effect through
-the same coordinator-owned execution cut.
+lifecycle mutation surface. The scheduler-owned completion transaction
+consumes the selected rejected-validation carrier and publishes its diagnostic
+effect through the same coordinator-owned execution cut.
 
 The body-store side of that seam is scheduler-free. It accepts an exact
 `DurableBodyReceipt`, a separately carried expected manifest hash, and the
@@ -866,10 +873,10 @@ hash authorities. Its closed non-clone result is either a post-fsync
 `ValidatedBodyReceipt`, a deterministic rejection bound to the same durable
 receipt, or an exact certified-merge-sidecar deferral bound to that receipt.
 No work id, runtime owner, lifecycle ordinal, or scheduler decision appears in
-this surface. The existing worker-task entry is not a second authority: it
-delegates to the same storage core and must be deleted at production cutover.
-Only the registry path supplies the independent manifest authority needed by
-the direct lifecycle transaction.
+this surface. The sole production worker entry reaches the storage core through
+the closed lifecycle registry dispatch; the legacy body-validation work item is
+absent. Only the registry path supplies the independent manifest authority
+needed by the direct lifecycle transaction.
 The scheduler-free result has a consuming success-only extraction which
 returns every rejection or sidecar deferral intact. The closed Validate
 registry preflight can bind that exact `ValidatedBodyReceipt` without changing
@@ -877,9 +884,9 @@ its row: it rechecks the durable receipt, any inherited Prepare/Commit
 commitment, and derives a domain-separated replacement digest from the
 incumbent physical identity, independent manifest hash, durable frame, and
 canonical execution commitment. The resulting borrow-bound token exposes only
-preview inputs, the validation receipt, and old/new digests; it has no install,
-remove, or commit operation until the coordinator Ready replacement and
-registry conversion can publish atomically.
+preview inputs, the validation receipt, and old/new digests; install, removal,
+and commit remain sealed inside the scheduler-owned transaction that atomically
+publishes the coordinator Ready replacement and registry conversion.
 
 The body-store validation marker is a first-release closed outcome envelope,
 not a success-only witness. It stores either the exact validated execution
@@ -931,10 +938,12 @@ coordinator, and return one non-clone dispatch. Every precommit failure returns
 the caller's exact lease; a body-store error returns the complete dispatch and
 wake authority intact. Dropping a successful dispatch leaves the row explicitly
 Waiting and the closed registry carrier unchanged. This tranche creates no
-second body task or work identifier, enqueues no service work, publishes no
-Ready event while dispatching, rewrites no lifecycle ledger, and has no
-production caller. Merge-sidecar registration and wake remain prerequisites
-for wiring it.
+second body task or work identifier, publishes no Ready event while
+dispatching, and rewrites no lifecycle ledger. The production scheduler is its
+sole caller: it publishes one lifecycle-owned Validate worker command and
+retains the move-only dispatch until guarded completion. A missing merge
+sidecar durably registers that same immutable address, owner, reference, wait
+source, and generation before the dispatch is parked.
 
 Executable validation completion is one volatile two-sided transaction.
 Successful validation and deterministic rejection each install a closed
@@ -968,9 +977,11 @@ from `LifecycleLedgerV1`, so neither executable publication nor deferral writes
 the lifecycle ledger. A crash before the volatile cut retains only the durable
 Validate row; a crash after it likewise reconstructs that durable row and
 semantically revalidates the body-store success marker before any replacement
-is re-exposed. There is no production caller yet.
+is re-exposed. Production launch restores the exact Waiting row and durable
+sidecar registration; authenticated arrival wakes that same generation and
+ordinal before the scheduler retries it.
 
-Ready Validate execution now has an inert, sealed preflight. One exact
+Ready Validate execution now has a sealed, scheduler-owned preflight. One exact
 coordinator-minted lease must retain the independent Validate key and stage,
 owner, ordinal, single Effect slot, and the outcome-bound replacement digest.
 The registry replays the retained incumbent through the verified height
@@ -1048,9 +1059,10 @@ and registry, applying the two deterministic progress observations, encoding
 the snapshot, and restoring the live pre-publication state. After ledger fsync,
 the precomputed value is installed last through the infallible status setter;
 the fallible status encoder is never called across the restart-only boundary.
-The serialized runner still cannot invoke this consumer until its production
-owner co-locates the lifecycle coordinator and concrete registry with the
-adapter and replaces the legacy runtime scheduler rather than shadowing it.
+The serialized runner invokes this consumer only through the production owner
+which co-locates the lifecycle coordinator, concrete registry, adapter, and
+durable ledger. The lifecycle completion-turn driver is the sole scheduler for
+this cut; the legacy runtime validation scheduler is absent.
 The restart prerequisite is now represented explicitly in LedgerV1 by a
 canonical three-state durable continuation. `None` is required for live rows
 and unrelated tombstones. `AdvancedNoSuccessor` is accepted only for an
@@ -1186,13 +1198,15 @@ and authenticated payload pruning, rechecks the post-commit join, and only then
 publishes adapter status. Every failure retains the adapter, unpublished
 effects, installed registry borrow, recovery authority, and any prepared or
 opened coordinator state still applicable; status failure is fail-stop after
-the exact open. Only production runner wiring and exposure of the final opaque
-published wrapper remain intentionally unavailable.
+the exact open. The unified consuming owner factory performs this installed-cut
+open and returns only `ProductionLifecycleOwnerV1`; both ordinary and
+PendingKura runners retain that owner. No alternate recovered publisher or raw
+installed-cut escape exists.
 
-The rejected-report branch now receives its one Consensus reservation before
-the Validate record is claimed; the consuming transaction still must convert
-that lease-bound reservation into the exact report child or release it on a
-typed non-report result. A claimed record cannot use record-level Capacity as
+The rejected-report branch receives its one Consensus reservation before the
+Validate record is claimed; the consuming scheduler transaction converts that
+lease-bound reservation into the exact report child or releases it on a typed
+non-report result. A claimed record cannot use record-level Capacity as
 a settlement wait. A durable Validate row is live, terminal `Advanced`, or
 typed `Cancelled` by explicit old-height retirement; generic Completed,
 Rejected, and Failed tombstones are rejected by the shared payload/terminal
@@ -1219,7 +1233,7 @@ capability to derive the report binding while retaining the ordinary causal
 root. No caller can supply the registered statement or certificate, and none
 of these projections is executable or installable authority.
 
-A shared inert coordinator reducer checks Apply and both Sign edges: it
+A shared staged coordinator reducer checks Apply and both Sign edges: it
 terminalizes the claimed Validate parent before admitting the exact one-slot
 Effect child, preserves the causal owner, advances the Effect generation once,
 and keeps net Effect usage constant. Apply additionally requires the
@@ -1231,11 +1245,12 @@ also releases its lease-bound Consensus reservation by advancing only the
 Consensus generation, never decrementing durable Consensus occupancy. Its
 production entry accepts the fixed registry/adapter preview token and rejects
 Busy, Apply, Persist, and Report classifications. All borrow-bound tokens
-expose no persistence, registry mutation, or commit method. A future atomic
-transition must still join the selected Validate lease, durable validation
-receipt or rejection identity, exact reducer preview, coordinator cut,
-registry carrier conversion, WAL ordering when required, and restart
-reconstruction before any staged state is published.
+expose no persistence, registry mutation, or commit method. The sole scheduler
+completion transaction joins the selected Validate lease, durable success or
+rejection, exact reducer preview, coordinator cut, and registry carrier. Sign
+is WAL-sealed before publication; Apply, report, and no-successor outcomes
+persist their exact lifecycle successor before exposing staged state. Busy
+alone parks on the typed reducer fence.
 
 An ordinary frozen-prefix target is blocked only by a member of its own frozen
 predecessor universe that is currently `Ready`; a `Waiting` member blocks
@@ -1533,9 +1548,9 @@ sidecar is reauthenticated. It reserves the Consensus queue while the exact key
 is still `CompletionPending`, and republishes the unchanged task as `Queued`
 before disarming either fail-stop guard. Unavailable sidecar or capacity
 returns the complete owner unchanged; a queue-owner mismatch closes output for
-restart. The serialized runner still
-does not call the owner factory; it must consume the sealed launch and its final
-observer-activation permit before deleting the independent runner constructors.
+restart. The serialized runner consumes the sealed owner factory and its final
+observer-activation permit before entering this driver; independent runner
+constructors are absent.
 
 The live recovered Decision-Fetch path is closed through its first durable
 Store successor. A Ready carrier projects only an
@@ -1663,10 +1678,10 @@ with the terminal-family Ready carrier, and Cancelled removes both. The raw
 coordinator settlement wrappers and raw-id production payload writer do not
 exist. Coordinator admission and LedgerV1 debt validation require the exact
 key/source/family relation; scheduler execution remains outside this inert
-evidence. A future owner-to-worker launch must transfer an authenticated
-completion capability bound to the retained body-store instance without
-inventing a receipt or parts API. The first release has one V1 carrier and one
-exact startup path.
+evidence. The owner-to-worker launch transfers an authenticated completion
+capability bound to the retained body-store instance without inventing a
+receipt or parts API. The first release has one V1 carrier and one exact startup
+path.
 
 The recovered Prepare/Commit path now performs the first sealed integration.
 The verified runtime WAL identity remains non-decodable. It can project only a
@@ -1721,9 +1736,9 @@ permit remains nested inside that adapter/registry token. No raw report effect,
 pending binding, receipt, or candidate accessor crosses either production
 entrypoint; all failures retain the move-only authority token, and both staged
 cuts remain drop-inert and unpublished. There is no raw Validate successor
-helper: Apply and Sign remain unavailable until their WAL-bound move-only
-authorities enter the same sealed transaction, rather than passing through a
-temporary effect/pending compatibility surface.
+helper: Apply and Sign enter only through their WAL-bound move-only authorities
+and the same sealed transaction, never through a temporary effect/pending
+compatibility surface.
 
 Direct signed replay now has the same closed first-release prerequisite for
 exactly `Broadcast` and `ReportEquivocation`. Each non-decodable wrapper can be
@@ -1740,24 +1755,26 @@ LedgerV1 retain and recheck the resulting inert envelope. There is no raw
 constructor, parts or encoded accessor, and zero-valued digest bytes are not
 reserved as a sentinel.
 
-Live safety-WAL continuations now have a separate inert exact-replay cut for
-`SignProposal`, `SignPrepare`, `SignCommit`, `SignTimeout`, `Apply`, and
-`EnterView`. The cut accepts only the reducer's one pending `Persist`, appends
-and fsyncs its exact frame, checks the retained frame against the append
-receipt and WAL record, acknowledges that persistence identifier, and returns
-a closed linear batch. The five payload-free effects carry a non-decodable WAL
-source plus a unique pending binding derived from the exact live frame and
-complete effect; callers cannot splice a same-effect foreign causal root.
-`Apply` instead retains a source-only Decision seal until the fixed registry
-join revalidates its installed Validate carrier and receipt, projects the child
-pending binding from that exact predecessor, and binds the body frame. A
-foreign receipt cannot construct the completion, and a foreign causal root is
-rejected before the source seal is consumed. Errors after append latch
-restart-required fail-stop; dropping the returned batch or pre-admission token
-publishes no work but never rolls back the WAL. LedgerV1 now requires a replay
-field, but the live sealed WAL transition has not yet supplied its fixed
-envelope to candidate admission; raw WAL stage projection fails closed until
-that join is threaded. Zero-valued frame hashes remain structurally valid.
+Live safety-WAL continuations use three specialized post-fsync exact-replay
+cuts: recovered Proposal to Prepare, Ready Validate to Sign, and Decision to
+Apply. Each cut appends and fsyncs its exact frame, checks the retained frame
+against the append receipt and WAL record, and acknowledges that persistence
+identifier before exposing its sealed successor. The recovered Proposal and
+Ready Validate cuts derive frame-bound pending owners from the complete effect;
+callers cannot splice a same-effect foreign causal root. Apply instead retains
+a source-only Decision seal until the fixed registry join revalidates its
+installed Validate carrier and receipt, projects the child pending binding from
+that exact predecessor, and binds the body frame. A foreign receipt cannot
+construct the completion, and a foreign causal root is rejected before the
+source seal is consumed. There is no generic persisted-continuation batch or
+driver and no parallel admission surface. Errors after append latch
+restart-required fail-stop; abandoning an uncommitted specialized successor
+publishes no work but never rolls back the WAL. LedgerV1 requires replay
+authority, and each specialized transition supplies its fixed envelope only to
+the unified lifecycle transaction. Raw WAL stage projection remains closed;
+the installed row, concrete registry carrier, replay authority, and LedgerV1
+frame are committed or returned together. Zero-valued frame hashes remain
+structurally valid.
 
 Local proposal bodies now retain a separate pre-intent replay capability from
 the active-view producer cut. The runtime consumes a one-shot mint permit only
@@ -1772,10 +1789,11 @@ inseparable inert composite rather than dropping the companion body origin.
 Retries reuse the installed sidecar, failed consuming projections return the
 original seal, and validation rejection, superseding view/lock, and Decision
 detach retire it explicitly. Detached worker tasks therefore carry no local
-replay authority. The mandatory LedgerV1 field exists, but this local wrapper
-is not yet joined into body-stage candidate admission; it exposes no origin,
-manifest, receipt, pending, effect, encoded, or parts accessor, and zero-valued
-digest bytes are valid.
+replay authority. The final Validate wrapper enters body-stage admission only
+through the `LocalBody` owner of the unified transaction, which installs the
+logical row, concrete carrier, mandatory replay field, and LedgerV1 record in
+one cut. It exposes no origin, manifest, receipt, pending, effect, encoded, or
+parts accessor, and zero-valued digest bytes are valid.
 
 Ordinary remote Proposal bodies now retain their distinct authenticated
 origin from the exact signed Proposal ingress to the runtime-owned
@@ -1792,8 +1810,10 @@ projection. Every failed projection retains both the incumbent token and the
 candidate owner or receipt; dropping any successful token is publication-
 inert. The wrappers expose no Proposal, ingress, source, effect, pending,
 receipt, encoded, or parts accessor and reserve no all-zero digest sentinel.
-The mandatory LedgerV1 field exists, but this remote body wrapper is not yet
-joined into body-stage admission, installation, or runner execution.
+The final Validate wrapper enters body-stage admission only through the
+`RemoteProposal` owner of the unified transaction; the lifecycle runner can
+schedule it only after the exact replay authority, LedgerV1 row, and concrete
+registry carrier have been installed together.
 
 Invalid certified-body reports now have a closed pre-admission prerequisite.
 The durable Validate carrier retains a closed certified-or-remote replay
@@ -1815,9 +1835,19 @@ report effect, child binding, registry borrow, and adapter borrow remain
 together in one move-only, drop-inert token. Every failure restores both
 previews. No certificate, manifest, receipt, pending, source, encoded, or parts
 surface is exposed. Although LedgerV1 now requires an authority field, this
-wrapper is not yet joined into report admission, installation, commit, or
-runner execution; all-zero frame-hash bytes remain valid rather than acting as
-a sentinel.
+wrapper can enter report admission only through the `InvalidBodyReport` owner
+of the unified transaction. The rejected Validate parent retains the reserved
+output slot until exactly one deterministic report successor is installed or
+the complete owner is returned; all-zero frame-hash bytes remain valid rather
+than acting as a sentinel.
+
+All production admission origins converge on one mandatory move-only
+`PreparedLifecycleAdmissionV1`. Its closed owner is exactly one of `LiveWal`,
+`LocalBody`, `RemoteProposal`, `InvalidBodyReport`, or `DirectSigned`; there is
+no absent or unbound branch. Preparation derives candidate geometry and replay
+authority from that owner, and the admission transaction publishes the
+coordinator row, concrete registry carrier, and LedgerV1 record atomically.
+Cold open reauthenticates the same origin before reconstructing executable work.
 
 Rollover is a two-context durable protocol, not an in-memory map clear. The
 verified successor snapshot carries its own ledger root and post-fsync

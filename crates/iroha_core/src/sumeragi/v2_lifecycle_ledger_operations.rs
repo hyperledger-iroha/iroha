@@ -631,7 +631,7 @@ impl LifecycleLedgerV1 {
         DurableCertifiedBodyPipelineRecoveryError,
     > {
         self.authenticate_durable_certified_body_pipeline_census(verified, store)?
-            .into_startup(self)
+            .into_startup(self, verified)
             .ok_or(DurableCertifiedBodyPipelineRecoveryError::InvalidStorageCut)
     }
     fn authenticate_durable_certified_body_pipeline_census(

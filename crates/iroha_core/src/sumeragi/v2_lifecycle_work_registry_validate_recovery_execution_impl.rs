@@ -24,7 +24,7 @@ impl<'a> PreparedCertifiedFetchExecution<'a> {
     /// Borrow the durable body proof retained by the exact completion.
     ///
     /// The receipt remains nested and non-decomposable; callers may use it only
-    /// for the future body-catalog equality check and canonical reload.
+    /// for the dedicated body-catalog equality check and canonical reload.
     pub(super) fn durable_body_receipt(&self) -> &DurableBodyReceipt {
         let work = self
             .registry

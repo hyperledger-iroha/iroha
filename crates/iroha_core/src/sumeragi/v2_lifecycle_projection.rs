@@ -146,11 +146,7 @@ impl AuthenticatedDurableBodyFrameRecovery {
         evidence: &RecoveredStandaloneValidateSourceV1,
     ) -> Option<DurableBodyReceipt> {
         evidence
-            .exactly_matches_recovered_body_frame(
-                &self.reference,
-                &self.manifest,
-                &self.receipt,
-            )
+            .exactly_matches_recovered_body_frame(&self.reference, &self.manifest, &self.receipt)
             .then_some(self.receipt)
     }
 }

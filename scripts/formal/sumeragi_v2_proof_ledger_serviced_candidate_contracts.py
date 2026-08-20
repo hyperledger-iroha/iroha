@@ -1828,7 +1828,10 @@ self.retransmit_owner = None;
 self.retransmit_owner_physical_cut = None;
 self.dormant_fresh_lifecycle_owners
     .retain(|_, owner| owner.causal_origin().root_tag == tag);
-self.active_view_producer = Some(ActiveViewProducerReservation { tag, ownership });
+self.active_view_producer = Some(ActiveViewProducerReservation {
+    tag,
+    owner: ownership.owner().clone(),
+});
 self.schedule = ScheduleState::default();
 """,
         "EnterView must retire every stale full round-tag clock owner before installing the successor producer and schedule",
@@ -2859,6 +2862,16 @@ let merged = BodyFetchTask {
         """
 if merged == existing.task {
     services.enqueue_body_fetch(merged).map_err(service_error)?;
+    if let Some(replay) = proposal_replay {
+        let previous = self.remote_proposal_replay.insert(
+            key,
+            RemoteProposalReplayStageV1::Fetch {
+                work_id: existing_id,
+                replay,
+            },
+        );
+        debug_assert!(previous.is_none());
+    }
     return Ok(());
 }
 services
@@ -2885,9 +2898,19 @@ let pending = self
     .expect("serialized body-fetch owner remains present after admission");
 pending.task = merged;
 pending.request_hash = request_hash;
+if let Some(replay) = proposal_replay {
+    let previous = self.remote_proposal_replay.insert(
+        key,
+        RemoteProposalReplayStageV1::Fetch {
+            work_id: existing_id,
+            replay,
+        },
+    );
+    debug_assert!(previous.is_none());
+}
 return Ok(());
 """,
-        "a successful same-owner Fetch authority upgrade must atomically install P/Q state and drain its retry",
+        "a successful same-owner Fetch authority upgrade must atomically install P/Q state, its Proposal replay lineage, and drain its retry",
         errors,
     )
     if begin_fetch is not None:

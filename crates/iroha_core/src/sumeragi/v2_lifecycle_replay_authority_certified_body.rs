@@ -472,9 +472,9 @@ where
         return Ok(None);
     };
     if let BodyPipelineOriginV1::Proposal(proposal) = &source.source.origin {
-        let message = wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
-        );
+        let message = wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(
+            proposal.clone(),
+        ));
         if verified.verify_consensus_message(&message).is_err() {
             return Ok(None);
         }
@@ -493,12 +493,14 @@ where
     ) else {
         return Ok(None);
     };
-    let Some(replay_evidence) = RecoveredStandaloneValidateReplayEvidenceV1::from_authenticated_source(
-        source,
-        &effect,
-        &durable_receipt,
-        &pending,
-    ) else {
+    let Some(replay_evidence) =
+        RecoveredStandaloneValidateReplayEvidenceV1::from_authenticated_source(
+            source,
+            &effect,
+            &durable_receipt,
+            &pending,
+        )
+    else {
         return Ok(None);
     };
     let manifest = standalone_origin_manifest(&replay_evidence.source)
@@ -552,12 +554,9 @@ where
         };
         replay_steps.push(step);
     }
-    let Some(step) = CertifiedBodyPipelineColdReplayStepV1::body_stored(
-        ordinal,
-        tag,
-        durable_receipt,
-        effect,
-    ) else {
+    let Some(step) =
+        CertifiedBodyPipelineColdReplayStepV1::body_stored(ordinal, tag, durable_receipt, effect)
+    else {
         return Ok(None);
     };
     replay_steps.push(step);
@@ -758,30 +757,13 @@ impl RecoveredStandaloneValidateReplayEvidenceV1 {
         pending: &PendingRuntimeEffectBinding,
     ) -> bool {
         self.validate_pending.exactly_matches(effect, pending)
-            && standalone_validate_stage_matches(
-                &self.source,
-                self.body_frame,
-                effect,
-                receipt,
-            )
+            && standalone_validate_stage_matches(&self.source, self.body_frame, effect, receipt)
     }
     fn exactly_matches_durable_body(&self, receipt: &DurableBodyReceipt) -> bool {
         let effect = standalone_validate_effect(&self.source);
         effect.is_some_and(|effect| {
             standalone_validate_stage_matches(&self.source, self.body_frame, &effect, receipt)
         })
-    }
-    pub(super) fn exactly_matches_recovered_body_frame(
-        &self,
-        reference: &DurableBodyFrameReference,
-        manifest: &wire::PayloadManifest,
-        receipt: &DurableBodyReceipt,
-    ) -> bool {
-        standalone_origin_manifest(&self.source).is_some_and(|retained| retained == manifest)
-            && self.body_frame.durable_reference() == *reference
-            && durable_body_frame_reference(replay_context(receipt.round()), receipt)
-                == Some(*reference)
-            && self.exactly_matches_durable_body(receipt)
     }
 }
 impl RecoveredStandaloneValidateSourceV1 {
@@ -796,12 +778,7 @@ impl RecoveredStandaloneValidateSourceV1 {
             && durable_body_frame_reference(replay_context(receipt.round()), receipt)
                 == Some(*reference)
             && standalone_validate_effect(&self.source).is_some_and(|effect| {
-                standalone_validate_stage_matches(
-                    &self.source,
-                    self.body_frame,
-                    &effect,
-                    receipt,
-                )
+                standalone_validate_stage_matches(&self.source, self.body_frame, &effect, receipt)
             })
     }
 }
@@ -853,8 +830,7 @@ fn standalone_validate_stage_matches(
         && receipt.round() == *round
         && receipt.subject() == *subject
         && receipt.manifest_hash() == HashOf::new(manifest)
-        && durable_body_frame_reference(context, receipt)
-            == Some(body_frame.durable_reference())
+        && durable_body_frame_reference(context, receipt) == Some(body_frame.durable_reference())
         && canonical_replay_authority(
             context,
             LifecycleReplaySourceV1::BodyPipeline(source.clone()),
@@ -989,9 +965,7 @@ impl DurableValidateReplayEvidenceV1 {
                 remote_proposal_validate_matches_durable_body(evidence, receipt)
             }
             Self::LocalBody(evidence) => evidence.exactly_matches_durable_body(receipt),
-            Self::RecoveredStandalone(evidence) => {
-                evidence.exactly_matches_durable_body(receipt)
-            }
+            Self::RecoveredStandalone(evidence) => evidence.exactly_matches_durable_body(receipt),
         }
     }
     /// Project one installed Validate carrier without exposing its replay family.
@@ -1214,8 +1188,7 @@ fn body_stage_matches_recovered_record(
     let Some(statement) = pending.candidate_statement() else {
         return false;
     };
-    let expected_payload =
-        DurablePayloadReference::BodyFrame(body_frame.durable_reference());
+    let expected_payload = DurablePayloadReference::BodyFrame(body_frame.durable_reference());
     let replay_source = LifecycleReplaySourceV1::BodyPipeline(source.clone());
     let Ok(shape) = replay_source.project(
         active_context,

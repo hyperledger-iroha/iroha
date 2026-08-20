@@ -969,10 +969,14 @@ fn vote_signed_callback_is_restart_scoped_before_control_delivery() {
             .body_stored(tag, round, prepared_subject, &receipt)
             .expect("acknowledge durable body");
         let validated = ValidatedBodyReceipt::for_test(receipt);
-        let sign = adapter
-            .validation_succeeded(tag, round, prepared_subject, &validated)
-            .expect("persist Prepare intent");
-        let sign_tag = match sign.effects() {
+        let sign = settle_ready_validate_succeeded_for_test(
+            &mut adapter,
+            tag,
+            round,
+            prepared_subject,
+            &validated,
+        );
+        let sign_tag = match sign.as_slice() {
             [
                 AdapterEffect::Sign {
                     tag,
@@ -1406,10 +1410,9 @@ fn replay_resigns_only_an_acknowledged_intent() {
             .body_stored(tag, round, subject, &receipt)
             .expect("body stored");
         let validated = ValidatedBodyReceipt::for_test(receipt);
-        let sign = adapter
-            .validation_succeeded(tag, round, subject, &validated)
-            .expect("body valid");
-        assert!(matches!(sign.effects(), [AdapterEffect::Sign { .. }]));
+        let sign =
+            settle_ready_validate_succeeded_for_test(&mut adapter, tag, round, subject, &validated);
+        assert!(matches!(sign.as_slice(), [AdapterEffect::Sign { .. }]));
     }
     let (adapter, startup) = open_test(&directory).expect("replay adapter");
     assert!(adapter.ingress_ready());
@@ -2312,10 +2315,13 @@ fn equivocation_flood_is_bounded_and_cannot_starve_commit_qc() {
         .expect("body stored");
     let validated = ValidatedBodyReceipt::for_test(receipt);
     let decided_execution_commitment = validated.execution_commitment();
-    let sign = adapter
-        .validation_succeeded(tag, round, decided_subject, &validated)
-        .expect("body valid")
-        .into_effects();
+    let sign = settle_ready_validate_succeeded_for_test(
+        &mut adapter,
+        tag,
+        round,
+        decided_subject,
+        &validated,
+    );
     let _sign_tag = match sign.as_slice() {
         [AdapterEffect::Sign { tag, .. }] => *tag,
         effects => panic!("unexpected validation effects: {effects:?}"),

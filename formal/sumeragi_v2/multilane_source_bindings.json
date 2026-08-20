@@ -9631,11 +9631,11 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
           "kind": "method",
-          "symbol": "LocalProposalState::handle_validation_rejection",
+          "symbol": "LocalProposalState::handle_candidate_binding_rejection",
           "required_tokens": [
             "self.reconcile",
-            "pending_events",
-            "global_selection",
+            "non_empty_retry",
+            "self.attempted = None",
             "FatalNonEmpty",
             "RetryNonEmpty"
           ]

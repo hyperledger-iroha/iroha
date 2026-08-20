@@ -1368,7 +1368,7 @@ fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
     );
 }
 #[test]
-fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
+fn store_completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
     let directory = TempDir::new().expect("temporary completion-coalescing directory");
     let (mut runtime, context, _keys) =
         authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
@@ -1414,7 +1414,6 @@ fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
         RetiredBodyPipelineCompletions {
             body_available: 0,
             body_stored: 1,
-            validation: 0,
             local_proposal: 0,
         }
     );
@@ -1467,7 +1466,6 @@ fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
         RetiredBodyPipelineCompletions {
             body_available: 0,
             body_stored: 1,
-            validation: 0,
             local_proposal: 0,
         }
     );
@@ -1479,53 +1477,6 @@ fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
             .expect("retirement cannot retain a phantom store owner"),
         None
     );
-    let deferred_validation = runtime_manifest(&context, 0x93);
-    let (_, validated) = receipts(&deferred_validation);
-    runtime
-        .driver
-        .defer_body_pipeline_stage_for_test(
-            owner_tag,
-            &deferred_validation,
-            DeferredBodyPipelineStageForTest::ValidationSucceeded,
-        )
-        .expect("stage a Busy-deferred validation completion");
-    runtime
-        .enqueue_validation_succeeded(
-            owner_tag,
-            deferred_validation.round,
-            deferred_validation.subject,
-            validated,
-        )
-        .expect("a retransmit coalesces with the Busy-deferred validation owner");
-    assert_eq!(runtime.queued_commands(), 0);
-    runtime
-        .retire_body_pipeline_completions(
-            owner_tag,
-            deferred_validation.round,
-            deferred_validation.subject,
-        )
-        .expect("retire the coalesced Busy-deferred validation owner");
-    let deferred_proposal = runtime_manifest(&context, 0x94);
-    let (durable, validated) = receipts(&deferred_proposal);
-    runtime
-        .driver
-        .defer_body_pipeline_stage_for_test(
-            owner_tag,
-            &deferred_proposal,
-            DeferredBodyPipelineStageForTest::LocalProposalReady,
-        )
-        .expect("stage a Busy-deferred local-proposal completion");
-    runtime
-        .enqueue_local_proposal(owner_tag, deferred_proposal.clone(), durable, validated)
-        .expect("a retransmit coalesces with the Busy-deferred proposal owner");
-    assert_eq!(runtime.queued_commands(), 0);
-    runtime
-        .retire_body_pipeline_completions(
-            owner_tag,
-            deferred_proposal.round,
-            deferred_proposal.subject,
-        )
-        .expect("retire the coalesced Busy-deferred proposal owner");
 }
 #[test]
 fn body_available_rebind_rejects_uninstalled_destination_without_mutation() {
@@ -1625,7 +1576,7 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
         .pop()
         .expect("one Fetch has one exact owner");
     let fetch_pending = fetch_ownership
-        .pending_adapter_effect_binding(fetch_effect)
+        .exact_pending_adapter_effect_binding(fetch_effect)
         .expect("Fetch owns one exact pending binding");
     let fetch_replay = fetch_ownership
         .exact_remote_proposal_fetch_replay(fetch_effect)
@@ -1680,7 +1631,7 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
         .pop()
         .expect("one Store has one exact owner");
     let store_pending = store_ownership
-        .pending_adapter_effect_binding(store_effect)
+        .exact_pending_adapter_effect_binding(store_effect)
         .expect("Store owns one exact pending binding");
     assert!(fetch_replay.exactly_projects_store(store_effect, &store_pending));
     let foreign_store_ownership = bind_adapter_effect_batch_ownership(
@@ -1691,7 +1642,7 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
     .pop()
     .expect("one foreign Store owner");
     let foreign_store_pending = foreign_store_ownership
-        .pending_adapter_effect_binding(store_effect)
+        .exact_pending_adapter_effect_binding(store_effect)
         .expect("foreign Store has one binding");
     assert!(
         fetch_replay
@@ -1754,7 +1705,7 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
         .pop()
         .expect("one Validate has one exact owner");
     let validate_pending = validate_ownership
-        .pending_adapter_effect_binding(validate_effect)
+        .exact_pending_adapter_effect_binding(validate_effect)
         .expect("Validate owns one exact pending binding");
     let foreign_validate_ownership = bind_adapter_effect_batch_ownership(
         core::slice::from_ref(validate_effect),
@@ -1764,7 +1715,7 @@ fn authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origi
     .pop()
     .expect("one foreign Validate owner");
     let foreign_validate_pending = foreign_validate_ownership
-        .pending_adapter_effect_binding(validate_effect)
+        .exact_pending_adapter_effect_binding(validate_effect)
         .expect("foreign Validate has one binding");
     assert!(
         stored_replay
@@ -1881,8 +1832,8 @@ fn periodic_decision_store_retry_carries_durable_commit_authority() {
     );
     let validated = ValidatedBodyReceipt::for_test(durable);
     runtime
-        .bind_validated_body(&manifest, &validated)
-        .expect("register the exact deterministic execution commitment");
+        .recover_validated_body(&manifest, &validated)
+        .expect("recover the exact durable execution commitment");
     let decision = wire::QuorumCertificate {
         round: manifest.round,
         proposal_round: manifest.round,

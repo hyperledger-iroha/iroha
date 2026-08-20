@@ -28,7 +28,6 @@ pub(crate) struct ProductionV2Services {
     next_locked_candidate_acquisition_id: u64,
     proposal_work_retired: bool,
     prepared_candidates: VecDeque<PreparedCandidateBody>,
-    validation_rejections: VecDeque<RejectedCandidateBody>,
     merge_sidecar_deferrals: VecDeque<DeferredMergeSidecarWork>,
     outbound_chunks: BTreeMap<HashOf<wire::PayloadManifest>, RetainedOutboundPayload>,
     fast_path_proposals: BTreeSet<wire::ConsensusRound>,

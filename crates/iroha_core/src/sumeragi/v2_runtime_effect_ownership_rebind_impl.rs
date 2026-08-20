@@ -9,18 +9,18 @@ impl RuntimeEffectOwnership {
         let inherited = self.candidate_semantic_statement();
         let candidate = production_adapter_effect_candidate_binding(effect, inherited.as_ref())?;
         let candidate_count = u8::from(candidate.is_some());
-        RuntimeEffectOwnership::inherited(self.owner.clone())
-            .bind_runtime_effect(
-                Some(&self.owner),
-                production_adapter_effect_kind(effect),
-                &production_adapter_effect_semantic_identity(effect),
-                candidate.as_ref(),
-                1,
-                1,
-                candidate_count,
-                candidate_count,
-            )
-            .map_err(|_| "Sumeragi v2 successor effect binding failed closed".to_owned())
+        RuntimeEffectOwnership::new_bound(
+            self.owner.clone(),
+            RuntimeEffectCausality::Inherit,
+            production_adapter_effect_kind(effect),
+            &production_adapter_effect_semantic_identity(effect),
+            candidate.as_ref(),
+            1,
+            1,
+            candidate_count,
+            candidate_count,
+        )
+        .map_err(|_| "Sumeragi v2 successor effect binding failed closed".to_owned())
     }
     pub(crate) fn rebind_same_adapter_effect(
         &self,
@@ -29,28 +29,18 @@ impl RuntimeEffectOwnership {
         let inherited = self.candidate_semantic_statement();
         let candidate = production_adapter_effect_candidate_binding(effect, inherited.as_ref())?;
         let candidate_count = u8::from(candidate.is_some());
-        let ownership = match self.causality {
-            RuntimeEffectCausality::Inherit => {
-                RuntimeEffectOwnership::inherited(self.owner.clone())
-            }
-            RuntimeEffectCausality::Fresh(kind) => {
-                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
-            }
-        };
-        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
-            .then(|| ownership.owner.clone());
-        ownership
-            .bind_runtime_effect(
-                parent.as_ref(),
-                production_adapter_effect_kind(effect),
-                &production_adapter_effect_semantic_identity(effect),
-                candidate.as_ref(),
-                1,
-                1,
-                candidate_count,
-                candidate_count,
-            )
-            .map_err(|_| "Sumeragi v2 exact effect rebind failed closed".to_owned())
+        RuntimeEffectOwnership::new_bound(
+            self.owner.clone(),
+            self.causality,
+            production_adapter_effect_kind(effect),
+            &production_adapter_effect_semantic_identity(effect),
+            candidate.as_ref(),
+            1,
+            1,
+            candidate_count,
+            candidate_count,
+        )
+        .map_err(|_| "Sumeragi v2 exact effect rebind failed closed".to_owned())
     }
     /// Bind a route-neutral semantic retry under the candidate's incumbent owner.
     ///
@@ -68,19 +58,11 @@ impl RuntimeEffectOwnership {
         incoming: &Self,
         effect: &AdapterEffect,
     ) -> Result<Self, String> {
-        if !self.validate_bound_exact() || !incoming.validate_bound_exact() {
-            return Err(
-                "Sumeragi v2 semantic retry omitted an exact ownership binding".to_owned(),
-            );
+        if !self.validate_exact() || !incoming.validate_exact() {
+            return Err("Sumeragi v2 semantic retry omitted an exact ownership binding".to_owned());
         }
-        let incumbent_binding = self
-            .binding
-            .as_ref()
-            .expect("validated bound ownership has one positional binding");
-        let incoming_binding = incoming
-            .binding
-            .as_ref()
-            .expect("validated bound ownership has one positional binding");
+        let incumbent_binding = &self.binding;
+        let incoming_binding = &incoming.binding;
         if incumbent_binding.candidate_kind == RUNTIME_CANDIDATE_KIND_NONE
             || incumbent_binding.candidate_kind != incoming_binding.candidate_kind
             || incumbent_binding.candidate_statement != incoming_binding.candidate_statement
@@ -108,10 +90,8 @@ impl RuntimeEffectOwnership {
             .ok_or_else(|| {
                 "Sumeragi v2 semantic retry rebound to a non-candidate effect".to_owned()
             })?;
-        let semantic_identity = runtime_effect_candidate_semantic_hash(
-            candidate.kind,
-            &candidate.semantic_identity,
-        );
+        let semantic_identity =
+            runtime_effect_candidate_semantic_hash(candidate.kind, &candidate.semantic_identity);
         if candidate.kind != incumbent_binding.candidate_kind
             || candidate.statement != Some(statement)
             || Some(semantic_identity) != incumbent_binding.candidate_semantic_identity
@@ -120,30 +100,18 @@ impl RuntimeEffectOwnership {
                 "Sumeragi v2 semantic retry disagreed with its retained candidate".to_owned(),
             );
         }
-        let ownership = match self.causality {
-            RuntimeEffectCausality::Inherit => {
-                RuntimeEffectOwnership::inherited(self.owner.clone())
-            }
-            RuntimeEffectCausality::Fresh(kind) => {
-                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
-            }
-        };
-        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
-            .then(|| ownership.owner.clone());
-        ownership
-            .bind_runtime_effect(
-                parent.as_ref(),
-                effect_kind,
-                &production_adapter_effect_semantic_identity(effect),
-                Some(&candidate),
-                incoming_binding.effect_position,
-                incoming_binding.effect_count,
-                incoming_binding.candidate_position,
-                incoming_binding.candidate_count,
-            )
-            .map_err(|_| {
-                "Sumeragi v2 semantic retry could not retain its incumbent owner".to_owned()
-            })
+        RuntimeEffectOwnership::new_bound(
+            self.owner.clone(),
+            self.causality,
+            effect_kind,
+            &production_adapter_effect_semantic_identity(effect),
+            Some(&candidate),
+            incoming_binding.effect_position,
+            incoming_binding.effect_count,
+            incoming_binding.candidate_position,
+            incoming_binding.candidate_count,
+        )
+        .map_err(|_| "Sumeragi v2 semantic retry could not retain its incumbent owner".to_owned())
     }
     /// Bind a later StoreBody or ValidateBody carrier to the one physical
     /// asynchronous task already serving its exact body stage.
@@ -161,19 +129,13 @@ impl RuntimeEffectOwnership {
         incoming: &Self,
         effect: &AdapterEffect,
     ) -> Result<Self, String> {
-        if !self.validate_bound_exact() || !incoming.validate_bound_exact() {
+        if !self.validate_exact() || !incoming.validate_exact() {
             return Err(
                 "Sumeragi v2 body-stage carrier omitted an exact ownership binding".to_owned(),
             );
         }
-        let incumbent_binding = self
-            .binding
-            .as_ref()
-            .expect("validated bound ownership has one positional binding");
-        let incoming_binding = incoming
-            .binding
-            .as_ref()
-            .expect("validated bound ownership has one positional binding");
+        let incumbent_binding = &self.binding;
+        let incoming_binding = &incoming.binding;
         let (effect_kind, candidate_kind) = match effect {
             AdapterEffect::StoreBody { .. } => (
                 RUNTIME_EFFECT_KIND_STORE_BODY,
@@ -247,30 +209,18 @@ impl RuntimeEffectOwnership {
                 "Sumeragi v2 body-stage retry changed its retained semantic statement".to_owned(),
             );
         }
-        let ownership = match self.causality {
-            RuntimeEffectCausality::Inherit => {
-                RuntimeEffectOwnership::inherited(self.owner.clone())
-            }
-            RuntimeEffectCausality::Fresh(kind) => {
-                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
-            }
-        };
-        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
-            .then(|| ownership.owner.clone());
-        ownership
-            .bind_runtime_effect(
-                parent.as_ref(),
-                effect_kind,
-                &production_adapter_effect_semantic_identity(effect),
-                Some(&candidate),
-                incoming_binding.effect_position,
-                incoming_binding.effect_count,
-                incoming_binding.candidate_position,
-                incoming_binding.candidate_count,
-            )
-            .map_err(|_| {
-                "Sumeragi v2 body-stage retry could not retain its incumbent owner".to_owned()
-            })
+        RuntimeEffectOwnership::new_bound(
+            self.owner.clone(),
+            self.causality,
+            effect_kind,
+            &production_adapter_effect_semantic_identity(effect),
+            Some(&candidate),
+            incoming_binding.effect_position,
+            incoming_binding.effect_count,
+            incoming_binding.candidate_position,
+            incoming_binding.candidate_count,
+        )
+        .map_err(|_| "Sumeragi v2 body-stage retry could not retain its incumbent owner".to_owned())
     }
     /// Bind one exact FetchBody carrier under its incumbent physical owner.
     ///
@@ -287,19 +237,13 @@ impl RuntimeEffectOwnership {
         incoming: &Self,
         effect: &AdapterEffect,
     ) -> Result<(Self, RuntimeFetchAuthorityRelation), String> {
-        if !self.validate_bound_exact() || !incoming.validate_bound_exact() {
+        if !self.validate_exact() || !incoming.validate_exact() {
             return Err(
                 "Sumeragi v2 body-fetch carrier omitted an exact ownership binding".to_owned(),
             );
         }
-        let incumbent_binding = self
-            .binding
-            .as_ref()
-            .expect("validated bound ownership has one positional binding");
-        let incoming_binding = incoming
-            .binding
-            .as_ref()
-            .expect("validated bound ownership has one positional binding");
+        let incumbent_binding = &self.binding;
+        let incoming_binding = &incoming.binding;
         if incumbent_binding.effect_kind != RUNTIME_EFFECT_KIND_FETCH_BODY
             || incoming_binding.effect_kind != RUNTIME_EFFECT_KIND_FETCH_BODY
             || incumbent_binding.candidate_kind != RUNTIME_CANDIDATE_KIND_FETCH_BODY
@@ -344,30 +288,20 @@ impl RuntimeEffectOwnership {
                     .to_owned(),
             );
         }
-        let ownership = match self.causality {
-            RuntimeEffectCausality::Inherit => {
-                RuntimeEffectOwnership::inherited(self.owner.clone())
-            }
-            RuntimeEffectCausality::Fresh(kind) => {
-                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
-            }
-        };
-        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
-            .then(|| ownership.owner.clone());
-        let adopted = ownership
-            .bind_runtime_effect(
-                parent.as_ref(),
-                effect_kind,
-                &production_adapter_effect_semantic_identity(effect),
-                Some(&candidate),
-                incoming_binding.effect_position,
-                incoming_binding.effect_count,
-                incoming_binding.candidate_position,
-                incoming_binding.candidate_count,
-            )
-            .map_err(|_| {
-                "Sumeragi v2 body-fetch carrier could not retain its incumbent owner".to_owned()
-            })?;
+        let adopted = RuntimeEffectOwnership::new_bound(
+            self.owner.clone(),
+            self.causality,
+            effect_kind,
+            &production_adapter_effect_semantic_identity(effect),
+            Some(&candidate),
+            incoming_binding.effect_position,
+            incoming_binding.effect_count,
+            incoming_binding.candidate_position,
+            incoming_binding.candidate_count,
+        )
+        .map_err(|_| {
+            "Sumeragi v2 body-fetch carrier could not retain its incumbent owner".to_owned()
+        })?;
         Ok((adopted, relation))
     }
     /// Bind a durable-Decision body-stage retry under its incumbent task owner.
@@ -390,19 +324,13 @@ impl RuntimeEffectOwnership {
         subject: wire::BlockSubject,
         execution_commitment: wire::ExecutionCommitment,
     ) -> Result<Self, String> {
-        if !self.validate_bound_exact() || !incoming.validate_bound_exact() {
+        if !self.validate_exact() || !incoming.validate_exact() {
             return Err(
                 "Sumeragi v2 Decision body stage omitted an exact ownership binding".to_owned(),
             );
         }
-        let incumbent_binding = self
-            .binding
-            .as_ref()
-            .expect("validated bound ownership has one positional binding");
-        let incoming_binding = incoming
-            .binding
-            .as_ref()
-            .expect("validated bound ownership has one positional binding");
+        let incumbent_binding = &self.binding;
+        let incoming_binding = &incoming.binding;
         let (expected_effect_kind, expected_candidate_kind, effect_round, effect_subject) =
             match effect {
                 AdapterEffect::StoreBody { round, subject, .. } => (
@@ -479,29 +407,19 @@ impl RuntimeEffectOwnership {
                 "Sumeragi v2 Decision body stage disagreed with its Commit binding".to_owned(),
             );
         }
-        let ownership = match self.causality {
-            RuntimeEffectCausality::Inherit => {
-                RuntimeEffectOwnership::inherited(self.owner.clone())
-            }
-            RuntimeEffectCausality::Fresh(kind) => {
-                RuntimeEffectOwnership::fresh(self.owner.clone(), kind)
-            }
-        };
-        let parent = matches!(ownership.causality, RuntimeEffectCausality::Inherit)
-            .then(|| ownership.owner.clone());
-        ownership
-            .bind_runtime_effect(
-                parent.as_ref(),
-                effect_kind,
-                &production_adapter_effect_semantic_identity(effect),
-                Some(&candidate),
-                incoming_binding.effect_position,
-                incoming_binding.effect_count,
-                incoming_binding.candidate_position,
-                incoming_binding.candidate_count,
-            )
-            .map_err(|_| {
-                "Sumeragi v2 Decision body stage could not retain its incumbent owner".to_owned()
-            })
+        RuntimeEffectOwnership::new_bound(
+            self.owner.clone(),
+            self.causality,
+            effect_kind,
+            &production_adapter_effect_semantic_identity(effect),
+            Some(&candidate),
+            incoming_binding.effect_position,
+            incoming_binding.effect_count,
+            incoming_binding.candidate_position,
+            incoming_binding.candidate_count,
+        )
+        .map_err(|_| {
+            "Sumeragi v2 Decision body stage could not retain its incumbent owner".to_owned()
+        })
     }
 }

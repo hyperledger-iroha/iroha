@@ -371,8 +371,12 @@ provenance. The outstanding revision-4 work includes:
   coordinator, registry, and LedgerV1 ownership and performs the exact
   Serve/Producer carrier replacement or removal; the lifecycle runner transfers
   body-store completion authority to the worker without exposing a receipt or
-  raw parts API; the lifecycle runner now performs that transfer. ExecuteBody
-  Validate remains typed unsupported. Selected-Serve predecessor scheduling
+  raw parts API. ExecuteBody Validate now follows the same lifecycle-owned
+  scheduler/worker boundary: an exact registry attestation and I/O/output
+  reservation precede the Ready-to-Waiting claim, guarded completion replaces
+  that row with the exact next Ready work, and missing merge-sidecar completion
+  remains parked under its durable same-row registration for wake or cold-open
+  recovery. Selected-Serve predecessor scheduling
   now uses one direct runtime observation plus a move-only, one-turn worker
   admission; the old persistent episode/witness state is gone while immutable
   lifecycle ordinals and the single bounded retry latch remain.
@@ -420,8 +424,15 @@ provenance. The outstanding revision-4 work includes:
   the exact paired service/lane endpoints. Retry reauthenticates that local
   sidecar before reserving Consensus capacity; unavailable sidecar or capacity
   returns the whole owner unchanged. Queue-level regressions now pin the exact
-  keyed retry transfer and both capacity/barrier non-mutation cases. Add
-  production-shaped dispatch/settlement/sidecar-driver regressions. CompleteTip
+  keyed retry transfer and both capacity/barrier non-mutation cases. Layered
+  acceptance covers the full crash-window, deterministic rejection/report
+  publication, same-row sidecar wake, restart reconstruction, and
+  post-LedgerV1-fsync fail-stop in exact four-validator BLS/RS16 contexts, plus
+  real four-validator success, view-change, restart, and authenticated
+  consensus Hold/Drop convergence. Live invalid-body reporting, live sidecar
+  recovery, publication-phase-targeted live restarts, and direct
+  PayloadManifest/PayloadChunk loss remain release-soak depth rather than
+  missing production joins. CompleteTip
   recovery now retains its full Kura artifact and receipt instead of a lossy
   predecessor hash projection, and terminal Apply has a separate exact
   four-row ledger oracle which cannot mint a live carrier. CompleteTip recovery
@@ -1167,7 +1178,7 @@ the signed receipts and completion marker against that same commit and ledger
 digest.
 
 On the current mutable tree, the independent static release inventory contract
-contains 91 legs, 865/865 production tests across 43 modules, 530/530 G-UNIT
+contains 91 legs, 864/864 production tests across 43 modules, 530/530 G-UNIT
 rows, and four mandatory four-peer gates. The grouped fixture SHA-256 is
 `87a4452291f40eef0d71a90703c95af7a96dcc8155ac8e64ef90844d1240bae8`.
 The grouped SDK closure is 1,400 paths at
@@ -1233,7 +1244,7 @@ green at that checkpoint. No Cargo result against the current split source is
 claimed, and this historical focused evidence does not replace the complete
 release gates.
 
-The static release inventory contract now enumerates `865/865` production tests
+The static release inventory contract now enumerates `864/864` production tests
 across 43 modules and `530/530` focused `G-UNIT` entries. Its canonical 531-line
 TSV has
 SHA-256
@@ -1270,7 +1281,7 @@ symbols, three ordered checks, and 14 mutations with no pending structural
 source check. The reviewed Rust include topology contains 52 parents and 316
 direct entries; its canonical payload SHA-256 is
 `1688c7fe596fd8216c6705e66b7e8281dde732cf8e4ab4ce1faa6bee8d4cb137`.
-The release-inventory contract is statically reconciled at 91/865/530, and the
+The release-inventory contract is statically reconciled at 91/864/530, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker and static Apalache-runner contract remain under current-source
 validation. The fixed QueuePlan admission-registry TLC run currently exhausts
@@ -1302,7 +1313,7 @@ source/distribution `88`, Swift `34`, Kotlin `43`, and Java `42` tests. Its
 Swift/Kotlin/Java wire consumers are runner- and receipt-bound; the Rust wire
 consumer is bound directly by the release runner and receipt. The
 receipt-required unsupported-version-before-signing regression preserves the exact
-865-production-test and 530-G-UNIT-test counts. Rust's separated client test
+864-production-test and 530-G-UNIT-test counts. Rust's separated client test
 module covers both complete endpoint-payload swaps while retaining its
 14-test count, so the API-separation source gap is closed. This is
 mutable-source inventory consistency, not deterministic regeneration, SDK
@@ -1319,7 +1330,7 @@ multilane binding ledger keeps this as the
 `composed_state_action_relation_with_source_bound_trace_extraction` claim, and source-binds
 the exact payload, reservation, queue-order, Kura persistence/recovery, runner,
 and release-receipt consumers. The schema-5 structural/source-binding checker
-passes on the mutable tree. The exact 865-test production inventory, 530-test
+passes on the mutable tree. The exact 864-test production inventory, 530-test
 G-UNIT source inventory, 12 fail-closed layout tests, two receipt parser tests,
 and 12 Apalache-runner contract controls still require a final source-bound
 rerun. The ledger retains the
@@ -1368,7 +1379,7 @@ The remaining work is evidence-driven and must stay in order:
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
   mutations before release evidence is accepted, then finish the remaining
-  865-test,
+  864-test,
   43-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product assigns all 54 structural TLAPS
   projection rows; that is source inventory only. Its V2 inductive-safety,
@@ -27351,7 +27362,7 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
 original HEAD/tree/`Cargo.lock`, all 91 pre-network legs and their exact
-865-test inventory plus the separate exact 530-test G-UNIT inventory, the
+864-test inventory plus the separate exact 530-test G-UNIT inventory, the
 formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the

@@ -236,7 +236,7 @@ def _borrow_bound_outer_ingress_order_errors(
         "match current_turn.target()",
         "LifecycleRunnerRankTarget::Completion =>",
         "LifecycleRunnerRankTarget::Runtime =>",
-        "advance_executor(receiver, executor, services, 1)?",
+        "advance_executor(receiver, owner, executor, services, 1)?",
         "LifecycleRunnerRankTarget::Ingress =>",
         "activated.drive_ingress_turn(current_turn)",
     )
@@ -264,13 +264,13 @@ _REMOTE_PROPOSAL_REPLAY_ITEM_SHA256 = {
     "origin_merge": "47cbedbb2fcd3da2122459143e65ed6196d14b7779e29d12d135d3fd7e7157f7",
     "origin_bind_fetch": "546e2a076aeccc4577fc4fcd31898a0cb645fcf2b086cf2a9ca825d7085c4a8b",
     "driver_default_bind": "8a0e749888af5c64b474d89b3048fcb1d91344776319e61c67415f4eeb894bcd",
-    "driver_bind": "8117b5b9453be5494bc46f3ed9d164a1472411e6ed712067afcc554f32b6a1e3",
-    "ownership_fetch_replay": "fec923e08dd4c0c33198a53369d808298c2a62d8a9abb2ef2aff6ac0c54ba182",
+    "driver_bind": "6818a5387daaf5b0d38461d4d4c77f2acd5e5c57011b38b5c467446c6d82af8f",
+    "ownership_fetch_replay": "1ac9ff4ff448a03d9348faab7796bc1c986cd0600f64d3feb27b4f0abee657c1",
     "authority_mint": "ea8680ad00ae88245688355cc371724b4a133b112be43c3d46fe50f9cc4785e3",
     "authority_match": "fffb59ff81f0cdf5b0f8c1c222693c0fb586af021b2c68746ca5e846bf0ba8e5",
     "authority_pending": "cbea73229aa28cb8524d08e36bc0e89dabfe803f16791dfb1ea9519376082b82",
     "authority_fetch": "95992baebcab3fd7ecce16e4530609d27197b10e58b222764d0abc3e3acc3aae",
-    "runtime_regression": "46c5d09beb1f80e9d5c7b2c83a8bf2d8dbfefa56705d915a8899f928a177d398",
+    "runtime_regression": "af02211035619d4397099c7b177513f680432e3110f62618765ddcf1ac63c20d",
 }
 
 
@@ -490,7 +490,7 @@ RemoteProposalFetchReplayEvidenceV1::from_exact_authenticated_proposal(
             "AdapterEffect::FetchBody { certificate: None, .. }",
             "let Some((index, effect)) = fetches.next() else",
             "if fetches.next().is_some() || ownership[index].remote_proposal_fetch_replay.is_some()",
-            "ownership[index].pending_adapter_effect_binding(effect)",
+            "ownership[index].exact_pending_adapter_effect_binding(effect)",
             "origin.bind_exact_fetch(effect, pending)",
             "ownership[index].remote_proposal_fetch_replay = Some(replay);",
         ),
@@ -639,7 +639,7 @@ if let Some(origin) = self.pending_remote_proposal_replay.take() {
         accessor,
         """
 let replay = self.remote_proposal_fetch_replay.as_ref()?;
-let pending = self.pending_adapter_effect_binding(effect)?;
+let pending = self.exact_pending_adapter_effect_binding(effect).ok()?;
 replay.exactly_matches_fetch_pending(effect, &pending).then(|| replay.clone())
 """,
         "remote Proposal replay accessor must require the exact Fetch pending binding",

@@ -614,22 +614,16 @@ impl ConcreteLifecycleWorkRegistry {
         coordinator: &LifecycleCoordinator,
         ordinal: u128,
         fence: Option<crate::sumeragi::v2::LifecycleReducerFenceObservationV1>,
-    ) -> Result<
-        ReadyCertifiedBodyPipelineAttestationV1,
-        ReadyCertifiedBodyPipelineAttestationErrorV1,
-    > {
+    ) -> Result<ReadyCertifiedBodyPipelineAttestationV1, ReadyCertifiedBodyPipelineAttestationErrorV1>
+    {
         if coordinator.fault.is_some() || coordinator.active_lease.is_some() {
-            return Err(
-                ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex,
-            );
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex);
         }
         let (Some(record), Some(metadata)) = (
             coordinator.records.get(&ordinal),
             coordinator.durable_records.get(&ordinal),
         ) else {
-            return Err(
-                ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex,
-            );
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex);
         };
         let schedulable = match record.state {
             super::LifecycleState::Ready => coordinator.ready_index.contains(&ordinal),
@@ -665,27 +659,20 @@ impl ConcreteLifecycleWorkRegistry {
             || metadata.continuation != super::schema::DurableContinuation::None
             || metadata.reconstruction_source != record.owner.causal_root().digest()
         {
-            return Err(
-                ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex,
-            );
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex);
         }
         let Some((&slot, &digest)) = record.physical_slots.first_key_value() else {
-            return Err(
-                ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex,
-            );
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex);
         };
         if record.physical_slots.len() != 1
             || slot != PhysicalSlotId::for_capacity(CapacityClass::Effect, 0)
             || record.episode.slot_universe != std::collections::BTreeSet::from([slot])
             || record.episode.consumed_slots != std::collections::BTreeSet::from([slot])
         {
-            return Err(
-                ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex,
-            );
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex);
         }
-        let address = ConcreteWorkAddress::new(record.owner, ordinal, slot).ok_or(
-            ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex,
-        )?;
+        let address = ConcreteWorkAddress::new(record.owner, ordinal, slot)
+            .ok_or(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex)?;
         if self
             .entries
             .keys()
@@ -693,9 +680,7 @@ impl ConcreteLifecycleWorkRegistry {
             .count()
             != 1
         {
-            return Err(
-                ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex,
-            );
+            return Err(ReadyCertifiedBodyPipelineAttestationErrorV1::InvalidCoordinatorIndex);
         }
         let work = self.entries.get(&address).ok_or(
             ReadyCertifiedBodyPipelineAttestationErrorV1::Registry(RegistryError::Missing),
@@ -731,12 +716,7 @@ impl ConcreteLifecycleWorkRegistry {
                     && completion.matches_recovered_candidate(&candidate)
             }
             (ConcreteLifecycleWorkKind::DurableStoreBody(store), LifecycleWorkClass::Store) => {
-                store.matches_recovered_record(
-                    coordinator.active_context,
-                    record,
-                    metadata,
-                    digest,
-                )
+                store.matches_recovered_record(coordinator.active_context, record, metadata, digest)
             }
             (
                 ConcreteLifecycleWorkKind::CertifiedFetchCompletion(_)
@@ -4739,122 +4719,9 @@ impl ConcreteLifecycleWorkRegistry {
             executed,
         })
     }
-    /// Reattach the complete executed dispatch and its exact wake authority.
-    ///
-    /// This is the sole registry entry to volatile Validate completion. Every
-    /// failure returns the original move-only dispatch and leaves the map
-    /// untouched; success retains the exclusive borrow in a sealed preflight.
-    #[cfg_attr(not(test), allow(dead_code))]
-    #[allow(clippy::result_large_err)]
-    pub(super) fn prepare_executed_durable_validate_completion(
-        &mut self,
-        dispatch: ExecutedDurableValidateDispatch,
-    ) -> Result<
-        PreparedExecutedDurableValidateCompletion<'_>,
-        (
-            DurableValidateCompletionPublicationError,
-            ExecutedDurableValidateDispatch,
-        ),
-    > {
-        let ExecutedDurableValidateDispatch { executed, wake } = dispatch;
-        let prepared = match self.reattach_durable_validate_execution(executed) {
-            Ok(prepared) => prepared,
-            Err((error, executed)) => {
-                return Err((
-                    DurableValidateCompletionPublicationError::Registry(
-                        DurableValidateCompletionConversionError::Execution(error),
-                    ),
-                    ExecutedDurableValidateDispatch { executed, wake },
-                ));
-            }
-        };
-        let PreparedDurableValidateCompletion {
-            _registry: registry,
-            executed,
-        } = prepared;
-        let dispatch = ExecutedDurableValidateDispatch { executed, wake };
-        let request = &dispatch.executed.request;
-        let expected_source = durable_validation_wait_source_for_request(request);
-        if dispatch.wake.wait_token.source() != expected_source
-            || dispatch.wake.wait_token.observed_generation() == u64::MAX
-        {
-            return Err((
-                DurableValidateCompletionPublicationError::Registry(
-                    DurableValidateCompletionConversionError::InvalidWakeAuthority,
-                ),
-                dispatch,
-            ));
-        }
-        let Some(outcome_kind) = durable_validate_outcome_kind(dispatch.outcome()) else {
-            return Err((
-                DurableValidateCompletionPublicationError::Registry(
-                    DurableValidateCompletionConversionError::InvalidOutcome,
-                ),
-                dispatch,
-            ));
-        };
-        let replacement_digest = durable_validate_completion_digest(
-            request.incumbent_digest,
-            request.expected_manifest_hash,
-            dispatch.outcome(),
-        );
-        if matches!(
-            outcome_kind,
-            DurableValidateOutcomeKind::Validated | DurableValidateOutcomeKind::Rejected
-        ) && replacement_digest.is_none_or(|digest| digest == request.incumbent_digest)
-        {
-            return Err((
-                DurableValidateCompletionPublicationError::Registry(
-                    DurableValidateCompletionConversionError::InvalidReplacementDigest,
-                ),
-                dispatch,
-            ));
-        }
-        if outcome_kind == DurableValidateOutcomeKind::DeferredMergeSidecar
-            && replacement_digest.is_some()
-        {
-            return Err((
-                DurableValidateCompletionPublicationError::Registry(
-                    DurableValidateCompletionConversionError::InvalidOutcome,
-                ),
-                dispatch,
-            ));
-        }
-        let Some(payload) = durable_validate_body_payload(&request.durable_receipt) else {
-            return Err((
-                DurableValidateCompletionPublicationError::Registry(
-                    DurableValidateCompletionConversionError::InvalidOutcome,
-                ),
-                dispatch,
-            ));
-        };
-        if !super::body_pipeline_transition::durable_validate_payload_is_exact(
-            request.lifecycle_key,
-            payload,
-        ) {
-            return Err((
-                DurableValidateCompletionPublicationError::Registry(
-                    DurableValidateCompletionConversionError::InvalidOutcome,
-                ),
-                dispatch,
-            ));
-        }
-        let authority = DurableValidateCompletionAuthority {
-            address: request.address,
-            incumbent_digest: request.incumbent_digest,
-            replacement_digest,
-            wait_token: dispatch.wake.wait_token,
-            outcome_kind,
-            lifecycle_key: request.lifecycle_key,
-            lifecycle_stage: request.lifecycle_stage,
-            payload,
-        };
-        Ok(PreparedExecutedDurableValidateCompletion {
-            registry,
-            dispatch,
-            authority,
-        })
-    }
+}
+include!("v2_lifecycle_work_registry_validate_completion_impl.rs");
+impl ConcreteLifecycleWorkRegistry {
     /// Borrow the still-pending adapter effect advertised by one lease slot.
     /// Closed carriers fail rather than re-executing their retained effects.
     pub(super) fn borrow_for_lease(

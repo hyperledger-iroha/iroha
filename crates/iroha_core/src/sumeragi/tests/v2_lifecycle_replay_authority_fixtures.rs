@@ -26,11 +26,17 @@ use std::collections::BTreeSet;
 use std::num::NonZeroU64;
 use tempfile::TempDir;
 fn replay_authority_source_for_test() -> String {
-    include_str!("../v2_lifecycle_replay_authority.rs").replacen(
-        "include!(\"v2_lifecycle_replay_authority_certified_body.rs\");\n",
-        include_str!("../v2_lifecycle_replay_authority_certified_body.rs"),
-        1,
-    )
+    include_str!("../v2_lifecycle_replay_authority.rs")
+        .replacen(
+            "include!(\"v2_lifecycle_replay_authority_live_wal.rs\");\n",
+            include_str!("../v2_lifecycle_replay_authority_live_wal.rs"),
+            1,
+        )
+        .replacen(
+            "include!(\"v2_lifecycle_replay_authority_certified_body.rs\");\n",
+            include_str!("../v2_lifecycle_replay_authority_certified_body.rs"),
+            1,
+        )
 }
 pub(in crate::sumeragi::v2_lifecycle_coordinator) struct ReplayCase {
     pub(in crate::sumeragi::v2_lifecycle_coordinator) authority: LifecycleReplayAuthorityV1,
@@ -1151,7 +1157,7 @@ fn pending_binding(
     .expect("bind exact direct signed replay fixture")
     .pop()
     .expect("one direct signed replay fixture owner")
-    .pending_adapter_effect_binding(effect)
+    .exact_pending_adapter_effect_binding(effect)
     .expect("mint exact direct signed replay pending binding")
 }
 fn signed_broadcast_effects(fixture: &Fixture) -> Vec<AdapterEffect> {

@@ -74,7 +74,9 @@ PROOF_LEDGER_TEST_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_terminal_discharge_cases.py",
     "sumeragi_v2_proof_ledger_release_inventory_cases.py",
     "sumeragi_v2_proof_ledger_release_corridor_cases.py",
+    "sumeragi_v2_proof_ledger_release_corridor_tail_cases.py",
     "sumeragi_v2_proof_ledger_formal_contract_cases.py",
+    "sumeragi_v2_proof_ledger_formal_contract_tail_cases.py",
     "sumeragi_v2_proof_ledger_exact_output_cases.py",
     "sumeragi_v2_proof_ledger_transport_cases.py",
     "sumeragi_v2_proof_ledger_timeout_cases.py",
@@ -90,7 +92,7 @@ PROOF_LEDGER_TEST_COMPONENT_FILES = (
     "sumeragi_v2_proof_ledger_causal_fifo_cases.py",
     "sumeragi_v2_proof_ledger_post_component_cases.py",
 )
-assert len(PROOF_LEDGER_TEST_COMPONENT_FILES) == len(set(PROOF_LEDGER_TEST_COMPONENT_FILES)) == 22
+assert len(PROOF_LEDGER_TEST_COMPONENT_FILES) == len(set(PROOF_LEDGER_TEST_COMPONENT_FILES)) == 24
 
 def _execute_test_component(filename: str) -> None:
     """Execute one reviewed case component in this canonical test namespace."""
@@ -193,7 +195,7 @@ def checker_source_paths() -> tuple[Path, ...]:
 
     module = load_checker()
     filenames = tuple(module._CHECKER_COMPONENT_FILES)
-    assert len(filenames) == len(set(filenames)) == 35
+    assert len(filenames) == len(set(filenames)) == 36
     return (SCRIPT, *(SCRIPT.with_name(filename) for filename in filenames))
 
 
@@ -11157,8 +11159,8 @@ def test_shared_tlc_result_contract_is_complete_and_source_sealed(
     module = load_checker()
     repo_root = copy_shared_tlc_result_contract_fixture(tmp_path, module)
 
-    assert len(module.SHARED_TLC_RESULT_CONTRACT_CALLERS) == 33
-    assert len(set(module.SHARED_TLC_RESULT_CONTRACT_CALLERS)) == 33
+    assert len(module.SHARED_TLC_RESULT_CONTRACT_CALLERS) == 34
+    assert len(set(module.SHARED_TLC_RESULT_CONTRACT_CALLERS)) == 34
     assert len(module.SHARED_TLC_RESULT_SPECIALIZED_CALLERS) == 4
     assert len(module.SHARED_TLC_RESULT_CONTRACT_SHA256) == 34
     assert set(module.SHARED_TLC_RESULT_BRANCH_PROFILES) == set(

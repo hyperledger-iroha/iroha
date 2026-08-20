@@ -7,7 +7,6 @@ if [[ $# -gt 1 ]] || [[ "$profile" != "--pr" && "$profile" != "--release" ]]; th
   echo "usage: $0 [--pr|--release]" >&2
   exit 2
 fi
-
 readonly repo_root="$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)"
 readonly TLAPM_COMMIT="3ab43c7ff31db4ced850619d4746fa4c841a7681"
 # A production release is launched only by the externally authenticated
@@ -161,7 +160,6 @@ export GIT_CONFIG_KEY_0=core.hooksPath
 export GIT_CONFIG_VALUE_0=/dev/null
 export GIT_CONFIG_KEY_1=core.fsmonitor
 export GIT_CONFIG_VALUE_1=false
-
 readonly release_runner_support_components=(
   scripts/run_sumeragi_v2_release_gates_support.sh
 )
@@ -188,7 +186,6 @@ fi
 # authenticated bytes are lexically loaded; it does not claim same-UID defense.
 source "${repo_root}/scripts/run_sumeragi_v2_release_gates_support.sh"
 unset release_runner_support_path release_runner_support_observed_sha256
-
 if [[ "$profile" != "--release" && "${IROHA_RELEASE_PRIVATE_PR:-0}" != 1 ]]; then
   pr_rustup_bin="$(canonical_executable rustup)" || {
     echo "rustup is required to resolve the repository-pinned PR Rust tools" >&2
@@ -462,7 +459,6 @@ if [[ "$profile" == "--pr" && "${IROHA_RELEASE_PRIVATE_PR:-0}" == 1 ]]; then
     --verify --root "$repo_root" --no-writable-paths
   export PATH="$IROHA_RELEASE_PR_BIN" GIT_EXEC_PATH="$IROHA_RELEASE_PR_BIN"
 fi
-
 # Production evidence never executes in the caller's mutable checkout. Require
 # one committed source tree, reproduce it in a fully independent clone without
 # alternates or shared object inodes, copy the separately-bound ignored
@@ -644,7 +640,6 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
   fi
   readonly candidate_identity_path candidate_identity_json candidate_manifest_sha256
   readonly candidate_head candidate_lock_mode
-
   release_cargo_bin="$(canonical_executable cargo)" || {
     echo "the authenticated release Cargo executable could not be resolved" >&2
     exit 1
@@ -675,7 +670,6 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     echo "the authenticated runner aliases do not expose the exact Cargo/rustc release pair" >&2
     exit 1
   fi
-
   case "$(uname -s)-$(uname -m)" in
     Darwin-arm64)
       release_verus_sha256="f11f8a863103a3c8fcaf27e6189edfdba31081516591365b5e29b0a66f570451"
@@ -2173,10 +2167,10 @@ required_production_liveness_tests=(
   sumeragi::v2_apply::tests::committed_merge_reservation_rejects_bare_norito
   sumeragi::v2_effects::tests::retained_locked_body_survives_same_lock_view_churn_before_fetch_adopts_it
   sumeragi::v2_effects::tests::authenticated_genesis_satisfies_manifestless_certified_decision_fetch_locally
-  sumeragi::v2_effects::tests::reproposal_commit_qc_applies_the_exact_unchanged_body
+  sumeragi::v2_effects::tests::recovered_next_vote_body_catalog_join_is_exact_and_store_bound
   sumeragi::v2_effects::tests::reproposal_commit_signing_uses_its_same_round_validation_marker
   sumeragi::v2_effects::tests::split_round_commit_signing_is_rejected_before_service_dispatch
-  sumeragi::v2_effects::tests::deferred_merge_sidecar_accepts_earlier_carrier_and_rejects_future_or_foreign
+  sumeragi::v2_effects::tests::recovered_validation_catalog_hydrates_direct_apply_durability
   sumeragi::v2_effects::tests::higher_different_lock_releases_retained_cache_before_replacement_staging
   sumeragi::v2_effects::tests::synthetic_higher_round_same_subject_retires_origin_bound_stages_before_raw_cache_reuse
   sumeragi::v2_effects::tests::queued_protected_store_keeps_one_work_id_across_repeated_tcs
@@ -2189,25 +2183,25 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::serialized_runtime_rebinds_busy_deferred_body_completion_before_service
   sumeragi::v2_effects::tests::tc_body_rebind_cancels_fetch_superseded_by_a_higher_different_qc
   sumeragi::v2_effects::tests::same_tag_higher_lock_retires_exact_origin_ownership_before_staging
-  sumeragi::v2_effects::tests::same_tag_higher_lock_retires_fetch_store_and_validation_owners
-  sumeragi::v2_effects::tests::first_lock_retires_unlocked_fetch_store_and_validation_owners
-  sumeragi::v2_effects::tests::higher_lock_retires_queued_store_validation_and_local_proposal_completions
+  sumeragi::v2_effects::tests::retained_locked_body_finishes_an_already_started_exact_origin_fetch
+  sumeragi::v2_effects::tests::retained_locked_body_cannot_rebind_to_a_later_proposal_origin
+  sumeragi::v2_effects::tests::failed_initial_local_store_admission_does_not_publish_pipeline_owner
   sumeragi::v2_effects::tests::lock_reconciliation_rejects_same_round_conflict_and_late_lower_lock
   sumeragi::v2_effects::tests::failed_lock_cleanup_keeps_exact_owner_and_requires_restart
   sumeragi::v2_effects::tests::lock_cleanup_rejects_inconsistent_certified_request_before_mutation
   sumeragi::v2_effects::tests::lock_cleanup_status_failure_preserves_committed_replacement
-  sumeragi::v2_effects::tests::higher_round_same_subject_retires_old_origin_pipeline_with_same_tag
+  sumeragi::v2_effects::tests::active_old_view_store_rebinds_current_consumer_before_late_completion
   sumeragi::v2_effects::tests::decision_installed_by_same_runtime_step_retires_stale_terminal_effects
   sumeragi::v2_effects::tests::decision_installed_by_same_runtime_step_keeps_exact_commit_and_body_work
   sumeragi::v2_effects::tests::different_subject_decision_supersedes_protected_lock_and_frees_losing_capacity
   sumeragi::v2_effects::tests::failed_decision_cleanup_keeps_losing_owner_and_requires_restart
   sumeragi::v2_effects::tests::decision_cleanup_fetch_failure_preserves_exact_local_pipeline_consumer
   sumeragi::v2_effects::tests::decision_cleanup_rejects_inconsistent_certified_request_before_mutation
-  sumeragi::v2_effects::tests::decision_rebinds_exact_local_validation_to_reducer_progress
+  sumeragi::v2_effects::tests::decision_rebinds_exact_local_store_under_incumbent_owner
   sumeragi::v2_effects::tests::decision_preserves_current_tag_local_proposal_for_direct_apply
   sumeragi::v2_effects::tests::decision_commitment_mismatch_fails_closed_before_apply
   sumeragi::v2_effects::tests::stale_generation_local_completion_uses_durable_recovery
-  sumeragi::v2_effects::tests::missing_merge_sidecar_retains_exact_validation_until_retry
+  sumeragi::v2_effects::tests::pending_kura_tip_requires_exact_decision_body_and_validation_replay
   sumeragi::v2_effects::tests::decided_apply_retries_after_exact_merge_sidecar_recovery
   sumeragi::v2_effects::tests::apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
   sumeragi::v2_effects::tests::production_certified_body_request_rejects_locally_conflicting_qc_without_fail_close
@@ -2314,18 +2308,18 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::runtime_ingress_carrier_capacity_returns_backpressure_atomically
   sumeragi::v2_runtime::tests::exact_authenticated_progress_retransmission_is_queue_coalesced
   sumeragi::v2_runtime::tests::certified_tc_crosses_full_fence_blocked_prepare_prefix
-  sumeragi::v2_runtime::tests::completion_retries_coalesce_across_ingress_and_busy_deferred_ownership
+  sumeragi::v2_runtime::tests::store_completion_retries_coalesce_across_ingress_and_busy_deferred_ownership
   sumeragi::v2_runtime::tests::body_available_rebind_accepts_same_view_higher_generation
   sumeragi::v2_runtime::tests::body_available_rebind_rejects_uninstalled_destination_without_mutation
   sumeragi::v2_runtime::tests::body_available_rebind_coalesces_exact_busy_deferred_destination_owner
   sumeragi::v2_runtime::tests::body_available_rebind_destination_conflicts_and_duplicates_fail_closed_before_mutation
   sumeragi::v2_runtime::tests::duplicate_body_available_rebind_and_retirement_fail_closed_before_mutation
-  sumeragi::v2_runtime::tests::unbound_direct_prepare_and_commit_votes_are_recoverable_after_validation
+  sumeragi::v2_runtime::tests::unbound_direct_prepare_and_commit_votes_are_recoverable_from_durable_validation
   sumeragi::v2_runtime::tests::conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning
-  sumeragi::v2_runtime::tests::conflicting_local_and_validated_receipts_do_not_coalesce
-  sumeragi::v2_runtime::tests::applied_body_pipeline_phases_suppress_retries_before_ordinal_allocation
-  sumeragi::v2_runtime::tests::applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome
-  sumeragi::v2_runtime::tests::applied_local_proposal_handoff_suppresses_retry_before_ordinal_allocation
+  sumeragi::v2_runtime::tests::pending_validate_successor_projection_rejects_forged_coordinates_and_authority
+  sumeragi::v2_runtime::tests::applied_body_storage_phases_suppress_retries_before_ordinal_allocation
+  sumeragi::v2_runtime::tests::pending_validate_projects_exact_prepare_commit_and_report_successors
+  sumeragi::v2_runtime::tests::pending_validate_projects_only_the_exact_commit_authorized_apply_successor
   sumeragi::v2_runtime::tests::drained_internal_ignore_uses_exact_durable_tombstone_before_readmission
   sumeragi::v2_runtime::tests::queued_body_completion_coalesces_only_its_incumbent_owner
   sumeragi::v2_runtime::tests::stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordinal
@@ -2350,7 +2344,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runtime::tests::distinct_pre_runtime_leader_wire_qc_waits_behind_busy_deferred_owner
   sumeragi::v2_runtime::tests::post_cut_old_logical_replay_cannot_overtake_fenced_busy_deferred_target
   sumeragi::v2_runtime::tests::pre_dequeue_probe_validates_unfrozen_leader_wire_identity
-  sumeragi::v2_runtime::tests::real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress
+  sumeragi::v2_runtime::tests::authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origin
   sumeragi::v2_runtime::tests::adapter_command_identity_is_derived_from_exact_immutable_payload
   sumeragi::v2_runtime::tests::admission_ordinal_exhaustion_fails_runtime_closed
   sumeragi::v2_runtime::tests::runtime_rejects_replayed_foreign_and_mutated_deferred_tokens
@@ -2369,8 +2363,8 @@ required_production_liveness_tests=(
   sumeragi::v2_lifecycle_coordinator::scheduler_inputs::certified_serve_scheduler_tests::certified_serve_scheduler_cannot_overtake_its_ready_predecessor
   sumeragi::v2_lifecycle_coordinator::tests::restart_seeds_high_water_and_rollover_preserves_it
   sumeragi::v2_lifecycle_coordinator::tests::producer_handoff_blocks_later_work_without_making_serve_a_global_barrier
-  sumeragi::v2_runtime::tests::preassigned_batch_lifecycles_require_shared_mint_and_exact_root
-  sumeragi::v2_runtime::tests::restart_dormant_completion_batch_atomically_replaces_latent_slots
+  sumeragi::v2_runtime::tests::queued_store_terminal_adopts_authority_upgrade_under_incumbent_owner
+  sumeragi::v2_runtime::tests::local_proposal_ready_is_owned_by_its_validate_predecessor
   sumeragi::v2_runtime::tests::restart_dormant_local_fifo_reservation_survives_full_class_churn
   sumeragi::v2_transport::tests::reproposal_commit_qc_authenticates_its_exact_same_round_body
   sumeragi::v2_recovery::tests::all_hash_only_snapshot_recovers_exact_authenticated_successor
@@ -2401,7 +2395,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::first_same_subject_lock_preserves_pending_local_proposal_events
   sumeragi::v2_runner::tests::higher_same_subject_lock_retires_prior_origin_work
   sumeragi::v2_runner::tests::first_same_subject_lock_from_prior_view_retires_unlocked_work
-  sumeragi::v2_runner::tests::late_old_rejection_cannot_arm_non_empty_retry_for_replacement_lock
+  sumeragi::v2_runner::tests::pre_submit_lane_binding_rejection_arms_one_non_empty_retry
   sumeragi::v2_runner::tests::decision_retires_local_work_before_prepared_delivery
   sumeragi::v2_runner::tests::finalized_rollover_closes_ingress_before_successor_replay
   sumeragi::v2_runner::tests::synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff

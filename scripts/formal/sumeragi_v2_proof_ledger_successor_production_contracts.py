@@ -1246,7 +1246,7 @@ let discovery_was_outstanding = activated.with_runner_runtime(
             "adapter status publication latch closed surface",
             adapter_source,
             "status_publication_enabled",
-            7,
+            8,
         )
         require_token_count(
             adapter_path,
@@ -1299,16 +1299,27 @@ if publish_initial_status {
             "initial status publication must remain dominated by its constructor latch",
             errors,
         )
-        ready_validate_publication = _require_rust_item(
-            adapter_path,
-            adapter_source,
-            "install_registry_and_commit_adapter",
-            errors,
+        ready_validate_context = (
+            ("impl", "PreparedReadyDurableValidatePersistedSign", "<", "'", "_", ">"),
         )
+        ready_validate_publications = tuple(
+            item
+            for item in rust_items(adapter_source, "install_registry_and_commit_adapter")
+            if item.brace_context == ready_validate_context
+        )
+        if len(ready_validate_publications) != 1:
+            errors.append(
+                f"{adapter_path}: require exactly one Ready-Validate direct status "
+                "publication; found "
+                f"{len(ready_validate_publications)}"
+            )
+            ready_validate_publication = None
+        else:
+            ready_validate_publication = ready_validate_publications[0]
         _require_rust_item_context(
             adapter_path,
             ready_validate_publication,
-            (("impl", "PreparedReadyDurableValidatePersistedSign", "<", "'", "_", ">"),),
+            ready_validate_context,
             "Ready-Validate direct status publication",
             errors,
             expected_attributes=("#[inline(never)]",),

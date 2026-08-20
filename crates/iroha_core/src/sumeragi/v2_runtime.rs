@@ -57,6 +57,7 @@ use super::{
         DeferredOccurrenceOwnershipEvidence, DeferredRuntimeOwnershipSeal, DeferredServiceEvidence,
         LiveWalFrameIdentity, PersistedWalFrameLocatorV1,
         PreparedRecoveredDecisionApplyAdapterCompletionV1, ProducerContinuationHandoffEvidence,
+        ReadyDurableValidateAdapterPublicationKind,
         RecoveredDecisionApplyAdapterCompletionAuthorityV1, RecoveredWalControlSign,
         RecoveredWalDecisionFetch, RecoveredWalFrameIdentity, RecoveredWalVoteSign,
         RegisteredPrepareInvalidBodyReportCapability, RegisteredPrepareValidateSignCapability,
@@ -72,8 +73,8 @@ use super::{
         AuthenticatedRecoveredWalControlProjection,
         AuthenticatedRecoveredWalDecisionFetchProjection,
         AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
-        DurableCertifiedFetchPendingMintPermit, DurableStandaloneValidatePendingMintPermit,
-        DurableValidateReplayEvidenceV1,
+        DurableCertifiedFetchPendingMintPermit, DurableLifecycleOutputPendingMintPermit,
+        DurableStandaloneValidatePendingMintPermit, DurableValidateReplayEvidenceV1,
         PreparedReadyDurableValidateAdapterPreview, PreparedReadyDurableValidateExecution,
         ReadyDurableValidateAdapterPreviewError,
         RecoveredLifecycleNextWalVoteCandidateProjectionV1, RecoveredLifecycleNextWalVoteSealV1,
@@ -487,10 +488,6 @@ pub(crate) enum RuntimeCommandKind {
     BodyAvailable,
     /// Exact body-store persistence completed.
     BodyStored,
-    /// Deterministic body validation succeeded.
-    ValidationSucceeded,
-    /// Deterministic body validation failed.
-    ValidationFailed,
     /// Consensus signing completed.
     SignatureCompleted,
     /// Decided-body application completed.
@@ -2107,8 +2104,18 @@ impl RuntimeEffectCandidateBinding {
 pub(crate) struct RuntimeEffectOwnership {
     owner: RuntimeLifecycleOwner,
     causality: RuntimeEffectCausality,
-    binding: Option<RuntimeEffectCandidateBinding>,
+    binding: RuntimeEffectCandidateBinding,
     remote_proposal_fetch_replay: Option<RemoteProposalFetchReplayEvidenceV1>,
+}
+/// Lifecycle-owner selection consumed by the atomic effect-binding constructor.
+///
+/// This value cannot enter an executor or admission boundary: it deliberately
+/// exposes no effect-ownership API and is consumed when a complete positional
+/// batch is converted into exact [`RuntimeEffectOwnership`] values.
+#[derive(Clone, Debug)]
+pub(crate) struct RuntimeEffectOwnerAssignment {
+    owner: RuntimeLifecycleOwner,
+    causality: RuntimeEffectCausality,
 }
 /// One-shot runtime-only permit for minting authenticated remote Proposal replay evidence.
 ///
@@ -2258,40 +2265,40 @@ fn local_proposal_ready_command_projection_hash(
     iroha_crypto::Hash::new(projection)
 }
 impl LocalProposalReadyCommandIdentity {
-    /// Derive the inert key only from an exact owned Validate completion.
-    pub(in crate::sumeragi) fn from_exact_handoff(
+    /// Derive the same inert key from a lifecycle-owned pending Validate binding.
+    pub(in crate::sumeragi) fn from_exact_pending_handoff(
         tag: EventTag,
         manifest: &wire::PayloadManifest,
         durable_receipt: &DurableBodyReceipt,
         validated_receipt: &ValidatedBodyReceipt,
-        ownership: &RuntimeEffectOwnership,
+        pending: &PendingRuntimeEffectBinding,
     ) -> Option<Self> {
-        let predecessor = AdapterEffect::ValidateBody {
+        let effect = AdapterEffect::ValidateBody {
             tag,
             round: manifest.round,
             subject: manifest.subject,
         };
-        let successor = BodyPipelineCompletionEvidence::LocalProposalReady {
-            manifest: manifest.clone(),
-            durable_receipt: durable_receipt.clone(),
-            validated_receipt: validated_receipt.clone(),
-        };
-        if !ownership.exactly_authorizes_body_pipeline_successor(&predecessor, tag, &successor) {
+        if validated_receipt.durable() != durable_receipt
+            || durable_receipt.round() != manifest.round
+            || durable_receipt.subject() != manifest.subject
+            || durable_receipt.manifest_hash() != iroha_crypto::HashOf::new(manifest)
+            || !pending.exactly_binds_adapter_effect(&effect)
+        {
             return None;
         }
         let command = AdapterCommand::LocalProposalReady {
             manifest: manifest.clone(),
             durable_receipt: durable_receipt.clone(),
             validated_receipt: validated_receipt.clone(),
-        };
-        let command = command.exact_runtime_command_identity();
+        }
+        .exact_runtime_command_identity();
         if !command.validate_exact() {
             return None;
         }
         let mut identity = Self {
             tag,
             command_hash: command.canonical_hash,
-            causal_lifecycle_key: ownership.owner().causal_origin().lifecycle_key,
+            causal_lifecycle_key: *pending.causal_lifecycle_key(),
             projection_hash: iroha_crypto::Hash::new([]),
         };
         identity.projection_hash = local_proposal_ready_command_projection_hash(&identity);
@@ -2299,6 +2306,24 @@ impl LocalProposalReadyCommandIdentity {
     }
     fn validate_exact(&self) -> bool {
         self.projection_hash == local_proposal_ready_command_projection_hash(self)
+    }
+
+    /// Match the sole queued lifecycle-owned local proposal completion.
+    fn exactly_matches_queued_lifecycle_handoff(
+        &self,
+        queued: &TaggedCommand<AdapterCommand>,
+        lifecycle_ordinal: u128,
+    ) -> bool {
+        self.validate_exact()
+            && lifecycle_ordinal != 0
+            && queued.validate_admission_identity()
+            && queued.tag == self.tag
+            && queued.class == CommandClass::Completion
+            && queued.lifecycle_ordinal == Some(lifecycle_ordinal)
+            && queued.causal_origin.lifecycle_key == self.causal_lifecycle_key
+            && queued.identity.kind == RuntimeCommandKind::LocalProposalReady
+            && queued.identity.canonical_hash == self.command_hash
+            && matches!(queued.command, AdapterCommand::LocalProposalReady { .. })
     }
     /// Compare the cloneable FIFO command with its retained Validate owner.
     pub(in crate::sumeragi) fn exactly_matches_handoff(
@@ -2365,7 +2390,9 @@ impl LocalProposalEffectOwnership {
         effect: &AdapterEffect,
         manifest: &wire::PayloadManifest,
     ) -> Option<Self> {
-        let pending = ownership.pending_adapter_effect_binding(effect)?;
+        let pending = ownership
+            .exact_pending_adapter_effect_binding(effect)
+            .ok()?;
         let replay = LocalBodyPreIntentReplaySealV1::from_exact_assemble_body(
             LocalBodyReplayMintPermit::new(),
             effect,
@@ -2404,8 +2431,8 @@ impl LocalProposalEffectOwnership {
         validate_effect: &AdapterEffect,
         validate_ownership: &RuntimeEffectOwnership,
     ) -> bool {
-        let Some(validate_pending) =
-            validate_ownership.pending_adapter_effect_binding(validate_effect)
+        let Ok(validate_pending) =
+            validate_ownership.exact_pending_adapter_effect_binding(validate_effect)
         else {
             return false;
         };
@@ -2427,8 +2454,8 @@ impl LocalProposalEffectOwnership {
         validate_effect: &AdapterEffect,
         validate_ownership: &RuntimeEffectOwnership,
     ) -> Result<LocalValidateReplayEvidenceV1, Self> {
-        let Some(validate_pending) =
-            validate_ownership.pending_adapter_effect_binding(validate_effect)
+        let Ok(validate_pending) =
+            validate_ownership.exact_pending_adapter_effect_binding(validate_effect)
         else {
             return Err(self);
         };
@@ -2977,47 +3004,9 @@ impl PendingRuntimeEffectBinding {
         };
         pending.validate_exact(effect).then_some(pending)
     }
-    /// Reconstruct the unique ordinal-free owner of a standalone durable Validate.
-    ///
-    /// The replay module mints the permit only after the canonical LocalBody or
-    /// signed-Proposal authority has joined the exact authenticated BodyFrame.
-    pub(in crate::sumeragi) fn from_durable_standalone_validate(
-        _permit: DurableStandaloneValidatePendingMintPermit,
-        causal_lifecycle_key: iroha_crypto::Hash,
-        effect: &AdapterEffect,
-    ) -> Option<Self> {
-        if !matches!(effect, AdapterEffect::ValidateBody { .. }) {
-            return None;
-        }
-        let effect_kind = production_adapter_effect_kind(effect);
-        let effect_identity = runtime_effect_identity_hash(
-            effect_kind,
-            &production_adapter_effect_semantic_identity(effect),
-        );
-        let candidate = production_adapter_effect_candidate_binding(effect, None).ok()??;
-        let candidate_semantic_identity = Some(runtime_effect_candidate_semantic_hash(
-            candidate.kind,
-            &candidate.semantic_identity,
-        ));
-        let projection_hash = pending_runtime_effect_binding_projection_hash(
-            &causal_lifecycle_key,
-            effect_kind,
-            &effect_identity,
-            candidate.kind,
-            candidate.statement,
-            candidate_semantic_identity.as_ref(),
-        );
-        let pending = Self {
-            causal_lifecycle_key,
-            effect_kind,
-            effect_identity,
-            candidate_kind: candidate.kind,
-            candidate_statement: candidate.statement,
-            candidate_semantic_identity,
-            projection_hash,
-        };
-        pending.validate_exact(effect).then_some(pending)
-    }
+}
+include!("v2_runtime_durable_recovery_pending.rs");
+impl PendingRuntimeEffectBinding {
     /// Mint the unique pending owner of one exact payload-free live-WAL continuation.
     ///
     /// The causal key is derived from the non-decodable post-fsync frame seal
@@ -4557,10 +4546,10 @@ fn optional_runtime_identity_projection(
 /// identities. Production runtime drivers use the same low-level constructor.
 pub(crate) fn bind_adapter_effect_batch_ownership(
     effects: &[AdapterEffect],
-    ownership: Vec<RuntimeEffectOwnership>,
+    assignments: Vec<RuntimeEffectOwnerAssignment>,
 ) -> Result<Vec<RuntimeEffectOwnership>, String> {
     if effects.is_empty()
-        || effects.len() != ownership.len()
+        || effects.len() != assignments.len()
         || effects.len() > MAX_EFFECTS_PER_STEP
     {
         return Err("Sumeragi v2 effect batch cannot be bound positionally".to_owned());
@@ -4579,9 +4568,9 @@ pub(crate) fn bind_adapter_effect_batch_ownership(
     let mut candidate_position = 0u8;
     effects
         .iter()
-        .zip(ownership)
+        .zip(assignments)
         .enumerate()
-        .map(|(index, (effect, ownership))| {
+        .map(|(index, (effect, assignment))| {
             let effect_position = u8::try_from(index + 1)
                 .map_err(|_| "Sumeragi v2 effect position is not representable".to_owned())?;
             let effect_semantic_identity = production_adapter_effect_semantic_identity(effect);
@@ -4591,28 +4580,18 @@ pub(crate) fn bind_adapter_effect_batch_ownership(
                     .checked_add(1)
                     .ok_or_else(|| "Sumeragi v2 candidate position overflowed".to_owned())?;
             }
-            let ownership = match ownership.causality() {
-                RuntimeEffectCausality::Inherit => {
-                    RuntimeEffectOwnership::inherited(ownership.owner().clone())
-                }
-                RuntimeEffectCausality::Fresh(kind) => {
-                    RuntimeEffectOwnership::fresh(ownership.owner().clone(), kind)
-                }
-            };
-            let parent = matches!(ownership.causality(), RuntimeEffectCausality::Inherit)
-                .then(|| ownership.owner().clone());
-            ownership
-                .bind_runtime_effect(
-                    parent.as_ref(),
-                    production_adapter_effect_kind(effect),
-                    &effect_semantic_identity,
-                    candidate.as_ref(),
-                    effect_position,
-                    effect_count,
-                    candidate.as_ref().map_or(0, |_| candidate_position),
-                    candidate_count,
-                )
-                .map_err(|_| "Sumeragi v2 effect binding failed closed".to_owned())
+            RuntimeEffectOwnership::new_bound(
+                assignment.owner,
+                assignment.causality,
+                production_adapter_effect_kind(effect),
+                &effect_semantic_identity,
+                candidate.as_ref(),
+                effect_position,
+                effect_count,
+                candidate.as_ref().map_or(0, |_| candidate_position),
+                candidate_count,
+            )
+            .map_err(|_| "Sumeragi v2 effect binding failed closed".to_owned())
         })
         .collect()
 }
@@ -4636,10 +4615,10 @@ pub(crate) fn production_adapter_effect_candidate_trace_projection(
         candidate_owner_count_before,
         candidate_owner_count_after,
     )?;
-    let binding = ownership
-        .binding()
-        .filter(|binding| binding.validate_exact(ownership.owner(), ownership.causality()))
-        .ok_or_else(|| "Sumeragi v2 effect omitted its exact candidate binding".to_owned())?;
+    let binding = ownership.binding();
+    if !binding.validate_exact(ownership.owner(), ownership.causality()) {
+        return Err("Sumeragi v2 effect carried an invalid candidate binding".to_owned());
+    }
     let effect_kind = production_adapter_effect_kind(effect);
     let effect_identity = runtime_effect_identity_hash(
         effect_kind,
@@ -5470,8 +5449,6 @@ impl RuntimeCommandKind {
             Self::LocalProposalReady => 2,
             Self::BodyAvailable => 3,
             Self::BodyStored => 4,
-            Self::ValidationSucceeded => 5,
-            Self::ValidationFailed => 6,
             Self::SignatureCompleted => 7,
             Self::ApplicationCompleted => 8,
             Self::LifecycleRoot => 9,
@@ -6731,188 +6708,6 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
                     debug_assert!(removed);
                 }
                 ingress.commands.push_back(command);
-                Ok(())
-            },
-        )
-    }
-    fn enqueue_completion_batch(
-        &mut self,
-        commands: Vec<TaggedCommand<C>>,
-    ) -> Result<(), EnqueueError> {
-        if commands.iter().any(|command| {
-            command.class != CommandClass::Completion || !command.validate_admission_identity()
-        }) {
-            return Err(EnqueueError::FailClosed);
-        }
-        let mut deduplicated = Vec::with_capacity(commands.len());
-        for command in commands {
-            if Self::restored_producer_alias_in(&command, self.commands.iter())?
-                || Self::restored_producer_alias_in(&command, deduplicated.iter())?
-            {
-                continue;
-            }
-            deduplicated.push(command);
-        }
-        let mut commands = deduplicated;
-        let dormant_replacements = commands
-            .iter()
-            .map(|command| self.dormant_local_fifo_replacement(command))
-            .collect::<Result<Vec<_>, _>>()?;
-        let unique_dormant_replacements = dormant_replacements
-            .iter()
-            .flatten()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if unique_dormant_replacements.len() != dormant_replacements.iter().flatten().count() {
-            return Err(EnqueueError::FailClosed);
-        }
-        for (index, command) in commands.iter().enumerate() {
-            self.validate_preassigned_lifecycle_owner(command, &commands[..index])?;
-        }
-        self.check_capacity_change(
-            CommandClass::Completion,
-            unique_dormant_replacements.len(),
-            commands.len(),
-        )?;
-        if commands.is_empty() {
-            return Ok(());
-        }
-        let command_count = commands.len();
-        self.with_checked_admission_ordinal_range(
-            command_count,
-            move |ingress, first_ordinal, ordinal_successor| {
-                for (offset, command) in commands.iter_mut().enumerate() {
-                    let offset = u128::try_from(offset).map_err(|_| EnqueueError::FailClosed)?;
-                    let physical_ordinal = first_ordinal
-                        .checked_add(offset)
-                        .ok_or(EnqueueError::FailClosed)?;
-                    command.admission_ordinal = Some(physical_ordinal);
-                    if command
-                        .lifecycle_ordinal
-                        .is_some_and(|ordinal| ordinal >= physical_ordinal)
-                    {
-                        return Err(EnqueueError::FailClosed);
-                    }
-                    if command.lifecycle_ordinal.is_none() {
-                        command.lifecycle_ordinal = Some(physical_ordinal);
-                    }
-                    let lifecycle_ordinal =
-                        command.lifecycle_ordinal.ok_or(EnqueueError::FailClosed)?;
-                    if !command
-                        .causal_origin
-                        .bind_lifecycle_ordinal(lifecycle_ordinal)
-                    {
-                        return Err(EnqueueError::FailClosed);
-                    }
-                    command.mint_queue_occurrence_owner(&ingress.selection_source_identity)?;
-                }
-                let occupied_at_start = ingress
-                    .commands
-                    .len()
-                    .checked_add(usize::from(ingress.reserved_body_available.is_some()))
-                    .ok_or(EnqueueError::FailClosed)?;
-                let queue_len_at_start = u64::try_from(occupied_at_start)
-                    .expect("bounded runtime ingress length is representable as u64");
-                let dormant_count_at_start =
-                    u64::try_from(ingress.active_dormant_local_fifo_reservation_count()?)
-                        .map_err(|_| EnqueueError::FailClosed)?;
-                let mut checked_transitions = Vec::with_capacity(commands.len());
-                let mut removed_dormant = 0_u64;
-                for (offset, (command, dormant_replacement)) in
-                    commands.iter().zip(dormant_replacements.iter()).enumerate()
-                {
-                    let incoming_tag = command.tag;
-                    let incoming_class = command.class.service_code();
-                    let queue_offset =
-                        u64::try_from(offset).map_err(|_| EnqueueError::FailClosed)?;
-                    let ordinal_offset =
-                        u128::try_from(offset).map_err(|_| EnqueueError::FailClosed)?;
-                    let physical_ordinal = first_ordinal
-                        .checked_add(ordinal_offset)
-                        .ok_or(EnqueueError::FailClosed)?;
-                    let source_after = physical_ordinal
-                        .checked_add(1)
-                        .ok_or(EnqueueError::FailClosed)?;
-                    let queue_len_before = queue_len_at_start
-                        .checked_add(queue_offset)
-                        .ok_or(EnqueueError::FailClosed)?;
-                    let queue_len_after = queue_len_before
-                        .checked_add(1)
-                        .ok_or(EnqueueError::FailClosed)?;
-                    let dormant_reservations_before = dormant_count_at_start
-                        .checked_sub(removed_dormant)
-                        .ok_or(EnqueueError::FailClosed)?;
-                    let (dormant_reservations_after, dormant_owner_ordinal) =
-                        if let Some(reservation) = dormant_replacement {
-                            if !ingress
-                                .dormant_local_fifo_reservations
-                                .contains(reservation)
-                            {
-                                return Err(EnqueueError::FailClosed);
-                            }
-                            removed_dormant = removed_dormant
-                                .checked_add(1)
-                                .ok_or(EnqueueError::FailClosed)?;
-                            (
-                                dormant_reservations_before
-                                    .checked_sub(1)
-                                    .ok_or(EnqueueError::FailClosed)?,
-                                reservation.admission_ordinal,
-                            )
-                        } else {
-                            (dormant_reservations_before, 0)
-                        };
-                    let ingress_trace = ProductionIngressIdentityAndClassTraceProjection {
-                        incoming_height: incoming_tag.height(),
-                        incoming_view: incoming_tag.view(),
-                        incoming_generation: incoming_tag.generation().get(),
-                        incoming_class,
-                        stored_height: command.tag.height(),
-                        stored_view: command.tag.view(),
-                        stored_generation: command.tag.generation().get(),
-                        stored_class: command.class.service_code(),
-                        queue_len_before,
-                        queue_len_after,
-                        queue_capacity: u64::try_from(ingress.config.capacity)
-                            .expect("bounded runtime ingress capacity is representable as u64"),
-                        ordinal_source_before: physical_ordinal,
-                        physical_admission_ordinal: physical_ordinal,
-                        lifecycle_ordinal: command
-                            .lifecycle_ordinal
-                            .ok_or(EnqueueError::FailClosed)?,
-                        ordinal_source_after: source_after,
-                        dormant_reservations_before,
-                        dormant_reservations_after,
-                        dormant_owner_ordinal,
-                        ordinal_minted: true,
-                    };
-                    checked_transitions.push(
-                        check_production_ingress_transition(ingress_trace)
-                            .ok_or(EnqueueError::FailClosed)?
-                            .into_projection(),
-                    );
-                }
-                if ordinal_successor
-                    != first_ordinal
-                        .checked_add(
-                            u128::try_from(command_count).map_err(|_| EnqueueError::FailClosed)?,
-                        )
-                        .ok_or(EnqueueError::FailClosed)?
-                    || unique_dormant_replacements.iter().any(|reservation| {
-                        !ingress
-                            .dormant_local_fifo_reservations
-                            .contains(reservation)
-                    })
-                {
-                    return Err(EnqueueError::FailClosed);
-                }
-                drop(checked_transitions);
-                // Infallible commit tail under the ordinal-source mutex.
-                for reservation in &unique_dormant_replacements {
-                    let removed = ingress.dormant_local_fifo_reservations.remove(reservation);
-                    debug_assert!(removed);
-                }
-                ingress.commands.extend(commands);
                 Ok(())
             },
         )
@@ -8448,7 +8243,6 @@ impl DecisionProposalRetirement {
 pub(crate) struct RetiredBodyPipelineCompletions {
     body_available: usize,
     body_stored: usize,
-    validation: usize,
     local_proposal: usize,
 }
 impl RetiredBodyPipelineCompletions {
@@ -8459,10 +8253,6 @@ impl RetiredBodyPipelineCompletions {
     /// Record one exact durable-store completion owner.
     pub(crate) fn record_body_stored(&mut self) {
         self.body_stored = self.body_stored.saturating_add(1);
-    }
-    /// Record one exact validation completion owner.
-    pub(crate) fn record_validation(&mut self) {
-        self.validation = self.validation.saturating_add(1);
     }
     /// Record one exact locally built proposal completion owner.
     pub(crate) fn record_local_proposal(&mut self) {
@@ -8495,24 +8285,10 @@ impl RetiredBodyPipelineCompletions {
                 self.record_body_stored();
                 true
             }
-            AdapterCommand::ValidationSucceeded {
-                round: queued_round,
-                subject: queued_subject,
-                ..
-            }
-            | AdapterCommand::ValidationFailed {
-                round: queued_round,
-                subject: queued_subject,
-            } if *queued_round == round && *queued_subject == subject => {
-                self.record_validation();
-                true
-            }
             AdapterCommand::Authenticated(_)
             | AdapterCommand::LocalProposalReady { .. }
             | AdapterCommand::BodyAvailable { .. }
             | AdapterCommand::BodyStored { .. }
-            | AdapterCommand::ValidationSucceeded { .. }
-            | AdapterCommand::ValidationFailed { .. }
             | AdapterCommand::SignatureCompleted(_)
             | AdapterCommand::ApplicationCompleted(_) => false,
         }
@@ -8521,16 +8297,11 @@ impl RetiredBodyPipelineCompletions {
         Self {
             body_available: self.body_available.saturating_add(other.body_available),
             body_stored: self.body_stored.saturating_add(other.body_stored),
-            validation: self.validation.saturating_add(other.validation),
             local_proposal: self.local_proposal.saturating_add(other.local_proposal),
         }
     }
     fn validate_unique(self) -> Result<Self, String> {
-        if self.body_available > 1
-            || self.body_stored > 1
-            || self.validation > 1
-            || self.local_proposal > 1
-        {
+        if self.body_available > 1 || self.body_stored > 1 || self.local_proposal > 1 {
             return Err(
                 "Sumeragi v2 body pipeline has duplicate exact serialized completion stages"
                     .to_owned(),
@@ -8558,15 +8329,6 @@ pub(crate) enum AdapterCommand {
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
         receipt: DurableBodyReceipt,
-    },
-    ValidationSucceeded {
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        receipt: ValidatedBodyReceipt,
-    },
-    ValidationFailed {
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
     },
     SignatureCompleted(Vec<u8>),
     ApplicationCompleted(wire::BlockSubject),
@@ -8599,21 +8361,6 @@ impl AdapterCommand {
                 subject: *subject,
                 receipt: receipt.clone(),
             }),
-            Self::ValidationSucceeded {
-                round,
-                subject,
-                receipt,
-            } => Some(BodyPipelineCompletionEvidence::ValidationSucceeded {
-                round: *round,
-                subject: *subject,
-                receipt: receipt.clone(),
-            }),
-            Self::ValidationFailed { round, subject } => {
-                Some(BodyPipelineCompletionEvidence::ValidationFailed {
-                    round: *round,
-                    subject: *subject,
-                })
-            }
             Self::Authenticated(_)
             | Self::SignatureCompleted(_)
             | Self::ApplicationCompleted(_) => None,
@@ -8670,42 +8417,6 @@ impl AdapterCommand {
             ) if round == candidate_round && subject == candidate_subject => {
                 Some(receipt == candidate_receipt)
             }
-            (
-                Self::ValidationSucceeded {
-                    round,
-                    subject,
-                    receipt,
-                },
-                BodyPipelineCompletionEvidence::ValidationSucceeded {
-                    round: candidate_round,
-                    subject: candidate_subject,
-                    receipt: candidate_receipt,
-                },
-            ) if round == candidate_round && subject == candidate_subject => {
-                Some(receipt == candidate_receipt)
-            }
-            (
-                Self::ValidationFailed { round, subject },
-                BodyPipelineCompletionEvidence::ValidationFailed {
-                    round: candidate_round,
-                    subject: candidate_subject,
-                },
-            ) if round == candidate_round && subject == candidate_subject => Some(true),
-            (
-                Self::ValidationSucceeded { round, subject, .. },
-                BodyPipelineCompletionEvidence::ValidationFailed {
-                    round: candidate_round,
-                    subject: candidate_subject,
-                },
-            )
-            | (
-                Self::ValidationFailed { round, subject },
-                BodyPipelineCompletionEvidence::ValidationSucceeded {
-                    round: candidate_round,
-                    subject: candidate_subject,
-                    ..
-                },
-            ) if round == candidate_round && subject == candidate_subject => Some(false),
             _ => None,
         }
     }
@@ -8791,25 +8502,6 @@ impl ExactRuntimeCommandIdentity for AdapterCommand {
                 append_runtime_identity_field(&mut identity, &receipt_identity);
                 (RuntimeCommandKind::BodyStored, identity)
             }
-            Self::ValidationSucceeded {
-                round,
-                subject,
-                receipt,
-            } => {
-                let mut identity = Vec::new();
-                append_runtime_identity_field(&mut identity, &round.encode());
-                append_runtime_identity_field(&mut identity, &subject.encode());
-                let mut receipt_identity = Vec::new();
-                append_validated_receipt_identity(&mut receipt_identity, receipt);
-                append_runtime_identity_field(&mut identity, &receipt_identity);
-                (RuntimeCommandKind::ValidationSucceeded, identity)
-            }
-            Self::ValidationFailed { round, subject } => {
-                let mut identity = Vec::new();
-                append_runtime_identity_field(&mut identity, &round.encode());
-                append_runtime_identity_field(&mut identity, &subject.encode());
-                (RuntimeCommandKind::ValidationFailed, identity)
-            }
             Self::SignatureCompleted(signature) => {
                 let mut identity = Vec::new();
                 append_runtime_identity_field(&mut identity, signature);
@@ -8863,16 +8555,14 @@ impl RuntimeBodyCompletionOwnershipPlan {
         incoming: &RuntimeEffectOwnership,
     ) -> Result<RuntimeEffectOwnership, String> {
         if !self.retained_owner.validate_exact()
-            || !incoming.validate_bound_exact()
+            || !incoming.validate_exact()
             || !incoming.exactly_binds_adapter_effect(effect)
         {
             return Err(
                 "Sumeragi v2 body terminal retry omitted exact effect ownership".to_owned(),
             );
         }
-        let incoming_binding = incoming
-            .binding()
-            .expect("validated terminal retry has one positional binding");
+        let incoming_binding = incoming.binding();
         let retained_statement = self.effective_statement().ok_or_else(|| {
             "Sumeragi v2 body terminal retry omitted its retained authority statement".to_owned()
         })?;
@@ -8889,30 +8579,20 @@ impl RuntimeBodyCompletionOwnershipPlan {
                     .to_owned(),
             );
         }
-        let ownership = match incoming.causality() {
-            RuntimeEffectCausality::Inherit => {
-                RuntimeEffectOwnership::inherited(self.retained_owner.clone())
-            }
-            RuntimeEffectCausality::Fresh(kind) => {
-                RuntimeEffectOwnership::fresh(self.retained_owner.clone(), kind)
-            }
-        };
-        let parent = matches!(ownership.causality(), RuntimeEffectCausality::Inherit)
-            .then(|| self.retained_owner.clone());
-        ownership
-            .bind_runtime_effect(
-                parent.as_ref(),
-                production_adapter_effect_kind(effect),
-                &production_adapter_effect_semantic_identity(effect),
-                Some(&candidate),
-                incoming_binding.effect_position,
-                incoming_binding.effect_count,
-                incoming_binding.candidate_position,
-                incoming_binding.candidate_count,
-            )
-            .map_err(|_| {
-                "Sumeragi v2 body terminal retry could not retain its incumbent owner".to_owned()
-            })
+        RuntimeEffectOwnership::new_bound(
+            self.retained_owner.clone(),
+            incoming.causality(),
+            production_adapter_effect_kind(effect),
+            &production_adapter_effect_semantic_identity(effect),
+            Some(&candidate),
+            incoming_binding.effect_position,
+            incoming_binding.effect_count,
+            incoming_binding.candidate_position,
+            incoming_binding.candidate_count,
+        )
+        .map_err(|_| {
+            "Sumeragi v2 body terminal retry could not retain its incumbent owner".to_owned()
+        })
     }
 }
 #[derive(Clone, Debug, Default)]
@@ -9839,8 +9519,6 @@ impl BoundedIngress<AdapterCommand> {
                 | AdapterCommand::LocalProposalReady { .. }
                 | AdapterCommand::BodyAvailable { .. }
                 | AdapterCommand::BodyStored { .. }
-                | AdapterCommand::ValidationSucceeded { .. }
-                | AdapterCommand::ValidationFailed { .. }
                 | AdapterCommand::SignatureCompleted(_)
                 | AdapterCommand::ApplicationCompleted(_) => false,
             };
@@ -10383,7 +10061,7 @@ impl RuntimeDriver for SumeragiV2Adapter {
         command: &Self::Command,
         ownership: &RuntimeEffectOwnership,
     ) -> bool {
-        let (round, subject) = match command {
+        match command {
             AdapterCommand::LocalProposalReady {
                 manifest,
                 durable_receipt,
@@ -10405,19 +10083,12 @@ impl RuntimeDriver for SumeragiV2Adapter {
                     &successor,
                 );
             }
-            AdapterCommand::ValidationSucceeded { round, subject, .. }
-            | AdapterCommand::ValidationFailed { round, subject } => (*round, *subject),
             AdapterCommand::Authenticated(_)
             | AdapterCommand::BodyAvailable { .. }
             | AdapterCommand::BodyStored { .. }
             | AdapterCommand::SignatureCompleted(_)
             | AdapterCommand::ApplicationCompleted(_) => return false,
-        };
-        ownership.exactly_binds_adapter_effect(&AdapterEffect::ValidateBody {
-            tag,
-            round,
-            subject,
-        })
+        }
     }
     fn dormant_producer_lifecycle(
         &self,
@@ -10498,14 +10169,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
                     subject,
                     receipt,
                 } => self.body_stored(tag, round, subject, &receipt),
-                AdapterCommand::ValidationSucceeded {
-                    round,
-                    subject,
-                    receipt,
-                } => self.validation_succeeded(tag, round, subject, &receipt),
-                AdapterCommand::ValidationFailed { round, subject } => {
-                    self.validation_failed(tag, round, subject)
-                }
                 AdapterCommand::SignatureCompleted(signature) => {
                     self.signature_completed(tag, signature)
                 }
@@ -10560,8 +10223,8 @@ impl RuntimeDriver for SumeragiV2Adapter {
             return Err(());
         }
         let pending = ownership[index]
-            .pending_adapter_effect_binding(effect)
-            .ok_or(())?;
+            .exact_pending_adapter_effect_binding(effect)
+            .map_err(|_| ())?;
         let replay = origin.bind_exact_fetch(effect, pending).ok_or(())?;
         ownership[index].remote_proposal_fetch_replay = Some(replay);
         Ok(())
@@ -10646,8 +10309,6 @@ impl RuntimeDriver for SumeragiV2Adapter {
             AdapterCommand::LocalProposalReady { .. }
             | AdapterCommand::BodyAvailable { .. }
             | AdapterCommand::BodyStored { .. }
-            | AdapterCommand::ValidationSucceeded { .. }
-            | AdapterCommand::ValidationFailed { .. }
             | AdapterCommand::SignatureCompleted(_)
             | AdapterCommand::ApplicationCompleted(_) => false,
         }
@@ -10936,7 +10597,7 @@ pub(crate) enum LeaderWireRuntimeTerminal {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ActiveViewProducerReservation {
     tag: EventTag,
-    ownership: RuntimeEffectOwnership,
+    owner: RuntimeLifecycleOwner,
 }
 /// One adapter-deferred producer together with its immutable receiver-local
 /// ingress cut.
@@ -11616,20 +11277,18 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             } else {
                 D::effect_causality(effect, source)
             };
-            let evidence = match causality {
+            let owner = match causality {
                 RuntimeEffectCausality::Inherit => {
-                    let owner = parent.cloned().ok_or(EnqueueError::FailClosed)?;
-                    RuntimeEffectOwnership::inherited(owner)
+                    parent.cloned().ok_or(EnqueueError::FailClosed)?
                 }
                 RuntimeEffectCausality::Fresh(kind) => {
                     let tag = D::effect_root_tag(effect).unwrap_or(self.round_tag);
-                    let owner = self.mint_fresh_lifecycle_owner(
+                    self.mint_fresh_lifecycle_owner(
                         tag,
                         CommandClass::Progress,
                         kind,
                         &D::fresh_effect_semantic_identity(effect, kind),
-                    )?;
-                    RuntimeEffectOwnership::fresh(owner, kind)
+                    )?
                 }
             };
             if candidate.is_some() {
@@ -11638,10 +11297,9 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                     .ok_or(EnqueueError::FailClosed)?;
             }
             let effect_position = u8::try_from(index + 1).map_err(|_| EnqueueError::FailClosed)?;
-            let evidence = evidence.bind_runtime_effect(
-                matches!(causality, RuntimeEffectCausality::Inherit)
-                    .then_some(parent)
-                    .flatten(),
+            let evidence = RuntimeEffectOwnership::new_bound(
+                owner,
+                causality,
                 D::effect_refinement_kind(effect),
                 &D::effect_semantic_identity(effect),
                 candidate.as_ref(),
@@ -11650,7 +11308,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 candidate.as_ref().map_or(0, |_| candidate_position),
                 candidate_count,
             )?;
-            if !evidence.validate_bound_exact() {
+            if !evidence.validate_exact() {
                 return Err(EnqueueError::FailClosed);
             }
             // Startup is fenced before live ingress. Its deterministic effect
@@ -11696,9 +11354,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Err("Sumeragi v2 effect batch omitted its lifecycle ownership".to_owned());
         };
         if ownership.len() != effect_count
-            || ownership
-                .iter()
-                .any(|evidence| !evidence.validate_bound_exact())
+            || ownership.iter().any(|evidence| !evidence.validate_exact())
         {
             self.latch_fail_closed("effect lifecycle ownership did not match its batch");
             return Err("Sumeragi v2 effect lifecycle ownership was invalid".to_owned());
@@ -11713,6 +11369,34 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         effects: &[D::Effect],
     ) -> Result<(), EnqueueError> {
         self.retain_effect_ownership(RuntimeEffectSource::Retransmit, None, None, effects)
+    }
+    /// Bind one externally settled lifecycle effect to the next runtime
+    /// ordinal for ordering tests whose lifecycle coordinator is out of scope.
+    #[cfg(test)]
+    pub(crate) fn retain_external_lifecycle_effect_ownership_for_test(
+        &mut self,
+        effects: &[D::Effect],
+    ) -> Result<(), String>
+    where
+        D: RuntimeDriver<Effect = AdapterEffect>,
+    {
+        if effects.len() != 1 || self.pending_effect_ownership.is_some() {
+            return Err("external lifecycle test effect must be one unowned successor".to_owned());
+        }
+        let lifecycle_ordinal = self
+            .ingress
+            .lifecycle_ordinals
+            .reserve_one()
+            .map_err(|error| error.to_string())?;
+        let ownership = bind_adapter_effect_batch_ownership(
+            effects,
+            vec![RuntimeEffectOwnerAssignment::fresh_for_test(
+                self.round_tag,
+                lifecycle_ordinal,
+            )],
+        )?;
+        self.pending_effect_ownership = Some(ownership);
+        Ok(())
     }
     /// Publish the receiver-local physical admission high-watermark before a
     /// serialized runtime turn. The value may only advance; refreshing an
@@ -12035,7 +11719,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             );
         }
         if let Some(reservation) = self.active_view_producer.as_ref() {
-            if reservation.tag != tag || !reservation.ownership.validate_exact() {
+            if reservation.tag != tag || !reservation.owner.validate_exact() {
                 self.latch_fail_closed(
                     "local proposal changed its active-view producer reservation",
                 );
@@ -12043,13 +11727,13 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                     "Sumeragi v2 local proposal changed its active-view producer".to_owned(),
                 );
             }
-            let ownership = reservation.ownership.clone();
+            let owner = reservation.owner.clone();
             self.retain_fresh_lifecycle_alias(
                 tag,
                 CommandClass::Normal,
                 RuntimeFreshRootKind::LocalProposalAdmission,
                 &manifest.encode(),
-                ownership.owner(),
+                &owner,
             )
             .map_err(|error| error.to_string())?;
             let effect = AdapterEffect::StoreBody {
@@ -12059,7 +11743,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             };
             let ownership = bind_adapter_effect_batch_ownership(
                 std::slice::from_ref(&effect),
-                vec![RuntimeEffectOwnership::inherited(ownership.owner().clone())],
+                vec![RuntimeEffectOwnerAssignment::inherit(owner)],
             )?
             .pop()
             .ok_or_else(|| "local proposal StoreBody binding was empty".to_owned())?;
@@ -12095,7 +11779,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         };
         let ownership = bind_adapter_effect_batch_ownership(
             std::slice::from_ref(&effect),
-            vec![RuntimeEffectOwnership::fresh(
+            vec![RuntimeEffectOwnerAssignment::fresh_root(
                 owner,
                 RuntimeFreshRootKind::LocalProposalAdmission,
             )],
@@ -12136,7 +11820,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         let Some(reservation) = self.active_view_producer.as_ref() else {
             return Ok(!self.clocks_armed);
         };
-        if reservation.tag != tag || !reservation.ownership.validate_exact() {
+        if reservation.tag != tag || !reservation.owner.validate_exact() {
             self.latch_fail_closed("local proposal admission preflight changed its producer");
             return Err("Sumeragi v2 local proposal preflight producer was invalid".to_owned());
         }
@@ -12171,7 +11855,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             return Ok(());
         }
         if let Some(reservation) = self.active_view_producer.as_ref() {
-            if reservation.tag == tag && reservation.ownership.validate_exact() {
+            if reservation.tag == tag && reservation.owner.validate_exact() {
                 return Ok(());
             }
             self.latch_fail_closed(
@@ -12187,13 +11871,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 b"active-view-producer-reservation",
             )
             .map_err(|error| error.to_string())?;
-        self.active_view_producer = Some(ActiveViewProducerReservation {
-            tag,
-            ownership: RuntimeEffectOwnership::fresh(
-                owner,
-                RuntimeFreshRootKind::LocalProposalAdmission,
-            ),
-        });
+        self.active_view_producer = Some(ActiveViewProducerReservation { tag, owner });
         Ok(())
     }
     /// Retire the exact active-view producer after its signed Proposal and
@@ -12215,13 +11893,13 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if reservation.tag != self.round_tag
             || proposal_round.height != reservation.tag.height()
             || proposal_round.view != reservation.tag.view()
-            || !reservation.ownership.validate_exact()
+            || !reservation.owner.validate_exact()
             || !ownership.validate_exact()
         {
             self.latch_fail_closed("Proposal fanout changed its active-view producer");
             return Err("Sumeragi v2 Proposal fanout changed producer ownership".to_owned());
         }
-        if reservation.ownership.owner() != ownership.owner() {
+        if &reservation.owner != ownership.owner() {
             let owner = ownership.owner();
             let fresh_kind = self
                 .dormant_fresh_lifecycle_owners
@@ -13209,10 +12887,10 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             observe(owner)?;
         }
         if let Some(reservation) = &self.active_view_producer {
-            if reservation.tag != self.round_tag || !reservation.ownership.validate_exact() {
+            if reservation.tag != self.round_tag || !reservation.owner.validate_exact() {
                 return Err(EnqueueError::FailClosed);
             }
-            observe(reservation.ownership.owner())?;
+            observe(&reservation.owner)?;
         }
         for owner in &self.external_lifecycle_owners {
             observe(owner)?;
@@ -13428,7 +13106,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             || self
                 .active_view_producer
                 .as_ref()
-                .is_some_and(|reservation| owner_matches(reservation.ownership.owner()))
+                .is_some_and(|reservation| owner_matches(&reservation.owner))
             || self
                 .external_lifecycle_owners
                 .iter()
@@ -15454,7 +15132,10 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                 self.retransmit_owner_physical_cut = None;
                 self.dormant_fresh_lifecycle_owners
                     .retain(|_, owner| owner.causal_origin().root_tag == tag);
-                self.active_view_producer = Some(ActiveViewProducerReservation { tag, ownership });
+                self.active_view_producer = Some(ActiveViewProducerReservation {
+                    tag,
+                    owner: ownership.owner().clone(),
+                });
                 self.schedule = ScheduleState::default();
             }
         }
@@ -15483,12 +15164,47 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
                     b"direct-test-enter-view-owner",
                 )
             })?;
-        self.pending_effect_ownership = Some(
-            effects
+        let effect_count = u8::try_from(effects.len()).map_err(|_| EnqueueError::FailClosed)?;
+        let candidates = effects
+            .iter()
+            .map(|effect| {
+                self.driver
+                    .effect_candidate_semantic_binding(effect, None)
+                    .map_err(|_| EnqueueError::FailClosed)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let candidate_count = u8::try_from(
+            candidates
                 .iter()
-                .map(|_| RuntimeEffectOwnership::inherited(owner.clone()))
-                .collect(),
-        );
+                .filter(|candidate| candidate.is_some())
+                .count(),
+        )
+        .map_err(|_| EnqueueError::FailClosed)?;
+        let mut candidate_position = 0u8;
+        let ownership = effects
+            .iter()
+            .zip(candidates.iter())
+            .enumerate()
+            .map(|(index, (effect, candidate))| {
+                if candidate.is_some() {
+                    candidate_position = candidate_position
+                        .checked_add(1)
+                        .ok_or(EnqueueError::FailClosed)?;
+                }
+                RuntimeEffectOwnership::new_bound(
+                    owner.clone(),
+                    RuntimeEffectCausality::Inherit,
+                    D::effect_refinement_kind(effect),
+                    &D::effect_semantic_identity(effect),
+                    candidate.as_ref(),
+                    u8::try_from(index + 1).map_err(|_| EnqueueError::FailClosed)?,
+                    effect_count,
+                    candidate.as_ref().map_or(0, |_| candidate_position),
+                    candidate_count,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.pending_effect_ownership = Some(ownership);
         let result = self.observe_effects(now, effects);
         self.pending_effect_ownership = None;
         result
@@ -15506,6 +15222,39 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         &self,
     ) -> super::v2::LifecycleReducerFenceObservationV1 {
         self.driver.lifecycle_reducer_fence_observation()
+    }
+
+    fn ready_validate_runtime_gate_is_open(
+        &self,
+        local_publication: Option<(LocalProposalReadyCommandIdentity, u128)>,
+    ) -> bool {
+        let ingress_is_exact_local_retry =
+            local_publication.is_some_and(|(identity, lifecycle_ordinal)| {
+                self.ingress.commands.len() == 1
+                    && self.ingress.commands.front().is_some_and(|queued| {
+                        identity.exactly_matches_queued_lifecycle_handoff(queued, lifecycle_ordinal)
+                    })
+            });
+        (self.ingress.len() == 0 || ingress_is_exact_local_retry)
+            && self.pending_effect_ownership.is_none()
+            && self.last_scheduler_ownership.is_none()
+            && self.pending_leader_wire_terminals.is_empty()
+    }
+
+    /// Classify a Ready Validate publication without retaining adapter state.
+    ///
+    /// An exact already-queued local successor is accepted only for retry of
+    /// the same actor-global lifecycle ordinal. No other runtime ingress can
+    /// be bypassed by this gate.
+    pub(in crate::sumeragi) fn preflight_ready_durable_validate_adapter_publication(
+        &mut self,
+        execution: &PreparedReadyDurableValidateExecution<'_>,
+        local_publication: Option<(LocalProposalReadyCommandIdentity, u128)>,
+    ) -> Result<ReadyDurableValidateAdapterPublicationKind, AdapterError> {
+        if self.fail_closed || !self.ready_validate_runtime_gate_is_open(local_publication) {
+            return Err(AdapterError::ReadyDurableValidatePublicationContractViolation);
+        }
+        execution.preflight_adapter_publication_kind(&mut self.driver)
     }
     /// Freeze the serialized shell around one ordinary Fetch-to-Store preview.
     pub(in crate::sumeragi) fn prepare_certified_fetch_store(
@@ -15546,16 +15295,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
     pub(in crate::sumeragi) fn prepare_ready_durable_validate_adapter_preview<'registry>(
         &mut self,
         execution: PreparedReadyDurableValidateExecution<'registry>,
+        local_publication: Option<(LocalProposalReadyCommandIdentity, u128)>,
     ) -> Result<
         PreparedReadyDurableValidateAdapterPreview<'registry, '_>,
         ReadyDurableValidateAdapterPreviewError<'registry>,
     > {
-        if self.fail_closed
-            || self.ingress.len() != 0
-            || self.pending_effect_ownership.is_some()
-            || self.last_scheduler_ownership.is_some()
-            || !self.pending_leader_wire_terminals.is_empty()
-        {
+        if self.fail_closed || !self.ready_validate_runtime_gate_is_open(local_publication) {
             return Err(ReadyDurableValidateAdapterPreviewError::runtime_gate(
                 execution,
                 AdapterError::ReadyDurableValidatePublicationContractViolation,
@@ -15944,44 +15689,29 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         // so an unrelated lifecycle or conflicting certificate still fails
         // closed below.
         let incoming_statement = ownership.candidate_semantic_statement();
-        let typed_predecessor_required = ownership.binding().is_some()
-            || retained_statement.is_some()
-            || incoming_statement.is_some();
-        let replacement_statement = if typed_predecessor_required {
-            if !ownership.binds_body_pipeline_completion_predecessor(candidate) {
-                self.latch_fail_closed("body completion retry changed its exact predecessor stage");
-                return Err(EnqueueError::FailClosed);
-            }
-            let Some(relation) = retained_statement
-                .zip(incoming_statement)
-                .and_then(|(incumbent, incoming)| incumbent.fetch_authority_relation_to(incoming))
-            else {
-                self.latch_fail_closed(
-                    "body completion retry changed its exact authority statement",
-                );
-                return Err(EnqueueError::FailClosed);
-            };
-            match relation {
-                RuntimeFetchAuthorityRelation::Upgrade => incoming_statement,
-                RuntimeFetchAuthorityRelation::Same => None,
-                RuntimeFetchAuthorityRelation::Stale => {
-                    if retained_owner != *ownership.owner() {
-                        self.latch_fail_closed(
-                            "coalesced body completion changed its exact lifecycle owner",
-                        );
-                        return Err(EnqueueError::FailClosed);
-                    }
-                    None
+        if !ownership.binds_body_pipeline_completion_predecessor(candidate) {
+            self.latch_fail_closed("body completion retry changed its exact predecessor stage");
+            return Err(EnqueueError::FailClosed);
+        }
+        let Some(relation) = retained_statement
+            .zip(incoming_statement)
+            .and_then(|(incumbent, incoming)| incumbent.fetch_authority_relation_to(incoming))
+        else {
+            self.latch_fail_closed("body completion retry changed its exact authority statement");
+            return Err(EnqueueError::FailClosed);
+        };
+        let replacement_statement = match relation {
+            RuntimeFetchAuthorityRelation::Upgrade => incoming_statement,
+            RuntimeFetchAuthorityRelation::Same => None,
+            RuntimeFetchAuthorityRelation::Stale => {
+                if retained_owner != *ownership.owner() {
+                    self.latch_fail_closed(
+                        "coalesced body completion changed its exact lifecycle owner",
+                    );
+                    return Err(EnqueueError::FailClosed);
                 }
+                None
             }
-        } else {
-            if retained_owner != *ownership.owner() {
-                self.latch_fail_closed(
-                    "coalesced body completion changed its exact lifecycle owner",
-                );
-                return Err(EnqueueError::FailClosed);
-            }
-            None
         };
         Ok(Some(RuntimeBodyCompletionOwnershipPlan {
             tag,
@@ -16170,9 +15900,7 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
                     subject: *subject,
                 })
             }
-            BodyPipelineCompletionEvidence::ValidationSucceeded { round, subject, .. }
-            | BodyPipelineCompletionEvidence::ValidationFailed { round, subject }
-            | BodyPipelineCompletionEvidence::LocalProposalReady {
+            BodyPipelineCompletionEvidence::LocalProposalReady {
                 manifest: wire::PayloadManifest { round, subject, .. },
                 ..
             } => Some(AdapterEffect::ValidateBody {
@@ -16539,22 +16267,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         }
         self.driver
             .recover_validated_body(manifest, validated_receipt)
-    }
-    /// Bind one live, independently durable validation marker without
-    /// delivering an obsolete reducer event.
-    ///
-    /// Effect completions call this inside the same serialized actor turn as
-    /// their catalog update. The registry mutation is exact and monotone; it
-    /// does not retag or otherwise revive a retired reducer consumer.
-    pub(crate) fn bind_validated_body(
-        &mut self,
-        manifest: &wire::PayloadManifest,
-        validated_receipt: &ValidatedBodyReceipt,
-    ) -> Result<(), AdapterError> {
-        if self.fail_closed {
-            return Err(AdapterError::FailClosed);
-        }
-        self.driver.bind_validated_body(manifest, validated_receipt)
     }
     /// Authenticate and enqueue one reducer-directed network message.
     ///
@@ -17238,64 +16950,115 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             .expect("real test fair ingress produces exact ownership");
         self.can_admit_network_message_with_ingress_ownership(message, &ownership)
     }
-    /// Enqueue a completed local proposal build with its original reducer tag.
-    pub(crate) fn enqueue_local_proposal(
+    /// Enqueue a local proposal successor under the immutable lifecycle Validate owner.
+    ///
+    /// The coordinator ordinal is already minted by the actor-global source;
+    /// this boundary validates and reuses it rather than allocating a second
+    /// logical lifecycle position.
+    pub(in crate::sumeragi) fn enqueue_local_proposal_with_lifecycle_pending(
         &mut self,
         tag: EventTag,
         manifest: wire::PayloadManifest,
         durable_receipt: DurableBodyReceipt,
         validated_receipt: ValidatedBodyReceipt,
-    ) -> Result<(), EnqueueError> {
-        let evidence = BodyPipelineCompletionEvidence::LocalProposalReady {
-            manifest: manifest.clone(),
-            durable_receipt: durable_receipt.clone(),
-            validated_receipt: validated_receipt.clone(),
-        };
-        self.enqueue_body_pipeline_completion(
-            tag,
-            evidence,
-            AdapterCommand::LocalProposalReady {
-                manifest,
-                durable_receipt,
-                validated_receipt,
-            },
-        )
-    }
-    /// Enqueue a completed local proposal without changing the immutable
-    /// `AssembleBody` lifecycle owner minted when the proposal entered the
-    /// asynchronous Store -> Validate pipeline.
-    pub(crate) fn enqueue_local_proposal_with_owner(
-        &mut self,
-        tag: EventTag,
-        manifest: wire::PayloadManifest,
-        durable_receipt: DurableBodyReceipt,
-        validated_receipt: ValidatedBodyReceipt,
-        ownership: &RuntimeEffectOwnership,
+        pending: &PendingRuntimeEffectBinding,
+        lifecycle_ordinal: u128,
     ) -> Result<LocalProposalReadyCommandIdentity, EnqueueError> {
-        let identity = LocalProposalReadyCommandIdentity::from_exact_handoff(
+        if self.fail_closed || lifecycle_ordinal == 0 {
+            return Err(EnqueueError::FailClosed);
+        }
+        let identity = LocalProposalReadyCommandIdentity::from_exact_pending_handoff(
             tag,
             &manifest,
             &durable_receipt,
             &validated_receipt,
-            ownership,
+            pending,
         )
         .ok_or(EnqueueError::FailClosed)?;
-        let evidence = BodyPipelineCompletionEvidence::LocalProposalReady {
-            manifest: manifest.clone(),
-            durable_receipt: durable_receipt.clone(),
-            validated_receipt: validated_receipt.clone(),
+        let command = AdapterCommand::LocalProposalReady {
+            manifest,
+            durable_receipt,
+            validated_receipt,
         };
-        self.enqueue_body_pipeline_completion_with_owner(
-            tag,
-            evidence,
-            AdapterCommand::LocalProposalReady {
-                manifest,
-                durable_receipt,
-                validated_receipt,
-            },
-            ownership,
-        )?;
-        Ok(identity)
+        let preflight =
+            self.command_admission_preflight(tag, CommandClass::Completion, &command)?;
+        let mut tagged = match preflight {
+            RuntimeCommandAdmissionPreflight::CoalesceOwned {
+                causal_lifecycle_key,
+                admission_ordinal,
+            } if causal_lifecycle_key == *pending.causal_lifecycle_key()
+                && admission_ordinal == lifecycle_ordinal =>
+            {
+                return Ok(identity);
+            }
+            RuntimeCommandAdmissionPreflight::Coalesce if tag != self.driver.current_tag() => {
+                return Ok(identity);
+            }
+            RuntimeCommandAdmissionPreflight::Coalesce
+            | RuntimeCommandAdmissionPreflight::CoalesceOwned { .. } => {
+                self.latch_fail_closed(
+                    "lifecycle local-proposal completion changed its immutable owner",
+                );
+                return Err(EnqueueError::FailClosed);
+            }
+            RuntimeCommandAdmissionPreflight::Admit => {
+                let owner = self.restored_command_owner(
+                    tag,
+                    CommandClass::Completion,
+                    &command,
+                    None,
+                    *pending.causal_lifecycle_key(),
+                    lifecycle_ordinal,
+                )?;
+                TaggedCommand::with_causal_origin(
+                    tag,
+                    CommandClass::Completion,
+                    command,
+                    Instant::now(),
+                    owner.causal_origin().clone(),
+                    owner.lifecycle_ordinal(),
+                )?
+            }
+            RuntimeCommandAdmissionPreflight::ReuseDormant {
+                causal_lifecycle_key,
+                admission_ordinal,
+                producer_stage,
+            } => {
+                if causal_lifecycle_key != *pending.causal_lifecycle_key()
+                    || admission_ordinal != lifecycle_ordinal
+                    || producer_stage != 0
+                {
+                    self.latch_fail_closed(
+                        "lifecycle local-proposal completion changed its dormant owner",
+                    );
+                    return Err(EnqueueError::FailClosed);
+                }
+                self.restored_tagged_command(
+                    tag,
+                    CommandClass::Completion,
+                    command,
+                    Instant::now(),
+                    causal_lifecycle_key,
+                    admission_ordinal,
+                    producer_stage,
+                )?
+            }
+            RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
+        };
+        tagged.candidate_semantic_statement = pending.candidate_statement();
+        if !tagged.validate_admission_identity() {
+            self.latch_fail_closed(
+                "lifecycle local-proposal completion carried an invalid candidate statement",
+            );
+            return Err(EnqueueError::FailClosed);
+        }
+        let result = self.enqueue_after_clock_reservation(tagged);
+        if result == Err(EnqueueError::FailClosed) {
+            self.latch_fail_closed(
+                "lifecycle local-proposal completion failed exact queue ownership",
+            );
+        }
+        result.map(|()| identity)
     }
     /// Enqueue successful canonical reconstruction with the exact fetch tag.
     ///
@@ -18215,255 +17978,6 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             },
             ownership,
         )
-    }
-    /// Enqueue successful deterministic validation with its non-forgeable
-    /// receipt and the tag of its currently attached reducer consumer.
-    pub(crate) fn enqueue_validation_succeeded(
-        &mut self,
-        tag: EventTag,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        receipt: ValidatedBodyReceipt,
-    ) -> Result<(), EnqueueError> {
-        let evidence = BodyPipelineCompletionEvidence::ValidationSucceeded {
-            round,
-            subject,
-            receipt: receipt.clone(),
-        };
-        self.enqueue_body_pipeline_completion(
-            tag,
-            evidence,
-            AdapterCommand::ValidationSucceeded {
-                round,
-                subject,
-                receipt,
-            },
-        )
-    }
-    pub(crate) fn enqueue_validation_succeeded_with_owner(
-        &mut self,
-        tag: EventTag,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        receipt: ValidatedBodyReceipt,
-        ownership: &RuntimeEffectOwnership,
-    ) -> Result<(), EnqueueError> {
-        let evidence = BodyPipelineCompletionEvidence::ValidationSucceeded {
-            round,
-            subject,
-            receipt: receipt.clone(),
-        };
-        self.enqueue_body_pipeline_completion_with_owner(
-            tag,
-            evidence,
-            AdapterCommand::ValidationSucceeded {
-                round,
-                subject,
-                receipt,
-            },
-            ownership,
-        )
-    }
-    /// Enqueue deterministic validation rejection for its currently attached
-    /// reducer consumer.
-    pub(crate) fn enqueue_validation_failed(
-        &mut self,
-        tag: EventTag,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-    ) -> Result<(), EnqueueError> {
-        let evidence = BodyPipelineCompletionEvidence::ValidationFailed { round, subject };
-        self.enqueue_body_pipeline_completion(
-            tag,
-            evidence,
-            AdapterCommand::ValidationFailed { round, subject },
-        )
-    }
-    pub(crate) fn enqueue_validation_failed_with_owner(
-        &mut self,
-        tag: EventTag,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        ownership: &RuntimeEffectOwnership,
-    ) -> Result<(), EnqueueError> {
-        let evidence = BodyPipelineCompletionEvidence::ValidationFailed { round, subject };
-        self.enqueue_body_pipeline_completion_with_owner(
-            tag,
-            evidence,
-            AdapterCommand::ValidationFailed { round, subject },
-            ownership,
-        )
-    }
-    /// Atomically enqueue a set of deterministic validation rejections.
-    ///
-    /// Exact pre-existing owners coalesce. Every vacant owner and the complete
-    /// completion-capacity requirement are checked before any command becomes
-    /// visible to the reducer.
-    pub(crate) fn enqueue_validation_failures_atomically(
-        &mut self,
-        failures: &[(EventTag, wire::ConsensusRound, wire::BlockSubject)],
-    ) -> Result<(), EnqueueError> {
-        if self.fail_closed {
-            return Err(EnqueueError::FailClosed);
-        }
-        let mut keys = BTreeSet::new();
-        let mut commands = Vec::with_capacity(failures.len());
-        let admitted_at = Instant::now();
-        for (tag, round, subject) in failures.iter().copied() {
-            if !keys.insert((round, subject)) {
-                self.latch_fail_closed("validation failure batch contained duplicate body owners");
-                return Err(EnqueueError::DuplicateCompletionOwnership);
-            }
-            let evidence = BodyPipelineCompletionEvidence::ValidationFailed { round, subject };
-            if self.body_pipeline_completion_is_owned(tag, &evidence)? {
-                continue;
-            }
-            let command = AdapterCommand::ValidationFailed { round, subject };
-            let preflight =
-                self.command_admission_preflight(tag, CommandClass::Completion, &command)?;
-            let tagged = match preflight {
-                RuntimeCommandAdmissionPreflight::Coalesce
-                | RuntimeCommandAdmissionPreflight::CoalesceOwned { .. } => continue,
-                RuntimeCommandAdmissionPreflight::Admit => {
-                    TaggedCommand::new(tag, CommandClass::Completion, command, admitted_at)
-                }
-                RuntimeCommandAdmissionPreflight::ReuseDormant {
-                    causal_lifecycle_key,
-                    admission_ordinal,
-                    producer_stage,
-                } => self.restored_tagged_command(
-                    tag,
-                    CommandClass::Completion,
-                    command,
-                    admitted_at,
-                    causal_lifecycle_key,
-                    admission_ordinal,
-                    producer_stage,
-                )?,
-                RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
-            };
-            commands.push(tagged);
-        }
-        let result = self.ingress.enqueue_completion_batch(commands);
-        if result == Err(EnqueueError::FailClosed) {
-            self.latch_fail_closed("validation failure batch ownership validation failed");
-        }
-        result
-    }
-    /// Atomically enqueue validation rejections while preserving the exact
-    /// lifecycle owner of every independently admitted validation task.
-    pub(crate) fn enqueue_validation_failures_atomically_with_owners(
-        &mut self,
-        failures: &[(
-            EventTag,
-            wire::ConsensusRound,
-            wire::BlockSubject,
-            RuntimeEffectOwnership,
-        )],
-    ) -> Result<(), EnqueueError> {
-        if self.fail_closed {
-            return Err(EnqueueError::FailClosed);
-        }
-        let mut keys = BTreeSet::new();
-        let mut commands = Vec::with_capacity(failures.len());
-        let mut refinement_plans = Vec::new();
-        let admitted_at = Instant::now();
-        for (tag, round, subject, ownership) in failures {
-            if !ownership.validate_exact() {
-                self.latch_fail_closed(
-                    "validation failure batch contained invalid lifecycle ownership",
-                );
-                return Err(EnqueueError::FailClosed);
-            }
-            if !keys.insert((*round, *subject)) {
-                self.latch_fail_closed("validation failure batch contained duplicate body owners");
-                return Err(EnqueueError::DuplicateCompletionOwnership);
-            }
-            let evidence = BodyPipelineCompletionEvidence::ValidationFailed {
-                round: *round,
-                subject: *subject,
-            };
-            let predecessor = AdapterEffect::ValidateBody {
-                tag: *tag,
-                round: *round,
-                subject: *subject,
-            };
-            if !ownership.exactly_authorizes_body_pipeline_successor(&predecessor, *tag, &evidence)
-            {
-                self.latch_fail_closed(
-                    "validation failure batch changed its exact predecessor stage",
-                );
-                return Err(EnqueueError::FailClosed);
-            }
-            if let Some(plan) =
-                self.resolve_body_pipeline_completion_owner(*tag, &evidence, ownership)?
-            {
-                refinement_plans.push(plan);
-                continue;
-            }
-            let command = AdapterCommand::ValidationFailed {
-                round: *round,
-                subject: *subject,
-            };
-            let preflight =
-                self.command_admission_preflight(*tag, CommandClass::Completion, &command)?;
-            if self.owned_preflight_is_coalesced(*tag, &command, preflight, ownership)? {
-                continue;
-            }
-            let restored_owner = match preflight {
-                RuntimeCommandAdmissionPreflight::ReuseDormant {
-                    causal_lifecycle_key,
-                    admission_ordinal,
-                    producer_stage,
-                } => Some((
-                    self.restored_command_owner(
-                        *tag,
-                        CommandClass::Completion,
-                        &command,
-                        None,
-                        causal_lifecycle_key,
-                        admission_ordinal,
-                    )?,
-                    producer_stage,
-                )),
-                RuntimeCommandAdmissionPreflight::Admit => None,
-                RuntimeCommandAdmissionPreflight::Coalesce
-                | RuntimeCommandAdmissionPreflight::CoalesceOwned { .. } => {
-                    unreachable!("handled above")
-                }
-                RuntimeCommandAdmissionPreflight::Reject => unreachable!("reject handled above"),
-            };
-            let owner = restored_owner
-                .as_ref()
-                .map_or_else(|| ownership.owner(), |(owner, _)| owner);
-            let mut tagged = TaggedCommand::with_causal_origin(
-                *tag,
-                CommandClass::Completion,
-                command,
-                admitted_at,
-                owner.causal_origin().clone(),
-                owner.lifecycle_ordinal(),
-            )?;
-            tagged.candidate_semantic_statement = ownership.candidate_semantic_statement();
-            tagged.restored_producer_stage =
-                restored_owner.map(|(_, producer_stage)| producer_stage);
-            if !tagged.validate_admission_identity() {
-                self.latch_fail_closed(
-                    "owned validation failure batch lost its candidate statement",
-                );
-                return Err(EnqueueError::FailClosed);
-            }
-            commands.push(tagged);
-        }
-        let prepared = self.prepare_body_pipeline_completion_refinements(&refinement_plans)?;
-        match self.ingress.enqueue_completion_batch(commands) {
-            Ok(()) => self.commit_prepared_body_pipeline_completion_refinements(prepared),
-            Err(EnqueueError::FailClosed) => {
-                self.latch_fail_closed("owned validation failure batch validation failed");
-                Err(EnqueueError::FailClosed)
-            }
-            Err(error) => Err(error),
-        }
     }
     /// Enqueue a signer completion without retagging it to the current view.
     pub(crate) fn enqueue_signature(

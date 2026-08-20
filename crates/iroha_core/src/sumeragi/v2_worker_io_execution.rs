@@ -699,13 +699,6 @@ impl LockedCandidateAcquisition {
         })
     }
 }
-/// Deterministic body rejection surfaced to local candidate scheduling.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RejectedCandidateBody {
-    round: wire::ConsensusRound,
-    subject: wire::BlockSubject,
-    reason: String,
-}
 /// Exact body/reference tuple retained when validation or decided application
 /// reports that only its certified merge sidecar is unavailable.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -748,20 +741,6 @@ impl PreparedCandidateBody {
     /// Exact subject covered by Prepare intent.
     pub(crate) const fn subject(self) -> wire::BlockSubject {
         self.subject
-    }
-}
-impl RejectedCandidateBody {
-    /// Round whose exact durable body failed validation.
-    pub(crate) const fn round(&self) -> wire::ConsensusRound {
-        self.round
-    }
-    /// Rejected exact subject.
-    pub(crate) const fn subject(&self) -> wire::BlockSubject {
-        self.subject
-    }
-    /// Deterministic validator diagnostic.
-    pub(crate) fn reason(&self) -> &str {
-        &self.reason
     }
 }
 impl LoadedCandidateBody {

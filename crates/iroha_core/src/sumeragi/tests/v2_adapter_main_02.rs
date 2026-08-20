@@ -941,14 +941,13 @@ fn failed_busy_parent_retirement_retains_queue_and_durable_owner() {
     );
 }
 #[test]
-fn restart_frontier_retains_all_four_stages_of_the_protected_body_pipeline() {
+fn restart_frontier_retains_all_three_stages_of_the_protected_body_pipeline() {
     let directory = TempDir::new().expect("temporary protected-frontier directory");
     let expected_addresses;
     let expected_stage_codes = BTreeSet::from([
         ServicedCandidateStage::LocalProposalReady as u8,
         ServicedCandidateStage::BodyAvailable as u8,
         ServicedCandidateStage::BodyStored as u8,
-        ServicedCandidateStage::ValidationCompleted as u8,
     ]);
     let protected_target;
     {
@@ -974,11 +973,6 @@ fn restart_frontier_retains_all_four_stages_of_the_protected_body_pipeline() {
             ),
             (DeferredBodyPipelineStageForTest::BodyAvailable, 0x41, 42),
             (DeferredBodyPipelineStageForTest::BodyStored, 0x42, 43),
-            (
-                DeferredBodyPipelineStageForTest::ValidationSucceeded,
-                0x43,
-                44,
-            ),
         ] {
             adapter
                 .defer_body_pipeline_stage_for_test(tag, &manifest, stage)
@@ -1094,7 +1088,7 @@ fn restart_frontier_retains_all_four_stages_of_the_protected_body_pipeline() {
         Box::new(TestAggregator),
         deferred_admission_ordinals(),
     )
-    .expect("reopen the protected four-stage producer frontier");
+    .expect("reopen the protected three-stage producer frontier");
     assert_eq!(restarted.current_tag().view(), 1);
     assert_eq!(
         restarted.restored_dormant_producer_continuations, expected_addresses,
@@ -1135,8 +1129,8 @@ fn restart_frontier_retains_all_four_stages_of_the_protected_body_pipeline() {
             .dormant_local_fifo_reservations()
             .expect("project protected Local stages into FIFO reservations")
             .len(),
-        3,
-        "BodyAvailable remains fetch-backed while the other three protected stages retain local FIFO slots"
+        2,
+        "BodyAvailable remains fetch-backed while the other two protected stages retain local FIFO slots"
     );
     assert!(!restarted.fail_closed);
 }

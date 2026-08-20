@@ -556,8 +556,7 @@ impl ApplyFixture {
             instructions
         };
         let body = if include_lane_payload {
-            let transaction = TransactionBuilder::new(
-                context.network_id,
+            let transaction = TransactionBuilder::new_genesis(
                 transaction_authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -589,8 +588,7 @@ impl ApplyFixture {
                 .with_lane_payload_ownerships(lane_plan.ownerships);
             build_genesis_body(transaction, Some(execution_context))
         } else {
-            let transaction = TransactionBuilder::new(
-                context.network_id,
+            let transaction = TransactionBuilder::new_genesis(
                 transaction_authority.clone(),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )

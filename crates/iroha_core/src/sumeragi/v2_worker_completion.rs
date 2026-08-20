@@ -761,7 +761,6 @@ enum V2IoCompletion {
     RecoveredDecisionFetchBodyPersisted(
         Box<GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1>,
     ),
-    Validated(BodyValidationCompletion),
     Applied(Box<DurableApplyCompletion>),
     RecoveredDecisionApply(Box<GuardedRecoveredDecisionApplyWorkerResultV1>),
     RecoveredLifecycleSign(Box<GuardedRecoveredLifecycleSignWorkerResultV1>),
@@ -830,7 +829,6 @@ impl V2IoCompletion {
             self,
             Self::Signature { .. }
                 | Self::Stored(_)
-                | Self::Validated(_)
                 | Self::Applied(_)
                 | Self::RecoveredDecisionApply(_)
                 | Self::RecoveredLifecycleSign(_)
@@ -847,9 +845,6 @@ impl V2IoCompletion {
             }
             Self::RecoveredDecisionFetchBodyPersisted(_) => {
                 V2IoCompletionAcknowledgement::RecoveredDecisionFetchRetained
-            }
-            Self::Validated(completion) => {
-                V2IoCompletionAcknowledgement::Work(completion.work_id())
             }
             Self::Applied(completion) => V2IoCompletionAcknowledgement::Work(completion.work_id()),
             Self::RecoveredDecisionApply(_) => {
@@ -1395,14 +1390,6 @@ impl V2IoHandle {
                                                 .map_err(|(error, _dispatch)| error.to_string())
                                         }
                                     }
-                                    V2IoCommand::Validate(task) => body_store
-                                        .as_mut()
-                                        .expect("body store remains live before Retire")
-                                        .execute_validation_task(&task, |body| {
-                                            apply_service.validate_candidate(&context, body)
-                                        })
-                                        .map(V2IoCompletion::Validated)
-                                        .map_err(|error| error.to_string()),
                                     V2IoCommand::Apply(task) => match apply_service.execute(
                                         &context,
                                         body_store

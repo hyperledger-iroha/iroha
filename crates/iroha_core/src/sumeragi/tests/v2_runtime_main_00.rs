@@ -21,9 +21,9 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
     let owner = RuntimeEffectOwnership::fresh_for_test(tag, 71);
     let bound = bind_adapter_effect_batch_ownership(&[store.clone()], vec![owner])
         .expect("one exact StoreBody candidate is within the bound");
-    assert!(bound[0].validate_bound_exact());
+    assert!(bound[0].validate_exact());
     let pending = bound[0]
-        .pending_adapter_effect_binding(&store)
+        .exact_pending_adapter_effect_binding(&store)
         .expect("exact bound effect mints one pending binding");
     assert!(pending.exactly_binds_adapter_effect(&store));
     let different_legacy_ordinal = bind_adapter_effect_batch_ownership(
@@ -32,7 +32,7 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
     )
     .expect("same effect remains bindable under a different legacy ordinal");
     let mut different_pending = different_legacy_ordinal[0]
-        .pending_adapter_effect_binding(&store)
+        .exact_pending_adapter_effect_binding(&store)
         .expect("different legacy owner mints one pending binding");
     assert_eq!(
         pending, different_pending,
@@ -338,7 +338,7 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
     assert_eq!(three_bound.len(), 3);
     for (index, (effect, ownership)) in three_candidates.iter().zip(&three_bound).enumerate() {
         let position = u8::try_from(index + 1).expect("three positions fit in u8");
-        assert!(ownership.validate_bound_exact());
+        assert!(ownership.validate_exact());
         let projection = production_adapter_effect_candidate_trace_projection(
             effect, ownership, position, 3, position, 3, 0, 1, true,
         )
@@ -355,11 +355,7 @@ fn adapter_effect_binding_is_exact_route_neutral_and_three_bounded() {
         "a fourth causal successor must fail before retention"
     );
     let mut forged = bound[0].clone();
-    forged
-        .binding
-        .as_mut()
-        .expect("bound ownership has positional evidence")
-        .effect_position = 2;
+    forged.binding.effect_position = 2;
     assert!(!forged.validate_exact());
     assert!(
         production_adapter_effect_candidate_trace_projection(
@@ -445,11 +441,7 @@ fn certified_body_pipeline_retains_statement_and_owner_across_stage_kinds() {
     let fresh_store = production_adapter_effect_candidate_statement(&store)
         .expect("Store is a candidate")
         .1;
-    lost_phase_and_commitment
-        .binding
-        .as_mut()
-        .expect("Store has exact binding")
-        .candidate_statement = Some(fresh_store);
+    lost_phase_and_commitment.binding.candidate_statement = Some(fresh_store);
     assert!(
         !lost_phase_and_commitment.validate_exact(),
         "dropping inherited phase and commitment invalidates the sealed binding"
@@ -904,8 +896,8 @@ fn fetch_authority_adoption_retains_owner_and_incoming_positions() {
     assert_eq!(relation, RuntimeFetchAuthorityRelation::Upgrade);
     assert_eq!(adopted.owner(), ordinary.owner());
     assert_eq!(adopted.causality(), ordinary.causality());
-    let adopted_binding = adopted.binding().expect("adopted carrier is bound");
-    let incoming_binding = incoming.binding().expect("incoming carrier is bound");
+    let adopted_binding = adopted.binding();
+    let incoming_binding = incoming.binding();
     assert_eq!(
         adopted_binding.effect_position,
         incoming_binding.effect_position

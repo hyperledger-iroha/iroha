@@ -1153,7 +1153,6 @@ impl ProductionV2Services {
             next_locked_candidate_acquisition_id: 0,
             proposal_work_retired: false,
             prepared_candidates: VecDeque::new(),
-            validation_rejections: VecDeque::new(),
             merge_sidecar_deferrals: VecDeque::new(),
             outbound_chunks: BTreeMap::new(),
             fast_path_proposals: BTreeSet::new(),
@@ -1704,13 +1703,6 @@ impl ProductionV2Services {
         self.locked_candidate_acquisition
             .as_mut()
             .and_then(LockedCandidateAcquisition::take_ready)
-    }
-    /// Take the next deterministic body rejection observed by the worker.
-    pub(crate) fn take_validation_rejection(&mut self) -> Option<RejectedCandidateBody> {
-        if self.output_guard.restart_required() {
-            return None;
-        }
-        self.validation_rejections.pop_front()
     }
     /// Take the next exact validation deferral for bounded sidecar recovery.
     pub(crate) fn take_merge_sidecar_deferral(&mut self) -> Option<DeferredMergeSidecarWork> {
@@ -2856,12 +2848,6 @@ impl ProductionV2Services {
                                     "persisted Fetch completion retains its exact work ack",
                                 ),
                             });
-                    }
-                    PendingServiceCompletion::Io {
-                        completion: V2IoCompletion::Validated(completion),
-                        ..
-                    } => {
-                        let _ = executor.complete_body_validation(completion, self)?;
                     }
                     PendingServiceCompletion::Io {
                         completion: V2IoCompletion::Applied(completion),

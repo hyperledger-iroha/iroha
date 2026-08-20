@@ -5,10 +5,10 @@ EXTENDS Naturals
 Bounded mutation model for evidence-bearing completion admission after reducer
 apply.
 
-The finite model deliberately covers only the two phases for which the sealed
+The finite model deliberately covers the surviving phase for which the sealed
 production Busy-owner regression retains complete callback evidence:
 
-  BodyStored, ValidationSucceeded.
+  BodyStored.
 
 For an arbitrary active phase, the finite prefix is:
 
@@ -17,7 +17,7 @@ For an arbitrary active phase, the finite prefix is:
   2. an exact Busy retry coalesces with that owner;
   3. service applies the callback and retires physical ownership; and
   4. one adversarial probe retries the applied callback, conflicts in
-     validation evidence/polarity, supplies a malformed callback under a
+     storage payload/owner evidence, supplies a malformed callback under a
      current or stale tag, or supplies a well-formed stale callback.
 
 `step` and the `*Observed` variables are trace instrumentation only.  An exact
@@ -33,11 +33,9 @@ stale tag before validating the complete callback would hide the
 malformed-plus-stale case; looking past a stale tag would turn well-formed
 obsolete input into a current physical owner.
 
-The production source seal separately retains a four-phase Rust regression for
-exact post-apply suppression of BodyAvailable, BodyStored,
-ValidationSucceeded, and SignatureCompleted.  This TLA+ matrix makes no
-conflicting-evidence or Busy-owner claim for BodyAvailable or
-SignatureCompleted.
+The production source seal separately retains a two-phase Rust regression for
+exact post-apply suppression of BodyAvailable and BodyStored. This TLA+ matrix
+makes no conflicting-evidence or Busy-owner claim for BodyAvailable.
 
 This is a compact live-process admission obligation.  It does not claim a
 crash/restart refinement, Byzantine wire validation, or a deductive proof of
@@ -51,7 +49,7 @@ CONSTANTS EnabledScenarios,
           ValidateCallbackBeforeStaleTagCoalescing,
           CoalesceStaleTagBeforeAdmission
 
-Phases == {"BodyStored", "ValidationSucceeded"}
+Phases == {"BodyStored"}
 
 CurrentTag == "CurrentTag"
 StaleTag == "StaleTag"
@@ -64,18 +62,18 @@ PhaseStates == {Unseen, PhysicallyOwned, Applied}
 
 ExactAppliedRetry == "ExactAppliedRetry"
 ConflictEvidence == "ConflictEvidence"
-ConflictPolarity == "ConflictPolarity"
+ConflictOwner == "ConflictOwner"
 MalformedCallbackCurrentTag == "MalformedCallbackCurrentTag"
 MalformedCallbackStaleTag == "MalformedCallbackStaleTag"
 WellFormedStaleTag == "WellFormedStaleTag"
 
-ConflictScenarios == {ConflictEvidence, ConflictPolarity}
+ConflictScenarios == {ConflictEvidence, ConflictOwner}
 MalformedCallbackScenarios ==
   {MalformedCallbackCurrentTag, MalformedCallbackStaleTag}
 Scenarios ==
   {ExactAppliedRetry,
    ConflictEvidence,
-   ConflictPolarity,
+   ConflictOwner,
    MalformedCallbackCurrentTag,
    MalformedCallbackStaleTag,
    WellFormedStaleTag}
@@ -90,40 +88,40 @@ ASSUME /\ EnabledScenarios \in (SUBSET Scenarios)
 
 CanonicalPayload == "CanonicalPayload"
 ConflictingPayload == "ConflictingPayload"
-PositivePolarity == "Positive"
-NegativePolarity == "Negative"
+CanonicalOwner == "CanonicalOwner"
+ForeignOwner == "ForeignOwner"
 
 Payloads == {CanonicalPayload, ConflictingPayload}
-Polarities == {PositivePolarity, NegativePolarity}
+Owners == {CanonicalOwner, ForeignOwner}
 
 NoEvidence ==
   [phase |-> "NoPhase",
    payload |-> "NoPayload",
-   polarity |-> "NoPolarity"]
+   owner |-> "NoOwner"]
 
 EvidenceDomain ==
   { [phase |-> phase,
      payload |-> payload,
-     polarity |-> polarity]:
+     owner |-> owner]:
        phase \in Phases,
        payload \in Payloads,
-       polarity \in Polarities }
+       owner \in Owners }
     \cup {NoEvidence}
 
 CanonicalEvidence(phase) ==
   [phase |-> phase,
    payload |-> CanonicalPayload,
-   polarity |-> PositivePolarity]
+   owner |-> CanonicalOwner]
 
 ConflictingEvidence(phase, conflictScenario) ==
   CASE conflictScenario = ConflictEvidence ->
          [phase |-> phase,
           payload |-> ConflictingPayload,
-          polarity |-> PositivePolarity]
-    [] conflictScenario = ConflictPolarity ->
+          owner |-> CanonicalOwner]
+    [] conflictScenario = ConflictOwner ->
          [phase |-> phase,
           payload |-> CanonicalPayload,
-          polarity |-> NegativePolarity]
+          owner |-> ForeignOwner]
     [] OTHER -> NoEvidence
 
 InitialAdmissionOrdinal == 1
@@ -277,7 +275,7 @@ Init ==
   /\ activePhase \in Phases
   /\ scenario \in EnabledScenarios
   /\ (scenario \in ConflictScenarios =>
-        activePhase = "ValidationSucceeded")
+        activePhase = "BodyStored")
   /\ callbackWellFormed = ~(scenario \in MalformedCallbackScenarios)
   /\ tagClass =
        IF scenario \in {MalformedCallbackStaleTag, WellFormedStaleTag}

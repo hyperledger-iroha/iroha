@@ -775,6 +775,124 @@ def _async_historical_recovery_source_fidelity_errors(
     return errors
 
 
+def _check_successor_snapshot_authority(
+    recovery_path: Path,
+    recovery_source: str,
+    region: Any,
+    require_tokens: Any,
+    require_order: Any,
+) -> None:
+    """Bind snapshot and complete-tip successor activation authority."""
+
+    snapshot_authority = region(
+        recovery_path,
+        recovery_source,
+        "SnapshotSuccessorActivationAuthority::new",
+        "fn new(record: &wire::SnapshotV2BootstrapRecord) -> Self",
+        "\n    /// Imported snapshot height which anchors the first executable context.",
+    )
+    require_tokens(
+        recovery_path,
+        "SnapshotSuccessorActivationAuthority::new",
+        snapshot_authority,
+        (
+            "record.context.snapshot_bootstrap.as_ref()",
+            "expect(\"verified snapshot activation authority retains its anchor\")",
+            "record_hash: HashOf::new(record), snapshot_height: anchor.snapshot_height, snapshot_block_hash: anchor.snapshot_block_hash, successor_context_id: record.context.id(),",
+        ),
+    )
+    recovery = region(
+        recovery_path,
+        recovery_source,
+        "recover_active_height_with_plan",
+        "pub(crate) fn recover_active_height_with_plan(",
+        "\nfn verify_state_kura_prefix(",
+    )
+    require_tokens(
+        recovery_path,
+        "recover_active_height_with_plan snapshot authority",
+        recovery,
+        (
+            "authenticate_v2_snapshot_replay_boundary(kura, state, &replay_plan)?;",
+            "if record.context() != &bootstrap.context || record.proofs_of_possession() != bootstrap.validator_set_pops",
+            "let verified_context = VerifiedHeightContext::snapshot_bootstrap(bootstrap)?;",
+            "RecoveredSuccessorActivationAuthority::SnapshotBootstrap( SnapshotSuccessorActivationAuthority::new(bootstrap), )",
+        ),
+    )
+    require_order(
+        recovery_path,
+        "recover_active_height_with_plan snapshot authority",
+        recovery,
+        (
+            "authenticate_v2_snapshot_replay_boundary(",
+            "is_entirely_audited_snapshot_import()",
+            "authenticated_snapshot_v2_bootstrap()",
+            "record.context() != &bootstrap.context",
+            "VerifiedHeightContext::snapshot_bootstrap(bootstrap)",
+            "SnapshotSuccessorActivationAuthority::new(bootstrap)",
+        ),
+    )
+    require_tokens(
+        recovery_path,
+        "recover_active_height_with_plan complete-tip authority",
+        recovery,
+        (
+            "kura.v2_finality_artifact_with_receipt(durable_height)?",
+            "let predecessor_record = context_store.load(durable_height)?",
+            "let verified_predecessor = verify_persisted_height( kura, state, &context_store, predecessor_record, durable_height, )?;",
+            "let predecessor_signature_policy = if durable_height == 1 { BlockSignaturePolicy::GenesisAuthority(genesis_public_key.clone()) } else { BlockSignaturePolicy::RotatingLeader };",
+            "build_verified_successor(state, &context_store, &parent_artifact, &parent_receipt)?;",
+            "let (verified_context, activation) = successor.into_parts();",
+            "RecoveredCompleteTipActivationAuthority::authenticate( parent_artifact, parent_receipt, verified_predecessor, predecessor_signature_policy, &verified_context, activation, kura, )?;",
+            "RecoveredSuccessorActivationAuthority::CompleteTip( complete_tip_activation, )",
+        ),
+    )
+    require_order(
+        recovery_path,
+        "recover_active_height_with_plan complete-tip authority",
+        recovery,
+        (
+            "verify_persisted_height(",
+            "build_verified_successor(",
+            "successor.into_parts()",
+            "RecoveredCompleteTipActivationAuthority::authenticate(",
+            "RecoveredSuccessorActivationAuthority::CompleteTip(",
+        ),
+    )
+    verified_successor = region(
+        recovery_path,
+        recovery_source,
+        "build_verified_successor",
+        "pub(crate) fn build_verified_successor(",
+        "\nfn verify_persisted_height(",
+    )
+    require_tokens(
+        recovery_path,
+        "build_verified_successor",
+        verified_successor,
+        (
+            "DurableV2PredecessorIdentity::authenticate(parent_artifact, parent_receipt)?;",
+            "if state_height != parent_height || state_block_hash != Some(predecessor.block_hash)",
+            "if parent_record.context() != &parent_artifact.height_context",
+            "VerifiedHeightContext::successor( expected, proofs, parent_artifact, parent_receipt, parent_record.proofs_of_possession(), )?;",
+            "DurableSuccessorActivationAuthority { predecessor, successor_context_id: verified.context().id(), }",
+            "DurableSuccessorActivationAuthority { predecessor, successor_context_id: verified_context.context().id(), }",
+        ),
+    )
+    require_order(
+        recovery_path,
+        "build_verified_successor",
+        verified_successor,
+        (
+            "DurableV2PredecessorIdentity::authenticate(",
+            "state_height != parent_height",
+            "parent_record.context() != &parent_artifact.height_context",
+            "VerifiedHeightContext::successor(",
+            "DurableSuccessorActivationAuthority",
+        ),
+    )
+
+
 def _persistent_recovery_cut_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -1521,7 +1639,7 @@ if decided_subject.is_some() {
         ),
         (
             "adapter",
-            "restart_frontier_retains_all_four_stages_of_the_protected_body_pipeline",
+            "restart_frontier_retains_all_three_stages_of_the_protected_body_pipeline",
             "retains every exact protected-lock body-pipeline stage",
         ),
         (
@@ -2760,8 +2878,8 @@ pub(super) struct LockedPreparedFairIngressExactDequeue<'a> {
             "ProductionCompletionReadyWorkV1::PassThrough",
             "LifecycleWorkClass::Broadcast",
             "ProductionCompletionReadyWorkV1::RecoveredLifecycleBroadcast",
-            "LifecycleWorkClass::Validate",
             "if classes.iter().all(|class|",
+            "LifecycleWorkClass::Validate",
             "LifecycleWorkClass::Apply",
             "LifecycleWorkClass::Fetch",
             "ProductionCompletionReadyWorkV1::CompletionIo",
@@ -3105,6 +3223,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         composite_capture,
         "joint recovered Completion physical-corridor census",
         (
+            "RecoveredCompletionCapacityProbeV1::Validate",
             "RecoveredCompletionCapacityProbeV1::Apply",
             "RecoveredCompletionCapacityProbeV1::Sign",
             "RecoveredCompletionCapacityProbeV1::Fetch",
@@ -3135,6 +3254,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         composite_dispatch,
         "all-row recovered Completion authentication and selection",
         (
+            "census.select_validate(ordinal)",
             "census.select_apply(ordinal)",
             "census.select_sign(ordinal)",
             "census.select_fetch(ordinal)",
@@ -3147,20 +3267,20 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             rust_code_tokens(composite_dispatch.source),
             rust_code_tokens("census.complete_without_selection()"),
         )
-        if census_releases != 3:
+        if census_releases != 4:
             errors.append(
                 f"{paths['scheduler']}:{composite_dispatch.line}: unified Completion "
-                "dispatch must release its physical census on idle, ordinary Fetch, "
+                "dispatch must release its physical census on idle, direct Validate, ordinary Fetch, "
                 f"and ordinary Store paths; found {census_releases} release sites"
             )
         physical_rows = _token_sequence_count(
             rust_code_tokens(composite_dispatch.source),
             rust_code_tokens("authenticated_ready_row_with_physical_capacity("),
         )
-        if physical_rows != 3:
+        if physical_rows != 4:
             errors.append(
                 f"{paths['scheduler']}:{composite_dispatch.line}: all-row recovered "
-                f"Completion authentication and selection must project exactly three "
+                f"Completion authentication and selection must project exactly four "
                 f"physical row classes; found {physical_rows}"
             )
     physical_row = item("schema", "from_authenticated_with_physical_capacity")
@@ -3508,6 +3628,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         "activated lifecycle ordinary Completion/Runtime/Ingress batch",
         (
             "outer_ingress_turns(limit, context_id, height)",
+            "settle_one_recovered_lifecycle_output(",
+            "if recovered_output_settled",
             "LifecycleRunnerRankTarget::Completion",
             "activated.drive_completion_pre_gate(current_turn, lane_work)",
             "PreGate::Ordinary(ordinary_turn)",
@@ -3519,7 +3641,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "completion_selection_stops_batch(&selected)",
             "LifecycleV2IngressDrainDispositionV1::ready(producer_claim)",
             "LifecycleRunnerRankTarget::Runtime",
-            "advance_executor(receiver, executor, services, 1)?",
+            "advance_executor(receiver, owner, executor, services, 1)?",
             "LifecycleRunnerRankTarget::Ingress",
             "activated.drive_ingress_turn(current_turn)",
             "activated.consume_prepared_ordinary_ingress_turn(",
@@ -3918,8 +4040,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         lifecycle_active,
         "coordinator ProducerTurn claim, attempt, and durable settlement",
         (
-            "let ready_to_finish = activated.with_runner_runtime(",
-            "claim_producer_turn_for_local_proposal(&mut active_runner)",
+            "let (ready_to_finish, lifecycle_yield) = activated.with_runner_runtime(",
+            "let producer_turn = match activated.claim_producer_turn_for_local_proposal(&mut active_runner)",
             "if !ready_to_finish || producer_turn.is_some()",
             "schedule_local_proposal(",
             "dispatch_lane_work_effects(",

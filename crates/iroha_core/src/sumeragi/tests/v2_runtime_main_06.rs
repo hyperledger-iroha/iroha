@@ -16,11 +16,25 @@ fn drained_internal_ignore_uses_exact_durable_tombstone_before_readmission() {
         .expect("the first ownerless completion reaches its terminal reducer discard");
     assert_eq!(runtime.queued_commands(), 1);
     assert_ne!(runtime.ingress.next_admission_ordinal, ordinal_before_first);
-    let original_ownership = RuntimeEffectOwnership::inherited(
-        runtime.ingress.commands[0]
-            .lifecycle_owner()
-            .expect("first completion retains its exact lifecycle owner"),
-    );
+    let fetch = AdapterEffect::FetchBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+        manifest: Some(manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let original_ownership = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&fetch),
+        vec![RuntimeEffectOwnerAssignment::inherit(
+            runtime.ingress.commands[0]
+                .lifecycle_owner()
+                .expect("first completion retains its exact lifecycle owner"),
+        )],
+    )
+    .expect("bind the original Fetch predecessor")
+    .pop()
+    .expect("one original Fetch predecessor");
     assert!(matches!(
         runtime
             .step_and_take_scheduler_ownership_for_test(now)
@@ -58,14 +72,20 @@ fn drained_internal_ignore_uses_exact_durable_tombstone_before_readmission() {
         Some(original_ownership.owner())
     );
     assert_eq!(restarted.ingress.next_admission_ordinal, next_ordinal);
-    let foreign_ownership = RuntimeEffectOwnership::fresh_for_test(
-        restarted_tag,
-        original_ownership
-            .owner()
-            .lifecycle_ordinal()
-            .checked_add(1)
-            .expect("test lifecycle ordinal remains finite"),
-    );
+    let foreign_ownership = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&fetch),
+        vec![RuntimeEffectOwnership::fresh_for_test(
+            restarted_tag,
+            original_ownership
+                .owner()
+                .lifecycle_ordinal()
+                .checked_add(1)
+                .expect("test lifecycle ordinal remains finite"),
+        )],
+    )
+    .expect("bind the foreign Fetch predecessor")
+    .pop()
+    .expect("one foreign Fetch predecessor");
     assert_eq!(
         restarted.reserve_body_available_with_owner(restarted_tag, manifest, &foreign_ownership,),
         Err(EnqueueError::FailClosed),
@@ -87,11 +107,25 @@ fn queued_body_completion_coalesces_only_its_incumbent_owner() {
     runtime
         .enqueue_body_available(tag, manifest.clone())
         .expect("enqueue one exact body completion owner");
-    let incumbent = RuntimeEffectOwnership::inherited(
-        runtime.ingress.commands[0]
-            .lifecycle_owner()
-            .expect("queued body completion has one exact owner"),
-    );
+    let fetch = AdapterEffect::FetchBody {
+        tag,
+        round: manifest.round,
+        subject: manifest.subject,
+        manifest: Some(manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let incumbent = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&fetch),
+        vec![RuntimeEffectOwnerAssignment::inherit(
+            runtime.ingress.commands[0]
+                .lifecycle_owner()
+                .expect("queued body completion has one exact owner"),
+        )],
+    )
+    .expect("bind the incumbent Fetch predecessor")
+    .pop()
+    .expect("one incumbent Fetch predecessor");
     let next_ordinal = runtime.ingress.next_admission_ordinal;
     let exact = runtime
         .reserve_body_available_with_owner(tag, manifest.clone(), &incumbent)
@@ -100,14 +134,20 @@ fn queued_body_completion_coalesces_only_its_incumbent_owner() {
     assert_eq!(exact.lifecycle_owner().as_ref(), Some(incumbent.owner()));
     assert_eq!(runtime.queued_commands(), 1);
     assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
-    let foreign = RuntimeEffectOwnership::fresh_for_test(
-        tag,
-        incumbent
-            .owner()
-            .lifecycle_ordinal()
-            .checked_add(1)
-            .expect("test lifecycle ordinal remains finite"),
-    );
+    let foreign = bind_adapter_effect_batch_ownership(
+        std::slice::from_ref(&fetch),
+        vec![RuntimeEffectOwnership::fresh_for_test(
+            tag,
+            incumbent
+                .owner()
+                .lifecycle_ordinal()
+                .checked_add(1)
+                .expect("test lifecycle ordinal remains finite"),
+        )],
+    )
+    .expect("bind the foreign Fetch predecessor")
+    .pop()
+    .expect("one foreign Fetch predecessor");
     assert_eq!(
         runtime.reserve_body_available_with_owner(tag, manifest, &foreign),
         Err(EnqueueError::FailClosed),
@@ -167,7 +207,9 @@ fn same_owner_wrong_stage_cannot_coalesce_a_body_completion() {
     };
     let wrong_stage = bind_adapter_effect_batch_ownership(
         std::slice::from_ref(&validate_effect),
-        vec![RuntimeEffectOwnership::inherited(incumbent.owner().clone())],
+        vec![RuntimeEffectOwnerAssignment::inherit(
+            incumbent.owner().clone(),
+        )],
     )
     .expect("bind the same owner to a different pipeline stage")
     .pop()
@@ -408,8 +450,7 @@ fn foreign_stale_store_authority_cannot_take_a_queued_terminal() {
     );
     assert_eq!(runtime.queued_commands(), 1);
     assert_eq!(
-        runtime.ingress.commands[0].candidate_semantic_statement,
-        retained_statement,
+        runtime.ingress.commands[0].candidate_semantic_statement, retained_statement,
         "rejected stale authority must not rewrite the terminal statement"
     );
     assert!(runtime.fail_closed);
@@ -615,162 +656,6 @@ fn busy_deferred_store_completion_keeps_incumbent_and_rejects_conflicting_author
     assert!(runtime.fail_closed);
 }
 #[test]
-fn owned_validation_batch_refines_authority_only_after_atomic_commit() {
-    let directory = TempDir::new().expect("temporary owned validation batch directory");
-    let (mut runtime, context, keys) =
-        authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
-    let tag = runtime.round_tag();
-    let incumbent_manifest = runtime_manifest(&context, 0xAC);
-    let validate_effect = AdapterEffect::ValidateBody {
-        tag,
-        round: incumbent_manifest.round,
-        subject: incumbent_manifest.subject,
-    };
-    let incumbent_ordinal = runtime
-        .ingress
-        .mint_non_fifo_lifecycle_ordinal()
-        .expect("mint incumbent Validate lifecycle");
-    let incumbent = bind_adapter_effect_batch_ownership(
-        std::slice::from_ref(&validate_effect),
-        vec![RuntimeEffectOwnership::fresh_for_test(
-            tag,
-            incumbent_ordinal,
-        )],
-    )
-    .expect("bind the incumbent ordinary Validate")
-    .pop()
-    .expect("one Validate owns one candidate");
-    runtime
-        .enqueue_validation_failed_with_owner(
-            tag,
-            incumbent_manifest.round,
-            incumbent_manifest.subject,
-            &incumbent,
-        )
-        .expect("queue the incumbent validation failure");
-    let incumbent_statement = incumbent
-        .candidate_semantic_statement()
-        .expect("ordinary Validate carries an exact body statement");
-    assert_eq!(
-        runtime.ingress.commands[0].candidate_semantic_statement,
-        Some(incumbent_statement),
-    );
-    let mut prepare = signed_runtime_quorum_certificate(&context, &keys, 0xAD);
-    prepare.phase = wire::GlobalPhase::Prepare;
-    prepare.round = incumbent_manifest.round;
-    prepare.proposal_round = incumbent_manifest.round;
-    prepare.subject = incumbent_manifest.subject;
-    let certified_fetch = AdapterEffect::FetchBody {
-        tag,
-        round: incumbent_manifest.round,
-        subject: incumbent_manifest.subject,
-        manifest: Some(incumbent_manifest.clone()),
-        certified_sources: Vec::new(),
-        certificate: Some(prepare),
-    };
-    let upgrade_ordinal = runtime
-        .ingress
-        .mint_non_fifo_lifecycle_ordinal()
-        .expect("mint certified Validate carrier");
-    let certified_fetch_owner = bind_adapter_effect_batch_ownership(
-        std::slice::from_ref(&certified_fetch),
-        vec![RuntimeEffectOwnership::fresh_for_test(tag, upgrade_ordinal)],
-    )
-    .expect("bind the certified Fetch parent")
-    .pop()
-    .expect("one Fetch owns one candidate");
-    let upgraded_validate = certified_fetch_owner
-        .rebind_as_inherited_adapter_effect(&validate_effect)
-        .expect("certified Fetch passes its authority to Validate");
-    let upgraded_statement = upgraded_validate
-        .candidate_semantic_statement()
-        .expect("certified Validate retains its Prepare statement");
-    let mut batch = vec![(
-        tag,
-        incumbent_manifest.round,
-        incumbent_manifest.subject,
-        upgraded_validate,
-    )];
-    for marker in [0xAE, 0xAF, 0xB0] {
-        let manifest = runtime_manifest(&context, marker);
-        let effect = AdapterEffect::ValidateBody {
-            tag,
-            round: manifest.round,
-            subject: manifest.subject,
-        };
-        let ordinal = runtime
-            .ingress
-            .mint_non_fifo_lifecycle_ordinal()
-            .expect("mint vacant Validate lifecycle");
-        let ownership = bind_adapter_effect_batch_ownership(
-            std::slice::from_ref(&effect),
-            vec![RuntimeEffectOwnership::fresh_for_test(tag, ordinal)],
-        )
-        .expect("bind one vacant Validate owner")
-        .pop()
-        .expect("one Validate owns one candidate");
-        batch.push((tag, manifest.round, manifest.subject, ownership));
-    }
-    let first_vacant_statement = batch[1]
-        .3
-        .candidate_semantic_statement()
-        .expect("vacant Validate carries its exact statement");
-    let next_ordinal = runtime.ingress.next_admission_ordinal;
-    assert_eq!(
-        runtime.enqueue_validation_failures_atomically_with_owners(&batch),
-        Err(EnqueueError::Full),
-        "capacity rejection must precede every authority refinement",
-    );
-    assert_eq!(runtime.queued_commands(), 1);
-    assert_eq!(runtime.ingress.next_admission_ordinal, next_ordinal);
-    assert_eq!(
-        runtime.ingress.commands[0].candidate_semantic_statement,
-        Some(incumbent_statement),
-        "a rejected batch cannot strengthen an earlier coalesced member",
-    );
-    assert!(!runtime.fail_closed);
-    runtime
-        .enqueue_validation_failures_atomically_with_owners(&batch[..2])
-        .expect("a fitting batch atomically refines and publishes its vacant member");
-    assert_eq!(runtime.queued_commands(), 2);
-    let retained_incumbent = runtime
-        .ingress
-        .commands
-        .iter()
-        .find(|queued| {
-            matches!(
-                &queued.command,
-                AdapterCommand::ValidationFailed { round, subject }
-                    if *round == incumbent_manifest.round
-                        && *subject == incumbent_manifest.subject
-            )
-        })
-        .expect("the incumbent validation failure remains queued");
-    assert_eq!(
-        retained_incumbent.candidate_semantic_statement,
-        Some(upgraded_statement),
-    );
-    let first_vacant_subject = batch[1].2;
-    let retained_vacant = runtime
-        .ingress
-        .commands
-        .iter()
-        .find(|queued| {
-            matches!(
-                &queued.command,
-                AdapterCommand::ValidationFailed { subject, .. }
-                    if *subject == first_vacant_subject
-            )
-        })
-        .expect("the fitting vacant validation failure was published");
-    assert_eq!(
-        retained_vacant.candidate_semantic_statement,
-        Some(first_vacant_statement),
-        "new owner-aware batch commands must retain typed authority",
-    );
-    assert!(!runtime.fail_closed);
-}
-#[test]
 fn stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordinal() {
     let stale_directory = TempDir::new().expect("temporary stale internal-callback directory");
     let (mut runtime, context, _keys) =
@@ -834,22 +719,14 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
         let validated = ValidatedBodyReceipt::for_test(durable.clone());
         (durable, validated)
     };
-    let three_stages = RetiredBodyPipelineCompletions {
+    let two_stages = RetiredBodyPipelineCompletions {
         body_available: 0,
         body_stored: 1,
-        validation: 1,
         local_proposal: 1,
-    };
-    let validation_only = RetiredBodyPipelineCompletions {
-        body_available: 0,
-        body_stored: 0,
-        validation: 1,
-        local_proposal: 0,
     };
     let body_available_only = RetiredBodyPipelineCompletions {
         body_available: 1,
         body_stored: 0,
-        validation: 0,
         local_proposal: 0,
     };
     let dormant_manifest = runtime_manifest(&context, 0xA0);
@@ -961,15 +838,6 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
     stage_completion_for_queue_test(
         &mut runtime,
         owner_tag,
-        AdapterCommand::ValidationSucceeded {
-            round: ingress_manifest.round,
-            subject: ingress_manifest.subject,
-            receipt: validated.clone(),
-        },
-    );
-    stage_completion_for_queue_test(
-        &mut runtime,
-        owner_tag,
         AdapterCommand::LocalProposalReady {
             manifest: ingress_manifest.clone(),
             durable_receipt: durable,
@@ -984,30 +852,11 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
                 ingress_manifest.subject,
             )
             .expect("retire ingress body pipeline"),
-        three_stages
-    );
-    let ingress_failure_manifest = runtime_manifest(&context, 0xA2);
-    runtime
-        .enqueue_validation_failed(
-            owner_tag,
-            ingress_failure_manifest.round,
-            ingress_failure_manifest.subject,
-        )
-        .expect("enqueue ingress validation-failure owner");
-    assert_eq!(
-        runtime
-            .retire_body_pipeline_completions(
-                owner_tag,
-                ingress_failure_manifest.round,
-                ingress_failure_manifest.subject,
-            )
-            .expect("retire ingress validation failure"),
-        validation_only
+        two_stages
     );
     let deferred_manifest = runtime_manifest(&context, 0xB1);
     for stage in [
         DeferredBodyPipelineStageForTest::BodyStored,
-        DeferredBodyPipelineStageForTest::ValidationSucceeded,
         DeferredBodyPipelineStageForTest::LocalProposalReady,
     ] {
         runtime
@@ -1023,26 +872,7 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
                 deferred_manifest.subject,
             )
             .expect("retire Busy-deferred body pipeline"),
-        three_stages
-    );
-    let deferred_failure_manifest = runtime_manifest(&context, 0xB2);
-    runtime
-        .driver
-        .defer_body_pipeline_stage_for_test(
-            owner_tag,
-            &deferred_failure_manifest,
-            DeferredBodyPipelineStageForTest::ValidationFailed,
-        )
-        .expect("stage Busy-deferred validation failure");
-    assert_eq!(
-        runtime
-            .retire_body_pipeline_completions(
-                owner_tag,
-                deferred_failure_manifest.round,
-                deferred_failure_manifest.subject,
-            )
-            .expect("retire Busy-deferred validation failure"),
-        validation_only
+        two_stages
     );
     let duplicate_body_stored = runtime_manifest(&context, 0xC1);
     let (durable, _) = receipts(&duplicate_body_stored);
@@ -1066,7 +896,6 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
     let stored_only = RetiredBodyPipelineCompletions {
         body_available: 0,
         body_stored: 1,
-        validation: 0,
         local_proposal: 0,
     };
     assert_eq!(runtime.queued_commands(), 1);
@@ -1188,7 +1017,6 @@ fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_d
         RetiredBodyPipelineCompletions {
             body_available: 2,
             body_stored: 0,
-            validation: 0,
             local_proposal: 0,
         },
     );

@@ -2486,116 +2486,6 @@ impl AuthenticatedRecoveredWalSignProjection {
         !candidates.contains_key(&self.parent.key)
             && candidates.get(&self.child.key) == Some(&self.child)
     }
-    /// Build one closed repaired-pair fixture without exposing either raw
-    /// candidate to sibling lifecycle tests.
-    #[cfg(all(test, feature = "bls"))]
-    pub(super) fn repaired_ledger_fixture_for_test(
-        context: LifecycleContext,
-        marker: u8,
-    ) -> Option<(Self, super::ledger::LifecycleLedgerV1)> {
-        let root = super::CausalRoot::new(LifecycleDigest::new([marker.wrapping_add(3); 32]));
-        let parent_replay = super::replay_authority::exact_record_fixture(
-            context,
-            LifecycleStageKind::ValidateBody,
-            marker,
-        );
-        let child_replay = super::replay_authority::exact_record_fixture(
-            context,
-            LifecycleStageKind::SignPrepareVote,
-            marker,
-        );
-        let effect_slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
-        let parent = CandidateAdmission::new(
-            parent_replay.key,
-            root,
-            LifecycleWorkClass::Validate,
-            LifecycleStage::new(
-                LifecycleStageKind::ValidateBody,
-                PredecessorScope::Independent,
-            ),
-            InitialLifecycleState::Ready,
-            root.digest(),
-            parent_replay.payload,
-            parent_replay.authority,
-            super::PhysicalGeometry::new(
-                [PhysicalSlot::new(
-                    effect_slot,
-                    LifecycleDigest::new([marker.wrapping_add(4); 32]),
-                )],
-                [effect_slot],
-            ),
-            None,
-        );
-        let child = CandidateAdmission::new(
-            child_replay.key,
-            root,
-            LifecycleWorkClass::SignVote,
-            LifecycleStage::new(
-                LifecycleStageKind::SignPrepareVote,
-                PredecessorScope::Independent,
-            ),
-            InitialLifecycleState::Ready,
-            root.digest(),
-            DurablePayloadReference::None,
-            child_replay.authority,
-            super::PhysicalGeometry::new(
-                [PhysicalSlot::new(
-                    effect_slot,
-                    LifecycleDigest::new([marker.wrapping_add(5); 32]),
-                )],
-                [effect_slot],
-            ),
-            None,
-        );
-        let owner = OwnerId::new(root, 1);
-        let parent_address = ConcreteWorkAddress::new(owner, 1, effect_slot)?;
-        let child_address = ConcreteWorkAddress::new(owner, 2, effect_slot)?;
-        let parent_record = super::ledger::LifecycleLedgerRecordV1::new(
-            parent.key,
-            owner,
-            parent_address.ordinal,
-            parent.work_class,
-            parent.stage,
-            Some(super::TerminalOutcome::Advanced),
-            parent.reconstruction_source,
-            parent.payload,
-            parent.replay_authority.clone(),
-            super::schema::DurableContinuation::successor(
-                super::schema::DurableContinuationEdge::ValidateToSignPrepare,
-                child_address.ordinal,
-            ),
-        )
-        .ok()?;
-        let child_record = super::ledger::LifecycleLedgerRecordV1::new(
-            child.key,
-            owner,
-            child_address.ordinal,
-            child.work_class,
-            child.stage,
-            None,
-            child.reconstruction_source,
-            child.payload,
-            child.replay_authority.clone(),
-            super::schema::DurableContinuation::None,
-        )
-        .ok()?;
-        let ledger = super::ledger::LifecycleLedgerV1::new(
-            context,
-            child_address.ordinal,
-            vec![parent_record, child_record],
-            BTreeMap::new(),
-        )
-        .ok()?;
-        Some((
-            Self {
-                parent,
-                child,
-                parent_address,
-                child_address,
-            },
-            ledger,
-        ))
-    }
     /// Seed only the opaque projection's parent in a focused recovery fixture.
     #[cfg(test)]
     pub(super) fn seed_parent_candidate_for_test(
@@ -2661,6 +2551,8 @@ pub(crate) struct ProductionOpenedRecoveredWalSignLifecycleCut<'registry> {
 pub(crate) struct RecoveredWalProductionOwnerOpenV1 {
     pub(super) coordinator: LifecycleCoordinator,
     pub(super) verified: VerifiedHeightContext,
+    pub(super) recovered_lifecycle_outputs:
+        Option<super::open::PreparedLifecycleOutputRecoveryV1>,
     pub(super) serve_payloads:
         crate::sumeragi::v2_certified_serve_payload_store::AuthenticatedCertifiedServePayloadRecoveryCut,
     pub(super) registry_identity: ConcreteLifecycleWorkRegistryInstanceIdentity,
@@ -3957,7 +3849,7 @@ impl ProductionOpenedRecoveredWalSignLifecycleCut<'_> {
         }
         let OpenedRecoveredWalSignLifecycleCut {
             installed,
-            recovery,
+            mut recovery,
             coordinator,
         } = opened;
         let registry_identity = installed.registry.instance_identity();
@@ -3967,6 +3859,7 @@ impl ProductionOpenedRecoveredWalSignLifecycleCut<'_> {
             RecoveredWalProductionOwnerOpenV1 {
                 coordinator,
                 verified,
+                recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
                 serve_payloads: recovery.into_serve_payloads(),
                 registry_identity,
                 body_store_identity,

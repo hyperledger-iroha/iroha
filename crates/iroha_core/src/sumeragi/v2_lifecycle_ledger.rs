@@ -1034,6 +1034,77 @@ impl LifecycleLedgerRecordV1 {
             &self.replay_authority,
         )
     }
+
+    /// Re-authenticate one exact live output row for cold registry recovery.
+    ///
+    /// A signed Broadcast with a durable Sign predecessor is deliberately not
+    /// accepted here; recovered-WAL startup owns that family.  Invalid-body
+    /// reports must supply their unique adjacent terminal Validate parent, and
+    /// both the public edge and private replay-family relation are checked
+    /// before the cold output seal is minted.
+    pub(super) fn authenticate_recovered_lifecycle_output(
+        &self,
+        context: LifecycleContext,
+        verified: &VerifiedHeightContext,
+        invalid_parent: Option<&Self>,
+    ) -> Option<super::replay_authority::AuthenticatedRecoveredLifecycleOutputV1> {
+        let invalid_parent_parts = match invalid_parent {
+            None => None,
+            Some(parent) => {
+                let parent_key = parent.key()?;
+                let child_key = self.key()?;
+                let parent_stage = parent.stage()?;
+                let child_stage = self.stage()?;
+                let parent_payload = parent.durable_payload()?;
+                let child_payload = self.durable_payload()?;
+                let exact_edge =
+                    parent
+                        .continuation()?
+                        .successor_parts()
+                        .is_some_and(|(edge, ordinal)| {
+                            edge == DurableContinuationEdge::ValidateToInvalidBodyReport
+                                && ordinal == self.ordinal()
+                                && parent.ordinal().checked_add(1) == Some(self.ordinal())
+                                && parent.owner() == self.owner()
+                                && parent.work_class() == Some(LifecycleWorkClass::Validate)
+                                && parent.terminal() == Some(Some(TerminalOutcome::Advanced))
+                                && durable_continuation_successor_is_exact(
+                                    edge,
+                                    LifecycleWorkClass::Validate,
+                                    parent_key,
+                                    parent_stage,
+                                    LifecycleWorkClass::InvalidBodyReport,
+                                    child_key,
+                                    child_stage,
+                                )
+                                && durable_continuation_payload_is_exact(
+                                    edge,
+                                    parent_payload,
+                                    child_payload,
+                                )
+                        });
+                if !exact_edge {
+                    return None;
+                }
+                Some((&parent.replay_authority, parent_payload))
+            }
+        };
+        super::replay_authority::authenticate_durable_lifecycle_output(
+            verified,
+            context,
+            self.key()?,
+            self.owner(),
+            self.ordinal(),
+            self.work_class()?,
+            self.stage()?,
+            self.terminal()?,
+            self.reconstruction_source(),
+            self.durable_payload()?,
+            self.continuation()?,
+            &self.replay_authority,
+            invalid_parent_parts,
+        )
+    }
     /// Authenticate this row's source before opening its exact body-store frame.
     fn authenticate_durable_certified_fetch_origin<F>(
         &self,
@@ -2471,14 +2542,10 @@ impl ProductionLifecycleStartupErrorV1 {
 #[must_use = "failed recovered control startup requires process restart"]
 pub(in crate::sumeragi) struct ProductionRecoveredWalControlStartupErrorV1 {
     reason: &'static str,
-    assembly_detail: Option<String>,
 }
 impl ProductionRecoveredWalControlStartupErrorV1 {
     const fn new(reason: &'static str) -> Self {
-        Self {
-            reason,
-            assembly_detail: None,
-        }
+        Self { reason }
     }
     /// Preserve the typed, non-authorizing storage-census discriminator.
     pub(super) fn from_assembly(error: LifecycleRecoveryAssemblyError) -> Self {
@@ -2487,20 +2554,11 @@ impl ProductionRecoveredWalControlStartupErrorV1 {
             detail = %assembly_detail,
             "recovered control storage census assembly failed"
         );
-        Self {
-            reason: "recovered control storage census assembly failed",
-            assembly_detail: Some(assembly_detail),
-        }
+        Self::new("recovered control storage census assembly failed")
     }
     /// Return the stable non-authorizing failure classification.
     pub(in crate::sumeragi) const fn reason(&self) -> &'static str {
         self.reason
-    }
-
-    /// Borrow the typed assembler discriminator without exposing authority.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(in crate::sumeragi) fn assembly_detail(&self) -> Option<&str> {
-        self.assembly_detail.as_deref()
     }
 }
 /// Startup-fatal failure from exact recovered Decision-Fetch storage repair.
@@ -2614,7 +2672,7 @@ impl AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1 {
                 ProductionLifecycleStartupErrorKindV1::LedgerFrameMismatch,
             ));
         }
-        let body_pipeline = census.into_startup(&ledger).ok_or_else(|| {
+        let body_pipeline = census.into_startup(&ledger, &verified).ok_or_else(|| {
             ProductionLifecycleStartupErrorV1::new(
                 ProductionLifecycleStartupErrorKindV1::InvalidBodyPipelineCensus,
             )
@@ -2681,6 +2739,7 @@ impl AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1 {
             verified,
             coordinator,
             registry,
+            recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
             payload_store,
             serve_payloads: recovery.into_serve_payloads(),
             body_store: Some(body_store),
@@ -3003,7 +3062,7 @@ impl ProductionLifecycleOwnerV1 {
                         "verified height cannot derive recovered control cold-pair authority",
                     )
                 })?;
-                let (coordinator, recovery) = installed
+                let (coordinator, mut recovery) = installed
                     .open_with_exact_store_authority(
                         authority,
                         ledger_store,
@@ -3017,6 +3076,7 @@ impl ProductionLifecycleOwnerV1 {
                     verified,
                     coordinator,
                     registry,
+                    recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
                     payload_store,
                     serve_payloads: recovery.into_serve_payloads(),
                     body_store: Some(body_store),
@@ -3098,7 +3158,7 @@ impl ProductionLifecycleOwnerV1 {
                             "verified height cannot derive recovered control Broadcast authority",
                         )
                     })?;
-            let (coordinator, recovery) = installed
+            let (coordinator, mut recovery) = installed
                 .open_with_exact_store_authority(
                     authority,
                     ledger_store,
@@ -3112,6 +3172,7 @@ impl ProductionLifecycleOwnerV1 {
                 verified,
                 coordinator,
                 registry,
+                recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
                 payload_store,
                 serve_payloads: recovery.into_serve_payloads(),
                 body_store: Some(body_store),
@@ -3253,7 +3314,7 @@ impl ProductionLifecycleOwnerV1 {
                             "verified height cannot derive recovered control lifecycle authority",
                         )
                     })?;
-            let (coordinator, recovery) = installed
+            let (coordinator, mut recovery) = installed
                 .open_with_exact_store_authority(
                     authority,
                     ledger_store,
@@ -3267,6 +3328,7 @@ impl ProductionLifecycleOwnerV1 {
                 verified,
                 coordinator,
                 registry,
+                recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
                 payload_store,
                 serve_payloads: recovery.into_serve_payloads(),
                 body_store: Some(body_store),
@@ -3420,7 +3482,7 @@ impl ProductionLifecycleOwnerV1 {
                 "verified height cannot derive recovered Decision Fetch lifecycle authority",
             )
         })?;
-        let (coordinator, recovery) = installed
+        let (coordinator, mut recovery) = installed
             .open_with_exact_store_authority(authority, ledger_store, &mut payload_store, recovery)
             .map_err(|error| {
                 ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
@@ -3429,6 +3491,7 @@ impl ProductionLifecycleOwnerV1 {
             verified,
             coordinator,
             registry,
+            recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
             payload_store,
             serve_payloads: recovery.into_serve_payloads(),
             body_store: Some(body_store),
@@ -3532,7 +3595,7 @@ impl ProductionLifecycleOwnerV1 {
                 "verified height cannot derive recovered Decision Store lifecycle authority",
             )
         })?;
-        let (coordinator, recovery) = installed
+        let (coordinator, mut recovery) = installed
             .open_with_exact_store_authority(authority, ledger_store, &mut payload_store, recovery)
             .map_err(|error| {
                 ProductionRecoveredWalDecisionFetchStartupErrorV1::new(error.reason())
@@ -3541,6 +3604,7 @@ impl ProductionLifecycleOwnerV1 {
             verified,
             coordinator,
             registry,
+            recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
             payload_store,
             serve_payloads: recovery.into_serve_payloads(),
             body_store: Some(body_store),
@@ -3659,13 +3723,14 @@ impl ProductionLifecycleOwnerV1 {
         installed
             .install_body_pipeline(body_pipeline)
             .map_err(|error| ProductionRecoveredDecisionApplyStartupErrorV1::new(error.reason()))?;
-        let (coordinator, recovery) = installed
+        let (coordinator, mut recovery) = installed
             .open_with_prepared_successor(prepared, &mut payload_store, recovery)
             .map_err(|error| ProductionRecoveredDecisionApplyStartupErrorV1::new(error.reason()))?;
         Ok(Self {
             verified,
             coordinator,
             registry,
+            recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
             payload_store,
             serve_payloads: recovery.into_serve_payloads(),
             body_store: Some(body_store),
@@ -3692,6 +3757,7 @@ impl ProductionLifecycleOwnerV1 {
         let RecoveredWalProductionOwnerOpenV1 {
             coordinator,
             verified,
+            recovered_lifecycle_outputs,
             serve_payloads,
             registry_identity,
             body_store_identity,
@@ -3729,6 +3795,7 @@ impl ProductionLifecycleOwnerV1 {
             verified,
             coordinator,
             registry,
+            recovered_lifecycle_outputs,
             payload_store,
             serve_payloads,
             body_store: Some(body_store),

@@ -1307,6 +1307,7 @@ fn empty_successor_owner_for_complete_tip(
         verified,
         coordinator,
         registry: LifecycleWorkRegistryHolder::empty(),
+        recovered_lifecycle_outputs: None,
         payload_store,
         serve_payloads,
         body_store: Some(body_store),

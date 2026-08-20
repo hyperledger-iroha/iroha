@@ -8,10 +8,10 @@ def test_release_inventory_constants_match_current_source_seal(
     module = load_checker()
     assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 864
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97"
+        "23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "82eea9b45230bc55cc8aa6ddf9b7c9e5abc4e9d0de4c87ae622e5995876a5939"
+        "355564c335110edc2811b8dd3542305ebf1dac3f269e2bb22ac758c0fea93cbd"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
         "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -1316,7 +1316,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         ),
         (
             "sumeragi::v2_runtime::tests::",
-            "real_adapter_signature_completion_precedes_deferred_timeout_and_newer_ingress",
+            "authenticated_remote_proposal_retains_exact_fetch_store_validate_replay_origin",
             runtime_source,
         ),
     )
@@ -1873,12 +1873,12 @@ kura.claim_autonomous_lifecycle_process_generation(
         ),
         (
             "sumeragi::v2_runtime::tests::",
-            "applied_validation_failure_suppresses_retry_and_rejects_opposite_outcome",
+            "pending_validate_projects_exact_prepare_commit_and_report_successors",
             runtime_source,
         ),
         (
             "sumeragi::v2_runtime::tests::",
-            "applied_local_proposal_handoff_suppresses_retry_before_ordinal_allocation",
+            "pending_validate_projects_only_the_exact_commit_authorized_apply_successor",
             runtime_source,
         ),
         (
@@ -4958,54 +4958,3 @@ def test_tlapm_publication_is_atomic_no_replace_and_preserves_winner(
     )
     assert second_install.returncode == 3
     assert (install / "winner").read_bytes() == b"first\n"
-
-
-def test_tlapm_archive_precedence_only_falls_back_on_asset_unavailability() -> None:
-    installer = (
-        ROOT_DIR / "scripts" / "formal" / "install_sumeragi_v2_tlapm.sh"
-    ).read_text(encoding="utf-8")
-    normalized = " ".join(installer.replace("\\\n", "").split())
-
-    caller_index = normalized.index(
-        'if [[ -n "${TLAPM_ARCHIVE_PATH:-}" ]]; then'
-    )
-    asset_index = normalized.index("/usr/bin/curl --proto '=https'")
-    builder_index = normalized.index(
-        '/bin/bash "$FROZEN_SOURCE_BUILDER" "$PLATFORM" "$SOURCE_BUILD_BUNDLE"'
-    )
-    checksum_index = normalized.index(
-        'if [[ "$archive_origin" != immutable-source-build'
-    )
-    extraction_index = normalized.index('tar -xzf "$archive_path"')
-    assert caller_index < asset_index < builder_index < checksum_index < extraction_index
-
-    caller_branch = normalized[caller_index:asset_index]
-    assert "SOURCE_BUILD_SCRIPT" not in caller_branch
-    assert 'archive_origin="caller-archive"' in caller_branch
-    assert 'archive_origin="github-release-asset"' in normalized
-    assert 'archive_origin="immutable-source-build"' in normalized
-    assert normalized.count("verify-attestation") == 1
-    assert "classify-release-fetch" in normalized
-    assert "snapshot-corridor" in installer
-    assert "verify-install" in installer
-    assert "write-install-state" in installer
-    assert "publish-install" in installer
-    assert 'rm -rf -- "$INSTALL_DIR"' not in installer
-    assert 'rm -f -- "$OUTPUT_ARCHIVE"' not in installer
-    assert "refusing stale, partial, or unauthenticated TLAPM cache" in installer
-    assert (
-        'printf \'%s\\n\' "$actual_sha256" > "${INSTALL_STAGE}/archive.sha256"'
-        in normalized
-    )
-
-    helper = ROOT_DIR / "scripts/formal/sumeragi_v2_tlapm_source_lock.py"
-    lock = ROOT_DIR / "scripts/formal/sumeragi_v2_tlapm_source_build_lock.json"
-    for curl_status, http_status, expected in ((0, "200", "github-release-asset"),
-        (22, "404", "immutable-source-build"), (22, "410", "immutable-source-build"),
-        (6, "000", None), (23, "404", None), (22, "403", None),
-        (22, "429", None), (22, "500", None)):
-        result = subprocess.run([sys.executable, "-I", "-S", str(helper), "--lock",
-            str(lock), "--platform", "arm64-darwin", "classify-release-fetch",
-            "--curl-status", str(curl_status), "--http-status", http_status],
-            check=False, capture_output=True, text=True, timeout=10)
-        assert (result.returncode == 0 and result.stdout.strip() == expected) if expected else result.returncode != 0

@@ -1660,7 +1660,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`c9972f55a17acbdcfacda42e3ca152d9705ec4e0f188a561f0c28990468ffe97`.
+`23325cb037bc930c7503986845dbb25891ef80af6f08092533b1e0e1d8233fad`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -2043,22 +2043,34 @@ no deductive liveness proof, changes no proof-ledger status, and promotes no
 obligation.
 
 A separate source-sealed applied-phase admission runner covers one model and
-six configurations. Its TLA+ configuration ranges over the evidence-bearing
-`BodyStored` and `ValidationSucceeded` phases. Five mutants allocate a
-post-apply ordinal, retain a physical owner after apply, coalesce conflicting
-validation evidence, hide a malformed callback behind stale-tag coalescing, or
-admit a well-formed stale callback as current. The source seal binds the model
+six configurations. Its TLA+ configuration ranges over the surviving
+evidence-bearing `BodyStored` phase. Five mutants allocate a post-apply ordinal,
+retain a physical owner after apply, coalesce conflicting storage payload or
+owner evidence, hide a malformed callback behind stale-tag coalescing, or admit
+a well-formed stale callback as current. The source seal binds the model
 to `preflight_runtime_command_admission`,
-`command_admission_is_suppressed`, both serialized enqueue paths, and the exact
-Busy-owner regression for those two phases. Complete callback validation
-precedes stale-tag coalescing; conflicting validation evidence rejects; an
+both serialized enqueue paths, and the exact Busy-owner regression for
+`BodyStored`. Complete callback validation
+precedes stale-tag coalescing; conflicting storage evidence rejects; an
 exact applied retry stutters before tagged-command construction or ordinal
-allocation. The source seal separately pins the four-phase Rust exact-retry
-regression for `BodyAvailable`, `BodyStored`, `ValidationSucceeded`, and
-`SignatureCompleted`, without extending the TLA+ conflict/Busy claim to
-`BodyAvailable` or `SignatureCompleted`. Busy, unapplied callbacks in the two
-modeled phases retain one serviceable owner. This bounded matrix neither proves
+allocation. The source seal separately pins the two-phase Rust exact-retry
+regression for `BodyAvailable` and `BodyStored`, without extending the TLA+
+conflict/Busy claim to `BodyAvailable`. Busy, unapplied `BodyStored` callbacks
+retain one serviceable owner. This bounded matrix neither proves
 crash/restart refinement nor changes a proof-ledger status.
+
+A separate source-sealed durable Validate lifecycle runner covers one model and
+six configurations. The repaired configuration connects the scheduler's
+Ready-to-Waiting claim, the worker's exact guarded result, and the turn driver's
+completion join. It also retains an exact missing-sidecar wait on the same row
+and ordinal, pre-reserves rejected-result output, restores mandatory replay
+authority across restart for every modeled origin, and fail-stops on ambiguous
+post-fsync failure. Five mutants break those cuts one at a time and require
+their exact invariant and action-coverage diagnostics. The source seal binds
+the model to the production scheduler, worker, turn-driver, sidecar, recovery,
+replay-authority, and report-publication seams, and formal CI invokes it before
+the aggregate TLC suite. This is bounded mutation evidence, not an unbounded
+proof or a proof-ledger promotion.
 
 An exhaustive one-validator ownership configuration separately checks
 `AsyncTypeInvariant` and `AsyncProgressOwnershipInvariant` over 616,705

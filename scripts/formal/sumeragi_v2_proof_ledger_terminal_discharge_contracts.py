@@ -449,7 +449,7 @@ _READINESS_TLA_SOURCE_SHA256 = {
 
 _READINESS_TOOL_SOURCE_SHA256 = {
     "ci/check_sumeragi_formal.sh": (
-        "2418c232995d04a0574abc4e386c1b214b677f8ffc5aaabcbba17ffa5b7f6714"
+        "41399c4e3c6e404f2f24512b444230ff11899782e20e2b5b3ec7c9559f72b78f"
     ),
     "scripts/formal/check_sumeragi_v2_begin_timeout_ready_contract.py": (
         "70676b4b572c1b6cbd420ffbcc3f638a151fa3cb60d094d52c27556e6cfee4da"
@@ -962,7 +962,7 @@ def _atomic_timeout_completion_source_fidelity_errors(
 
 _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
     "crates/iroha_core/src/sumeragi/v2_core/refinement.rs": (
-        "acdc63763495b64aceacd92c8f1fe80ef9cb7e8194a8f5fb967f1a02d55b2bca"
+        "52558a7c6976fc869b1e6214202190ef3eb0111231e8c49d990a7e36fe2c63d7"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
         "2c49ccb619002d185804b2fdd11d8b1bccf586157556b8580ea037a33039dee1"
@@ -974,13 +974,13 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "b78fe6b65194ff48919c35f8423f31714fb6da4a172d8a004720e5b23f0b0d50"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "8a4e47cc65ade991de0a32b8b7093b18c332d0c114d836187d713781865c062a"
+        "34a7902ba92f218891701dbfcf648881efb890ba682fb56014fc2880a47ec620"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
-        "6c639d832ffd46d8f75f9ddc4f70465d5362c1f6a09e80b3ec07185b8bce987a"
+        "f02cb53c6df3cb69e24864f2ca74a56c2b22683b32b4bdc1573cd45b9caef6e5"
     ),
     "crates/iroha_core/src/sumeragi/v2_worker.rs": (
-        "1cbff9f87b8dc5e0b5ab591416b2704cbfb6d3c2f2a4a23b1412b4f4d08d2d43"
+        "d2514b0e13008991d1fcf982b3fd290868a9a192cd47b525954d3519415ae20a"
     ),
     "crates/iroha_sumeragi_core/src/verus_proofs.rs": (
         "11f0d554e114b832ec31604a6fa3bb78e9ecbc965e0269be1bc5b3548ff8e519"
