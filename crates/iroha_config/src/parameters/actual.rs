@@ -7085,6 +7085,65 @@ pub fn validate_sumeragi_v2_exact_output_geometry(
     }
     Ok(())
 }
+
+/// Invalid bounded geometry for the height-local lifecycle ledger.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SumeragiV2LifecycleCapacityGeometryError {
+    /// One of the checked capacity operations overflowed.
+    #[error("Sumeragi v2 lifecycle capacity geometry overflowed")]
+    ArithmeticOverflow,
+    /// The complete worst-case height inventory exceeds the physical slot space.
+    #[error("Sumeragi v2 lifecycle record capacity {actual} exceeds maximum {maximum}")]
+    CapacityTooLarge {
+        /// Required height-local lifecycle records.
+        actual: usize,
+        /// Maximum representable lifecycle records at one height.
+        maximum: usize,
+    },
+}
+
+/// Validate the complete worst-case lifecycle record geometry.
+///
+/// The calculation reserves two consensus phase families, one effect-work
+/// family, and the two-phase Serve plus Producer families for the largest
+/// protocol-valid validator roster. A zero reply-source bound still reserves
+/// one source because the runtime uses the same fail-closed floor.
+///
+/// # Errors
+///
+/// Returns an arithmetic error when any intermediate is not representable, or
+/// [`SumeragiV2LifecycleCapacityGeometryError::CapacityTooLarge`] when the
+/// complete inventory does not fit the height-local `u16` slot namespace.
+pub fn validate_sumeragi_v2_lifecycle_capacity_geometry(
+    effect_work_capacity: usize,
+    certified_request_capacity: usize,
+    reply_source_capacity: usize,
+) -> core::result::Result<usize, SumeragiV2LifecycleCapacityGeometryError> {
+    let consensus = defaults::sumeragi::V2_MAX_EFFECTS_PER_STEP
+        .checked_mul(2)
+        .ok_or(SumeragiV2LifecycleCapacityGeometryError::ArithmeticOverflow)?;
+    let observer_owners = reply_source_capacity
+        .max(1)
+        .checked_mul(certified_request_capacity)
+        .ok_or(SumeragiV2LifecycleCapacityGeometryError::ArithmeticOverflow)?;
+    let serve = consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+        .checked_add(observer_owners)
+        .and_then(|owners| owners.checked_mul(2))
+        .ok_or(SumeragiV2LifecycleCapacityGeometryError::ArithmeticOverflow)?;
+    let actual = serve
+        .checked_mul(2)
+        .and_then(|serve_and_producer| {
+            consensus
+                .checked_add(effect_work_capacity)?
+                .checked_add(serve_and_producer)
+        })
+        .ok_or(SumeragiV2LifecycleCapacityGeometryError::ArithmeticOverflow)?;
+    let maximum = usize::from(u16::MAX) + 1;
+    if actual > maximum {
+        return Err(SumeragiV2LifecycleCapacityGeometryError::CapacityTooLarge { actual, maximum });
+    }
+    Ok(actual)
+}
 /// Invalid or non-canonical Sumeragi v2 runtime configuration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum SumeragiV2ConfigError {
@@ -8135,68 +8194,6 @@ pub struct ToriiTransport {
 }
 include!("actual/torii_http_transport.rs");
 include!("actual/torii_mcp_profile.rs");
-/// Native MCP configuration exposed by Torii.
-#[derive(Debug, Clone)]
-pub struct ToriiMcp {
-    /// Master enable switch for `/v1/mcp`.
-    pub enabled: bool,
-    /// Maximum accepted request payload size in bytes.
-    pub max_request_bytes: usize,
-    /// Maximum number of tools emitted in one `tools/list` response page.
-    pub max_tools_per_list: usize,
-    /// MCP tool profile.
-    pub profile: ToriiMcpProfile,
-    /// Expose operator-only routes in the MCP tool registry.
-    pub expose_operator_routes: bool,
-    /// Additional allow-list prefixes for tool names (empty => profile-only).
-    pub allow_tool_prefixes: Vec<String>,
-    /// Additional deny-list prefixes for tool names.
-    pub deny_tool_prefixes: Vec<String>,
-    /// Optional steady-state MCP request budget (requests per minute).
-    pub rate_per_minute: Option<NonZeroU32>,
-    /// Optional MCP burst budget.
-    pub burst: Option<NonZeroU32>,
-}
-/// Torii CORS response-header policy.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToriiCors {
-    /// Enable CORS response headers.
-    pub enabled: bool,
-    /// Explicit browser origins allowed to make cross-origin requests.
-    pub allowed_origins: Vec<String>,
-    /// Explicit HTTP methods allowed in CORS preflight responses.
-    pub allowed_methods: Vec<String>,
-    /// Explicit request headers allowed in CORS preflight responses.
-    pub allowed_headers: Vec<String>,
-    /// Explicit response headers exposed to browser clients.
-    pub exposed_headers: Vec<String>,
-    /// Maximum preflight cache age in seconds.
-    pub max_age_secs: u64,
-}
-impl Default for ToriiCors {
-    fn default() -> Self {
-        Self {
-            enabled: defaults::torii::cors::ENABLED,
-            allowed_origins: defaults::torii::cors::allowed_origins(),
-            allowed_methods: defaults::torii::cors::allowed_methods(),
-            allowed_headers: defaults::torii::cors::allowed_headers(),
-            exposed_headers: defaults::torii::cors::exposed_headers(),
-            max_age_secs: defaults::torii::cors::MAX_AGE_SECS,
-        }
-    }
-}
-impl From<user::ToriiCors> for ToriiCors {
-    fn from(value: user::ToriiCors) -> Self {
-        Self {
-            enabled: value.enabled,
-            allowed_origins: value.allowed_origins,
-            allowed_methods: value.allowed_methods,
-            allowed_headers: value.allowed_headers,
-            exposed_headers: value.exposed_headers,
-            max_age_secs: value.max_age_secs,
-        }
-    }
-}
 /// Norito-RPC transport configuration (stage, allowlist, toggles).
 #[derive(Debug, Clone)]
 pub struct NoritoRpcTransport {

@@ -524,3 +524,112 @@ fn telemetry_clamps_zero_telegram_metrics_period() {
         Some(StdDuration::from_millis(100))
     );
 }
+#[test]
+fn sumeragi_v2_exact_output_geometry_accepts_network_source_boundary() {
+    let mut table = base_table();
+    let network = table
+        .get_mut("network")
+        .and_then(Value::as_table_mut)
+        .expect("network table");
+    network.insert("max_total_connections".into(), Value::Integer(97));
+    let sumeragi = table
+        .entry("sumeragi")
+        .or_insert_with(|| Value::Table(Table::new()))
+        .as_table_mut()
+        .expect("sumeragi table");
+    let queues = sumeragi
+        .entry("queues")
+        .or_insert_with(|| Value::Table(Table::new()))
+        .as_table_mut()
+        .expect("sumeragi.queues table");
+    queues.insert("commands".into(), Value::Integer(8_192));
+    let actual = load_root(table.clone());
+    assert_eq!(actual.sumeragi.queues.commands.get(), 8_192);
+    assert_eq!(
+        actual
+            .network
+            .max_total_connections
+            .map(std::num::NonZeroUsize::get),
+        Some(97),
+    );
+    table
+        .get_mut("network")
+        .and_then(Value::as_table_mut)
+        .expect("network table")
+        .insert("max_total_connections".into(), Value::Integer(98));
+    let error = actual::Root::from_toml_source(TomlSource::inline(table))
+        .expect_err("the next reply-source slot exceeds lifecycle capacity");
+    let report = format!("{error:?}");
+    assert!(
+        report.contains(
+            "Sumeragi v2 lifecycle record capacity 66084 exceeds maximum 65536; configured network reply-source capacity is 98"
+        ),
+        "{report}",
+    );
+}
+#[test]
+fn sumeragi_v2_exact_output_geometry_accepts_equal_capacity_boundary() {
+    let mut table = base_table();
+    let network = table
+        .get_mut("network")
+        .and_then(Value::as_table_mut)
+        .expect("network table");
+    network.insert("max_total_connections".into(), Value::Integer(93));
+    let sumeragi = table
+        .entry("sumeragi")
+        .or_insert_with(|| Value::Table(Table::new()))
+        .as_table_mut()
+        .expect("sumeragi table");
+    let queues = sumeragi
+        .entry("queues")
+        .or_insert_with(|| Value::Table(Table::new()))
+        .as_table_mut()
+        .expect("sumeragi.queues table");
+    queues.insert("bodies".into(), Value::Integer(15));
+    let actual = load_root(table);
+    let shared_capacity = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
+        (actual.sumeragi.queues.commands.get()
+            / defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
+            .max(1),
+        actual.sumeragi.queues.bodies.get(),
+    )
+    .expect("fixture capacity must be representable");
+    let source_capacity = actual
+        .network
+        .max_total_connections
+        .expect("fixture configures the source bound")
+        .get();
+    assert_eq!(
+        shared_capacity,
+        source_capacity * defaults::sumeragi::V2_EXACT_OUTPUT_CLASS_COUNT,
+    );
+}
+#[test]
+fn sumeragi_v2_exact_output_geometry_rejects_unreservable_network_sources() {
+    let mut table = base_table();
+    let network = table
+        .get_mut("network")
+        .and_then(Value::as_table_mut)
+        .expect("network table");
+    network.insert("max_total_connections".into(), Value::Integer(93));
+    let sumeragi = table
+        .entry("sumeragi")
+        .or_insert_with(|| Value::Table(Table::new()))
+        .as_table_mut()
+        .expect("sumeragi table");
+    let queues = sumeragi
+        .entry("queues")
+        .or_insert_with(|| Value::Table(Table::new()))
+        .as_table_mut()
+        .expect("sumeragi.queues table");
+    queues.insert("bodies".into(), Value::Integer(14));
+    let error = actual::Root::from_toml_source(TomlSource::inline(table))
+        .expect_err("one maximum reply-source fanout must fit exact output");
+    let report = format!("{error:?}");
+    assert!(
+        report.contains(
+            "Sumeragi v2 outbound shared ownership capacity 278 is below one maximum fanout 279; configured network reply-source capacity is 93"
+        ),
+        "{report}",
+    );
+}

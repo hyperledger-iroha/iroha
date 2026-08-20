@@ -20,7 +20,7 @@
     },
     {
       "key": "head_block_cid_hex",
-      "value": "15bea4cb5bd28e1618d2a8a185d5d33db4a5c98aedbcc52af2438cd6f2d8d837"
+      "value": "7d8217e4cd6f0dec1497bfff290e211320fc497a54dad986178edafe2dacb66e"
     },
     {
       "key": "head_block_cid_len",
@@ -60,11 +60,11 @@
     },
     {
       "key": "block_0_cid_hex",
-      "value": "83ae1817994d78c270f01f0f39eb05538ddcbbe1a054dd1437c8f1e712b2e645"
+      "value": "0a53d1afa7fd851f9e27dab4155b15bb72ac4ea75a6932763316d2e9c28bcfdb"
     },
     {
       "key": "block_1_cid_hex",
-      "value": "15bea4cb5bd28e1618d2a8a185d5d33db4a5c98aedbcc52af2438cd6f2d8d837"
+      "value": "7d8217e4cd6f0dec1497bfff290e211320fc497a54dad986178edafe2dacb66e"
     },
     {
       "key": "validation_error",

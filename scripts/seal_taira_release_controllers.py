@@ -154,6 +154,7 @@ MACOS_FILES = COMMON_FILES + (
     "scripts/capture_taira_macos_four_peer_receipt.py",
     "scripts/capture_taira_privacy_protocol_four_peer_receipt.py",
     "scripts/check_native_sdk_abi22_artifact.py",
+    "scripts/check_taira_public_v2_24h_soak_evidence.py",
     "scripts/close_taira_publication_handoff.py",
     "scripts/close_taira_qualification_handoff.py",
     "scripts/deploy_taira_v21_reset.py",
@@ -176,6 +177,7 @@ MACOS_FILES = COMMON_FILES + (
     "scripts/taira_privacy_rollout_contract.py",
     "scripts/taira_release_authority.py",
     "scripts/taira_rollout_admission.py",
+    "scripts/taira_public_soak_authority_contract.py",
     "scripts/write_release_sha256sums.py",
     "configs/soranexus/taira/privacy_rollout_plan_v1.json",
 )

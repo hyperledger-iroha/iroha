@@ -6,7 +6,9 @@ use crate::sumeragi::{
     v2::VerifiedHeightContext, v2_core::MAX_EFFECTS_PER_STEP,
     v2_worker::certified_serve_family_capacity,
 };
-use iroha_config::parameters::actual::SumeragiV2Config;
+use iroha_config::parameters::actual::{
+    SumeragiV2Config, validate_sumeragi_v2_lifecycle_capacity_geometry,
+};
 use iroha_crypto::Hash;
 use norito::codec::Encode;
 use schema::{
@@ -139,6 +141,15 @@ fn capacity_geometry_from_limits(
     certified_request_capacity: usize,
     reply_route_source_capacity: usize,
 ) -> Option<CapacityGeometry> {
+    if effect_work_capacity == 0 || certified_request_capacity == 0 {
+        return None;
+    }
+    validate_sumeragi_v2_lifecycle_capacity_geometry(
+        effect_work_capacity,
+        certified_request_capacity,
+        reply_route_source_capacity,
+    )
+    .ok()?;
     let consensus = MAX_EFFECTS_PER_STEP.checked_mul(2)?;
     let serve = certified_serve_family_capacity(
         roster_len,
@@ -146,8 +157,7 @@ fn capacity_geometry_from_limits(
         certified_request_capacity,
     )
     .ok()?;
-    if effect_work_capacity == 0 || certified_request_capacity == 0 || consensus == 0 || serve == 0
-    {
+    if consensus == 0 || serve == 0 {
         return None;
     }
     let geometry = CapacityGeometry::new([

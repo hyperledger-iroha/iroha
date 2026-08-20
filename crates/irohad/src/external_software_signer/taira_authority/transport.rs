@@ -1854,7 +1854,7 @@ const fn cli_error(_: TairaAuthorityErrorV1) -> &'static str {
 mod request_client_identity_tests {
     use std::{
         fs,
-        io::{Read as _, Seek as _, SeekFrom, Write as _},
+        io::{Read as _, Write as _},
         os::{
             fd::AsRawFd as _,
             unix::fs::{MetadataExt as _, PermissionsExt as _},
@@ -1899,15 +1899,14 @@ mod request_client_identity_tests {
     fn read_only_inherited_descriptor_survives_root_child_reexec_planning() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let path = directory.path().join("artifact");
-        let mut original = fs::File::create(&path).expect("create inherited artifact");
-        original
+        let mut writer = fs::File::create(&path).expect("create inherited artifact");
+        writer
             .write_all(b"root-owned read-only artifact")
             .expect("write inherited artifact");
-        original
-            .seek(SeekFrom::Start(0))
-            .expect("rewind inherited artifact");
+        drop(writer);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o400))
             .expect("make inherited artifact read-only");
+        let original = fs::File::open(&path).expect("open inherited artifact read-only");
         let metadata = fs::metadata(&path).expect("stat inherited artifact");
         if rustix::process::geteuid().as_raw() == 0 {
             assert_eq!(metadata.uid(), 0);

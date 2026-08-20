@@ -24939,7 +24939,6 @@ pub(super) mod tests {
     #[derive(Clone, Copy)]
     enum AutonomousAuthorRule {
         Autonomous,
-        Lane,
     }
     #[allow(clippy::too_many_arguments)]
     fn signed_autonomous_payload_for_entrypoint(
@@ -24978,7 +24977,6 @@ pub(super) mod tests {
         };
         let producer = match author_rule {
             AutonomousAuthorRule::Autonomous => adapter.expected_autonomous_lane_author(proposal),
-            AutonomousAuthorRule::Lane => adapter.expected_lane_author(proposal),
         }
         .expect(author_expect)
         .clone();

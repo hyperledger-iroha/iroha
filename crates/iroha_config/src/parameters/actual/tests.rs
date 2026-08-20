@@ -454,6 +454,21 @@ mod tests {
             validate_sumeragi_v2_exact_output_geometry(usize::MAX, usize::MAX),
             Err(SumeragiV2ExactOutputGeometryError::MaximumFanoutOverflow),
         );
+        assert_eq!(
+            validate_sumeragi_v2_lifecycle_capacity_geometry(2_048, 163, 97),
+            Ok(65_432),
+        );
+        assert_eq!(
+            validate_sumeragi_v2_lifecycle_capacity_geometry(2_048, 163, 98),
+            Err(SumeragiV2LifecycleCapacityGeometryError::CapacityTooLarge {
+                actual: 66_084,
+                maximum: 65_536,
+            }),
+        );
+        assert_eq!(
+            validate_sumeragi_v2_lifecycle_capacity_geometry(usize::MAX, 1, 1),
+            Err(SumeragiV2LifecycleCapacityGeometryError::ArithmeticOverflow),
+        );
     }
     #[test]
     fn sumeragi_v2_shared_config_defaults_are_finite_and_deterministic() {

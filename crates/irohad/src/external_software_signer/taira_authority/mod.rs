@@ -8,6 +8,7 @@
 mod native_evidence;
 mod privacy_protocol_origin;
 mod protocol;
+mod qualification_binding;
 mod rollout_observation;
 mod sandbox;
 mod service;

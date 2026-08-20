@@ -6914,7 +6914,6 @@ impl NetworkBuilder {
             // integration scenarios (NPoS liveness and certified-body recovery).
             .write(["network", "block_gossip_size"], participant_fanout);
         base_layer = base_layer
-            .write(["sumeragi", "queues", "bodies"], 512i64)
             // Test networks always provision BLS validator keys; drop the HSM binding requirement
             // so genesis peer registration succeeds.
             .write(["sumeragi", "keys", "require_hsm"], false)
@@ -13148,9 +13147,12 @@ exit 0
             .and_then(|table| get_nested_value(table, &["queues", "bodies"]))
             .and_then(TomlValue::as_integer);
         assert_eq!(
-            cap,
-            Some(512),
-            "test network should raise certified-body queue capacity to avoid dropped sync updates"
+            cap, None,
+            "test networks must inherit production queue geometry"
+        );
+        assert_eq!(
+            iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
+            163,
         );
     }
     #[tokio::test]

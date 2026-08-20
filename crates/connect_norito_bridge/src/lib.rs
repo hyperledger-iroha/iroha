@@ -13166,7 +13166,7 @@ mod detached_transaction_scaffold_tests {
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let mut builder = TransactionBuilder::new(
             detached_test_network_id(),
-            authority.clone(),
+            authority,
             FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(9_000_000)),
         )
         .with_executable(executable)
@@ -13183,10 +13183,17 @@ mod detached_transaction_scaffold_tests {
         builder.set_ttl(Duration::from_millis(60_000));
         configure(&mut builder);
         let placeholder = fixture_keypair(0xA1);
-        builder
-            .try_sign(placeholder.private_key())
-            .expect("placeholder scaffold signature")
-            .with_authority(authority)
+        let payload = builder
+            .into_payload()
+            .expect("valid detached scaffold payload");
+        let placeholder_signature = Signature::try_new(
+            placeholder.private_key(),
+            iroha_crypto::HashOf::new(&payload).as_ref(),
+        )
+        .expect("placeholder scaffold signature");
+        TransactionBuilder::from_payload(payload)
+            .expect("valid detached scaffold payload")
+            .build_with_signature(placeholder_signature)
     }
     fn contract_scaffold(authority_keypair: &KeyPair) -> SignedTransaction {
         let authority = AccountId::new(authority_keypair.public_key().clone());
@@ -13390,10 +13397,9 @@ mod detached_transaction_scaffold_tests {
         assert!(inspect_detached_transaction_scaffold(&with_multisig.encode_versioned()).is_err());
         let authority = AccountId::new(keypair.public_key().clone());
         let contract = contract_scaffold(&keypair).instructions().clone();
-        let placeholder = fixture_keypair(0xA1);
         let with_attachments = TransactionBuilder::new(
             detached_test_network_id(),
-            authority.clone(),
+            authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_executable(contract)
@@ -13405,9 +13411,8 @@ mod detached_transaction_scaffold_tests {
             )])
             .expect("one attachment is a valid bounded proof list"),
         )
-        .try_sign(placeholder.private_key())
-        .unwrap()
-        .with_authority(authority);
+        .try_sign(keypair.private_key())
+        .unwrap();
         assert!(
             inspect_detached_transaction_scaffold(&with_attachments.encode_versioned()).is_err()
         );
@@ -14782,8 +14787,7 @@ mod kagemusha_bridge_tests {
             OFFLINE_RECIPIENT_LINEAGE_VERSION, OfflineRecipientLineageSelectorV2,
             OfflineRecipientReceiveOfferV2, OfflineRecipientRegistrationLineage,
         };
-        let network_id = CURRENT_TAIRA_NETWORK_ID
-            .parse::<NetworkId>()
+        let network_id: NetworkId = norito::json::from_value(CURRENT_TAIRA_NETWORK_ID.into())
             .expect("current Taira NetworkId");
         let sbd_asset = CBSI_SBD_ASSET_DEFINITION_ID
             .parse::<AssetDefinitionId>()
@@ -14922,7 +14926,7 @@ mod kagemusha_bridge_tests {
         assert_eq!(one.lineage.selector.network_id, one.request.network_id);
         assert_eq!(one.lineage.selector.asset, one.request.asset);
         let one_bytes = norito::to_bytes(&one).expect("encode one-proof offer");
-        assert_eq!(one_bytes.len(), 12_363);
+        assert_eq!(one_bytes.len(), 12_425);
         assert_eq!(
             one_bytes,
             decode_hex_fixture(include_str!(
@@ -15017,7 +15021,7 @@ mod kagemusha_bridge_tests {
         assert!(one_bytes.len() <= OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES);
         assert_eq!(
             one_bytes.len() + OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES,
-            12_447
+            12_509
         );
         assert!(
             one_bytes.len() + OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES
@@ -15651,50 +15655,42 @@ mod kagemusha_bridge_tests {
                 "{label} must not expose the retired authorization-template finalizer",
             );
         }
+        let (_, paired) = source
+            .rsplit_once("macro_rules! kagemusha_sdk_android_forwarders")
+            .expect("paired Kagemusha JNI generator");
         for namespace in ["sdk", "android"] {
-            let package = if namespace == "sdk" {
-                "org_hyperledger_iroha_sdk_offline"
-            } else {
-                "org_hyperledger_iroha_android_offline"
-            };
-            let retired_jni_symbol = [
-                "fn Java_",
-                package,
-                "_KagemushaRecursiveSpendProver_native",
-                "CreateAuthorizationV2(",
-            ]
-            .concat();
+            let package = format!("org_hyperledger_iroha_{namespace}_offline");
             assert!(
-                !source.contains(&retired_jni_symbol),
-                "{namespace} must not expose the retired JNI authorization finalizer",
+                paired.contains(&format!("Java_{package}_KagemushaRecursiveSpendProver_")),
+                "missing {namespace} Kagemusha JNI namespace",
             );
-            let hardware_symbol = format!(
-                "fn Java_{package}_KagemushaRecursiveSpendProver_nativeFinalizeHardwareAuthorizationV2("
-            );
-            let hardware_start = source
-                .find(&hardware_symbol)
-                .unwrap_or_else(|| panic!("missing {namespace} hardware JNI finalizer"));
-            let hardware_end = hardware_start
-                + source[hardware_start..]
-                    .find(" {\n")
-                    .expect("hardware JNI signature terminator");
-            let hardware_signature = &source[hardware_start..hardware_end];
-            assert_eq!(hardware_signature.matches("JByteArray<'_>").count(), 3);
-            assert!(hardware_signature.contains("-> jni::sys::jobjectArray"));
-            let ios_symbol = format!(
-                "fn Java_{package}_KagemushaRecursiveSpendProver_nativeFinalizeIosAppAttestAuthorizationV2("
-            );
-            let ios_start = source
-                .find(&ios_symbol)
-                .unwrap_or_else(|| panic!("missing {namespace} App Attest JNI finalizer"));
-            let ios_end = ios_start
-                + source[ios_start..]
-                    .find(" {\n")
-                    .expect("App Attest JNI signature terminator");
-            let ios_signature = &source[ios_start..ios_end];
-            assert_eq!(ios_signature.matches("JByteArray<'_>").count(), 2);
-            assert!(ios_signature.contains("-> jni::sys::jobjectArray"));
         }
+        let (_, production) = paired
+            .split_once("kagemusha_sdk_android_forwarders! {")
+            .expect("production Kagemusha JNI inventory");
+        let (production, _) = production
+            .split_once("pub(super) fn ensure_min_array_length")
+            .expect("end of production Kagemusha JNI inventory");
+        let retired_method = ["native", "CreateAuthorizationV2"].concat();
+        assert!(
+            !production.contains(&retired_method),
+            "paired namespaces must not expose the retired JNI authorization finalizer",
+        );
+        let compact_production: String = production.split_whitespace().collect();
+        assert!(compact_production.contains(
+            "nativeFinalizeHardwareAuthorizationV2{preparationbytes,authenticator_databytes,signature_derbytes}->JniObjectArray=java_native_kagemusha_finalize_hardware_authorization_v2;"
+        ));
+        assert!(compact_production.contains(
+            "nativeFinalizeIosAppAttestAuthorizationV2{preparationbytes,assertion_objectbytes}->JniObjectArray=java_native_kagemusha_finalize_ios_app_attest_authorization_v2;"
+        ));
+        let (_, argument_types) = source
+            .rsplit_once("macro_rules! kagemusha_jni_argument_type")
+            .expect("typed Kagemusha JNI arguments");
+        let (argument_types, _) = argument_types
+            .split_once("/// Generates both JNI namespace exports")
+            .expect("end of typed Kagemusha JNI arguments");
+        let compact_argument_types: String = argument_types.split_whitespace().collect();
+        assert!(compact_argument_types.contains("(bytes)=>{jni::objects::JByteArray<'_>};"));
         let mut authorization_ptr = ptr::dangling_mut::<c_uchar>();
         let mut authorization_len = 99;
         let mut signature_ptr = ptr::dangling_mut::<c_uchar>();
@@ -16155,7 +16151,7 @@ mod kagemusha_bridge_tests {
         assert!(nested.contains("BorrowedFromJni"));
 
         let paired = source
-            .split_once("macro_rules! kagemusha_sdk_android_forwarders")
+            .rsplit_once("macro_rules! kagemusha_sdk_android_forwarders")
             .expect("paired Kagemusha JNI generator")
             .1;
         assert!(
@@ -16438,13 +16434,13 @@ mod kagemusha_bridge_tests {
             .0;
         assert!(busy_finalize.contains("KagemushaRecursiveSpendError.proofWorkerBusy"));
         assert!(!busy_finalize.contains("kagemushaRecursiveSpendArtifactCancelV4"));
-        assert!(!busy_finalize.contains("self.handle = nil"));
+        assert!(!busy_finalize.contains("handle = nil"));
         let terminal_finalize = finalize
             .split_once("} catch {")
             .expect("Swift artifact finalizer terminal-error branch")
             .1;
         assert!(terminal_finalize.contains("kagemushaRecursiveSpendArtifactCancelV4"));
-        assert!(terminal_finalize.contains("self.handle = nil"));
+        assert!(terminal_finalize.contains("if handle == active { handle = nil }"));
         let install = source
             .split_once(
                 "    public func install() throws -> KagemushaRecursiveSpendInstalledArtifactSetV4 {",
@@ -16486,7 +16482,7 @@ mod kagemusha_bridge_tests {
             .expect("end of Swift artifact coordinator acquire")
             .0;
         let pending_match = acquire
-            .find("if let pending {")
+            .find("if let pending = pendingSnapshot() {")
             .expect("Swift coordinator checks a retained candidate");
         let retry_install = acquire
             .find("pending.artifacts == identity")
@@ -16495,7 +16491,7 @@ mod kagemusha_bridge_tests {
             .find("try cancelPendingCandidate()")
             .expect("Swift coordinator cancels a different candidate");
         let active_reuse = acquire
-            .find("if let active,")
+            .find("if let active = activeSnapshot(),")
             .expect("Swift coordinator retains active-generation reuse");
         assert!(pending_match < retry_install);
         assert!(retry_install < cancel_mismatch);
@@ -16516,7 +16512,8 @@ mod kagemusha_bridge_tests {
             .split_once("} catch {")
             .expect("Swift coordinator keeps terminal install cleanup separate")
             .0;
-        assert!(retain_busy.contains("pending = PendingCandidate("));
+        assert!(retain_busy.contains("let retained = PendingCandidate("));
+        assert!(retain_busy.contains("pending = retained"));
         assert!(retain_busy.contains("throw KagemushaRecursiveSpendError.proofWorkerBusy"));
         assert!(!retain_busy.contains("candidate.cancel()"));
         assert!(!retain_busy.contains("candidate.uninstall()"));
@@ -20756,10 +20753,10 @@ mod kagemusha_bridge_tests {
         assert!(!install.contains("installed.authenticated_payload("));
         assert!(!install.contains("installed.authenticated_verifier_artifacts()"));
         assert!(!install.contains("installed.authenticated_prover_artifacts()"));
-        assert!(!source.contains("KagemushaRecursiveSpendSourceQualificationV4"));
-        assert!(!source.contains("fn authenticated_payload("));
-        assert!(!source.contains("fn authenticated_verifier_artifacts("));
-        assert!(!source.contains("fn authenticated_prover_artifacts("));
+        assert!(!source.contains(&["KagemushaRecursiveSpendSource", "QualificationV4"].concat()));
+        assert!(!source.contains(&["fn authenticated_", "payload("].concat()));
+        assert!(!source.contains(&["fn authenticated_", "verifier_artifacts("].concat()));
+        assert!(!source.contains(&["fn authenticated_", "prover_artifacts("].concat()));
         assert!(capabilities.contains("installed.validate_live_inventory()?"));
         assert!(!capabilities.contains("installed.authenticated_verifier_artifacts()?"));
         assert!(!capabilities.contains("installed.authenticated_prover_artifacts()?"));
@@ -21687,8 +21684,8 @@ mod kagemusha_bridge_tests {
         assert_eq!(
             first.opening.rho,
             [
-                121, 115, 41, 194, 188, 140, 137, 170, 159, 118, 154, 213, 233, 246, 73, 123, 104,
-                148, 196, 107, 224, 137, 190, 34, 74, 115, 7, 159, 47, 52, 39, 44,
+                45, 104, 250, 74, 189, 234, 148, 200, 233, 231, 90, 233, 52, 34, 208, 159, 73, 201,
+                200, 157, 206, 109, 215, 157, 203, 234, 104, 234, 14, 9, 44, 95,
             ],
             "fixed keyed-BLAKE3 vector must be updated only for an intentional wire/KDF change"
         );
@@ -22157,9 +22154,20 @@ mod kagemusha_bridge_tests {
             .split_once("pub unsafe extern \"C\" fn connect_norito_kagemusha_receiver_key_reference_v2")
             .expect("end of prepare export")
             .0;
-        assert!(prepare.contains("write_kagemusha_secret_bytes"));
+        assert!(prepare.contains("write_kagemusha_secret_archive!("));
         assert!(!prepare.contains("write_kagemusha_archive_bridge"));
         assert!(!prepare.contains("connect_norito_free"));
+        let secret_writer = source
+            .split_once("macro_rules! write_kagemusha_secret_archive")
+            .expect("secret Kagemusha archive writer")
+            .1
+            .split_once("unsafe fn write_kagemusha_archive_bridge")
+            .expect("end of secret Kagemusha archive writer")
+            .0;
+        assert!(secret_writer.contains("Zeroizing::new"));
+        assert!(secret_writer.contains("write_kagemusha_secret_bytes"));
+        assert!(!secret_writer.contains("write_kagemusha_archive_bridge"));
+        assert!(!secret_writer.contains("connect_norito_free"));
     }
     #[test]
     fn redemption_change_preparation_jni_covers_both_sdk_namespaces() {
@@ -22202,11 +22210,11 @@ mod kagemusha_bridge_tests {
         );
         let source = bridge_source();
         let jni_source = source
-            .split_once("fn java_native_kagemusha_prepare_recipient_request_v2(")
+            .rsplit_once("fn java_native_kagemusha_prepare_recipient_request_v2(")
             .expect("Kagemusha JNI helper region")
             .1;
         let opening_helper = source
-            .split_once("fn java_kagemusha_note_opening_v2(")
+            .rsplit_once("fn java_kagemusha_note_opening_v2(")
             .expect("sensitive opening helper")
             .1
             .split_once("fn java_kagemusha_amount(")
@@ -22325,40 +22333,28 @@ mod kagemusha_bridge_tests {
             "the stable V2 projection tuple remains version 1 under ABI 21"
         );
         let source = bridge_source();
-        let init_projection = source
-            .split_once("fn java_native_kagemusha_project_init_result_v4(")
-            .expect("V4 init projection")
-            .1
-            .split_once("fn java_native_kagemusha_project_split_result_v4(")
-            .expect("end of V4 init projection")
-            .0;
-        for required in [
-            "result.membership_witness",
-            "result.topup_provenance",
-            "java_kagemusha_append_branch_projection_v1",
-        ] {
-            assert!(
-                init_projection.contains(required),
-                "init projection must retain {required}"
-            );
-        }
+        let start = "fn java_native_kagemusha_project_init_result_v4(";
+        let (_, i) = source.rsplit_once(start).unwrap();
+        let end = "fn java_native_kagemusha_project_split_result_v4(";
+        let (i, _) = i.split_once(end).unwrap();
+        let compact_i: String = i.split_whitespace().collect();
+        assert!(compact_i.contains("result.membership_witness"));
+        assert!(compact_i.contains("result.topup_provenance"));
+        assert!(compact_i.contains("java_kagemusha_append_branch_projection_v1"));
         assert!(
-            !init_projection.contains("opening"),
+            !i.contains("opening"),
             "init projection must never export a local note opening"
         );
-        let redeem_projection = source
-            .split_once("fn java_native_kagemusha_project_redeem_build_result_v4(")
-            .expect("V4 redemption projection")
-            .1
-            .split_once("fn java_native_kagemusha_prepare_acknowledgement_v2(")
-            .expect("end of V4 redemption projection")
-            .0;
+        let start = "fn java_native_kagemusha_project_redeem_build_result_v4(";
+        let (_, r) = source.rsplit_once(start).unwrap();
+        let end = "fn java_native_kagemusha_prepare_acknowledgement_v2(";
+        let (r, _) = r.split_once(end).unwrap();
         assert!(
-            redeem_projection.contains("offline_change_topup_provenance"),
+            r.contains("offline_change_topup_provenance"),
             "redemption change projection must retain provenance"
         );
         assert!(
-            !redeem_projection.contains("opening"),
+            !r.contains("opening"),
             "redemption projection must never export a local change opening"
         );
     }
@@ -24966,7 +24962,7 @@ mod accel_tests {
     #[test]
     fn governance_finalize_encoder_requires_one_exact_proposal_fingerprint_before_crypto() {
         let _guard = chain_guard();
-        let proposal_id = "33".repeat(32);
+        let proposal_id = "ab".repeat(32);
         let uppercase_referendum = proposal_id.to_uppercase();
         for algorithm in [None, Some(Algorithm::Ed25519)] {
             let (result, out_signed_ptr, out_signed_len, out_hash) =
@@ -25579,7 +25575,7 @@ mod accel_tests {
             "{}#dataspace:10",
             asset_definition_literal("wonderland", "rose")
         ));
-        let quantity = cstring("15.7500");
+        let quantity = cstring("15.75");
         let destination = authority.clone();
         let private_key = fixture_private_key();
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -25675,7 +25671,7 @@ mod accel_tests {
         let chain = network_id_cstring("swift-parity-transfer");
         let authority = fixture_authority("wonderland");
         let asset_definition = asset_definition_cstring("wonderland", "rose");
-        let quantity = cstring("15.7500");
+        let quantity = cstring("15.75");
         let destination = authority.clone();
         let private_key = fixture_private_key();
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -25720,7 +25716,7 @@ mod accel_tests {
         let chain = network_id_cstring("swift-parity-mint");
         let authority = fixture_authority("wonderland");
         let asset_definition = asset_definition_cstring("wonderland", "rose");
-        let quantity = cstring("42.0100");
+        let quantity = cstring("42.01");
         let destination = authority.clone();
         let private_key = fixture_private_key();
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -25765,7 +25761,7 @@ mod accel_tests {
         let chain = network_id_cstring("swift-parity-burn");
         let authority = fixture_authority("wonderland");
         let asset_definition = asset_definition_cstring("wonderland", "rose");
-        let quantity = cstring("5.2500");
+        let quantity = cstring("5.25");
         let destination = authority.clone();
         let private_key = fixture_private_key();
         let mut out_signed_ptr: *mut u8 = ptr::null_mut();
@@ -27273,13 +27269,21 @@ pub unsafe extern "C" fn connect_norito_get_acceleration_state(
         0
     }
 }
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+))]
 mod platform_jni;
-#[cfg(not(test))]
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+))]
 #[allow(unused_imports)]
 pub use platform_jni::*;
-#[cfg(test)]
-#[allow(unused_imports)]
-use platform_jni::*;
 #[cfg(any(
     test,
     target_os = "android",
@@ -29407,10 +29411,9 @@ mod tests {
             iroha_torii_shared::offline_api::OfflineRecipientLineageRequest,
         >(query_bytes)
         .expect("decode canonical lineage query");
-        assert_eq!(
-            query.selector.network_id,
-            NETWORK_ID.parse().expect("NetworkId")
-        );
+        let expected_network_id: NetworkId =
+            norito::json::from_value(JsonValue::from(NETWORK_ID)).expect("canonical NetworkId");
+        assert_eq!(query.selector.network_id, expected_network_id);
         connect_norito_free(output);
         let status = unsafe {
             connect_norito_kagemusha_recipient_lineage_query_create_v2(
@@ -29503,12 +29506,12 @@ mod tests {
             "java_native_kagemusha_prepare_authorization_v2",
             "java_native_kagemusha_prepare_top_up_v4",
         ] {
-            let marker = format!("\nfn {symbol}(");
+            let marker = format!("\npub(super) fn {symbol}(");
             let helper = source
-                .split_once(&marker)
+                .rsplit_once(&marker)
                 .unwrap_or_else(|| panic!("{symbol} must remain present"))
                 .1
-                .split_once("\n}\n\n#[cfg(")
+                .split_once("\n}\n")
                 .unwrap_or_else(|| panic!("{symbol} must remain a discrete guarded helper"))
                 .0;
             assert!(
@@ -29600,7 +29603,12 @@ mod tests {
         connect_norito_free(out_ptr);
         assert_eq!(actual, expected);
         let encoded_json = norito::json::to_json(&body).expect("onboarding body JSON text");
-        let exact_field = format!("\"network_id\":\"{}\"", body.network_id);
+        let network_id_json =
+            norito::json::to_value(&body.network_id).expect("NetworkId JSON value");
+        let network_id = network_id_json
+            .as_str()
+            .expect("NetworkId JSON must be a string");
+        let exact_field = format!("\"network_id\":\"{network_id}\"");
         assert!(encoded_json.contains(&exact_field));
         let genesis = encoded_json.replacen(&exact_field, "\"network_id\":\"genesis\"", 1);
         assert!(norito::json::from_str::<ConnectAccountOnboardingPlanBodyV1>(&genesis).is_err());
@@ -31452,10 +31460,12 @@ mod tests {
     #[test]
     fn connect_wallet_signature_algorithm_parser_rejects_confusables() {
         assert_eq!(
-            parse_connect_wallet_signature_algorithm_label(" Ed25519 "),
+            parse_connect_wallet_signature_algorithm_label("ed25519"),
             Ok(Algorithm::Ed25519),
         );
         for algorithm in [
+            " Ed25519 ",
+            "Ed25519",
             "secp256k1",
             "ed\t25519",
             "ed\u{200B}25519",

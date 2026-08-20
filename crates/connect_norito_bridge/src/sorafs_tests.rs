@@ -1,11 +1,11 @@
 // SoraFS bridge regressions are included at crate scope to preserve test-only visibility.
 #[cfg(test)]
 mod sorafs_tests {
-    use std::{ffi::CString, fs, ptr, slice};
+    use super::*;
     use sorafs_car::{CarBuildPlan, fetch_plan::chunk_fetch_plan_to_string};
     use sorafs_chunker::ChunkProfile;
+    use std::{ffi::CString, fs, ptr, slice};
     use tempfile::tempdir;
-    use super::*;
     fn transport_hint_json(priority: JsonValue) -> JsonValue {
         let mut hint = JsonMap::new();
         hint.insert("protocol".into(), JsonValue::from("quic"));
@@ -476,7 +476,7 @@ mod sorafs_tests {
     fn sorafs_reference_governance_log_node_validator_via_bridge_ffi() {
         let payload = repo_fixture("fixtures/sorafs_manifest/moderation/governance_node_v1.to");
         let expected_node_cid =
-            hex::decode("9a2dc9a930494cbc70f0e4cab25df893fb607e83f1fa52520ed62dabca918d5a")
+            hex::decode("4dd7d8901fd8fdd78ce9edd0456fa1dc6bb072709ddc762e43116013c15ff20c")
                 .expect("fixture node CID");
         let label = b"moderation/governance_node_v1.to";
         let mut out_ptr: *mut c_uchar = ptr::null_mut();
@@ -1208,7 +1208,7 @@ mod sorafs_tests {
         );
         assert_eq!(
             outcome.get("code").and_then(JsonValue::as_str),
-            Some("SFS-OK-000")
+            Some("SFS-PDP-DIAG-000")
         );
     }
 }

@@ -80,6 +80,7 @@ const IZANAMI_TRANSACTION_GOSSIP_PERIOD_MS: i64 = 250;
 const IZANAMI_TRANSACTION_GOSSIP_SIZE: i64 = 1024;
 const IZANAMI_TRANSACTION_GOSSIP_RESEND_TICKS: i64 = 1;
 const IZANAMI_TRANSACTION_GOSSIP_PUBLIC_TARGET_CAP: i64 = 64;
+const IZANAMI_MAX_TOTAL_CONNECTIONS: i64 = 31;
 const IZANAMI_NEXUS_FUSION_FLOOR_TEU: i64 = 16_000_000;
 const IZANAMI_NEXUS_FUSION_EXIT_TEU: i64 = 24_000_000;
 const IZANAMI_IVM_GAS_LIMIT_PER_BLOCK: u64 = 2_000_000_000;
@@ -2485,6 +2486,10 @@ fn make_network_builder_with_sorafs(
                 IZANAMI_TORII_DISABLED_RATE_LIMIT,
             )
             .write(["torii", "api_high_load_tx_threshold"], queue_capacity)
+            .write(
+                ["network", "max_total_connections"],
+                IZANAMI_MAX_TOTAL_CONNECTIONS,
+            )
             .write(
                 ["network", "transaction_gossip_period_ms"],
                 IZANAMI_TRANSACTION_GOSSIP_PERIOD_MS,
@@ -11722,6 +11727,10 @@ mod tests {
         assert_eq!(
             lookup(&["sumeragi", "role"]).and_then(TomlValue::as_str),
             Some("validator")
+        );
+        assert_eq!(
+            lookup(&["network", "max_total_connections"]).and_then(TomlValue::as_integer),
+            Some(IZANAMI_MAX_TOTAL_CONNECTIONS)
         );
         assert_eq!(
             lookup(&["sumeragi", "block", "max_transactions"]).and_then(TomlValue::as_integer),

@@ -1159,6 +1159,9 @@ if protocol_abis != header_abis:
 print(header_abis[0])
 PY
 )" || exit 1
+# The mobile registry binds the Kagemusha ABI-21/V4 artifact family carried by
+# the independently versioned native bridge ABI above.
+KAGEMUSHA_ARTIFACT_ABI_VERSION=21
 SOURCE_COMMIT="$SOURCE_COMMIT_START"
 SOURCE_TREE_DIRTY=false
 if [[ -n "$SOURCE_STATUS_START" ]]; then
@@ -1375,7 +1378,7 @@ ${TEST_ONLY_MANIFEST_FIELD}
       "role": "native_bridge",
       "purpose": "typed Norito codecs and privacy proof execution",
       "circuit_id": null,
-      "abi": $BRIDGE_ABI_VERSION,
+      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
       "artifact_type": "xcframework",
       "delivery": "bridge_embedded",
       "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
@@ -1384,7 +1387,7 @@ ${TEST_ONLY_MANIFEST_FIELD}
       "role": "transfer_proving_key",
       "purpose": "prove exact confidential top-up and offline split transitions",
       "circuit_id": "confidential-transfer-v2",
-      "abi": $BRIDGE_ABI_VERSION,
+      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
       "artifact_type": "halo2_ipa_proving_key",
       "delivery": "bridge_embedded",
       "production_ready": $PRIVACY_PRODUCTION_JSON,
@@ -1394,7 +1397,7 @@ ${TEST_ONLY_MANIFEST_FIELD}
       "role": "transfer_verifier_record",
       "purpose": "verify top-up and offline split evidence at an active height",
       "circuit_id": "confidential-transfer-v2",
-      "abi": $BRIDGE_ABI_VERSION,
+      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
       "artifact_type": "norito_verifying_key_record",
       "delivery": "torii_readiness_snapshot",
       "required_by": ["topup", "peer_send", "peer_receive"]
@@ -1403,7 +1406,7 @@ ${TEST_ONLY_MANIFEST_FIELD}
       "role": "unshield_proving_key",
       "purpose": "prove full or partial offline-to-online redemption",
       "circuit_id": "confidential-unshield-v3",
-      "abi": $BRIDGE_ABI_VERSION,
+      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
       "artifact_type": "halo2_ipa_proving_key",
       "delivery": "bridge_embedded",
       "production_ready": $PRIVACY_PRODUCTION_JSON,
@@ -1413,7 +1416,7 @@ ${TEST_ONLY_MANIFEST_FIELD}
       "role": "unshield_verifier_record",
       "purpose": "verify proof-bound public credit and optional offline change",
       "circuit_id": "confidential-unshield-v3",
-      "abi": $BRIDGE_ABI_VERSION,
+      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
       "artifact_type": "norito_verifying_key_record",
       "delivery": "torii_readiness_snapshot",
       "required_by": ["redemption"]
@@ -1423,7 +1426,7 @@ ${TEST_ONLY_MANIFEST_FIELD}
       "purpose": "step_eq_params_ipa",
       "file_name": "step-eq.params-ipa.krv4",
       "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-      "abi": $BRIDGE_ABI_VERSION,
+      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
       "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
       "delivery": "content_addressed_external",
       "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
@@ -1433,7 +1436,7 @@ ${TEST_ONLY_MANIFEST_FIELD}
       "purpose": "step_eq_proving_key",
       "file_name": "step-eq.proving-key.krv4",
       "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-      "abi": $BRIDGE_ABI_VERSION,
+      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
       "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
       "delivery": "content_addressed_external",
       "required_by": ["topup", "peer_send", "redemption"]
@@ -1443,7 +1446,7 @@ ${TEST_ONLY_MANIFEST_FIELD}
       "purpose": "step_eq_verifying_key",
       "file_name": "step-eq.verifying-key.krv4",
       "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-      "abi": $BRIDGE_ABI_VERSION,
+      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
       "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
       "delivery": "content_addressed_external",
       "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
@@ -1453,7 +1456,7 @@ ${TEST_ONLY_MANIFEST_FIELD}
       "purpose": "step_eq_bootstrap_witness",
       "file_name": "step-eq.bootstrap-witness.krv4",
       "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
-      "abi": $BRIDGE_ABI_VERSION,
+      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
       "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
       "delivery": "content_addressed_external",
       "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
@@ -1463,7 +1466,7 @@ ${TEST_ONLY_MANIFEST_FIELD}
       "purpose": "step_ep_params_ipa",
       "file_name": "step-ep.params-ipa.krv4",
       "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-      "abi": $BRIDGE_ABI_VERSION,
+      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
       "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
       "delivery": "content_addressed_external",
       "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
@@ -1473,7 +1476,7 @@ ${TEST_ONLY_MANIFEST_FIELD}
       "purpose": "step_ep_proving_key",
       "file_name": "step-ep.proving-key.krv4",
       "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-      "abi": $BRIDGE_ABI_VERSION,
+      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
       "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
       "delivery": "content_addressed_external",
       "required_by": ["topup", "peer_send", "redemption"]
@@ -1483,7 +1486,7 @@ ${TEST_ONLY_MANIFEST_FIELD}
       "purpose": "step_ep_verifying_key",
       "file_name": "step-ep.verifying-key.krv4",
       "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-      "abi": $BRIDGE_ABI_VERSION,
+      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
       "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
       "delivery": "content_addressed_external",
       "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
@@ -1493,7 +1496,7 @@ ${TEST_ONLY_MANIFEST_FIELD}
       "purpose": "step_ep_bootstrap_witness",
       "file_name": "step-ep.bootstrap-witness.krv4",
       "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
-      "abi": $BRIDGE_ABI_VERSION,
+      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
       "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
       "delivery": "content_addressed_external",
       "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
@@ -1502,7 +1505,7 @@ ${TEST_ONLY_MANIFEST_FIELD}
       "role": "topup_finality_roster",
       "purpose": "topup_finality_roster",
       "circuit_id": "kagemusha-topup-finality-qc-merkle-v2",
-      "abi": $BRIDGE_ABI_VERSION,
+      "abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,
       "artifact_type": "iroha_data_model::offline::model::KagemushaTopUpFinalityRosterArtifactV2",
       "delivery": "content_addressed_external",
       "required_by": ["topup"]

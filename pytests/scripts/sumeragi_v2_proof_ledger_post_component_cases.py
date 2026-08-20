@@ -787,14 +787,89 @@ def exact_output_production_fixture(tmp_path: Path) -> None:
         Path("crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_runner/ordinary_ingress_consumer.rs"),
         Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_authority.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_lifecycle_schema.rs"),
+        Path("crates/iroha_data_model/src/block/consensus_v2.rs"),
         Path("crates/iroha_config/src/parameters/actual.rs"),
         Path("crates/iroha_config/src/parameters/defaults.rs"),
         Path("crates/iroha_config/src/parameters/user.rs"),
+        Path("crates/iroha_test_network/src/lib.rs"),
+        Path("crates/izanami/src/chaos.rs"),
+        Path("crates/iroha_kagami/src/localnet.rs"),
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
     copy_reviewed_rust_include_components(tmp_path)
+
+
+def test_lifecycle_capacity_production_source_and_mutations_are_bound(
+    tmp_path: Path,
+) -> None:
+    """Bind config admission, shipped profiles, and the runtime slot geometry."""
+
+    module = load_checker()
+    current_errors = module._lifecycle_capacity_production_source_fidelity_errors(
+        ROOT_DIR
+    )
+    assert current_errors == [], current_errors
+
+    mutations = (
+        (
+            "crates/iroha_config/src/parameters/actual.rs",
+            ".checked_mul(certified_request_capacity)",
+            ".saturating_mul(certified_request_capacity)",
+            "checked consensus, observer, two-phase Serve, and Producer geometry",
+        ),
+        (
+            "crates/iroha_config/src/parameters/user.rs",
+            "actual::validate_sumeragi_v2_lifecycle_capacity_geometry(",
+            "actual::validate_sumeragi_v2_exact_output_geometry(",
+            "root parsing must reject lifecycle geometry",
+        ),
+        (
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_authority.rs",
+            "validate_sumeragi_v2_lifecycle_capacity_geometry(",
+            "validate_sumeragi_v2_exact_output_geometry(",
+            "runtime lifecycle authority must consume the shared checked geometry",
+        ),
+        (
+            "crates/iroha_config/src/parameters/defaults.rs",
+            "pub const CORE_MAX_TOTAL_CONNECTIONS: usize = 97;",
+            "pub const CORE_MAX_TOTAL_CONNECTIONS: usize = 98;",
+            "reviewed 97-source boundary",
+        ),
+        (
+            "crates/iroha_test_network/src/lib.rs",
+            "cap, None,",
+            "cap, None,\n            .write([\"sumeragi\", \"queues\", \"bodies\"], 512i64)",
+            "test networks must not restore the lifecycle-invalid 512-body override",
+        ),
+        (
+            "crates/izanami/src/chaos.rs",
+            "const IZANAMI_MAX_TOTAL_CONNECTIONS: i64 = 31;",
+            "const IZANAMI_MAX_TOTAL_CONNECTIONS: i64 = 32;",
+            "Izanami's 512-body profile must retain its reviewed 31-source cap",
+        ),
+        (
+            "crates/iroha_kagami/src/localnet.rs",
+            "const LOCALNET_SUMERAGI_QUEUE_COMMANDS: usize = 8_192;",
+            "const LOCALNET_SUMERAGI_QUEUE_COMMANDS: usize = 8_191;",
+            "Kagami must retain the reviewed high-command localnet profile",
+        ),
+    )
+    for index, (relative, old, new, expected_error) in enumerate(mutations):
+        fixture_root = tmp_path / f"mutation_{index}"
+        exact_output_production_fixture(fixture_root)
+        path = fixture_root / relative
+        source = path.read_text(encoding="utf-8")
+        assert source.count(old) == 1, (relative, old)
+        path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+        errors = module._lifecycle_capacity_production_source_fidelity_errors(
+            fixture_root
+        )
+        assert any(expected_error in error for error in errors), errors
 
 
 @pytest.mark.parametrize(

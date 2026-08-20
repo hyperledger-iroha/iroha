@@ -6518,7 +6518,7 @@ mod sorafs_orderbook_validation_tests {
         let node =
             include_bytes!("../../../fixtures/sorafs_manifest/moderation/governance_node_v1.to");
         let expected_node_cid =
-            hex::decode("9a2dc9a930494cbc70f0e4cab25df893fb607e83f1fa52520ed62dabca918d5a")
+            hex::decode("4dd7d8901fd8fdd78ce9edd0456fa1dc6bb072709ddc762e43116013c15ff20c")
                 .expect("fixture node CID");
         let outcome = validate_governance_log_node_bytes(
             node,

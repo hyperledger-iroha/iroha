@@ -34,6 +34,13 @@ NATIVE_FEATURE = "taira-authority-bin"
 NATIVE_BINARY = "taira_release_authority"
 NATIVE_MODULE = "external_software_signer::taira_authority"
 FRAME_MAGIC = "IRTAUT01"
+INSTALLED_CONTROLLER_PATH = "scripts/seal_taira_release_controllers.py"
+INSTALLED_CONTROLLER_STAGE = "installed release controller"
+CONTROLLER_BLOCKED_OPERATIONS = ("assemble-boi", "deploy-reset")
+CONTROLLER_REQUIRED_MACOS_FILES = (
+    "scripts/check_taira_public_v2_24h_soak_evidence.py",
+    "scripts/taira_public_soak_authority_contract.py",
+)
 
 ROLE_REGISTRY = (
     "native-evidence",
@@ -309,12 +316,10 @@ def _live_nodes(
     return tuple(nodes)
 
 
-def is_unconditional_refusal(
-    function: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> bool:
-    """Return whether a function only discards inputs and raises/fails."""
+def _statements_unconditionally_refuse(body: Sequence[ast.stmt]) -> bool:
+    """Return whether statements only discard inputs and raise/fail."""
 
-    body = [node for node in _body(function) if not isinstance(node, ast.Delete)]
+    body = [node for node in body if not isinstance(node, ast.Delete)]
     if len(body) != 1:
         return False
     if isinstance(body[0], ast.Raise):
@@ -323,6 +328,14 @@ def is_unconditional_refusal(
         return False
     callee = body[0].value.func
     return isinstance(callee, ast.Name) and callee.id in {"fail", "_fail"}
+
+
+def is_unconditional_refusal(
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> bool:
+    """Return whether a function only discards inputs and raises/fails."""
+
+    return _statements_unconditionally_refuse(_body(function))
 
 
 def _assignment(module: ParsedModule, name: str) -> ast.expr | None:
@@ -344,6 +357,30 @@ def _string_sequence(value: ast.expr | None) -> tuple[str, ...] | None:
     ):
         return None
     return tuple(item.value for item in value.elts)  # type: ignore[misc]
+
+
+def _static_string_sequence(
+    module: ParsedModule,
+    value: ast.expr | None,
+    seen: frozenset[str] = frozenset(),
+) -> tuple[str, ...] | None:
+    """Resolve a static string sequence assembled from names and tuple addition."""
+
+    direct = _string_sequence(value)
+    if direct is not None:
+        return direct
+    if isinstance(value, ast.Name) and value.id not in seen:
+        return _static_string_sequence(
+            module,
+            _assignment(module, value.id),
+            seen | {value.id},
+        )
+    if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
+        left = _static_string_sequence(module, value.left, seen)
+        right = _static_string_sequence(module, value.right, seen)
+        if left is not None and right is not None:
+            return left + right
+    return None
 
 
 def _registry_roles(module: ParsedModule) -> tuple[str, ...] | None:
@@ -922,13 +959,150 @@ def _audit_client(repository: Path) -> list[dict[str, object]]:
     return reports
 
 
+def _is_args_string_equality(
+    expression: ast.expr, attribute: str, expected: str
+) -> bool:
+    if not (
+        isinstance(expression, ast.Compare)
+        and len(expression.ops) == 1
+        and isinstance(expression.ops[0], ast.Eq)
+        and len(expression.comparators) == 1
+    ):
+        return False
+    left, right = expression.left, expression.comparators[0]
+    return any(
+        isinstance(candidate, ast.Attribute)
+        and isinstance(candidate.value, ast.Name)
+        and candidate.value.id == "args"
+        and candidate.attr == attribute
+        and isinstance(value, ast.Constant)
+        and value.value == expected
+        for candidate, value in ((left, right), (right, left))
+    )
+
+
+def _and_terms(expression: ast.expr) -> tuple[ast.expr, ...]:
+    if isinstance(expression, ast.BoolOp) and isinstance(expression.op, ast.And):
+        return tuple(
+            term for value in expression.values for term in _and_terms(value)
+        )
+    return (expression,)
+
+
+def _is_run_operation_guard(expression: ast.expr, operation: str) -> bool:
+    terms = _and_terms(expression)
+    return any(
+        _is_args_string_equality(term, "command", "run") for term in terms
+    ) and any(
+        _is_args_string_equality(term, "operation", operation) for term in terms
+    )
+
+
+def _audit_sealed_controller(repository: Path) -> list[dict[str, object]]:
+    path = repository / INSTALLED_CONTROLLER_PATH
+    try:
+        module = _parse_module(path)
+    except PrerequisiteError as error:
+        return [
+            _report(
+                "installed-controller",
+                INSTALLED_CONTROLLER_PATH,
+                INSTALLED_CONTROLLER_STAGE,
+                str(error),
+            )
+        ]
+
+    reports: list[dict[str, object]] = []
+    main = module.functions.get("main")
+    if main is None:
+        reports.append(
+            _report(
+                "installed-controller",
+                INSTALLED_CONTROLLER_PATH,
+                INSTALLED_CONTROLLER_STAGE,
+                "installed controller main is missing",
+                "main",
+            )
+        )
+    else:
+        for operation in CONTROLLER_BLOCKED_OPERATIONS:
+            refusals = [
+                node
+                for node in _live_nodes(main)
+                if isinstance(node, ast.If)
+                and _is_run_operation_guard(node.test, operation)
+                and _statements_unconditionally_refuse(node.body)
+            ]
+            for refusal in refusals:
+                reports.append(
+                    _report(
+                        "controller-unconditional-refusal",
+                        INSTALLED_CONTROLLER_PATH,
+                        INSTALLED_CONTROLLER_STAGE,
+                        f"main refuses operation {operation!r} before attestation",
+                        "main",
+                        refusal.lineno,
+                    )
+                )
+
+    boi_dispatch = module.functions.get("_dispatch_boi_composite")
+    if boi_dispatch is None:
+        reports.append(
+            _report(
+                "installed-controller",
+                INSTALLED_CONTROLLER_PATH,
+                INSTALLED_CONTROLLER_STAGE,
+                "BOI composite dispatcher is missing",
+                "_dispatch_boi_composite",
+            )
+        )
+    elif is_unconditional_refusal(boi_dispatch):
+        reports.append(
+            _report(
+                "controller-unconditional-refusal",
+                INSTALLED_CONTROLLER_PATH,
+                INSTALLED_CONTROLLER_STAGE,
+                "BOI composite dispatcher remains an unconditional refusal",
+                "_dispatch_boi_composite",
+                boi_dispatch.lineno,
+            )
+        )
+
+    macos_files = _static_string_sequence(module, _assignment(module, "MACOS_FILES"))
+    if macos_files is None:
+        reports.append(
+            _report(
+                "controller-source-closure",
+                INSTALLED_CONTROLLER_PATH,
+                INSTALLED_CONTROLLER_STAGE,
+                "MACOS_FILES is not a statically auditable string sequence",
+            )
+        )
+    else:
+        for required in CONTROLLER_REQUIRED_MACOS_FILES:
+            if required not in macos_files:
+                reports.append(
+                    _report(
+                        "controller-source-closure",
+                        INSTALLED_CONTROLLER_PATH,
+                        INSTALLED_CONTROLLER_STAGE,
+                        f"MACOS_FILES omits required dependency {required!r}",
+                    )
+                )
+    return reports
+
+
 def unresolved_prerequisites(
     repository: Path,
     prerequisites: Iterable[Prerequisite] = PREREQUISITES,
 ) -> list[dict[str, object]]:
     """Return every incomplete native, registry, preflight, and operation path."""
 
-    reports = [*_audit_native(repository), *_audit_client(repository)]
+    reports = [
+        *_audit_native(repository),
+        *_audit_client(repository),
+        *_audit_sealed_controller(repository),
+    ]
     for prerequisite in prerequisites:
         try:
             module = _parse_module(repository / prerequisite.path)

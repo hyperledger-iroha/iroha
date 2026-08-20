@@ -71,8 +71,8 @@ fn provision_replay(
         soak_provisioning(
             TairaAuthorityRoleV1::PublicSoakReplayAdmission,
             "native-replay",
-            201,
             0,
+            201,
             203,
             0x72,
         ),

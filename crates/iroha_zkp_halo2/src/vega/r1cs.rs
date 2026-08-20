@@ -62,7 +62,6 @@ struct FoldRowInputs<'a> {
     strict_public_inputs: &'a [Scalar],
 }
 impl SparseMatrix {
-    #[cfg(test)]
     pub(super) fn new(
         rows: usize,
         columns: usize,

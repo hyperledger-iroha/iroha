@@ -25,7 +25,7 @@ VALIDATOR = ROOT / "scripts/validate_norito_bridge_xcframework.py"
 SOURCE_DATE_EPOCH = "1700000001"
 NORMALIZED_ZIP_TIME = (2023, 11, 14, 22, 13, 20)
 KNOWN_FIXTURE_ARCHIVE_SHA256 = (
-    "a9c757397511f0d4bcadd4f26a9cdb17a4568d6d596c57507e14289c65ebb66a"
+    "0f7dbc53223d921bd5180c73a88aa1d76ee33a517f4502917394b6a22ff33ba5"
 )
 SLICE_METADATA = {
     "ios-arm64": ("ios", ["arm64"], None),
@@ -726,9 +726,34 @@ print(f"{digest} {size}")
             builder,
         )
         self.assertIn("protocol_abis != header_abis", builder)
+        self.assertIn("KAGEMUSHA_ARTIFACT_ABI_VERSION=21", builder)
+        self.assertIn(
+            '"native_bridge_abi_version": $BRIDGE_ABI_VERSION,',
+            builder,
+        )
+        self.assertEqual(
+            builder.count('"abi": $KAGEMUSHA_ARTIFACT_ABI_VERSION,'),
+            14,
+        )
+        self.assertNotIn('"abi": $BRIDGE_ABI_VERSION,', builder)
         self.assertNotIn(
             "CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32",
             builder,
+        )
+        bridge = (ROOT / "crates/connect_norito_bridge/src/lib.rs").read_text(
+            encoding="utf-8"
+        )
+        host_jni_cfg = '''#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    windows
+))]'''
+        self.assertEqual(bridge.count(host_jni_cfg), 2)
+        self.assertIn(f"{host_jni_cfg}\nmod platform_jni;", bridge)
+        self.assertIn(
+            f"{host_jni_cfg}\n#[allow(unused_imports)]\npub use platform_jni::*;",
+            bridge,
         )
         for environment_name in (
             "NORITO_BRIDGE_OUTPUT_LOCK_FD",
@@ -766,7 +791,8 @@ print(f"{digest} {size}")
             checker,
         )
         self.assertIn('symbols="$(nm -gUj "$binary"', checker)
-        self.assertIn('["nm", "-gUj", binary]', checker)
+        self.assertIn("for line in captured.splitlines()", checker)
+        self.assertNotIn('["nm", "-gUj", binary]', checker)
 
     def test_native_architecture_and_export_inventory_is_authenticated(self) -> None:
         owner = load_owner_module()
@@ -928,31 +954,16 @@ print(f"{digest} {size}")
                 owner._validate_native_binaries(self.framework, NativePolicy)
 
     def test_missing_source_date_epoch_is_rejected(self) -> None:
-        environment = os.environ.copy()
-        environment.pop("SOURCE_DATE_EPOCH", None)
+        owner = load_owner_module()
         output = self.output_root / "missing-epoch.zip"
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-I",
-                "-S",
-                "-B",
-                str(OWNER),
-                "--xcframework",
-                str(self.framework),
-                "--output",
-                str(output),
-                "--scratch-dir",
-                str(self.scratch_root),
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            env=environment,
-            timeout=30,
-        )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("SOURCE_DATE_EPOCH", result.stderr)
+        with mock.patch.dict(os.environ):
+            os.environ.pop("SOURCE_DATE_EPOCH", None)
+            with self.assertRaisesRegex(owner.ArchiveError, "SOURCE_DATE_EPOCH"):
+                owner.archive_xcframework(
+                    str(self.framework),
+                    str(output),
+                    str(self.scratch_root),
+                )
         self.assertFalse(output.exists())
 
     def test_global_site_initialization_is_rejected(self) -> None:

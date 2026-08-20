@@ -117,6 +117,12 @@ impl TairaAuthorityRoleV1 {
             }
         }
     }
+
+    /// Whether an administrator must bind each run to one installed controller
+    /// and a fresh consume-once nonce.
+    pub(super) const fn requires_controller_run_binding(self) -> bool {
+        matches!(self, Self::NativeEvidence | Self::Qualification)
+    }
 }
 
 impl fmt::Display for TairaAuthorityRoleV1 {
@@ -398,14 +404,14 @@ pub(super) struct RunAssignmentV1 {
     pub run_id: [u8; 32],
     pub subject_sha256: [u8; 32],
     pub artifact_manifest_sha256: [u8; 32],
-    /// Administrator-pinned digest of the installed native-evidence controller.
-    /// Present only for [`TairaAuthorityRoleV1::NativeEvidence`].
+    /// Administrator-pinned digest of the installed controller.
+    /// Present only for controller-bound roles.
     pub controller_digest: Option<[u8; 32]>,
-    /// Administrator-pinned host identity for the native-evidence controller.
+    /// Administrator-pinned host identity for the installed controller.
     pub controller_host_id: Option<String>,
-    /// Administrator-pinned installation identity for the native-evidence controller.
+    /// Administrator-pinned installation identity for the installed controller.
     pub controller_installation_id: Option<String>,
-    /// Administrator-issued fresh nonce for the native-evidence run.
+    /// Administrator-issued fresh nonce for the controller-bound run.
     pub run_nonce: Option<[u8; 32]>,
     pub issued_at_unix_millis: u64,
     pub not_before_unix_millis: u64,

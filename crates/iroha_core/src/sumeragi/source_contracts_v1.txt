@@ -170,10 +170,10 @@ required|executor_mint|validated_bodies.get(&key) != Some(&validated)|next-Vote 
 required|executor_mint|durable_bodies.get(&key) != Some(durable)|next-Vote executor mint omitted durable_bodies.get(&key) != Some(durable)
 required|executor_mint|recovered_bodies.get(&key)|next-Vote executor mint omitted recovered_bodies.get(&key)
 required|executor_mint|RecoveredLifecycleNextVoteBodyAuthorityMintPermitV1::new()|next-Vote executor mint omitted RecoveredLifecycleNextVoteBodyAuthorityMintPermitV1::new()
-region|service_mint|worker|after|fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(|before|/// Publish the live completion owner
+region|service_mint|worker|after|fn prepare_recovered_lifecycle_sign_completion_with_body<'executor>(|before|pub(in crate::sumeragi) fn activate_effect_completion_observer(
 required|service_mint|self.recovered_lifecycle_next_vote_body_executor_permit(executor)?|next-Vote service mint omitted self.recovered_lifecycle_next_vote_body_executor_permit(executor)?
 required|service_mint|.prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)|next-Vote service mint omitted .prepare_recovered_lifecycle_sign_completion_with_body(permit, completion)
-region|phase_projection|wal_recovery|after|impl DurableAuthenticatedWalVoteLifecycleRepair {|before|/// Reconstruct a durable signed child only through this exact phase-vote WAL owner.
+region|phase_projection|wal_recovery|after|impl DurableAuthenticatedWalVoteLifecycleRepair {|before|pub(super) fn authenticate_recovered_wal_vote_lifecycle_from_ledger_parent(
 required|phase_projection|project_authenticated_signed_broadcast_and_sign|phase-vote combined projection omitted project_authenticated_signed_broadcast_and_sign
 required|phase_projection|next_sign.matches_verified_height(verified)|phase-vote combined projection omitted next_sign.matches_verified_height(verified)
 required|phase_projection|next_sign.matches_phase_vote_repair(self)|phase-vote combined projection omitted next_sign.matches_phase_vote_repair(self)
@@ -853,7 +853,7 @@ required|live|LiveWalPersistedPendingV1::ValidateSignBound|live WAL seal omitted
 required|live|LiveWalPersistedPendingV1::ApplyPending|live WAL seal omitted LiveWalPersistedPendingV1::ApplyPending
 required|live|LiveWalPersistedPendingV1::ApplyBound|live WAL seal omitted LiveWalPersistedPendingV1::ApplyBound
 required|live|from_exact_live_append(\n        cause: ExactLiveWalPersistedContinuationCause|live WAL seal omitted from_exact_live_append(\n        cause: ExactLiveWalPersistedContinuationCause
-required|live|exactly_binds_payload_free_pending(&self)|live WAL seal omitted exactly_binds_payload_free_pending(&self)
+forbidden|live|exactly_binds_payload_free_pending(&self)|live WAL seal retained the retired payload-free pending oracle
 required|live|bind_exact_validate_sign_pending(|live WAL seal omitted bind_exact_validate_sign_pending(
 required|live|exactly_binds_validate_sign_pending(&self)|live WAL seal omitted exactly_binds_validate_sign_pending(&self)
 required|live|project_validate_apply_successor(predecessor_effect, &self.effect)|live WAL seal omitted project_validate_apply_successor(predecessor_effect, &self.effect)
@@ -901,10 +901,10 @@ region|outside|worker|begin|-|end|-
 region|outside|runner|begin|-|end|-
 required|token|_persisted: SealedLiveWalPersistedEffectV1|live WAL token omitted {required}
 required|token|LiveWalReplayPreAdmissionOrigin<'a>|live WAL token omitted {required}
-required|token|PayloadFree|live WAL token omitted {required}
+forbidden|token|PayloadFree|live WAL token retained retired payload-free authority
 required|token|Apply(PreparedValidatedBodyCompletion<'a>)|live WAL token omitted {required}
-required|token|seal_payload_free(\n        persisted: SealedLiveWalPersistedEffectV1|live WAL token omitted {required}
-required|token|persisted.exactly_binds_payload_free_pending()|live WAL token omitted {required}
+forbidden|token|seal_payload_free(\n        persisted: SealedLiveWalPersistedEffectV1|live WAL token retained retired payload-free sealing
+forbidden|token|persisted.exactly_binds_payload_free_pending()|live WAL token retained retired payload-free binding
 required|production|pub(super) fn seal_live_wal_apply(|live WAL Apply join omitted {required}
 required|production|retained_validated_receipt_is_exact()|live WAL Apply join omitted {required}
 required|production|exactly_binds_validated_apply_successor|live WAL Apply join omitted {required}
@@ -1263,7 +1263,7 @@ region|common_work|registry|after|impl ConcreteLifecycleWork {|before|pub(super)
 region|live_sign_work|registry|after|pub(in crate::sumeragi) struct PreparedLiveValidateSignRegistryWork {|before|/// Closed pre-mutation failure inventory for certified-Fetch conversion.
 region|preparation|registry_recovery_impl|after|pub(super) fn prepare_durable_validate_execution(|before|pub(super) fn classify_ready_validate_carrier(
 region|execution_impl|registry_recovery|after|impl<'a> PreparedDurableValidateExecution<'a>|before|impl<'a> PreparedValidatedBodyCompletion<'a>
-region|completion|registry_recovery|after|pub(super) struct PreparedValidatedBodyCompletion<'a>|before|/// Closed live-WAL replay preflight retained until future exact admission.
+region|completion|registry_recovery|after|pub(super) struct PreparedValidatedBodyCompletion<'a>|before|pub(super) struct PreparedLiveWalReplayPreAdmission<'a>
 region|completion_impl|registry_recovery|after|impl<'a> PreparedValidatedBodyCompletion<'a>|end|-
 region|validate_successor|registry_recovery|after|pub(super) struct PreparedDurableStoreValidateSuccessor<'a>|before|pub(super) struct PreparedCertifiedFetchStoreSuccessor<'a>
 region|callers|selector|begin|-|end|-
@@ -1291,9 +1291,9 @@ forbidden|validation|fn new(|durable Validate carrier acquired a raw authority s
 forbidden|validation|for_test|durable Validate carrier acquired a raw authority seam: {forbidden}
 forbidden|validation|derive(Clone|durable Validate carrier acquired a raw authority seam: {forbidden}
 forbidden|validation|fn commit(|durable Validate carrier acquired a raw authority seam: {forbidden}
-count|common_work|ConcreteLifecycleWorkKind::DurableValidateBody|5|Validate carrier must remain exhaustive in validation, address, effect, pending, and generic-adapter rejection paths
-count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalSign|5|recovered Sign must remain exhaustive in validation, address, causal-root, effect-borrow, and generic-adapter rejection paths
-count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch|5|recovered Decision Fetch must remain exhaustive in validation, address, causal-root, effect-borrow, and generic-adapter rejection paths
+count|common_work|ConcreteLifecycleWorkKind::DurableValidateBody|4|Validate carrier must remain exhaustive in validation, address, causal-root, and effect-borrow rejection paths
+count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalSign|4|recovered Sign must remain exhaustive in validation, address, causal-root, and effect-borrow rejection paths
+count|common_work|ConcreteLifecycleWorkKind::DurableRecoveredWalDecisionFetch|4|recovered Decision Fetch must remain exhaustive in validation, address, causal-root, and effect-borrow rejection paths
 required|production|pub(super) struct ConcreteLifecycleWork {|concrete lifecycle work lost its registry-private declaration
 forbidden|production|pub(in crate::sumeragi) struct ConcreteLifecycleWork {|concrete lifecycle work escaped registry-private visibility
 required|live_sign_work|work: ConcreteLifecycleWork|opaque live Sign work omitted {required}
@@ -1845,9 +1845,11 @@ region|publication|registry_recovery_impl|after|pub(super) fn publish_recovered_
 region|adapter_preview|adapter|after|pub(in crate::sumeragi) fn prepare_recovered_decision_apply_completion(|before|pub(crate) fn preflight_runtime_command_admission(
 region|runtime|runtime|begin|-|end|-
 region|executor|effects|begin|-|end|-
-region|settlement|launch|after|pub(in crate::sumeragi) fn settle_recovered_decision_apply_completion(|before|/// Fail-stop failure while consuming the recovered lifecycle owner
+region|settlement|launch|after|fn settle_recovered_decision_apply_completion_owner(|before|/// Fail-stop failure while consuming the recovered lifecycle owner
 region|deferred_retry|launch|after|impl RetainedRecoveredDecisionApplyDeferredV1|before|/// Fail-stop class while durably terminalizing
-region|drive|launch|after|fn drive_recovered_decision_apply_deferred(|before|/// Exercise recovered Apply dispatch
+region|drive|launch|after|fn drive_recovered_decision_apply_deferred(|before|fn settle_recovered_decision_apply_completion_owner(
+region|worker_classifier|worker|after|pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(|before|pub(in crate::sumeragi) fn drain_recovered_lifecycle_sign_completion(
+region|turn_driver|turn_driver|after|match self.services.take_next_recovered_lifecycle_completion()|before|let selected = match self.owner.classify_completion_ready_work()
 region|exact_request|lane_work|after|fn dispatch_next_recovered_apply_sidecar_request(|before|#[cfg(test)]
 required|completion_projection|self.exact_body_binding()|completion projection omitted self.exact_body_binding()
 required|completion_projection|key.matches_carrier(self.context, self.installed_digest())|completion projection omitted key.matches_carrier(self.context, self.installed_digest())
@@ -1891,7 +1893,7 @@ required|adapter_preview|self.last_progress = prior_last_progress|adapter previe
 forbidden|adapter_preview|self.step(|adapter preview reopened direct reducer stepping
 required|runtime|fn prepare_recovered_decision_apply_completion(|runtime lost recovered Decision Apply completion preparation
 required|executor|fn commit_recovered_decision_apply_finality(|executor lost recovered Decision Apply finality commit
-required|settlement|drain_recovered_decision_apply_completion()|settlement omitted drain_recovered_decision_apply_completion()
+forbidden|settlement|drain_recovered_decision_apply_completion()|terminal settlement retained the retired dedicated Apply drain
 required|settlement|RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference }|settlement omitted RecoveredDecisionApplyWorkerResultV1::Deferred { task, reference }
 required|settlement|completion.authorizes_sidecar_owner(services, lane_work)|settlement omitted completion.authorizes_sidecar_owner(services, lane_work)
 required|settlement|sidecar.register(lane_work)|settlement omitted sidecar.register(lane_work)
@@ -1919,6 +1921,14 @@ required|drive|deferred.retry_after_available()|sidecar drive omitted deferred.r
 forbidden|drive|dispatch_lane_work_effects(|sidecar drive reopened broad lane dispatch
 forbidden|drive|effect_limit|sidecar drive acquired an effect limit
 order|drive|3|authorizes_sidecar_owner|deferred.sidecar.register(lane_work)|MergeSidecarDeferralDisposition::Available|sidecar ownership, registration, and availability must remain ordered
+required|worker_classifier|V2IoCompletion::RecoveredDecisionApply(guarded)|unified lifecycle classifier omitted guarded recovered Apply ownership
+required|worker_classifier|.prepare_recovered_decision_apply_ack(key, Arc::clone(&self.output_guard))|unified lifecycle classifier omitted recovered Apply acknowledgement preparation
+required|worker_classifier|PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack }|unified lifecycle classifier omitted prepared recovered Apply ownership
+required|worker_classifier|RecoveredLifecycleCompletionTakeV1::Apply(|unified lifecycle classifier omitted the recovered Apply branch
+required|turn_driver|RecoveredLifecycleCompletionTakeV1::Apply(completion)|turn driver omitted recovered Apply routing
+required|turn_driver|.settle_recovered_decision_apply_completion_owner(completion, lane_work)|turn driver omitted owner-scoped recovered Apply settlement
+required|turn_driver|ProductionRecoveredDecisionApplyCompletionV1::Applied|turn driver omitted recovered Apply terminal routing
+required|turn_driver|ProductionRecoveredDecisionApplyCompletionV1::Deferred|turn driver omitted recovered Apply deferred routing
 required|exact_request|let Some(next) = self.next_effect()|exact sidecar request dispatch omitted let Some(next) = self.next_effect()
 required|exact_request|CertifiedMergeSidecarMessage::Request(request)|exact sidecar request dispatch omitted CertifiedMergeSidecarMessage::Request(request)
 required|exact_request|request.request_id != request.canonical_request_id()|exact sidecar request dispatch omitted request.request_id != request.canonical_request_id()
@@ -2026,10 +2036,11 @@ region|enqueue|worker|after|fn try_send_as(|before|fn cancel(
 region|reservation|worker|after|impl RecoveredDecisionApplyCapacityReservationV1<'_>|before|impl Drop for RecoveredDecisionApplyCapacityReservationV1
 region|completion|worker|after|struct RecoveredDecisionApplyWorkAckV1|before|enum V2IoCompletion
 region|retry|worker|after|fn retry_recovered_decision_apply<|before|fn acknowledge_completion(
-region|generic_take|worker|after|fn take_io_completion(|before|fn take_recovered_decision_apply_completion(
+region|generic_take|worker|after|fn take_io_completion(|before|fn take_recovered_lifecycle_sign_completion(
+region|classifier|worker|after|pub(in crate::sumeragi) fn take_next_recovered_lifecycle_completion(|before|pub(in crate::sumeragi) fn drain_recovered_lifecycle_sign_completion(
 region|runtime_capacity|worker|after|const fn requires_runtime_capacity(&self) -> bool|before|fn acknowledgement(&self)
 required|enqueue|UnreservedRecoveredDecisionApply|generic queue lost the unreserved recovered Apply classification
-required|reservation|authenticated_predecessor_debt|recovered Apply reservation lost authenticated predecessor debt
+forbidden|reservation|authenticated_predecessor_debt|recovered Apply reservation retained unrelated Sign predecessor debt
 required|reservation|prepared.commit_for_worker()|recovered Apply reservation lost its worker commit
 required|reservation|V2IoCommand::RecoveredDecisionApply(task)|recovered Apply reservation lost its dedicated command
 required|completion|acknowledge_recovered_decision_apply|recovered Apply acknowledgement is missing
@@ -2040,8 +2051,12 @@ required|completion|acknowledge_recovered_decision_apply_completion(self.key)|re
 order|retry|6|V2IoWorkState::CompletionPending|exact_target_active|try_reserve(V2IoAdmissionClass::Consensus)|transfer_recovered_decision_apply_completion(key)|V2IoWorkState::Queued|task.into_command()|deferred retry must rejoin the Serve barrier and transfer completion ownership before publication
 required|generic_take|V2IoCompletion::RecoveredDecisionApply(_)|generic completion take lost recovered Apply retention
 required|generic_take|IoCompletionTake::retained_runtime()|generic completion take must retain recovered Apply runtime ownership
+required|classifier|V2IoCompletion::RecoveredDecisionApply(guarded)|unified lifecycle classifier omitted guarded recovered Apply ownership
+required|classifier|.prepare_recovered_decision_apply_ack(key, Arc::clone(&self.output_guard))|unified lifecycle classifier omitted recovered Apply acknowledgement preparation
+required|classifier|PreparedRecoveredDecisionApplyCompletionV1 { guarded, work_ack }|unified lifecycle classifier omitted prepared recovered Apply ownership
+required|classifier|RecoveredLifecycleCompletionTakeV1::Apply(|unified lifecycle classifier omitted the recovered Apply branch
 required|runtime_capacity|Self::RecoveredDecisionApply(_)|recovered Apply completion lost runtime capacity classification
-required|whole|fn drain_recovered_decision_apply_completion(|dedicated recovered Apply completion drain is missing
+forbidden|whole|fn drain_recovered_decision_apply_completion(|retired dedicated recovered Apply completion drain remains
 required|whole|fn authorizes_sidecar_owner(|recovered Apply sidecar owner oracle is missing
 forbidden|whole|_services: &'services mut ProductionV2Services|worker recovered Apply corridor must not borrow production services
 forbidden|whole|complete_application(*guarded|worker recovered Apply corridor must not call the legacy guarded completion
@@ -2318,7 +2333,7 @@ count|scheduler|SchedulerReadyInputs::from_authenticated_waiting_fetch(|1|authen
 count|schema|pub(super) fn from_authenticated_waiting_fetch(|1|schema waiting-Fetch constructor count drifted
 count|selector|pub(super) fn matches_waiting_record(|1|selector waiting-record oracle count drifted
 count|scheduler|SchedulerInputs::from_authenticated(|1|authenticated scheduler-input factory count drifted
-count|scheduler|AuthenticatedSchedulerInputsFactory::new()|9|authenticated scheduler factory mint count drifted
+count|scheduler|AuthenticatedSchedulerInputsFactory::new()|7|authenticated scheduler factory mint count drifted
 required|schema|_factory: &AuthenticatedSchedulerInputsFactory|schema lost borrowed authenticated scheduler factory
 required|schema|_factory: AuthenticatedSchedulerInputsFactory|schema lost owned authenticated scheduler factory
 required|schema|/// Construct one test row without exposing a production rank mint.\n    #[cfg(test)]\n    pub(super) fn new(|raw scheduler row constructor escaped its test gate

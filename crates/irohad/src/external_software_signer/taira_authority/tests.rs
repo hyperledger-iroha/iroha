@@ -262,7 +262,7 @@ impl ClientRequestFixtureV1 {
             "artifact_manifest_sha256".into(),
             Value::from(hex::encode(self.manifest_sha256)),
         );
-        if self.role == TairaAuthorityRoleV1::NativeEvidence {
+        if self.role.requires_controller_run_binding() {
             assignment.insert(
                 "controller_host_id".into(),
                 Value::from(TEST_NATIVE_CONTROLLER_HOST_ID_V1),
@@ -1435,6 +1435,65 @@ fn native_assignment_authenticates_controller_identity_and_unique_run_nonce() {
         other_service.assign_run_json(&canonical_json_line(&other_assignment), TEST_NOW_MILLIS_V1,),
         Err(TairaAuthorityErrorV1::Rejected)
     );
+}
+
+#[test]
+fn qualification_assignment_requires_controller_binding_and_unique_run_nonce() {
+    let parent = temporary_parent();
+    let service = TairaAuthorityServiceV1::provision_for_test(
+        parent.path().join("qualification-state"),
+        registry_provisioning(TairaAuthorityRoleV1::Qualification, 3),
+        registry_wrapping_key(3),
+    )
+    .expect("provision qualification authority");
+    let fixture = ClientRequestFixtureV1::new(
+        TairaAuthorityRoleV1::Qualification,
+        "qualification-controller-assignment",
+        &[],
+    );
+    let assignment = fixture.assignment_json(
+        &service,
+        TEST_NOW_MILLIS_V1 - 10,
+        TEST_NOW_MILLIS_V1 - 1,
+        TEST_NOW_MILLIS_V1 + 60_000,
+    );
+    assign_active_run(&service, &fixture);
+    assert_eq!(
+        service
+            .assign_run_json(&assignment, TEST_NOW_MILLIS_V1)
+            .expect("replay exact qualification assignment")
+            .status,
+        OperationStatusV1::Replayed
+    );
+    let second = ClientRequestFixtureV1::new(
+        TairaAuthorityRoleV1::Qualification,
+        "qualification-controller-assignment-second-run",
+        &[],
+    );
+    let second = second.assignment_json(
+        &service,
+        TEST_NOW_MILLIS_V1 - 10,
+        TEST_NOW_MILLIS_V1 - 1,
+        TEST_NOW_MILLIS_V1 + 60_000,
+    );
+    assert_eq!(
+        service.assign_run_json(&second, TEST_NOW_MILLIS_V1),
+        Err(TairaAuthorityErrorV1::Conflict)
+    );
+    for field in [
+        "controller_digest",
+        "controller_host_id",
+        "controller_installation_id",
+        "run_nonce",
+    ] {
+        let mut malformed = parse_json(&second);
+        malformed.as_object_mut().unwrap().remove(field);
+        assert_eq!(
+            service.assign_run_json(&canonical_json_line(&malformed), TEST_NOW_MILLIS_V1),
+            Err(TairaAuthorityErrorV1::Rejected),
+            "qualification assignment omitted {field}"
+        );
+    }
 }
 
 fn mutate_object_path(value: &mut Value, path: &[&str]) {

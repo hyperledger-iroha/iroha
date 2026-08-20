@@ -145,6 +145,28 @@ pub enum TairaAuthorityRoleV1 {{
                 )
             lines.append("    return None")
         _write(root / prerequisite.path, "\n".join(lines) + "\n")
+    controller_files = "\n".join(
+        f'    "{path}",'
+        for path in readiness.CONTROLLER_REQUIRED_MACOS_FILES
+    )
+    _write(
+        root / readiness.INSTALLED_CONTROLLER_PATH,
+        f'''COMMON_FILES = ()
+MACOS_FILES = COMMON_FILES + (
+{controller_files}
+)
+
+def _dispatch_boi_composite(operation_args, attestation):
+    return (operation_args, attestation)
+
+def main():
+    if args.command == "run" and args.operation == "assemble-boi":
+        return _dispatch_boi_composite(args.operation_args, attest())
+    if args.command == "run" and args.operation == "deploy-reset":
+        return dispatch(args.operation)
+    return 0
+''',
+    )
 
 
 def test_unconditional_refusal_detection_is_narrow() -> None:
@@ -379,14 +401,69 @@ def test_each_operation_and_role_is_checked_individually(tmp_path: Path) -> None
     assert "public-soak-replay-admission" in str(matching[0]["detail"])
 
 
-def test_current_repository_implements_every_release_prerequisite() -> None:
-    """The checked-out implementation must report ready, not merely non-refusing."""
+def test_installed_controller_refusals_and_source_closure_fail_closed(
+    tmp_path: Path,
+) -> None:
+    _complete_fixture(tmp_path)
+    controller = tmp_path / readiness.INSTALLED_CONTROLLER_PATH
+    _write(
+        controller,
+        '''COMMON_FILES = ()
+MACOS_FILES = COMMON_FILES + ()
 
-    assert readiness.unresolved_prerequisites(REPO_ROOT) == []
+def _dispatch_boi_composite(operation_args, attestation):
+    del operation_args, attestation
+    _fail("closed")
+
+def main():
+    if args.command == "run" and args.operation == "assemble-boi":
+        _fail("closed")
+    if args.command == "run" and args.operation == "deploy-reset":
+        _fail("closed")
+''',
+    )
+    reports = readiness.unresolved_prerequisites(tmp_path)
+    assert [report["kind"] for report in reports] == [
+        "controller-unconditional-refusal",
+        "controller-unconditional-refusal",
+        "controller-unconditional-refusal",
+        "controller-source-closure",
+        "controller-source-closure",
+    ]
+    assert {str(report["function"]) for report in reports[:3]} == {
+        "main",
+        "_dispatch_boi_composite",
+    }
 
 
-def test_cli_is_machine_readable_and_ready() -> None:
-    """The release workflow receives exact eight-role readiness JSON."""
+def test_current_repository_reports_installed_controller_blockers() -> None:
+    """The checked-out controller barriers must keep readiness fail-closed."""
+
+    reports = readiness.unresolved_prerequisites(REPO_ROOT)
+    assert [
+        (report["kind"], report.get("function"), report["detail"])
+        for report in reports
+    ] == [
+        (
+            "controller-unconditional-refusal",
+            "main",
+            "main refuses operation 'assemble-boi' before attestation",
+        ),
+        (
+            "controller-unconditional-refusal",
+            "main",
+            "main refuses operation 'deploy-reset' before attestation",
+        ),
+        (
+            "controller-unconditional-refusal",
+            "_dispatch_boi_composite",
+            "BOI composite dispatcher remains an unconditional refusal",
+        ),
+    ]
+
+
+def test_cli_is_machine_readable_and_fail_closed() -> None:
+    """The workflow receives exact eight-role JSON and a nonzero blocker status."""
 
     result = subprocess.run(
         [
@@ -400,10 +477,10 @@ def test_cli_is_machine_readable_and_ready() -> None:
         text=True,
     )
     payload = json.loads(result.stdout)
-    assert result.returncode == 0
+    assert result.returncode == 1
     assert payload == {
-        "ready": True,
+        "ready": False,
         "role_count": 8,
         "roles": list(readiness.ROLE_REGISTRY),
-        "unresolved": [],
+        "unresolved": readiness.unresolved_prerequisites(REPO_ROOT),
     }

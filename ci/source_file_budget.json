@@ -109,7 +109,7 @@
     "crates/iroha_torii/src/sorafs/gateway/compliance.rs": 6261,
     "crates/iroha_torii/tests/mcp_endpoints.rs": 4179,
     "crates/iroha_torii/tests/sorafs_discovery.rs": 3535,
-    "crates/irohad/src/external_software_signer/taira_authority/service.rs": 5212,
+    "crates/irohad/src/external_software_signer/taira_authority/service.rs": 5205,
     "crates/irohad/src/main.rs": 19675,
     "crates/irohad/src/runtime_provider_broker.rs": 40875,
     "crates/irohad/src/runtime_provider_registry.rs": 6733,

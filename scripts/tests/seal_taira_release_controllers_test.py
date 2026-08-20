@@ -104,6 +104,10 @@ def test_controller_closures_are_exact_installed_operation_dependencies() -> Non
     assert "scripts/build_taira_public_v2_prerequisite_handoff.py" in (
         controller.MACOS_FILES
     )
+    assert {
+        "scripts/check_taira_public_v2_24h_soak_evidence.py",
+        "scripts/taira_public_soak_authority_contract.py",
+    } <= set(controller.MACOS_FILES)
     assert "scripts/build_taira_public_v2_prerequisite_handoff.py" not in (
         controller.LINUX_FILES
     )

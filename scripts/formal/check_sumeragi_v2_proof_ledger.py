@@ -59385,7 +59385,6 @@ def _autonomous_retirement_source_contract_errors(
     )
     return errors
 
-
 def _exact_output_production_source_fidelity_errors(
     repo_root: Path = ROOT_DIR,
 ) -> list[str]:
@@ -74356,6 +74355,7 @@ def validate_ledger(
     errors.extend(
         _queue_plan_semantic_request_production_source_fidelity_errors(ROOT_DIR)
     )
+    errors.extend(_lifecycle_capacity_production_source_fidelity_errors(ROOT_DIR))
     errors.extend(_exact_output_production_source_fidelity_errors(ROOT_DIR))
     errors.extend(
         _kura_application_receipt_production_source_fidelity_errors(ROOT_DIR)

@@ -18,6 +18,7 @@ use super::{
         TAIRA_AUTHORITY_PROTOCOL_VERSION_V1, TairaAuthorityArtifactManifestEntryV1,
         TairaAuthorityPublicBindingV1, TairaAuthorityRoleV1, sha256,
     },
+    qualification_binding::validate_qualification_subject_v1,
     store::{
         create_private_subdirectory, directory_contains_only_records, load_canonical_records,
         persist_canonical_once, validate_private_directory,
@@ -79,7 +80,6 @@ const PUBLIC_SOAK_BROKER_SIGNATURE_DOMAIN_V1: &[u8] =
     b"iroha.taira.public-v2-24h-soak.durable-admission-signature.v1\0";
 const PUBLIC_SOAK_REPLAY_NAMESPACE_V1: &str = "iroha.taira.public-v2-24h-soak-authority-replay.v1";
 const PUBLIC_SOAK_MAX_AUTHORITY_LIFETIME_MILLIS_V1: u64 = 15 * 60 * 1_000;
-
 /// Public inputs used to provision one isolated authority role.
 #[derive(Clone, Debug)]
 pub struct TairaAuthorityProvisioningV1 {
@@ -104,7 +104,6 @@ pub struct TairaAuthorityProvisioningV1 {
     /// Maximum canonical authority request bytes.
     pub max_request_bytes: u32,
 }
-
 /// Redaction-safe authority failure classes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TairaAuthorityErrorV1 {
@@ -119,7 +118,6 @@ pub enum TairaAuthorityErrorV1 {
     /// A signature or receipt could not be produced or verified.
     Crypto,
 }
-
 impl std::fmt::Display for TairaAuthorityErrorV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
@@ -131,9 +129,7 @@ impl std::fmt::Display for TairaAuthorityErrorV1 {
         })
     }
 }
-
 impl std::error::Error for TairaAuthorityErrorV1 {}
-
 fn validate_qualification_service_identity(
     role: TairaAuthorityRoleV1,
     service_uid: u32,
@@ -152,7 +148,6 @@ fn validate_qualification_service_identity(
     }
     Ok(())
 }
-
 struct AuthorityStateV1 {
     assignments: BTreeMap<[u8; 32], StoredRunAssignmentV1>,
     consumptions: BTreeMap<[u8; 32], ReplayConsumptionV1>,
@@ -161,14 +156,12 @@ struct AuthorityStateV1 {
     deployment_finalizations: BTreeMap<[u8; 32], StoredDeploymentFinalizationV1>,
     rotation_handoffs: BTreeMap<[u8; 32], StoredRotationHandoffV1>,
 }
-
 impl AuthorityStateV1 {
     fn has_incomplete_authorization(&self) -> bool {
         self.consumptions
             .values()
             .any(|consumption| !self.authorizations.contains_key(&consumption.operation_id))
     }
-
     fn has_incomplete_deployment_finalization(&self) -> bool {
         self.deployment_finalization_inputs
             .keys()
@@ -1264,7 +1257,7 @@ impl TairaAuthorityServiceV1 {
         if state.has_incomplete_durable_operation() {
             return Err(TairaAuthorityErrorV1::Conflict);
         }
-        if assignment.role == TairaAuthorityRoleV1::NativeEvidence {
+        if assignment.role.requires_controller_run_binding() {
             let run_nonce = assignment
                 .run_nonce
                 .ok_or(TairaAuthorityErrorV1::Rejected)?;
@@ -1429,10 +1422,16 @@ impl TairaAuthorityServiceV1 {
                 )?;
                 None
             }
-            TairaAuthorityRoleV1::Qualification => Some(
-                super::sandbox::run_qualification_probes(artifacts.files_mut(), &request.manifest)?
+            TairaAuthorityRoleV1::Qualification => {
+                validate_qualification_subject_v1(&request.subject, &assignment)?;
+                Some(
+                    super::sandbox::run_qualification_probes(
+                        artifacts.files_mut(),
+                        &request.manifest,
+                    )?
                     .to_json_value(),
-            ),
+                )
+            }
             TairaAuthorityRoleV1::RolloutObservation => {
                 super::rollout_observation::validate_rollout_observation_subject_v1(
                     &request.subject,
@@ -3588,7 +3587,7 @@ fn validate_recovered_state(
     deployment_finalizations: &BTreeMap<[u8; 32], StoredDeploymentFinalizationV1>,
     rotation_handoffs: &BTreeMap<[u8; 32], StoredRotationHandoffV1>,
 ) -> Result<(), TairaAuthorityErrorV1> {
-    let mut native_run_nonces = BTreeSet::new();
+    let mut controller_run_nonces = BTreeSet::new();
     for (run_id, assignment) in assignments {
         if assignment.assignment.role != role || assignment.assignment.run_id != *run_id {
             return Err(TairaAuthorityErrorV1::State);
@@ -3602,8 +3601,8 @@ fn validate_recovered_state(
         {
             return Err(TairaAuthorityErrorV1::State);
         }
-        if role == TairaAuthorityRoleV1::NativeEvidence
-            && !native_run_nonces.insert(
+        if role.requires_controller_run_binding()
+            && !controller_run_nonces.insert(
                 assignment
                     .assignment
                     .run_nonce
@@ -3949,7 +3948,7 @@ fn parse_assignment(
         "schema",
         "subject_sha256",
     ];
-    let native_fields = [
+    let controller_bound_fields = [
         "artifact_manifest_sha256",
         "controller_digest",
         "controller_host_id",
@@ -3968,8 +3967,8 @@ fn parse_assignment(
     ];
     let object = exact_object(
         &value,
-        if role == TairaAuthorityRoleV1::NativeEvidence {
-            &native_fields
+        if role.requires_controller_run_binding() {
+            &controller_bound_fields
         } else {
             &base_fields
         },
@@ -3979,24 +3978,23 @@ fn parse_assignment(
     {
         return Err(TairaAuthorityErrorV1::Rejected);
     }
-    let (controller_digest, controller_host_id, controller_installation_id, run_nonce) =
-        if role == TairaAuthorityRoleV1::NativeEvidence {
-            let host_id = required_str(object, "controller_host_id")?.to_owned();
-            let installation_id = required_str(object, "controller_installation_id")?.to_owned();
-            if !valid_native_controller_identity(&host_id)
-                || !valid_native_controller_identity(&installation_id)
-            {
-                return Err(TairaAuthorityErrorV1::Rejected);
-            }
-            (
-                Some(required_digest(object, "controller_digest")?),
-                Some(host_id),
-                Some(installation_id),
-                Some(required_digest(object, "run_nonce")?),
-            )
-        } else {
-            (None, None, None, None)
-        };
+    let (controller_digest, controller_host_id, controller_installation_id, run_nonce) = if role
+        .requires_controller_run_binding()
+    {
+        let host_id = required_str(object, "controller_host_id")?.to_owned();
+        let installation_id = required_str(object, "controller_installation_id")?.to_owned();
+        if !valid_controller_identity(&host_id) || !valid_controller_identity(&installation_id) {
+            return Err(TairaAuthorityErrorV1::Rejected);
+        }
+        (
+            Some(required_digest(object, "controller_digest")?),
+            Some(host_id),
+            Some(installation_id),
+            Some(required_digest(object, "run_nonce")?),
+        )
+    } else {
+        (None, None, None, None)
+    };
     Ok(RunAssignmentV1 {
         role,
         run_id: required_digest(object, "run_id")?,
@@ -4015,7 +4013,7 @@ fn parse_assignment(
     })
 }
 
-fn valid_native_controller_identity(value: &str) -> bool {
+fn valid_controller_identity(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 128
         && value
@@ -4584,7 +4582,7 @@ fn envelope_claims_json(
         "expires_at_unix_millis".into(),
         Value::from(assignment.expires_at_unix_millis),
     );
-    if role == TairaAuthorityRoleV1::NativeEvidence {
+    if role.requires_controller_run_binding() {
         let (
             Some(controller_digest),
             Some(controller_host_id),

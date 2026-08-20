@@ -27,15 +27,16 @@
     },
     "version": 1
   },
-  "node_cid_hex": "5df8480672bf2aa1fd3e3382310f9b00f4b0fcb263f4d0b3010c165d83a394bd",
+  "node_cid_hex": "4dd7d8901fd8fdd78ce9edd0456fa1dc6bb072709ddc762e43116013c15ff20c",
   "payload_kind": "moderation_ballot_event",
-  "prev_cid_hex": "9b85d5f7ed9c20b19f8ceacf2fbab307ef88fb161392a2e846490b201a398ae8",
+  "prev_cid_hex": "22cc36bfe1ea242afc1680bed4ab5b707e34316cb8c24c3439db7668d968b3a2",
   "publisher_peer_id": "12D3KooWModerationFixturePublisher",
   "publisher_signature": {
     "algorithm": "ed25519",
     "public_key_hex": "d5af25e204ad03d0a26e236996404f1be51a60948bcc026cd084a83690b756d3",
-    "signature_hex": "bcdffc74b73f42d5bb4d056db3b5d884dbd550091bfc7f3ae44f3a519e0322c5901ddec70058a60affc3a6ce1536ecf47a3e1df4705536a6427158bb67f0940a"
+    "signature_hex": "c2ec40a5bdfd8566b6b3beb52b1e13f6b08d287c63d1b6c73532f80cf3df67ff3ade69db64450995f4bd4dc7f9fe2e5d9473eb14b1b1bc2abfc14c8aec865105"
   },
+  "submission_provenance": null,
   "timestamp": 1700000750,
   "version": 1
 }

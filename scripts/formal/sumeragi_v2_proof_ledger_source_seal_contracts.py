@@ -3949,7 +3949,7 @@ _PRODUCTION_EXACT_OUTPUT_GEOMETRY_ITEM_SHA256 = {
         "b9ad00e3d2ee76b202fa98f53cab9f7264c63a7d9a3050b0c3d57c0449cfb8f5"
     ),
     "user::Root::parse": (
-        "7676351f7b370537454bceb3933c2d543269a141de3f2fcc9183d7c77b506f92"
+        "abe9abd56c9417ce0ad4fe090bca5c090a98f64acc129d6e17f337954291e0c3"
     ),
     "worker::validate_shared_ownership_geometry": (
         "67026793b1424da887ccec0301157480e43b3585d298ab1545fe98e8cb577411"

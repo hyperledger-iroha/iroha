@@ -32,6 +32,11 @@ Completed history lives in [`status.md`](./status.md).
   Ship the corrected IPA parameter derivation and Poseidon byte framing as one
   first-release fixture/proof hard cut; do not mix artifacts generated under
   the retired derivations with corrected nodes.
+- Keep T256/MKHE acceleration qualification fail closed: the fixed T256 suite
+  disables generic Rayon fan-out and the MKHE NTT remains fixed-order scalar.
+  Qualify no parallel, SIMD/NEON, Metal, or CUDA/GPU backend until fixed-shape
+  output/KAT parity, secret-handling review, and implementation-derived peak-RSS
+  evidence close; no hardware acceleration is currently claimed.
 - For OpenAPI, first commit the final repaired inputs, regenerate the bundle
   from that clean exact commit with truthful provenance, and commit the
   generated outputs in a descendant. Refresh SF1 rows and projections only
