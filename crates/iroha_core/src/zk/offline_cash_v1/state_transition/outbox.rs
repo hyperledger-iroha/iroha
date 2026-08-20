@@ -1,5 +1,7 @@
 //! Authenticated durable staging for canonical sender payments.
 
+use super::guard::sealed;
+use super::send::SendSplitPlanV1;
 use super::*;
 use zeroize::Zeroize as _;
 

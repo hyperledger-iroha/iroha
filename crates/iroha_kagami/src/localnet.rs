@@ -4507,7 +4507,7 @@ fn write_start_script(
     writeln!(start_file, "fi")?;
     writeln!(
         start_file,
-        "echo \"Using IROHAD_BIN=$IROHAD_BIN\" >&2\nIROHAD_BIN_RESOLVED=\"$(command -v \"$IROHAD_BIN\" 2>/dev/null || true)\"\nif [ -z \"$IROHAD_BIN_RESOLVED\" ]; then\n  echo \"iroha3d binary not executable: $IROHAD_BIN\" >&2\n  exit 1\nfi\nIROHAD_BIN_DIR=\"$(cd -- \"$(dirname -- \"$IROHAD_BIN_RESOLVED\")\" && pwd)\"\nIROHA_CLI_FROM_IROHAD=\"$IROHAD_BIN_DIR/iroha\""
+        "echo \"Using IROHAD_BIN=$IROHAD_BIN\" >&2\nIROHAD_BIN_RESOLVED=\"$(command -v \"$IROHAD_BIN\" 2>/dev/null || true)\"\nif [ -z \"$IROHAD_BIN_RESOLVED\" ]; then\n  echo \"iroha3d binary not executable: $IROHAD_BIN\" >&2\n  exit 1\nfi\nIROHAD_BIN_DIR=\"$(cd -- \"$(dirname -- \"$IROHAD_BIN_RESOLVED\")\" && pwd)\"\nIROHAD_BIN=\"$IROHAD_BIN_DIR/$(basename -- \"$IROHAD_BIN_RESOLVED\")\"\nIROHA_CLI_FROM_IROHAD=\"$IROHAD_BIN_DIR/iroha\""
     )?;
     writeln!(start_file, "IROHA_CLI=\"${{IROHA_CLI:-}}\"")?;
     writeln!(start_file, "if [ -z \"$IROHA_CLI\" ]; then")?;
@@ -4582,7 +4582,7 @@ fn write_start_script(
     writeln!(start_file, "  if command -v python3 >/dev/null 2>&1; then")?;
     writeln!(
         start_file,
-        "    peer_pid=$(SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=\"${{LOG_LEVEL:-info}}\" LOG_FILTER=\"${{LOG_FILTER:-}}\" IROHAD_BIN=\"$IROHAD_BIN\" IROHA_PEER_CONFIG=\"$DIR/peer${{i}}.toml\" IROHA_PEER_LOG=\"$DIR/peer${{i}}.log\" IROHA_SORA_MODE=\"{sora_mode_env}\" python3 - <<'PY'"
+        "    peer_pid=$(mkdir -p \"$DIR/state/peer${{i}}\" && cd \"$DIR/state/peer${{i}}\" && SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=\"${{LOG_LEVEL:-info}}\" LOG_FILTER=\"${{LOG_FILTER:-}}\" IROHAD_BIN=\"$IROHAD_BIN\" IROHA_PEER_CONFIG=\"$DIR/peer${{i}}.toml\" IROHA_PEER_LOG=\"$DIR/peer${{i}}.log\" IROHA_SORA_MODE=\"{sora_mode_env}\" python3 - <<'PY'"
     )?;
     writeln!(start_file, "import os")?;
     writeln!(start_file, "import subprocess")?;
@@ -4607,10 +4607,16 @@ fn write_start_script(
     writeln!(start_file, "PY")?;
     writeln!(start_file, "    )")?;
     writeln!(start_file, "  else")?;
+    writeln!(start_file, "    (")?;
     writeln!(
         start_file,
-        "    nohup env SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=${{LOG_LEVEL:-info}} LOG_FILTER=${{LOG_FILTER:-}} \"$IROHAD_BIN\" {sora_flag}--config \"$DIR/peer${{i}}.toml\" > \"$DIR/peer${{i}}.log\" 2>&1 &"
+        "      mkdir -p \"$DIR/state/peer${{i}}\" && cd \"$DIR/state/peer${{i}}\""
     )?;
+    writeln!(
+        start_file,
+        "      exec nohup env SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=\"${{LOG_LEVEL:-info}}\" LOG_FILTER=\"${{LOG_FILTER:-}}\" \"$IROHAD_BIN\" {sora_flag}--config \"$DIR/peer${{i}}.toml\""
+    )?;
+    writeln!(start_file, "    ) > \"$DIR/peer${{i}}.log\" 2>&1 &")?;
     writeln!(start_file, "    peer_pid=$!")?;
     writeln!(start_file, "    disown \"$peer_pid\" 2>/dev/null || true")?;
     writeln!(start_file, "  fi")?;
@@ -8515,6 +8521,48 @@ mod tests {
         assert!(!contents.lines().any(|line| line == "sh ./stop.sh"));
         assert!(!contents.lines().any(|line| line == "./start.sh"));
         assert!(!contents.lines().any(|line| line == "./stop.sh"));
+    }
+    #[test]
+    fn start_script_resolves_irohad_bin_before_entering_peer_directories() {
+        for sora_profile_enabled in [false, true] {
+            let tmp = tempfile::tempdir().expect("tmp dir");
+            let start = tmp.path().join("start.sh");
+            write_start_script(
+                &start,
+                4,
+                sora_profile_enabled,
+                "operator",
+                "gas",
+            )
+            .expect("write start script");
+            let contents = fs::read_to_string(&start).expect("read start script");
+
+            // A relative IROHAD_BIN must be made absolute while the CWD is
+            // still the net dir, or the per-peer cd below breaks it.
+            let reassembly = contents
+                .find("IROHAD_BIN=\"$IROHAD_BIN_DIR/$(basename -- \"$IROHAD_BIN_RESOLVED\")\"")
+                .expect("absolute IROHAD_BIN reassembly present");
+            let first_peer_cd = contents
+                .find("cd \"$DIR/state/peer${i}\"")
+                .expect("per-peer working directory present");
+            assert!(reassembly < first_peer_cd);
+
+            // Both launch paths enter the peer's own working directory.
+            assert!(contents.contains(
+                "peer_pid=$(mkdir -p \"$DIR/state/peer${i}\" && cd \"$DIR/state/peer${i}\" && "
+            ));
+            assert!(contents.contains(
+                "    (\n      mkdir -p \"$DIR/state/peer${i}\" && cd \"$DIR/state/peer${i}\"\n      exec nohup env SNAPSHOT_STORE_DIR="
+            ));
+            assert!(contents.contains(") > \"$DIR/peer${i}.log\" 2>&1 &"));
+
+            let syntax = std::process::Command::new("bash")
+                .arg("-n")
+                .arg(&start)
+                .status()
+                .expect("run bash -n");
+            assert!(syntax.success(), "generated start.sh must parse");
+        }
     }
     #[test]
     fn fresh_localnet_seed_uses_independent_256_bit_os_entropy() {
