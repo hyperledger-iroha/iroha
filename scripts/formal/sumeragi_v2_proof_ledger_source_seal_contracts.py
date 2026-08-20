@@ -603,7 +603,9 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'block/autonomous_merge_carrier_content_tests.rs',
         'block/exact_quorum_cardinality_tests.rs',
         'block/autonomous_anchor_network_tests.rs',
+        'block/sccp_soracloud_validation_tests.rs',
         'block/canonical_genesis_validation_tests.rs',
+        'block/axt_shared_budget_across_envelopes_test.rs',
         'block/scheduler_variant_tests.rs',
         'block/native_amx_exact_quorum_cardinality_tests.rs',
         'block/native_amx_and_dag_tests.rs',
@@ -645,6 +647,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/kura.rs': (
         *_KURA_PRODUCTION_COMPONENT_FILES,
+        'kura/tests/00_bounded_sidecar_read_tests.rs',
         'kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs',
         'kura/tests/01_prune_capacity_support.rs',
         'kura/tests/01a_retained_eviction_and_rewrite_tail.rs',
@@ -713,6 +716,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     'crates/iroha_core/src/queue.rs': (
         'queue/canonical_terminal_cleanup.rs',
         'queue/nexus_reconfigure_manifest_reload_tests.rs',
+        'queue/privacy_governance_compliance_tests.rs',
         'queue/plan_journal_startup_atomicity_tests.rs',
         'queue/global_guard_claim_conflict_tests.rs',
         'queue/transaction_guard_return_tests.rs',
@@ -735,6 +739,15 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'journal_direct_file_io.rs',
         'plan_journal_bounds_tests.rs',
         'plan_journal_replay_tests.rs',
+    ),
+    'crates/iroha_core/src/smartcontracts/ivm/host.rs': (
+        'host/core_codec_and_contract_tests.rs',
+        'host/core_query_pagination_tests.rs',
+        'host/nested_contract_state_and_rollback_tests.rs',
+        'host/zk_verification_tests.rs',
+        'host/prepared_public_arguments_tests.rs',
+        'host/pointer_abi_validation_tests.rs',
+        'host/pointer_abi_and_sm_tests.rs',
     ),
     'crates/iroha_core/src/state.rs': (
         'state/vpn_lease_validation.rs',
@@ -780,7 +793,10 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'main/startup_tail_tests.rs',
     ),
     'integration_tests/tests/taira_public_localnet.rs': (
-        'taira_public_localnet_config_digest_test.rs',
+        'taira_public_localnet/unit_tests.rs',
+    ),
+    'integration_tests/tests/taira_public_localnet/unit_tests.rs': (
+        'config_digest_test.rs',
     ),
     'crates/iroha_core/src/sumeragi/mod.rs': (
         'fair_v2_ingress_selector.rs',
@@ -800,6 +816,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/v2.rs': (
         'v2_authenticated_recovered_adapter_startup_impl.rs',
+        'v2_wire_registry_and_authentication.rs',
         'tests/v2_adapter_main_00.rs',
         'tests/v2_adapter_main_01.rs',
         'tests/v2_adapter_main_02.rs',
@@ -983,8 +1000,11 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_lane_work_effect_queue.rs',
     ),
     'integration_tests/tests/sumeragi_v2_runner.rs': (
-        'sumeragi_v2_runner/restart_timing_test.rs',
+        'sumeragi_v2_runner/prepare_qc_split_tests.rs',
         'sumeragi_v2_runner/status_validation_helpers.rs',
+    ),
+    'integration_tests/tests/sumeragi_v2_runner/prepare_qc_split_tests.rs': (
+        'restart_timing_test.rs',
     ),
     'crates/iroha_sumeragi_core/src/verus_proofs.rs': (
         'verus_proofs/production_transition_contracts.rs',

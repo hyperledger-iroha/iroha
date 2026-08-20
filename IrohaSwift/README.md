@@ -39,7 +39,15 @@ Build the required native bridge before resolving the package:
 ```bash
 cd /path/to/iroha
 export CARGO_TARGET_DIR=/absolute/non-symlink/path/to/iroha-apple-cargo
-mkdir -p "$CARGO_TARGET_DIR"
+export NORITO_BRIDGE_OUT_DIR=/absolute/non-symlink/path/to/iroha-apple-artifacts
+export NORITO_BRIDGE_BUILD_DIR=/absolute/non-symlink/path/to/iroha-apple-build
+export NORITO_BRIDGE_ARCHIVE_OUTPUT=/absolute/non-symlink/path/to/NoritoBridge.xcframework.zip
+mkdir -p \
+  "$CARGO_TARGET_DIR" \
+  "$NORITO_BRIDGE_OUT_DIR" \
+  "$NORITO_BRIDGE_BUILD_DIR" \
+  "$(dirname "$NORITO_BRIDGE_ARCHIVE_OUTPUT")"
+test ! -e "$NORITO_BRIDGE_ARCHIVE_OUTPUT"
 export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
 export CARGO_NET_OFFLINE=true
@@ -165,7 +173,12 @@ an opt-in Apple artifact with:
 
 ```bash
 export CARGO_TARGET_DIR=/absolute/non-symlink/path/to/iroha-apple-cargo
-mkdir -p "$CARGO_TARGET_DIR"
+export NORITO_BRIDGE_OUT_DIR=/absolute/non-symlink/path/to/iroha-apple-artifacts
+export NORITO_BRIDGE_BUILD_DIR=/absolute/non-symlink/path/to/iroha-apple-build
+mkdir -p \
+  "$CARGO_TARGET_DIR" \
+  "$NORITO_BRIDGE_OUT_DIR" \
+  "$NORITO_BRIDGE_BUILD_DIR"
 export CARGO_BUILD_JOBS=1
 export CARGO_INCREMENTAL=0
 export CARGO_NET_OFFLINE=true

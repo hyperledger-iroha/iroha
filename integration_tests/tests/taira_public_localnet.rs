@@ -19,7 +19,6 @@ use iroha::{
     },
 };
 use iroha_config::parameters::{actual, defaults};
-use iroha_config_base::toml::TomlSource;
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use iroha_test_network::{
     Program, fslock_ports::AllocatedPortBlock, init_instruction_registry, repo_root,
@@ -3246,5 +3245,6 @@ fn load_localnet_client(out_dir: &Path) -> Result<Client> {
     config.transaction_status_timeout = READY_TIMEOUT;
     Ok(Client::new(config))
 }
-#[path = "taira_public_localnet/unit_tests.rs"]
-mod unit_tests;
+mod unit_tests {
+    include!("taira_public_localnet/unit_tests.rs");
+}

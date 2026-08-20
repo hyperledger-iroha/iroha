@@ -1,12 +1,14 @@
 """Durable online freshness authority for production Kagemusha App Attest.
 
-The authority has two deliberately separate operations. ``issue`` durably
+The authority has three deliberately separate operations. ``issue`` durably
 reserves a one-time challenge pair and consumption identifier before a request
 is copied to a physical iPhone. ``consume`` validates the complete signed
 production evidence, refreshes the embedded App Attest receipt against Apple's
 production service, verifies the returned CMS receipt, atomically advances the
 per-key assertion counter, and only then signs the repository's canonical
-freshness/consumption receipt.
+freshness/consumption receipt. ``revalidate-catalog`` validates immutable
+historical consumption evidence, refreshes every release's Apple status, and
+durably reserves one promotion-scoped exact-catalog receipt before signing.
 
 The exact downstream v1 receipt retains fields named ``apple_revocation_*``.
 For this authority, ``good`` has the deliberately narrower App Attest meaning:
@@ -57,7 +59,10 @@ import kagemusha_production_ios_evidence as production_evidence
 CHALLENGE_LEASE_SCHEMA = (
     "iroha.kagemusha.ios.app_attest_online_challenge_lease.v1"
 )
-STATE_SCHEMA_VERSION = 1
+CATALOG_REVALIDATION_REQUEST_SCHEMA = (
+    "iroha.kagemusha.ios.app_attest_catalog_revalidation_request.v1"
+)
+STATE_SCHEMA_VERSION = 3
 APPLE_PRODUCTION_HOST = "data.appattest.apple.com"
 APPLE_PRODUCTION_PATH = "/v1/attestationData"
 APPLE_RECEIPT_ROOT = SCRIPT_DIRECTORY.parent / "certs/apple_root_ca_g3.pem"
@@ -77,6 +82,8 @@ MAX_RECEIPT_ATTRIBUTES = 64
 MAX_RECEIPT_TEXT_BYTES = 1024
 MAX_OUTSTANDING_CHALLENGES = 4096
 MAX_DURABLE_CONSUMPTIONS = 8192
+MAX_DURABLE_CATALOG_REVALIDATIONS = 8192
+MAX_CATALOG_REVALIDATION_REQUEST_BYTES = 256 * 1024
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 5.0
 DEFAULT_TOTAL_TIMEOUT_SECONDS = 20.0
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
@@ -111,6 +118,39 @@ APP_ATTEST_KEY_TABLE_COLUMNS = (
     "apple_receipt",
     "apple_risk_metric",
     "updated_at_unix_ms",
+)
+CATALOG_REVALIDATION_TABLE_COLUMNS = (
+    "promotion_id",
+    "catalog_sha256",
+    "receipt_id",
+    "issued_at_unix_ms",
+    "expires_at_unix_ms",
+    "authority_key_id",
+    "authority_public_key_sha256",
+    "receipt_payload",
+    "state",
+    "retired_at_unix_ms",
+)
+LEGACY_CATALOG_REVALIDATION_TABLE_COLUMNS_V2 = (
+    "promotion_id",
+    "catalog_sha256",
+    "receipt_id",
+    "issued_at_unix_ms",
+    "expires_at_unix_ms",
+    "authority_key_id",
+    "authority_public_key_sha256",
+    "receipt_payload",
+)
+CATALOG_REVALIDATION_REQUEST_FIELDS = frozenset(
+    {"schema", "version", "promotion_id", "releases"}
+)
+CATALOG_REVALIDATION_REQUEST_RELEASE_FIELDS = frozenset(
+    {
+        "evidence_path",
+        "artifact_root",
+        "consumption_receipt_path",
+        "capture_app_code_sign_measurements_path",
+    }
 )
 
 
@@ -171,6 +211,23 @@ class AppleReceiptFacts:
     expiration_time_unix_ms: int
     risk_metric: int
     verified_at_unix_ms: int
+
+
+@dataclass(frozen=True)
+class CatalogRevalidationRecord:
+    """One fully validated durable catalog-revalidation database record."""
+
+    receipt: dict[str, Any]
+    bindings: tuple[dict[str, str], ...]
+    promotion_id: str
+    catalog_sha256: str
+    receipt_id: str
+    issued_at_unix_ms: int
+    expires_at_unix_ms: int
+    authority_key_id: str
+    authority_public_key_sha256: str
+    state: str
+    retired_at_unix_ms: Optional[int]
 
 
 def _now_ms() -> int:
@@ -417,7 +474,7 @@ class AuthorityState:
                 schema_version INTEGER NOT NULL
             );
             INSERT OR IGNORE INTO authority_metadata(singleton, schema_version)
-                VALUES (1, 1);
+                VALUES (1, 3);
             CREATE TABLE IF NOT EXISTS challenges (
                 challenge_id TEXT PRIMARY KEY,
                 consumption_id TEXT NOT NULL UNIQUE,
@@ -446,6 +503,23 @@ class AuthorityState:
                 apple_risk_metric INTEGER NOT NULL,
                 updated_at_unix_ms INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS catalog_revalidations (
+                promotion_id TEXT PRIMARY KEY,
+                catalog_sha256 TEXT NOT NULL,
+                receipt_id TEXT NOT NULL UNIQUE,
+                issued_at_unix_ms INTEGER NOT NULL,
+                expires_at_unix_ms INTEGER NOT NULL,
+                authority_key_id TEXT NOT NULL,
+                authority_public_key_sha256 TEXT NOT NULL,
+                receipt_payload BLOB NOT NULL,
+                state TEXT NOT NULL CHECK (state IN ('active', 'expired')),
+                retired_at_unix_ms INTEGER,
+                CHECK (expires_at_unix_ms > issued_at_unix_ms),
+                CHECK (
+                    (state = 'active' AND retired_at_unix_ms IS NULL)
+                    OR (state = 'expired' AND retired_at_unix_ms > expires_at_unix_ms)
+                )
+            );
             CREATE INDEX IF NOT EXISTS challenges_state_expiry_v1
                 ON challenges(state, expires_at_unix_ms);
             """
@@ -453,6 +527,59 @@ class AuthorityState:
         row = self.connection.execute(
             "SELECT schema_version FROM authority_metadata WHERE singleton = 1"
         ).fetchone()
+        if row in ((1,), (2,)):
+            self.connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = self.connection.execute(
+                    "SELECT schema_version FROM authority_metadata WHERE singleton = 1"
+                ).fetchone()
+                if row in ((1,), (2,)):
+                    catalog_revalidation_columns = tuple(
+                        value[1]
+                        for value in self.connection.execute(
+                            "PRAGMA table_info(catalog_revalidations)"
+                        )
+                    )
+                    if (
+                        catalog_revalidation_columns
+                        == LEGACY_CATALOG_REVALIDATION_TABLE_COLUMNS_V2
+                    ):
+                        self.connection.execute(
+                            """
+                            ALTER TABLE catalog_revalidations
+                            ADD COLUMN state TEXT NOT NULL DEFAULT 'active'
+                                CHECK (state IN ('active', 'expired'))
+                            """
+                        )
+                        self.connection.execute(
+                            """
+                            ALTER TABLE catalog_revalidations
+                            ADD COLUMN retired_at_unix_ms INTEGER
+                            """
+                        )
+                    elif (
+                        catalog_revalidation_columns
+                        != CATALOG_REVALIDATION_TABLE_COLUMNS
+                    ):
+                        raise AuthorityError(
+                            "authority catalog revalidation table schema is not migratable"
+                        )
+                    self.connection.execute(
+                        """
+                        UPDATE authority_metadata
+                           SET schema_version = 3 WHERE singleton = 1
+                        """
+                    )
+                self.connection.execute("COMMIT")
+            except BaseException:
+                try:
+                    self.connection.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                raise
+            row = self.connection.execute(
+                "SELECT schema_version FROM authority_metadata WHERE singleton = 1"
+            ).fetchone()
         if row != (STATE_SCHEMA_VERSION,):
             raise AuthorityError("authority database schema version is unsupported")
         challenge_columns = tuple(
@@ -461,10 +588,18 @@ class AuthorityState:
         key_columns = tuple(
             row[1] for row in self.connection.execute("PRAGMA table_info(app_attest_keys)")
         )
+        catalog_revalidation_columns = tuple(
+            row[1]
+            for row in self.connection.execute(
+                "PRAGMA table_info(catalog_revalidations)"
+            )
+        )
         if challenge_columns != CHALLENGE_TABLE_COLUMNS:
             raise AuthorityError("authority challenge table schema is not exact")
         if key_columns != APP_ATTEST_KEY_TABLE_COLUMNS:
             raise AuthorityError("authority App Attest key table schema is not exact")
+        if catalog_revalidation_columns != CATALOG_REVALIDATION_TABLE_COLUMNS:
+            raise AuthorityError("authority catalog revalidation table schema is not exact")
 
     def _validate_database_configuration(self) -> None:
         expected = {
@@ -781,6 +916,311 @@ class AuthorityState:
             if isinstance(error, candidate_evidence.EvidenceError):
                 raise AuthorityError(str(error)) from error
             raise AuthorityError("freshness consumption could not be committed") from error
+        except AuthorityError:
+            try:
+                self.connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+
+    def commit_catalog_revalidation(
+        self,
+        *,
+        promotion_id: str,
+        catalog_sha256: str,
+        release_statuses: list[dict[str, Any]],
+        authority_key_id: str,
+        authority_public_key_sha256: str,
+        issued_at_unix_ms: int,
+    ) -> tuple[dict[str, Any], bool]:
+        """Atomically reserve one promotion id and its exact catalog result.
+
+        A promotion id is single-use. Crash recovery may recover the identical
+        still-current unsigned payload, but it can never rebind the id to a
+        different catalog or signing key and can never revive an expired run.
+        """
+
+        _require_sha256(promotion_id, "promotion id")
+        _require_sha256(catalog_sha256, "catalog digest")
+        _require_sha256(
+            authority_public_key_sha256, "catalog authority public key digest"
+        )
+        try:
+            candidate_evidence._validate_key_id(
+                authority_key_id, "catalog authority key id"
+            )
+        except candidate_evidence.EvidenceError as error:
+            raise AuthorityError(str(error)) from error
+        if (
+            isinstance(issued_at_unix_ms, bool)
+            or not isinstance(issued_at_unix_ms, int)
+            or issued_at_unix_ms <= 0
+        ):
+            raise AuthorityError(
+                "catalog revalidation time must be positive Unix milliseconds"
+            )
+        incoming_bindings, incoming_catalog_sha256 = (
+            _validate_catalog_revalidation_release_statuses(
+                release_statuses,
+                issued_at_unix_ms=issued_at_unix_ms,
+                label="catalog revalidation result",
+                validate_current_status=False,
+            )
+        )
+        if incoming_catalog_sha256 != catalog_sha256:
+            raise AuthorityError(
+                "catalog revalidation status bindings do not match the catalog digest"
+            )
+        try:
+            self._validate_storage()
+            self.connection.execute("BEGIN IMMEDIATE")
+            existing = self.connection.execute(
+                """
+                SELECT promotion_id, catalog_sha256, receipt_id,
+                       issued_at_unix_ms, expires_at_unix_ms,
+                       authority_key_id, authority_public_key_sha256,
+                       receipt_payload, state, retired_at_unix_ms
+                  FROM catalog_revalidations WHERE promotion_id = ?
+                """,
+                (promotion_id,),
+            ).fetchone()
+            if existing is not None:
+                record = _validate_persisted_catalog_revalidation_record(
+                    existing,
+                    expected_promotion_id=promotion_id,
+                    expected_catalog_sha256=catalog_sha256,
+                    expected_bindings=incoming_bindings,
+                    expected_authority_key_id=authority_key_id,
+                    expected_authority_public_key_sha256=(
+                        authority_public_key_sha256
+                    ),
+                    evaluation_time_unix_ms=issued_at_unix_ms,
+                )
+                if record.state == "expired":
+                    raise AuthorityError(
+                        "promotion id was already consumed by an expired catalog receipt"
+                    )
+                if issued_at_unix_ms > record.expires_at_unix_ms:
+                    self.connection.execute(
+                        """
+                        UPDATE catalog_revalidations
+                           SET state = 'expired', retired_at_unix_ms = ?
+                         WHERE promotion_id = ? AND state = 'active'
+                        """,
+                        (issued_at_unix_ms, promotion_id),
+                    )
+                    if self.connection.execute("SELECT changes()").fetchone() != (1,):
+                        raise AuthorityError(
+                            "catalog revalidation changed during expiry retirement"
+                        )
+                    self.connection.execute("COMMIT")
+                    self._validate_storage()
+                    raise AuthorityError(
+                        "promotion id was already consumed by an expired catalog receipt"
+                    )
+                _validate_catalog_revalidation_release_statuses(
+                    release_statuses,
+                    issued_at_unix_ms=issued_at_unix_ms,
+                    label="catalog revalidation result",
+                )
+                self.connection.execute("COMMIT")
+                self._validate_storage()
+                return record.receipt, True
+
+            _validate_catalog_revalidation_release_statuses(
+                release_statuses,
+                issued_at_unix_ms=issued_at_unix_ms,
+                label="catalog revalidation result",
+            )
+            durable = self.connection.execute(
+                "SELECT COUNT(*) FROM catalog_revalidations"
+            ).fetchone()
+            if (
+                durable is None
+                or durable[0] >= MAX_DURABLE_CATALOG_REVALIDATIONS
+            ):
+                raise AuthorityError(
+                    "authority catalog-revalidation cap requires operator archival"
+                )
+            receipt_id = _random_digest(
+                b"kagemusha-catalog-revalidation-receipt-v1"
+            )
+            expires_at_unix_ms = (
+                issued_at_unix_ms
+                + production_evidence.MAX_ONLINE_RECEIPT_LIFETIME_MS
+            )
+            receipt = _build_unsigned_catalog_revalidation_receipt(
+                receipt_id=receipt_id,
+                promotion_id=promotion_id,
+                catalog_sha256=catalog_sha256,
+                issued_at_unix_ms=issued_at_unix_ms,
+                expires_at_unix_ms=expires_at_unix_ms,
+                release_statuses=release_statuses,
+                authority_key_id=authority_key_id,
+                authority_public_key_sha256=authority_public_key_sha256,
+            )
+            payload = candidate_evidence.canonical_signature_payload(receipt)
+            record = _validate_persisted_catalog_revalidation_record(
+                (
+                    promotion_id,
+                    catalog_sha256,
+                    receipt_id,
+                    issued_at_unix_ms,
+                    expires_at_unix_ms,
+                    authority_key_id,
+                    authority_public_key_sha256,
+                    payload,
+                    "active",
+                    None,
+                ),
+                expected_promotion_id=promotion_id,
+                expected_catalog_sha256=catalog_sha256,
+                expected_bindings=incoming_bindings,
+                expected_authority_key_id=authority_key_id,
+                expected_authority_public_key_sha256=authority_public_key_sha256,
+                evaluation_time_unix_ms=issued_at_unix_ms,
+            )
+            self.connection.execute(
+                """
+                INSERT INTO catalog_revalidations(
+                    promotion_id, catalog_sha256, receipt_id,
+                    issued_at_unix_ms, expires_at_unix_ms,
+                    authority_key_id, authority_public_key_sha256,
+                    receipt_payload, state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+                """,
+                (
+                    promotion_id,
+                    catalog_sha256,
+                    receipt_id,
+                    issued_at_unix_ms,
+                    expires_at_unix_ms,
+                    authority_key_id,
+                    authority_public_key_sha256,
+                    payload,
+                ),
+            )
+            self.connection.execute("COMMIT")
+            self._validate_storage()
+            return record.receipt, False
+        except (sqlite3.Error, candidate_evidence.EvidenceError) as error:
+            try:
+                self.connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            if isinstance(error, candidate_evidence.EvidenceError):
+                raise AuthorityError(str(error)) from error
+            raise AuthorityError(
+                "catalog revalidation could not be committed"
+            ) from error
+        except AuthorityError:
+            try:
+                self.connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+
+    def recover_catalog_revalidation(
+        self,
+        *,
+        promotion_id: str,
+        catalog_sha256: str,
+        bindings: list[dict[str, str]],
+        authority_key_id: str,
+        authority_public_key_sha256: str,
+        evaluation_time_unix_ms: int,
+    ) -> Optional[dict[str, Any]]:
+        """Recover an identical current receipt after commit-before-signing crash."""
+
+        _require_sha256(promotion_id, "promotion id")
+        _require_sha256(catalog_sha256, "catalog digest")
+        _require_sha256(
+            authority_public_key_sha256, "catalog authority public key digest"
+        )
+        try:
+            candidate_evidence._validate_key_id(
+                authority_key_id, "catalog authority key id"
+            )
+            expected_catalog_sha256 = production_evidence.catalog_revalidation_digest(
+                bindings, candidate_evidence
+            )
+        except (ValueError, candidate_evidence.EvidenceError) as error:
+            raise AuthorityError(str(error)) from error
+        if expected_catalog_sha256 != catalog_sha256:
+            raise AuthorityError(
+                "catalog recovery bindings do not match the catalog digest"
+            )
+        if (
+            isinstance(evaluation_time_unix_ms, bool)
+            or not isinstance(evaluation_time_unix_ms, int)
+            or evaluation_time_unix_ms <= 0
+        ):
+            raise AuthorityError(
+                "catalog recovery time must be positive Unix milliseconds"
+            )
+        try:
+            self._validate_storage()
+            self.connection.execute("BEGIN IMMEDIATE")
+            row = self.connection.execute(
+                """
+                SELECT promotion_id, catalog_sha256, receipt_id,
+                       issued_at_unix_ms, expires_at_unix_ms,
+                       authority_key_id, authority_public_key_sha256,
+                       receipt_payload, state, retired_at_unix_ms
+                  FROM catalog_revalidations WHERE promotion_id = ?
+                """,
+                (promotion_id,),
+            ).fetchone()
+            if row is None:
+                self.connection.execute("COMMIT")
+                self._validate_storage()
+                return None
+            record = _validate_persisted_catalog_revalidation_record(
+                row,
+                expected_promotion_id=promotion_id,
+                expected_catalog_sha256=catalog_sha256,
+                expected_bindings=bindings,
+                expected_authority_key_id=authority_key_id,
+                expected_authority_public_key_sha256=(
+                    authority_public_key_sha256
+                ),
+                evaluation_time_unix_ms=evaluation_time_unix_ms,
+            )
+            if record.state == "expired":
+                raise AuthorityError(
+                    "promotion id was already consumed by an expired catalog receipt"
+                )
+            if evaluation_time_unix_ms > record.expires_at_unix_ms:
+                self.connection.execute(
+                    """
+                    UPDATE catalog_revalidations
+                       SET state = 'expired', retired_at_unix_ms = ?
+                     WHERE promotion_id = ? AND state = 'active'
+                    """,
+                    (evaluation_time_unix_ms, promotion_id),
+                )
+                if self.connection.execute("SELECT changes()").fetchone() != (1,):
+                    raise AuthorityError(
+                        "catalog revalidation changed during expiry retirement"
+                    )
+                self.connection.execute("COMMIT")
+                self._validate_storage()
+                raise AuthorityError(
+                    "promotion id was already consumed by an expired catalog receipt"
+                )
+            self.connection.execute("COMMIT")
+            self._validate_storage()
+            return record.receipt
+        except (sqlite3.Error, candidate_evidence.EvidenceError) as error:
+            try:
+                self.connection.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            if isinstance(error, candidate_evidence.EvidenceError):
+                raise AuthorityError(str(error)) from error
+            raise AuthorityError(
+                "catalog revalidation recovery could not be committed"
+            ) from error
         except AuthorityError:
             try:
                 self.connection.execute("ROLLBACK")
@@ -1984,6 +2424,325 @@ def _build_unsigned_receipt(
     }
 
 
+def _validate_catalog_revalidation_release_statuses(
+    release_statuses: list[dict[str, Any]],
+    *,
+    issued_at_unix_ms: int,
+    label: str,
+    validate_current_status: bool = True,
+) -> tuple[list[dict[str, str]], str]:
+    """Validate every current status and return its immutable catalog binding."""
+
+    if not isinstance(release_statuses, list) or not (
+        1
+        <= len(release_statuses)
+        <= production_evidence.MAX_CATALOG_REVALIDATION_RELEASES
+    ):
+        raise AuthorityError(
+            f"{label} must contain between 1 and "
+            f"{production_evidence.MAX_CATALOG_REVALIDATION_RELEASES} releases"
+        )
+    if (
+        isinstance(issued_at_unix_ms, bool)
+        or not isinstance(issued_at_unix_ms, int)
+        or issued_at_unix_ms <= 0
+    ):
+        raise AuthorityError(f"{label} issuance time must be positive Unix milliseconds")
+    bindings: list[dict[str, str]] = []
+    for index, status in enumerate(release_statuses):
+        status_label = f"{label} release_statuses[{index}]"
+        if not isinstance(status, dict) or set(status) != set(
+            production_evidence.CATALOG_REVALIDATION_RELEASE_STATUS_FIELDS
+        ):
+            raise AuthorityError(f"{status_label} fields are not exact")
+        binding = {
+            field: _require_sha256(status.get(field), f"{status_label}.{field}")
+            for field in sorted(
+                production_evidence.CATALOG_REVALIDATION_BINDING_FIELDS
+            )
+        }
+        bindings.append(binding)
+        if not validate_current_status:
+            continue
+        status_key_id = status.get("app_attest_key_id")
+        if (
+            not isinstance(status_key_id, str)
+            or not status_key_id
+            or len(status_key_id) > 1024
+        ):
+            raise AuthorityError(f"{status_label}.app_attest_key_id is invalid")
+        checked_at = status.get("apple_status_checked_at_unix_ms")
+        if (
+            isinstance(checked_at, bool)
+            or not isinstance(checked_at, int)
+            or checked_at <= 0
+        ):
+            raise AuthorityError(
+                f"{status_label}.apple_status_checked_at_unix_ms must be positive"
+            )
+        age = issued_at_unix_ms - checked_at
+        if not (
+            -production_evidence.MAX_ONLINE_CLOCK_SKEW_MS
+            <= age
+            <= production_evidence.MAX_ONLINE_REVOCATION_AGE_MS
+        ):
+            raise AuthorityError(f"{status_label} Apple status is not fresh at issuance")
+        if status.get("apple_status") != "good":
+            raise AuthorityError(f"{status_label}.apple_status must be good")
+        if (
+            status.get("apple_status_source")
+            != production_evidence.ONLINE_REVOCATION_SOURCE
+        ):
+            raise AuthorityError(f"{status_label}.apple_status_source is unsupported")
+        _require_sha256(
+            status.get("refreshed_apple_receipt_sha256"),
+            f"{status_label}.refreshed_apple_receipt_sha256",
+        )
+        risk_metric = status.get("risk_metric")
+        if (
+            isinstance(risk_metric, bool)
+            or not isinstance(risk_metric, int)
+            or not 0 <= risk_metric <= 0x7FFFFFFF
+        ):
+            raise AuthorityError(f"{status_label}.risk_metric is invalid")
+    try:
+        catalog_sha256 = production_evidence.catalog_revalidation_digest(
+            bindings, candidate_evidence
+        )
+    except ValueError as error:
+        raise AuthorityError(str(error)) from error
+    return bindings, catalog_sha256
+
+
+def _validate_persisted_catalog_revalidation_record(
+    row: tuple[Any, ...],
+    *,
+    expected_promotion_id: str,
+    expected_catalog_sha256: str,
+    expected_bindings: list[dict[str, str]],
+    expected_authority_key_id: str,
+    expected_authority_public_key_sha256: str,
+    evaluation_time_unix_ms: int,
+) -> CatalogRevalidationRecord:
+    """Validate one exact durable row and its canonical unsigned payload."""
+
+    if not isinstance(row, tuple) or len(row) != len(
+        CATALOG_REVALIDATION_TABLE_COLUMNS
+    ):
+        raise AuthorityError("persisted catalog revalidation row fields are not exact")
+    if (
+        isinstance(evaluation_time_unix_ms, bool)
+        or not isinstance(evaluation_time_unix_ms, int)
+        or evaluation_time_unix_ms <= 0
+    ):
+        raise AuthorityError(
+            "persisted catalog revalidation evaluation time must be positive"
+        )
+    _require_sha256(expected_promotion_id, "expected catalog promotion id")
+    _require_sha256(expected_catalog_sha256, "expected catalog digest")
+    _require_sha256(
+        expected_authority_public_key_sha256,
+        "expected catalog authority public key digest",
+    )
+    if not isinstance(expected_authority_key_id, str):
+        raise AuthorityError("expected catalog authority key id is invalid")
+    try:
+        candidate_evidence._validate_key_id(
+            expected_authority_key_id, "expected catalog authority key id"
+        )
+        expected_bindings_sha256 = production_evidence.catalog_revalidation_digest(
+            expected_bindings, candidate_evidence
+        )
+    except (ValueError, candidate_evidence.EvidenceError) as error:
+        raise AuthorityError(str(error)) from error
+    if expected_bindings_sha256 != expected_catalog_sha256:
+        raise AuthorityError("expected catalog bindings do not match its digest")
+
+    (
+        promotion_id,
+        catalog_sha256,
+        receipt_id,
+        issued_at_unix_ms,
+        expires_at_unix_ms,
+        authority_key_id,
+        authority_public_key_sha256,
+        payload,
+        state,
+        retired_at_unix_ms,
+    ) = row
+    _require_sha256(promotion_id, "persisted catalog promotion id")
+    _require_sha256(catalog_sha256, "persisted catalog digest")
+    _require_sha256(receipt_id, "persisted catalog receipt id")
+    _require_sha256(
+        authority_public_key_sha256,
+        "persisted catalog authority public key digest",
+    )
+    if not isinstance(authority_key_id, str):
+        raise AuthorityError("persisted catalog authority key id is invalid")
+    try:
+        candidate_evidence._validate_key_id(
+            authority_key_id, "persisted catalog authority key id"
+        )
+    except candidate_evidence.EvidenceError as error:
+        raise AuthorityError(str(error)) from error
+    if receipt_id == promotion_id:
+        raise AuthorityError("persisted catalog receipt id equals its promotion id")
+    for value, timestamp_label in (
+        (issued_at_unix_ms, "issued_at_unix_ms"),
+        (expires_at_unix_ms, "expires_at_unix_ms"),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise AuthorityError(
+                f"persisted catalog revalidation {timestamp_label} must be positive"
+            )
+    if not issued_at_unix_ms < expires_at_unix_ms:
+        raise AuthorityError("persisted catalog revalidation timestamp order is invalid")
+    if (
+        expires_at_unix_ms - issued_at_unix_ms
+        > production_evidence.MAX_ONLINE_RECEIPT_LIFETIME_MS
+    ):
+        raise AuthorityError("persisted catalog revalidation lifetime exceeds its bound")
+    if (
+        issued_at_unix_ms
+        > evaluation_time_unix_ms
+        + production_evidence.MAX_ONLINE_CLOCK_SKEW_MS
+    ):
+        raise AuthorityError("persisted catalog revalidation issuance is in the future")
+    if state == "active":
+        if retired_at_unix_ms is not None:
+            raise AuthorityError("active catalog revalidation has a retirement timestamp")
+    elif state == "expired":
+        if (
+            isinstance(retired_at_unix_ms, bool)
+            or not isinstance(retired_at_unix_ms, int)
+            or retired_at_unix_ms <= expires_at_unix_ms
+        ):
+            raise AuthorityError("expired catalog revalidation retirement is invalid")
+    else:
+        raise AuthorityError("persisted catalog revalidation state is invalid")
+    if not isinstance(payload, bytes) or not payload:
+        raise AuthorityError("persisted catalog revalidation payload is not a BLOB")
+    try:
+        receipt = candidate_evidence.parse_strict_json(
+            payload + b"\n", "persisted catalog revalidation receipt payload"
+        )
+        canonical_payload = candidate_evidence.canonical_signature_payload(receipt)
+    except candidate_evidence.EvidenceError as error:
+        raise AuthorityError(str(error)) from error
+    if canonical_payload != payload:
+        raise AuthorityError("persisted catalog revalidation payload is not canonical")
+    unsigned_fields = production_evidence.CATALOG_REVALIDATION_RECEIPT_FIELDS - {
+        "signature_payload_sha256",
+        "signature",
+    }
+    if set(receipt) != set(unsigned_fields):
+        raise AuthorityError("persisted catalog revalidation receipt fields are not exact")
+    if receipt.get("schema") != production_evidence.CATALOG_REVALIDATION_RECEIPT_SCHEMA:
+        raise AuthorityError("persisted catalog revalidation schema is unsupported")
+    if receipt.get("version") != 1 or isinstance(receipt.get("version"), bool):
+        raise AuthorityError("persisted catalog revalidation version must be integer 1")
+    payload_receipt_id = _require_sha256(
+        receipt.get("receipt_id"), "persisted payload receipt id"
+    )
+    payload_promotion_id = _require_sha256(
+        receipt.get("promotion_id"), "persisted payload promotion id"
+    )
+    payload_catalog_sha256 = _require_sha256(
+        receipt.get("catalog_sha256"), "persisted payload catalog digest"
+    )
+    if payload_receipt_id == payload_promotion_id:
+        raise AuthorityError("persisted payload receipt id equals its promotion id")
+    for value, timestamp_label in (
+        (receipt.get("issued_at_unix_ms"), "issued_at_unix_ms"),
+        (receipt.get("expires_at_unix_ms"), "expires_at_unix_ms"),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise AuthorityError(
+                f"persisted payload {timestamp_label} must be positive Unix milliseconds"
+            )
+    if (
+        payload_receipt_id != receipt_id
+        or payload_promotion_id != promotion_id
+        or payload_catalog_sha256 != catalog_sha256
+        or receipt.get("issued_at_unix_ms") != issued_at_unix_ms
+        or receipt.get("expires_at_unix_ms") != expires_at_unix_ms
+        or receipt.get("signer_key_id") != authority_key_id
+        or receipt.get("signer_public_key_sha256")
+        != authority_public_key_sha256
+    ):
+        raise AuthorityError("persisted catalog row and receipt payload do not match")
+    if receipt.get("status") != "catalog-revalidated-for-one-promotion":
+        raise AuthorityError("persisted catalog revalidation status is invalid")
+    if receipt.get("signature_algorithm") != "ed25519":
+        raise AuthorityError("persisted catalog revalidation algorithm is invalid")
+    statuses = receipt.get("release_statuses")
+    observed_bindings, observed_catalog_sha256 = (
+        _validate_catalog_revalidation_release_statuses(
+            statuses,
+            issued_at_unix_ms=issued_at_unix_ms,
+            label="persisted catalog revalidation receipt",
+        )
+    )
+    if observed_catalog_sha256 != catalog_sha256:
+        raise AuthorityError("persisted catalog receipt does not match its catalog digest")
+    if observed_bindings != expected_bindings:
+        raise AuthorityError(
+            "promotion id replay substituted the immutable release catalog"
+        )
+    if (
+        promotion_id != expected_promotion_id
+        or catalog_sha256 != expected_catalog_sha256
+        or authority_key_id != expected_authority_key_id
+        or authority_public_key_sha256
+        != expected_authority_public_key_sha256
+    ):
+        raise AuthorityError(
+            "promotion id was already bound to another catalog or authority"
+        )
+    return CatalogRevalidationRecord(
+        receipt=receipt,
+        bindings=tuple(observed_bindings),
+        promotion_id=promotion_id,
+        catalog_sha256=catalog_sha256,
+        receipt_id=receipt_id,
+        issued_at_unix_ms=issued_at_unix_ms,
+        expires_at_unix_ms=expires_at_unix_ms,
+        authority_key_id=authority_key_id,
+        authority_public_key_sha256=authority_public_key_sha256,
+        state=state,
+        retired_at_unix_ms=retired_at_unix_ms,
+    )
+
+
+def _build_unsigned_catalog_revalidation_receipt(
+    *,
+    receipt_id: str,
+    promotion_id: str,
+    catalog_sha256: str,
+    issued_at_unix_ms: int,
+    expires_at_unix_ms: int,
+    release_statuses: list[dict[str, Any]],
+    authority_key_id: str,
+    authority_public_key_sha256: str,
+) -> dict[str, Any]:
+    """Build the exact unsigned current-status receipt persisted before signing."""
+
+    return {
+        "schema": production_evidence.CATALOG_REVALIDATION_RECEIPT_SCHEMA,
+        "version": 1,
+        "receipt_id": receipt_id,
+        "promotion_id": promotion_id,
+        "catalog_sha256": catalog_sha256,
+        "issued_at_unix_ms": issued_at_unix_ms,
+        "expires_at_unix_ms": expires_at_unix_ms,
+        "status": "catalog-revalidated-for-one-promotion",
+        "release_statuses": release_statuses,
+        "signer_key_id": authority_key_id,
+        "signer_public_key_sha256": authority_public_key_sha256,
+        "signature_algorithm": "ed25519",
+    }
+
+
 def _authority_public_key(
     *,
     key_id: str,
@@ -2024,6 +2783,28 @@ def sign_committed_receipt(
     signed["signature"] = signature.hex()
     if set(signed) != production_evidence.FRESHNESS_RECEIPT_FIELDS:
         raise AuthorityError("signed freshness receipt fields are not exact")
+    return signed
+
+
+def sign_committed_catalog_revalidation_receipt(
+    receipt: dict[str, Any],
+    *,
+    private_key_path: Path,
+    public_key_path: Path,
+) -> dict[str, Any]:
+    """Sign one durably committed catalog receipt and enforce its exact schema."""
+
+    try:
+        payload = candidate_evidence.canonical_signature_payload(receipt)
+        signature = candidate_evidence.sign_ed25519(private_key_path, payload)
+        candidate_evidence.verify_ed25519(public_key_path, payload, signature)
+    except candidate_evidence.EvidenceError as error:
+        raise AuthorityError(str(error)) from error
+    signed = dict(receipt)
+    signed["signature_payload_sha256"] = hashlib.sha256(payload).hexdigest()
+    signed["signature"] = signature.hex()
+    if set(signed) != production_evidence.CATALOG_REVALIDATION_RECEIPT_FIELDS:
+        raise AuthorityError("signed catalog revalidation receipt fields are not exact")
     return signed
 
 
@@ -2233,6 +3014,359 @@ def consume_evidence(
     return signed
 
 
+def _load_catalog_revalidation_request(path: Path) -> tuple[Any, dict[str, Any]]:
+    """Snapshot and parse one exact private catalog revalidation request."""
+
+    try:
+        snapshot = candidate_evidence._snapshot_private_file(
+            path.resolve(strict=True),
+            "catalog revalidation request",
+            maximum=MAX_CATALOG_REVALIDATION_REQUEST_BYTES,
+            retain_payload=True,
+        )
+        request = candidate_evidence.parse_strict_json(
+            snapshot.payload, "catalog revalidation request"
+        )
+    except (OSError, candidate_evidence.EvidenceError) as error:
+        raise AuthorityError(str(error)) from error
+    if set(request) != set(CATALOG_REVALIDATION_REQUEST_FIELDS):
+        raise AuthorityError("catalog revalidation request fields are not exact")
+    if request.get("schema") != CATALOG_REVALIDATION_REQUEST_SCHEMA:
+        raise AuthorityError("catalog revalidation request schema is unsupported")
+    if request.get("version") != 1 or isinstance(request.get("version"), bool):
+        raise AuthorityError("catalog revalidation request version must be integer 1")
+    _require_sha256(request.get("promotion_id"), "promotion id")
+    releases = request.get("releases")
+    if not isinstance(releases, list) or not (
+        1
+        <= len(releases)
+        <= production_evidence.MAX_CATALOG_REVALIDATION_RELEASES
+    ):
+        raise AuthorityError(
+            "catalog revalidation request release count is outside its bound"
+        )
+    for index, release in enumerate(releases):
+        if not isinstance(release, dict) or set(release) != set(
+            CATALOG_REVALIDATION_REQUEST_RELEASE_FIELDS
+        ):
+            raise AuthorityError(
+                f"catalog revalidation request releases[{index}] fields are not exact"
+            )
+        for field in CATALOG_REVALIDATION_REQUEST_RELEASE_FIELDS:
+            value = release.get(field)
+            if not isinstance(value, str) or not value:
+                raise AuthorityError(
+                    f"catalog revalidation request releases[{index}].{field} is invalid"
+                )
+            candidate = Path(value)
+            if (
+                not candidate.is_absolute()
+                or candidate.resolve(strict=False) != candidate
+            ):
+                raise AuthorityError(
+                    f"catalog revalidation request releases[{index}].{field} "
+                    "must be a canonical absolute path"
+                )
+    return snapshot, request
+
+
+def revalidate_catalog(
+    state: AuthorityState,
+    *,
+    request_path: Path,
+    production_policy_path: Path,
+    trusted_lab_key_id: str,
+    trusted_lab_public_key_path: Path,
+    original_receipt_authority_key_id: str,
+    original_receipt_authority_public_key_path: Path,
+    authority_key_id: str,
+    authority_private_key_path: Path,
+    authority_public_key_path: Path,
+    maximum_risk_metric: int,
+    devicecheck_jwt_file: Optional[Path] = None,
+    devicecheck_jwt_fd: Optional[int] = None,
+    output_path: Optional[Path] = None,
+    connect_timeout_seconds: float = DEFAULT_CONNECT_TIMEOUT_SECONDS,
+    total_timeout_seconds: float = DEFAULT_TOTAL_TIMEOUT_SECONDS,
+    apple_transport: Optional[Callable[[bytes, str], bytes]] = None,
+    evaluation_time: Callable[[], int] = _now_ms,
+    after_commit: Optional[Callable[[], None]] = None,
+    apple_root_path: Path = APPLE_RECEIPT_ROOT,
+    openssl_path: Path = Path("/usr/bin/openssl"),
+    expected_apple_root_sha256: str = APPLE_ROOT_CA_G3_DER_SHA256,
+    enforce_trusted_openssl: bool = True,
+) -> dict[str, Any]:
+    """Refresh Apple status for an exact catalog and issue one promotion receipt."""
+
+    output_path = (
+        _require_new_private_output(output_path, "catalog revalidation receipt output")
+        if output_path is not None
+        else None
+    )
+    request_snapshot, request = _load_catalog_revalidation_request(request_path)
+    promotion_id = request["promotion_id"]
+    prepared: list[dict[str, Any]] = []
+    authority_public_key_sha256: Optional[str] = None
+    initial_time = evaluation_time()
+    if (
+        isinstance(initial_time, bool)
+        or not isinstance(initial_time, int)
+        or initial_time <= 0
+    ):
+        raise AuthorityError("authority evaluation time must be positive Unix milliseconds")
+    for index, release in enumerate(request["releases"]):
+        evidence_path = Path(release["evidence_path"])
+        artifact_root = Path(release["artifact_root"])
+        consumption_receipt_path = Path(release["consumption_receipt_path"])
+        capture_measurements_path = Path(
+            release["capture_app_code_sign_measurements_path"]
+        )
+        validated = _load_validated_evidence(
+            evidence_path=evidence_path,
+            artifact_root=artifact_root,
+            production_policy_path=production_policy_path,
+            capture_app_code_sign_measurements_path=capture_measurements_path,
+            trusted_lab_key_id=trusted_lab_key_id,
+            trusted_lab_public_key_path=trusted_lab_public_key_path,
+        )
+        historical_errors = production_evidence.validate_historical_production_evidence_for_catalog_revalidation(
+            evidence_path,
+            artifact_root,
+            trusted_lab_key_id,
+            trusted_lab_public_key_path,
+            production_policy_path,
+            candidate_evidence,
+            freshness_receipt_path=consumption_receipt_path,
+            trusted_freshness_key_id=original_receipt_authority_key_id,
+            trusted_freshness_public_key_path=(
+                original_receipt_authority_public_key_path
+            ),
+            evaluation_time_unix_ms=initial_time,
+        )
+        if historical_errors:
+            raise AuthorityError(
+                f"catalog release[{index}] historical consumption evidence is invalid: "
+                + "; ".join(historical_errors)
+            )
+        try:
+            consumption_snapshot = candidate_evidence._snapshot_private_file(
+                consumption_receipt_path.resolve(strict=True),
+                "historical consumption receipt",
+                maximum=production_evidence.MAX_FRESHNESS_RECEIPT_BYTES,
+                retain_payload=True,
+            )
+        except (OSError, candidate_evidence.EvidenceError) as error:
+            raise AuthorityError(str(error)) from error
+        binding = {
+            "release_manifest_sha256": validated.release_manifest_sha256,
+            "evidence_sha256": validated.evidence_sha256,
+            "consumption_receipt_sha256": consumption_snapshot.sha256,
+        }
+        observed_authority_digest = _authority_public_key(
+            key_id=authority_key_id,
+            public_key_path=authority_public_key_path,
+            validated=validated,
+        )
+        if authority_public_key_sha256 is None:
+            authority_public_key_sha256 = observed_authority_digest
+        elif authority_public_key_sha256 != observed_authority_digest:
+            raise AuthorityError("catalog authority key identity changed between releases")
+        prepared.append(
+            {
+                "index": index,
+                "binding": binding,
+                "validated": validated,
+                "evidence_path": evidence_path,
+                "artifact_root": artifact_root,
+                "consumption_receipt_path": consumption_receipt_path,
+                "consumption_snapshot": consumption_snapshot,
+                "capture_measurements_path": capture_measurements_path,
+            }
+        )
+    prepared.sort(key=lambda value: value["binding"]["release_manifest_sha256"])
+    bindings = [value["binding"] for value in prepared]
+    try:
+        catalog_sha256 = production_evidence.catalog_revalidation_digest(
+            bindings, candidate_evidence
+        )
+    except ValueError as error:
+        raise AuthorityError(str(error)) from error
+    def require_immutable_inputs_unchanged(evaluation_time_unix_ms: int) -> None:
+        for value in prepared:
+            prior: ValidatedEvidence = value["validated"]
+            current = _load_validated_evidence(
+                evidence_path=value["evidence_path"],
+                artifact_root=value["artifact_root"],
+                production_policy_path=production_policy_path,
+                capture_app_code_sign_measurements_path=value[
+                    "capture_measurements_path"
+                ],
+                trusted_lab_key_id=trusted_lab_key_id,
+                trusted_lab_public_key_path=trusted_lab_public_key_path,
+            )
+            if (
+                current.evidence_sha256 != prior.evidence_sha256
+                or current.policy_sha256 != prior.policy_sha256
+                or current.release_manifest_sha256 != prior.release_manifest_sha256
+                or current.embedded_apple_receipt != prior.embedded_apple_receipt
+            ):
+                raise AuthorityError("catalog evidence changed during validation")
+            historical_errors = production_evidence.validate_historical_production_evidence_for_catalog_revalidation(
+                value["evidence_path"],
+                value["artifact_root"],
+                trusted_lab_key_id,
+                trusted_lab_public_key_path,
+                production_policy_path,
+                candidate_evidence,
+                freshness_receipt_path=value["consumption_receipt_path"],
+                trusted_freshness_key_id=original_receipt_authority_key_id,
+                trusted_freshness_public_key_path=(
+                    original_receipt_authority_public_key_path
+                ),
+                evaluation_time_unix_ms=evaluation_time_unix_ms,
+            )
+            if historical_errors:
+                raise AuthorityError(
+                    "catalog historical consumption evidence changed during validation: "
+                    + "; ".join(historical_errors)
+                )
+            try:
+                candidate_evidence._require_private_file_snapshot_unchanged(
+                    value["consumption_snapshot"],
+                    "historical consumption receipt",
+                    maximum=production_evidence.MAX_FRESHNESS_RECEIPT_BYTES,
+                )
+            except candidate_evidence.EvidenceError as error:
+                raise AuthorityError(str(error)) from error
+        try:
+            candidate_evidence._require_private_file_snapshot_unchanged(
+                request_snapshot,
+                "catalog revalidation request",
+                maximum=MAX_CATALOG_REVALIDATION_REQUEST_BYTES,
+            )
+        except candidate_evidence.EvidenceError as error:
+            raise AuthorityError(str(error)) from error
+
+    assert authority_public_key_sha256 is not None
+    require_immutable_inputs_unchanged(initial_time)
+    recovered = state.recover_catalog_revalidation(
+        promotion_id=promotion_id,
+        catalog_sha256=catalog_sha256,
+        bindings=bindings,
+        authority_key_id=authority_key_id,
+        authority_public_key_sha256=authority_public_key_sha256,
+        evaluation_time_unix_ms=initial_time,
+    )
+    if recovered is not None:
+        signed = sign_committed_catalog_revalidation_receipt(
+            recovered,
+            private_key_path=authority_private_key_path,
+            public_key_path=authority_public_key_path,
+        )
+        if output_path is not None:
+            _write_new_private_json(
+                output_path, signed, "catalog revalidation receipt output"
+            )
+        return signed
+    jwt_payload = read_devicecheck_jwt(
+        file_path=devicecheck_jwt_file, descriptor=devicecheck_jwt_fd
+    )
+    first_validated: ValidatedEvidence = prepared[0]["validated"]
+    jwt = validate_devicecheck_jwt(
+        jwt_payload,
+        expected_issuer=first_validated.policy["app_id_prefix"],
+        evaluation_time_unix_ms=initial_time,
+    )
+    release_statuses: list[dict[str, Any]] = []
+    for value in prepared:
+        validated = value["validated"]
+        if validated.policy != first_validated.policy:
+            raise AuthorityError("catalog releases do not share the exact production policy")
+        if apple_transport is None:
+            refreshed_receipt = request_apple_receipt(
+                validated.embedded_apple_receipt,
+                jwt,
+                connect_timeout_seconds=connect_timeout_seconds,
+                total_timeout_seconds=total_timeout_seconds,
+            )
+        else:
+            refreshed_receipt = apple_transport(validated.embedded_apple_receipt, jwt)
+        if not isinstance(refreshed_receipt, bytes):
+            raise AuthorityError("Apple receipt transport returned a non-byte response")
+        checked_at = evaluation_time()
+        if (
+            isinstance(checked_at, bool)
+            or not isinstance(checked_at, int)
+            or checked_at <= 0
+        ):
+            raise AuthorityError(
+                "Apple status check time must be positive Unix milliseconds"
+            )
+        apple_facts = verify_apple_receipt(
+            refreshed_receipt,
+            expected_app_id=validated.app_id,
+            expected_public_key=validated.assertion_public_key,
+            maximum_risk_metric=maximum_risk_metric,
+            evaluation_time_unix_ms=checked_at,
+            root_pem_path=apple_root_path,
+            openssl_path=openssl_path,
+            cms_timeout_seconds=min(10.0, total_timeout_seconds),
+            expected_root_sha256=expected_apple_root_sha256,
+            enforce_trusted_executable=enforce_trusted_openssl,
+        )
+        release_statuses.append(
+            {
+                **value["binding"],
+                "app_attest_key_id": validated.facts.key_id,
+                "apple_status_checked_at_unix_ms": apple_facts.verified_at_unix_ms,
+                "apple_status": "good",
+                "apple_status_source": production_evidence.ONLINE_REVOCATION_SOURCE,
+                "refreshed_apple_receipt_sha256": hashlib.sha256(
+                    refreshed_receipt
+                ).hexdigest(),
+                "risk_metric": apple_facts.risk_metric,
+            }
+        )
+
+    # Close the network race by revalidating every immutable input before the
+    # durable promotion-id reservation is committed.
+    final_time = evaluation_time()
+    if (
+        isinstance(final_time, bool)
+        or not isinstance(final_time, int)
+        or final_time <= 0
+    ):
+        raise AuthorityError("catalog commit time must be positive Unix milliseconds")
+    require_immutable_inputs_unchanged(final_time)
+    for status in release_statuses:
+        checked_at = status["apple_status_checked_at_unix_ms"]
+        age = final_time - checked_at
+        if not -MAX_CLOCK_SKEW_MS <= age <= MAX_RECEIPT_CREATION_AGE_MS:
+            raise AuthorityError(
+                "catalog Apple status became stale before durable receipt commit"
+            )
+    receipt, recovered_after_network = state.commit_catalog_revalidation(
+        promotion_id=promotion_id,
+        catalog_sha256=catalog_sha256,
+        release_statuses=release_statuses,
+        authority_key_id=authority_key_id,
+        authority_public_key_sha256=authority_public_key_sha256,
+        issued_at_unix_ms=final_time,
+    )
+    if after_commit is not None and not recovered_after_network:
+        after_commit()
+    signed = sign_committed_catalog_revalidation_receipt(
+        receipt,
+        private_key_path=authority_private_key_path,
+        public_key_path=authority_public_key_path,
+    )
+    if output_path is not None:
+        _write_new_private_json(
+            output_path, signed, "catalog revalidation receipt output"
+        )
+    return signed
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2277,6 +3411,39 @@ def _parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_TOTAL_TIMEOUT_SECONDS,
     )
+    revalidate = subparsers.add_parser(
+        "revalidate-catalog",
+        help="refresh Apple status for one exact multi-release promotion catalog",
+    )
+    revalidate.add_argument("--state-dir", required=True)
+    revalidate.add_argument("--catalog-request", required=True)
+    revalidate.add_argument("--production-policy", required=True)
+    revalidate.add_argument("--trusted-lab-key-id", required=True)
+    revalidate.add_argument("--trusted-lab-public-key", required=True)
+    revalidate.add_argument(
+        "--original-receipt-authority-key-id", required=True
+    )
+    revalidate.add_argument(
+        "--original-receipt-authority-public-key", required=True
+    )
+    revalidate.add_argument("--authority-key-id", required=True)
+    revalidate.add_argument("--authority-private-key", required=True)
+    revalidate.add_argument("--authority-public-key", required=True)
+    revalidate_jwt = revalidate.add_mutually_exclusive_group()
+    revalidate_jwt.add_argument("--devicecheck-jwt-file")
+    revalidate_jwt.add_argument("--devicecheck-jwt-fd", type=int)
+    revalidate.add_argument("--maximum-risk-metric", type=int, required=True)
+    revalidate.add_argument("--receipt-output", required=True)
+    revalidate.add_argument(
+        "--connect-timeout-seconds",
+        type=float,
+        default=DEFAULT_CONNECT_TIMEOUT_SECONDS,
+    )
+    revalidate.add_argument(
+        "--total-timeout-seconds",
+        type=float,
+        default=DEFAULT_TOTAL_TIMEOUT_SECONDS,
+    )
     return parser
 
 
@@ -2293,11 +3460,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             if request_output == lease_output:
                 raise AuthorityError("capture request and challenge lease outputs must differ")
             receipt_output = None
-        else:
+        elif args.command == "consume":
             request_output = None
             lease_output = None
             receipt_output = _require_new_private_output(
                 Path(args.receipt_output), "freshness receipt output"
+            )
+        else:
+            request_output = None
+            lease_output = None
+            receipt_output = _require_new_private_output(
+                Path(args.receipt_output), "catalog revalidation receipt output"
             )
         with AuthorityState(Path(args.state_dir)) as state:
             if args.command == "issue":
@@ -2325,35 +3498,67 @@ def main(argv: Optional[list[str]] = None) -> int:
                     f"{lease.challenge_id}"
                 )
                 return 0
-            consume_evidence(
-                state,
-                challenge_id=args.challenge_id,
-                evidence_path=Path(args.evidence),
-                artifact_root=Path(args.artifact_root),
-                production_policy_path=Path(args.production_policy),
-                capture_app_code_sign_measurements_path=Path(
-                    args.capture_app_code_sign_measurements
-                ),
-                trusted_lab_key_id=args.trusted_lab_key_id,
-                trusted_lab_public_key_path=Path(args.trusted_lab_public_key),
-                authority_key_id=args.authority_key_id,
-                authority_private_key_path=Path(args.authority_private_key),
-                authority_public_key_path=Path(args.authority_public_key),
-                maximum_risk_metric=args.maximum_risk_metric,
-                devicecheck_jwt_file=(
-                    Path(args.devicecheck_jwt_file)
-                    if args.devicecheck_jwt_file is not None
-                    else None
-                ),
-                devicecheck_jwt_fd=args.devicecheck_jwt_fd,
-                output_path=receipt_output,
-                connect_timeout_seconds=args.connect_timeout_seconds,
-                total_timeout_seconds=args.total_timeout_seconds,
-            )
-            print(
-                "[kagemusha-app-attest-authority] Apple receipt verified and "
-                "one-time evidence consumed"
-            )
+            if args.command == "consume":
+                consume_evidence(
+                    state,
+                    challenge_id=args.challenge_id,
+                    evidence_path=Path(args.evidence),
+                    artifact_root=Path(args.artifact_root),
+                    production_policy_path=Path(args.production_policy),
+                    capture_app_code_sign_measurements_path=Path(
+                        args.capture_app_code_sign_measurements
+                    ),
+                    trusted_lab_key_id=args.trusted_lab_key_id,
+                    trusted_lab_public_key_path=Path(args.trusted_lab_public_key),
+                    authority_key_id=args.authority_key_id,
+                    authority_private_key_path=Path(args.authority_private_key),
+                    authority_public_key_path=Path(args.authority_public_key),
+                    maximum_risk_metric=args.maximum_risk_metric,
+                    devicecheck_jwt_file=(
+                        Path(args.devicecheck_jwt_file)
+                        if args.devicecheck_jwt_file is not None
+                        else None
+                    ),
+                    devicecheck_jwt_fd=args.devicecheck_jwt_fd,
+                    output_path=receipt_output,
+                    connect_timeout_seconds=args.connect_timeout_seconds,
+                    total_timeout_seconds=args.total_timeout_seconds,
+                )
+                print(
+                    "[kagemusha-app-attest-authority] Apple receipt verified and "
+                    "one-time evidence consumed"
+                )
+            else:
+                revalidate_catalog(
+                    state,
+                    request_path=Path(args.catalog_request),
+                    production_policy_path=Path(args.production_policy),
+                    trusted_lab_key_id=args.trusted_lab_key_id,
+                    trusted_lab_public_key_path=Path(args.trusted_lab_public_key),
+                    original_receipt_authority_key_id=(
+                        args.original_receipt_authority_key_id
+                    ),
+                    original_receipt_authority_public_key_path=Path(
+                        args.original_receipt_authority_public_key
+                    ),
+                    authority_key_id=args.authority_key_id,
+                    authority_private_key_path=Path(args.authority_private_key),
+                    authority_public_key_path=Path(args.authority_public_key),
+                    maximum_risk_metric=args.maximum_risk_metric,
+                    devicecheck_jwt_file=(
+                        Path(args.devicecheck_jwt_file)
+                        if args.devicecheck_jwt_file is not None
+                        else None
+                    ),
+                    devicecheck_jwt_fd=args.devicecheck_jwt_fd,
+                    output_path=receipt_output,
+                    connect_timeout_seconds=args.connect_timeout_seconds,
+                    total_timeout_seconds=args.total_timeout_seconds,
+                )
+                print(
+                    "[kagemusha-app-attest-authority] exact catalog Apple status "
+                    "revalidated for one promotion"
+                )
             return 0
     except (
         AuthorityError,

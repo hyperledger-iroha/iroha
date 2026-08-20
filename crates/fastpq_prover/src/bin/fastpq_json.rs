@@ -16,8 +16,7 @@ use iroha_data_model::{
     nexus::{
         AxtDescriptor, AxtEffectBinding, AxtFastpqBinding, AxtRemoteSpendClaimV1, AxtTouchSpec,
         LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneRelayEnvelope, ProofBlob,
-        TouchManifest, compute_remote_spend_claim_commitment_v1,
-        lane_relay_fastpq_claim_digest,
+        TouchManifest, compute_remote_spend_claim_commitment_v1, lane_relay_fastpq_claim_digest,
     },
 };
 use norito::{
@@ -133,10 +132,10 @@ struct ProofRequest {
     /// Norito-encoded lane envelope carrying a compact global-finality reference.
     #[norito(default)]
     finalized_relay_envelope_hex: String,
-    /// CommitQC parent state root accompanying an offline relay proof request.
+    /// `CommitQC` parent state root accompanying an offline relay proof request.
     #[norito(default)]
     relay_parent_state_root: String,
-    /// CommitQC post state root accompanying an offline relay proof request.
+    /// `CommitQC` post state root accompanying an offline relay proof request.
     #[norito(default)]
     relay_post_state_root: String,
 }
@@ -962,8 +961,8 @@ mod tests {
             policy_commitment: "44".repeat(32),
             verified_effect_type: LANE_RELAY_FASTPQ_EFFECT_TYPE.to_owned(),
             corridor: "CBUAE_TO_SBP".to_owned(),
-            verifier_id: "fastpq-prover".to_owned(),
-            verifier_version: "test".to_owned(),
+            verifier_id: "fastpq".to_owned(),
+            verifier_version: "v1".to_owned(),
             source_lane_id: 1,
             relay_block_height: 1,
             batch_base64: batch_base64.into(),
@@ -1056,8 +1055,10 @@ mod tests {
         for batch_base64 in ["", " \t\n"] {
             let err = build_batch_from_request(&proof_request(batch_base64))
                 .expect_err("descriptor-only requests must not synthesize a batch");
-            assert!(err.contains("requires an execution-captured batch_base64"));
-            assert!(err.contains("synthetic descriptor-only batches are forbidden"));
+            assert_eq!(
+                err,
+                "FASTPQ prove/verify requires an execution-captured batch_base64; synthetic descriptor-only batches are forbidden"
+            );
         }
     }
     #[test]

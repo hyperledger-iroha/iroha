@@ -137,12 +137,24 @@ Read access is intentional: the sealed runtime-identity composer must hash and
 copy the root-owned image into its owner-private execution snapshot. No
 non-root identity can modify the installed image or its parent chain.
 
-`.github/workflows/promote_kagemusha_v4.yml` is the repository-owned production
-entry point. Its untrusted job builds an inert controller image. Its separately
-protected macOS job checks that image against the independent digest pin,
-installs and qualifies it, authenticates the root-custodied readiness gate and
-Python interpreter, then invokes the gate in `promotion` mode under `env -i`
-with every policy, catalog, Kagami, source-authority, and physical-iOS trust
-pin. Missing paths, pins, sudo grants, or host capabilities stop the workflow;
-the workflow does not create operator trust records or claim external signer
-compatibility.
+`.github/workflows/promote_kagemusha_v4.yml` is the repository-owned protected
+readiness verifier; it is not yet a publisher or activation workflow. Its
+untrusted job builds an inert controller image. Its separately protected macOS
+job checks out the exact GitHub workflow SHA, binds that SHA and canonical
+workflow identity to the root-custodied reviewed-source checkout, checks the
+image against the independent digest pin, and installs it only at
+`/Library/SORA/Kagemusha/bin/iroha_authenticated_tool_controller`. It then
+qualifies the image, authenticates the root-custodied readiness gate and Python
+interpreter/runtime tree, and invokes the gate in strict `promotion`-validation
+mode under `env -i` with every policy, catalog, Kagami, source-authority,
+sealed-build-report, and physical-iOS trust pin. Missing identities, paths,
+pins, exact sudo grants, or host capabilities stop the workflow. Verification
+of a pre-existing promotion record does not publish a release, qualify a
+validator catalog, submit an activation, or create operator trust records.
+The workflow derives a domain-separated promotion id from the immutable GitHub
+repository, workflow ref/SHA, run id, and run attempt, and admits the current
+catalog revalidation receipt only at
+`/Library/SORA/Kagemusha/catalog-revalidation/<promotion-id>.json`. An
+independent authority must create that root-custodied receipt after dispatch
+and before protected-environment approval; authority signing material and
+DeviceCheck credentials never enter this verification workflow.

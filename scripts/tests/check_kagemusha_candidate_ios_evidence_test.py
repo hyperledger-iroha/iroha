@@ -752,6 +752,9 @@ class ProductionFixture:
         candidate: Fixture,
         freshness_private_key: Path,
         freshness_public_key: Path,
+        *,
+        release_manifest_sha256: str | None = None,
+        evaluated_at_unix_ms: int | None = None,
     ) -> None:
         self.candidate = candidate
         self.raw = candidate.raw
@@ -766,8 +769,16 @@ class ProductionFixture:
             candidate.signed_dir / "online-freshness-consumption-receipt-v1.json"
         )
         self.policy = candidate.base / "production-ios-policy-v1.json"
-        self.release_manifest_sha256 = nonzero_digest("final-release-manifest")
-        self.evaluated_at_unix_ms = time.time_ns() // 1_000_000 - 30_000
+        self.release_manifest_sha256 = (
+            release_manifest_sha256
+            if release_manifest_sha256 is not None
+            else nonzero_digest("final-release-manifest")
+        )
+        self.evaluated_at_unix_ms = (
+            evaluated_at_unix_ms
+            if evaluated_at_unix_ms is not None
+            else time.time_ns() // 1_000_000 - 30_000
+        )
         self.validation_time_unix_ms = self.evaluated_at_unix_ms + 32_000
         self._write_policy()
         self._write_evidence()
@@ -1736,6 +1747,154 @@ class IosCandidateEvidenceTest(unittest.TestCase):
             self.assertTrue(
                 any("receipt is expired" in error for error in errors),
                 errors,
+            )
+
+    def test_historical_consumption_and_current_two_release_catalog_are_separate(
+        self,
+    ) -> None:
+        """Old immutable capture receipts remain valid only with fresh catalog status."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.production_fixture(temporary)
+            much_later = fixture.validation_time_unix_ms + 24 * 60 * 60 * 1000
+            current_errors = production_evidence.validate_production_signed_evidence(
+                fixture.evidence,
+                fixture.raw,
+                fixture.key_id,
+                fixture.public_key,
+                fixture.policy,
+                evidence_lib,
+                freshness_receipt_path=fixture.freshness_receipt,
+                trusted_freshness_key_id=fixture.freshness_key_id,
+                trusted_freshness_public_key_path=fixture.freshness_public_key,
+                evaluation_time_unix_ms=much_later,
+            )
+            self.assertTrue(
+                any("receipt is expired" in error for error in current_errors),
+                current_errors,
+            )
+            historical_errors = (
+                production_evidence.validate_historical_production_evidence_for_catalog_revalidation(
+                    fixture.evidence,
+                    fixture.raw,
+                    fixture.key_id,
+                    fixture.public_key,
+                    fixture.policy,
+                    evidence_lib,
+                    freshness_receipt_path=fixture.freshness_receipt,
+                    trusted_freshness_key_id=fixture.freshness_key_id,
+                    trusted_freshness_public_key_path=fixture.freshness_public_key,
+                    evaluation_time_unix_ms=much_later,
+                )
+            )
+            self.assertEqual(historical_errors, [])
+
+            bindings = sorted(
+                (
+                    {
+                        "release_manifest_sha256": nonzero_digest("release-one"),
+                        "evidence_sha256": nonzero_digest("evidence-one"),
+                        "consumption_receipt_sha256": nonzero_digest(
+                            "consumption-one"
+                        ),
+                    },
+                    {
+                        "release_manifest_sha256": nonzero_digest("release-two"),
+                        "evidence_sha256": nonzero_digest("evidence-two"),
+                        "consumption_receipt_sha256": nonzero_digest(
+                            "consumption-two"
+                        ),
+                    },
+                ),
+                key=lambda value: value["release_manifest_sha256"],
+            )
+            promotion_id = nonzero_digest("unique-promotion-run")
+            issued_at = much_later
+            statuses = [
+                {
+                    **binding,
+                    "app_attest_key_id": f"app-attest-key-{index}",
+                    "apple_status_checked_at_unix_ms": issued_at
+                    - (240_000 if index == 0 else 1_000),
+                    "apple_status": "good",
+                    "apple_status_source": production_evidence.ONLINE_REVOCATION_SOURCE,
+                    "refreshed_apple_receipt_sha256": nonzero_digest(
+                        f"refreshed-apple-receipt-{index}"
+                    ),
+                    "risk_metric": index,
+                }
+                for index, binding in enumerate(bindings)
+            ]
+            receipt: dict[str, Any] = {
+                "schema": production_evidence.CATALOG_REVALIDATION_RECEIPT_SCHEMA,
+                "version": 1,
+                "receipt_id": nonzero_digest("catalog-revalidation-receipt"),
+                "promotion_id": promotion_id,
+                "catalog_sha256": production_evidence.catalog_revalidation_digest(
+                    bindings, evidence_lib
+                ),
+                "issued_at_unix_ms": issued_at,
+                "expires_at_unix_ms": issued_at + 5 * 60 * 1000,
+                "status": "catalog-revalidated-for-one-promotion",
+                "release_statuses": statuses,
+                "signer_key_id": fixture.freshness_key_id,
+                "signer_public_key_sha256": evidence_lib.signer_public_key_sha256(
+                    fixture.freshness_public_key
+                ),
+                "signature_algorithm": "ed25519",
+            }
+            payload = evidence_lib.canonical_signature_payload(receipt)
+            receipt["signature_payload_sha256"] = sha256(payload)
+            receipt["signature"] = evidence_lib.sign_ed25519(
+                fixture.freshness_private_key, payload
+            ).hex()
+            receipt_path = Path(temporary) / "catalog-revalidation-receipt.json"
+            evidence_lib.write_private_json(receipt_path, receipt)
+
+            def errors(
+                *,
+                expected_promotion_id: str = promotion_id,
+                expected_bindings: list[dict[str, str]] = bindings,
+                evaluation_time: int = issued_at + 1_000,
+            ) -> list[str]:
+                return production_evidence.validate_catalog_revalidation_receipt(
+                    receipt_path,
+                    fixture.freshness_key_id,
+                    fixture.freshness_public_key,
+                    expected_promotion_id,
+                    expected_bindings,
+                    fixture.key_id,
+                    fixture.public_key,
+                    evidence_lib,
+                    evaluation_time_unix_ms=evaluation_time,
+                )
+
+            self.assertEqual(errors(), [])
+            self.assertTrue(
+                any(
+                    "does not bind this promotion id" in error
+                    for error in errors(
+                        expected_promotion_id=nonzero_digest("different-promotion")
+                    )
+                )
+            )
+            substituted = [dict(binding) for binding in bindings]
+            substituted[0]["evidence_sha256"] = nonzero_digest(
+                "substituted-evidence"
+            )
+            self.assertTrue(
+                any(
+                    "does not bind the exact release catalog" in error
+                    for error in errors(expected_bindings=substituted)
+                )
+            )
+            self.assertTrue(
+                any(
+                    "receipt is expired" in error
+                    for error in errors(
+                        evaluation_time=issued_at + 5 * 60 * 1000 + 1
+                    )
+                )
             )
 
     def test_production_ios_receipt_is_required_and_cli_accepts_valid_receipt(self) -> None:

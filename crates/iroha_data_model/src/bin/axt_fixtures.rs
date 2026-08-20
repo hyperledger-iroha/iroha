@@ -14,9 +14,8 @@ use iroha_data_model::{
         AssetHandle, AssetHandleDraft, AxtBinding, AxtDescriptorBuilder, AxtEffectBinding,
         AxtFastpqBinding, AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey,
         AxtProofEnvelope, AxtProofFragment, AxtTouchFragment, DataSpaceId, GroupBinding,
-        HandleBudget, HandleSubject, LaneId, ProofBlob, RemoteSpendIntent, SpendOp,
-        TouchManifest, UniversalAccountId,
-        compute_descriptor_binding, compute_remote_spend_intent_commitment_v1,
+        HandleBudget, HandleSubject, LaneId, ProofBlob, RemoteSpendIntent, SpendOp, TouchManifest,
+        UniversalAccountId, compute_descriptor_binding, compute_remote_spend_intent_commitment_v1,
     },
     testing::axt::{
         DescriptorFixture, EnvelopeFixture, HandleFixtures, PoseidonConstantsFixture,
@@ -183,6 +182,7 @@ fn transfer_handle_fixture(
     AxtHandleFragment {
         handle: signed_fixture_handle(
             AssetHandleDraft {
+                asset_definition_id: asset_definition_id.clone(),
                 scope: vec!["transfer".to_string()],
                 subject: HandleSubject {
                     account: alice.clone(),
@@ -233,6 +233,7 @@ fn lock_handle_fixture(
     AxtHandleFragment {
         handle: signed_fixture_handle(
             AssetHandleDraft {
+                asset_definition_id: asset_definition_id.clone(),
                 scope: vec!["transfer".to_string()],
                 subject: HandleSubject {
                     account: bob.clone(),

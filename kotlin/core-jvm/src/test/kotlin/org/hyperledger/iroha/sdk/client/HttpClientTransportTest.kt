@@ -4417,17 +4417,14 @@ class HttpClientTransportTest {
     private fun obj(root: Map<String, Any?>, key: String): Map<String, Any?> =
         root[key] as? Map<String, Any?>
             ?: error("$key must be an object")
-
     @Suppress("UNCHECKED_CAST")
     private fun listOfMaps(root: Map<String, Any?>, key: String): List<Map<String, Any?>> =
         root[key] as? List<Map<String, Any?>>
             ?: error("$key must be a list of objects")
-
     @Suppress("UNCHECKED_CAST")
     private fun mutableObj(root: Map<String, Any?>, key: String): MutableMap<String, Any?> =
         root[key] as? MutableMap<String, Any?>
             ?: error("$key must be a mutable object")
-
     @Suppress("UNCHECKED_CAST")
     private fun mutableListOfMaps(
         root: Map<String, Any?>,
@@ -4435,25 +4432,20 @@ class HttpClientTransportTest {
     ): MutableList<MutableMap<String, Any?>> =
         root[key] as? MutableList<MutableMap<String, Any?>>
             ?: error("$key must be a mutable list of objects")
-
     private fun string(root: Map<String, Any?>, key: String): String =
         root[key] as? String ?: error("$key must be a string")
-
     private fun stringList(root: Map<String, Any?>, key: String): List<String> =
         (root[key] as? List<*> ?: error("$key must be a list")).mapIndexed { index, value ->
             value as? String ?: error("$key[$index] must be a string")
         }
-
     private fun long(root: Map<String, Any?>, key: String): Long =
         when (val value = root[key]) {
             is Number -> value.toLong()
             is String -> value.toLongOrNull() ?: error("$key must be an integer string")
             else -> error("$key must be a number")
         }
-
     private fun optionalLong(root: Map<String, Any?>, key: String): Long? =
         (root[key] as? Number)?.toLong()
-
     private fun longList(root: Map<String, Any?>, key: String): List<Long> =
         (root[key] as? List<*> ?: error("$key must be a list")).mapIndexed { index, value ->
             when (value) {
@@ -4462,7 +4454,6 @@ class HttpClientTransportTest {
                 else -> error("$key[$index] must be a number")
             }
         }
-
     private fun sampleBfvPolicy(parameters: IdentifierBfvPublicParameters?): IdentifierPolicySummary =
         IdentifierPolicySummary(
             policyId = "string#retail",
@@ -4476,7 +4467,6 @@ class HttpClientTransportTest {
             inputEncryptionPublicParametersDecoded = parameters,
             note = null,
         )
-
     private fun samplePlaintextOnlyPolicy(): IdentifierPolicySummary =
         IdentifierPolicySummary(
             policyId = "string#retail",
@@ -4490,7 +4480,6 @@ class HttpClientTransportTest {
             inputEncryptionPublicParametersDecoded = null,
             note = null,
         )
-
     private fun sampleBfvParameters(): IdentifierBfvPublicParameters =
         IdentifierBfvPublicParameters(
             IdentifierBfvPublicParameters.Parameters(8L, 257L, 16_842_752L, 12),

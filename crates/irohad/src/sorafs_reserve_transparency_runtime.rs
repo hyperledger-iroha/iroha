@@ -1,5 +1,4 @@
 //! Production supervision for finalized reserve-event transparency ingestion.
-use std::{sync::Arc, time::Duration};
 use eyre::{Result, bail};
 use iroha_config::parameters::actual::SorafsReserveTransparencyRuntime;
 use iroha_core::state::{State, WorldStateSnapshot as _};
@@ -14,6 +13,7 @@ use sorafs_node::{
         ReserveTransparencyScannerV1, ReserveTransparencySourceSinkV1,
     },
 };
+use std::{sync::Arc, time::Duration};
 const SHUTDOWN_WAIT: Duration = Duration::from_secs(2);
 struct StateReserveTransparencyCommittedProjectionV1 {
     state: Arc<State>,
@@ -164,8 +164,8 @@ fn next_retry_delay(current: Duration, base: Duration, maximum: Duration) -> Dur
 }
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
     use super::*;
+    use std::cell::Cell;
     #[test]
     fn committed_anchor_match_is_exact_and_height_bounded() {
         let hashes = [[0x11; 32], [0x22; 32], [0x33; 32]];

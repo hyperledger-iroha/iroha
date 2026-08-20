@@ -125,6 +125,8 @@ const READINESS_EXTERNAL_ENVIRONMENT_NAMES: &[&str] = &[
     "KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY",
     "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID",
     "KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY",
+    "KAGEMUSHA_V4_PROMOTION_ID",
+    "KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT",
 ];
 
 #[cfg(target_os = "macos")]
@@ -2424,6 +2426,25 @@ mod tests {
         )
         .expect_err("duplicate environment entry must reject");
         assert!(error.message.contains("duplicate variable LANG"));
+    }
+
+    #[test]
+    fn readiness_environment_requires_catalog_revalidation_identity() {
+        for required in [
+            "KAGEMUSHA_V4_PROMOTION_ID",
+            "KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT",
+        ] {
+            assert!(READINESS_EXTERNAL_ENVIRONMENT_NAMES.contains(&required));
+            let mut missing = exact_readiness_environment_entries();
+            missing.retain(|(name, _)| name.as_os_str() != OsStr::new(required));
+            let error = validate_exact_environment(
+                missing,
+                READINESS_EXTERNAL_ENVIRONMENT_NAMES,
+                "test readiness environment",
+            )
+            .expect_err("promotion-scoped catalog revalidation input must be exact");
+            assert!(error.message.contains("inventory is not exact"));
+        }
     }
 
     #[cfg(target_os = "macos")]

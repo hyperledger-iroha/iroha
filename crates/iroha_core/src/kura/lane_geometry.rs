@@ -12564,62 +12564,6 @@ fn bootstrap_validate_path_kind(store_root: &Path, path: &Path, directory: bool)
     }
     Ok(true)
 }
-fn bootstrap_validate_existing_ancestors(store_root: &Path, path: &Path) -> Result<()> {
-    let relative = path.strip_prefix(store_root).map_err(|_| {
-        lane_geometry_journal_structure_error(
-            store_root,
-            ErrorKind::InvalidInput,
-            "bootstrap geometry path escapes the Kura store root",
-        )
-    })?;
-    validate_relative_path(relative)?;
-    let root_metadata = fs::symlink_metadata(store_root)
-        .map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
-    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
-        return Err(Error::IO(
-            std::io::Error::new(
-                ErrorKind::InvalidData,
-                "bootstrap Kura root is not a non-symlink directory",
-            ),
-            store_root.to_path_buf(),
-        ));
-    }
-    let canonical_root =
-        fs::canonicalize(store_root).map_err(|error| Error::IO(error, store_root.to_path_buf()))?;
-    let components = relative.components().collect::<Vec<_>>();
-    let mut cursor = store_root.to_path_buf();
-    let mut expected = PathBuf::new();
-    for component in components.iter().take(components.len().saturating_sub(1)) {
-        cursor.push(component.as_os_str());
-        expected.push(component.as_os_str());
-        let metadata = match fs::symlink_metadata(&cursor) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == ErrorKind::NotFound => break,
-            Err(error) => return Err(Error::IO(error, cursor)),
-        };
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "bootstrap geometry ancestor is not a non-symlink directory",
-                ),
-                cursor,
-            ));
-        }
-        let canonical =
-            fs::canonicalize(&cursor).map_err(|error| Error::IO(error, cursor.clone()))?;
-        if canonical != canonical_root.join(&expected) {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "bootstrap geometry ancestor escapes the Kura store root",
-                ),
-                cursor,
-            ));
-        }
-    }
-    Ok(())
-}
 include!("lane_geometry/bootstrap_path_safety.rs");
 include!("lane_geometry/bootstrap_relabel.rs");
 include!("lane_geometry/catalog_validation.rs");

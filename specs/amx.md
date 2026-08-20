@@ -107,7 +107,7 @@ Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_
 
 1. Build an AXT descriptor listing the dataspace bucket that the remote spend uses plus any read/write touches required locally; keep the descriptor deterministic so the binding hash stays stable.
 2. Call `AXT_TOUCH` for the remote dataspace with the manifest view you expect; optionally attach a proof via `AXT_VERIFY_DS_PROOF` if the host requires it.
-3. Request or refresh the asset handle and invoke `AXT_USE_ASSET_HANDLE` with a `RemoteSpendIntent` that spends inside the remote dataspace (no bridge leg). Budget enforcement uses the handle’s `remaining`, `per_use`, `sub_nonce`, `handle_era`, and `expiry_slot` against the snapshot described above.
+3. Request or refresh an asset-specific handle and invoke `AXT_USE_ASSET_HANDLE` with a `RemoteSpendIntent` that spends the exact signed `AssetDefinitionId` inside the remote dataspace (no bridge leg). The handle's issuer-signed asset must equal `RemoteSpendIntent.op.asset_definition_id`; budget enforcement uses that asset identity plus the handle’s `remaining`, `per_use`, `sub_nonce`, `handle_era`, and `expiry_slot` against the snapshot described above.
 4. Commit via `AXT_COMMIT`; if the host returns `PermissionDenied`, use the reject label to decide whether to fetch a fresh handle (expiry/sub_nonce/era) or fix the manifest/lane binding.
 
 ## Operator Expectations
@@ -196,9 +196,11 @@ than requests to synthesize defaults.
 This is a first-release proof-format hard cut. Proofs and snapshots generated
 without the required metadata, or with the retired single-field metadata
 projection, are invalid and must be regenerated rather than relabelled.
-`SpendOp.asset_definition_id` and the claim's full `AxtHandleReplayKey` are
-required wire fields; pre-change handles, claims, proofs, and JSON fixtures do
-not decode as V1 and must be regenerated together.
+`AssetHandleDraft.asset_definition_id`, `AssetHandle.asset_definition_id`,
+`SpendOp.asset_definition_id`, and the claim's full `AxtHandleReplayKey` are
+required wire fields. The handle asset is part of the canonical issuer-signature
+payload. Pre-change handles, claims, proofs, and JSON fixtures do not decode as
+V1 and must be regenerated together.
 
 One cryptographically verified proof may be reused for multiple handles in the
 same dataspace only when its binding contains one distinct handle-bound claim
@@ -230,9 +232,11 @@ Issuers construct an unsigned `AssetHandleDraft`; signing consumes that draft
 and returns an admission-ready `AssetHandle` with a mandatory signature. The
 signature binds the exact genesis-derived `NetworkId`, committed issuer UAID and
 manifest root, executing code root, ABI version/hash, dataspace, descriptor
-digest, scope, subject, budget, group/lane context, exact active era/next
-counter, expiry, and skew allowance. The host reconstructs this context from
-committed state and the executing IVM before any FASTPQ work.
+digest, exact `AssetDefinitionId`, scope, subject, budget, group/lane context,
+exact active era/next counter, expiry, and skew allowance. The host reconstructs
+this context from committed state and the executing IVM before any FASTPQ work,
+and rejects a handle whose signed asset differs from the remote-spend intent or
+matched proof transcript.
 
 ### Generation and use
 
@@ -283,13 +287,19 @@ AXT handle verification now defaults to the Space Directory snapshot when the ho
 - counters: `handle_era` must equal the active manifest era and `sub_nonce` must equal the next committed counter; stale and caller-selected future values are rejected, advancement uses checked arithmetic, and CoreHost includes both the active envelope and earlier completed envelopes in the same transaction when deriving the next counter;
 - replay scope: the canonical replay key is `(asset_dsid, descriptor_binding, handle_era, sub_nonce, target_lane)`, where `asset_dsid` comes from the authenticated issuer/policy context. Distinct dataspaces therefore retain independent per-dataspace counters even when they share a lane and identical counter values; optional `origin_dsid` is not replay authority;
 - account identity: `HandleSubject.account` and `RemoteSpendIntent.op.{from,to}` must carry exact canonical I105 account identifiers; aliases, padded text, and alternate encodings are rejected before policy evaluation;
-- issuer authentication: the signature must bind every V1 policy/network field and verify with the single-key account resolved from the active manifest's committed UAID and dataspace binding;
+- issuer authentication: the signature must bind the exact asset definition and every V1 policy/network field, and verify with the single-key account resolved from the active manifest's committed UAID and dataspace binding;
 - membership: handles for dataspaces absent from the snapshot are denied.
 
 Failures map to `PermissionDenied`. IVM policy tests cover field-level allow/deny
 cases, while CoreHost regressions cover active and completed-envelope counter
 progression.
-Block validation authenticates unique handles before FASTPQ verification, scopes replay and budget aggregation by the authenticated asset dataspace, groups handles by their exact V1 issuer/network/policy scope, and reconstructs each committed per-dataspace pre-state counter with checked subtraction from the advertised post-state. It then requires exact ordered counter progression and exact equality with the advertised post-state, with a consensus ceiling of 65,536 authenticated handles per block. It also requires non-empty proofs per dataspace with `expiry_slot` covering the policy slot (with the configured skew allowance) and not expiring before the handle, enforces descriptor binding plus touch manifests for declared specs (and rejects out-of-prefix entries), checks handle intent invariants, and aggregates handle budgets per dataspace.
+Block validation authenticates unique handles before FASTPQ verification, scopes replay by the authenticated asset dataspace, groups budgets by the complete normalized V1 issuer-signed capability statement, and reconstructs each committed per-dataspace pre-state counter with checked subtraction from the advertised post-state. It then requires exact ordered counter progression and exact equality with the advertised post-state, with a consensus ceiling of 65,536 authenticated handles per block. It also requires non-empty proofs per dataspace with `expiry_slot` covering the policy slot (with the configured skew allowance) and not expiring before the handle, enforces descriptor binding plus touch manifests for declared specs (and rejects out-of-prefix entries), and checks exact signed-handle/intent/proof asset equality.
+Normalized signed handle-family consumption is consensus-persisted and aggregates across completed transaction envelopes, all envelope records in a block, and later blocks; splitting sequential `sub_nonce` values therefore cannot reset `remaining` or `per_use` limits.
+V1 does not prune this ledger: neither slot/configuration changes nor lane or dataspace removal cryptographically retires a signed family, so eviction could revive its allowance. Operators must account for this authenticated state growth until an irreversible family-generation/retirement protocol exists.
+
+Unexpired exact-use replay guards and per-dataspace policy/counter ratchets are also consensus-persisted. Lane retirement, reassignment, and dataspace removal never delete a replay guard; only deterministic expiry may remove it. Block admission hydrates replay and family-budget records only for referenced handles from the pre-block MVCC undo view, so validation cost is proportional to touched handles rather than historical ledger size.
+
+These persisted AXT stores are a first-release state-format hard cut. They are required in canonical World snapshots and change WSV checkpoint hashes even when initially empty. Pre-cut snapshots/checkpoints must not be loaded by defaulting a missing store to an empty map; deployments must re-genesis or rebuild at a chain boundary that invalidates every pre-cut handle and family.
 
 ## Error Catalog
 

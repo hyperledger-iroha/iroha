@@ -8,17 +8,6 @@
 compile_error!(
     "the test-network message controller requires Unix openat/no-follow and ownership semantics"
 );
-use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
-    env,
-    fs::{self, File, OpenOptions},
-    io::{Read, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
-    sync::{
-        Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-};
 use iroha_core::NetworkMessage;
 use iroha_crypto::Hash;
 use iroha_crypto::HashOf;
@@ -36,6 +25,17 @@ use iroha_p2p::network::NetworkReplyRoute;
 use norito::{
     codec::Encode,
     json::{Map, Value},
+};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    env,
+    fs::{self, File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 /// Environment variable consumed only by the feature-isolated test daemon.
 pub(crate) const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
@@ -1631,11 +1631,13 @@ impl std::fmt::Display for ControlError {
 impl std::error::Error for ControlError {}
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use super::*;
     use iroha_core::sumeragi::message::{BlockMessage, BlockMessageWire};
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::block::consensus_v2::{ConsensusMessageV2, PayloadChunk, PayloadManifest};
+    use iroha_data_model::block::consensus_v2::{
+        ConsensusMessageV2, PayloadChunk, PayloadManifest,
+    };
+    use std::sync::Arc;
     use tempfile::tempdir;
     fn peer(marker: u8) -> PeerId {
         let key = KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)

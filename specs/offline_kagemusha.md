@@ -882,18 +882,54 @@ Landlock/seccomp/cgroup backend has independent host qualification. A Linux
 promotion host therefore remains blocked and must not substitute Bubblewrap or
 an unqualified wrapper.
 
+The protected GitHub job checks out `github.workflow_sha`, requires the
+canonical `hyperledger-iroha/iroha` workflow path on a protected ref, requires
+`github.sha == github.workflow_sha`, and requires both that checkout and the
+root-custodied gate checkout to have the same `HEAD`. The gate then authenticates
+that root checkout against the signed reviewed-source closure. None of those
+identities comes from a repository or organization variable. The only admitted
+controller install leaf is
+`/Library/SORA/Kagemusha/bin/iroha_authenticated_tool_controller`; provision its
+parent and exact-argument sudo grants before dispatch. A mutable variable cannot
+select another root destination.
+
+Each dispatched run also derives a promotion-scoped identifier as lowercase
+SHA-256 over NUL-terminated values in this exact order:
+`iroha.kagemusha.github-promotion-run.v1`, `github.repository`,
+`github.workflow_ref`, `github.workflow_sha`, `github.run_id`, and
+`github.run_attempt`. The run id and attempt are immutable GitHub contexts, not
+repository or organization variables. After dispatch and before approving the
+protected environment, the independent online authority must issue the exact
+catalog revalidation receipt for that identifier and the complete ordered
+release set. Provision it without replacement at
+`/Library/SORA/Kagemusha/catalog-revalidation/<promotion-id>.json`. The workflow
+constructs that path itself and the gate requires the file to be canonical,
+bounded, root-custodied, and outside the immutable evidence root. A rerun has a
+different identifier and therefore cannot replay the prior attempt's receipt.
+The authority durably marks a promotion identifier expired the first time it
+observes that its receipt lifetime has elapsed; a later wall-clock rollback or
+authority restart cannot revive that identifier.
+The workflow neither receives the authority private key/DeviceCheck JWT nor
+invokes `revalidate-catalog`; those runtime-only credentials remain at the
+external authority boundary.
+
 ```bash
 KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256='<reviewed-gate-64-lowercase-hex>' \
 KAGEMUSHA_PRODUCTION_READINESS_PYTHON=/absolute/root-custodied/python3 \
 KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256='<reviewed-python-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_ROOT=/absolute/root-custodied/python-runtime \
+KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_TREE_SHA256='<reviewed-python-runtime-tree-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD='<reviewed-macos-build>' \
 KAGEMUSHA_V4_KAGAMI_BIN=/absolute/root-custodied/kagami \
 KAGEMUSHA_V4_KAGAMI_SHA256='<reviewed-kagami-64-lowercase-hex>' \
-KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN=/absolute/root-custodied/authenticated-tool-controller \
+KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN=/Library/SORA/Kagemusha/bin/iroha_authenticated_tool_controller \
 KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256='<reviewed-controller-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=/absolute/root-custodied/reviewed-source-closure.json \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION=/absolute/root-custodied/authenticated-source-seal-projection.json \
 KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256='<reviewed-projection-64-lowercase-hex>' \
+KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_PATH=/absolute/root-custodied/sealed-candidate-build-report.json \
+KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256='<reviewed-sealed-report-64-lowercase-hex>' \
 KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_PATH=/absolute/root-custodied/allowed-signers \
 KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_SHA256='<reviewed-allowed-signers-64-lowercase-hex>' \
 KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_PATH=/absolute/root-custodied/revocation \
@@ -912,14 +948,19 @@ runner's exact `raw/` tree:
 KAGEMUSHA_PRODUCTION_READINESS_GATE_SHA256='<reviewed-gate-64-lowercase-hex>' \
 KAGEMUSHA_PRODUCTION_READINESS_PYTHON=/absolute/root-custodied/python3 \
 KAGEMUSHA_PRODUCTION_READINESS_PYTHON_SHA256='<reviewed-python-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_ROOT=/absolute/root-custodied/python-runtime \
+KAGEMUSHA_PRODUCTION_READINESS_PYTHON_RUNTIME_TREE_SHA256='<reviewed-python-runtime-tree-64-lowercase-hex>' \
+KAGEMUSHA_PRODUCTION_READINESS_EXPECTED_MACOS_BUILD='<reviewed-macos-build>' \
 KAGEMUSHA_V4_KAGAMI_BIN=/absolute/root-custodied/kagami \
 KAGEMUSHA_V4_KAGAMI_SHA256='<reviewed-kagami-64-lowercase-hex>' \
-KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN=/absolute/root-custodied/authenticated-tool-controller \
+KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_BIN=/Library/SORA/Kagemusha/bin/iroha_authenticated_tool_controller \
 KAGEMUSHA_AUTHENTICATED_TOOL_CONTROLLER_SHA256='<reviewed-controller-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE=/absolute/root-custodied/reviewed-source-closure.json \
 KAGEMUSHA_BUILD_REVIEWED_SOURCE_CLOSURE_SHA256='<reviewed-closure-64-lowercase-hex>' \
 KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION=/absolute/root-custodied/authenticated-source-seal-projection.json \
 KAGEMUSHA_BUILD_AUTHENTICATED_SOURCE_SEAL_PROJECTION_SHA256='<reviewed-projection-64-lowercase-hex>' \
+KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_PATH=/absolute/root-custodied/sealed-candidate-build-report.json \
+KAGEMUSHA_V4_SEALED_CANDIDATE_BUILD_REPORT_SHA256='<reviewed-sealed-report-64-lowercase-hex>' \
 KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_PATH=/absolute/root-custodied/allowed-signers \
 KAGEMUSHA_PRODUCTION_SOURCE_SSH_ALLOWED_SIGNERS_SHA256='<reviewed-allowed-signers-64-lowercase-hex>' \
 KAGEMUSHA_PRODUCTION_SOURCE_SSH_REVOCATION_PATH=/absolute/root-custodied/revocation \
@@ -932,18 +973,65 @@ KAGEMUSHA_IOS_DEVICE_EVIDENCE_TRUSTED_PUBLIC_KEY=/run/secrets/kagemusha-ios-evid
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY=/run/secrets/kagemusha-production-ios-policy-v1.json \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_KEY_ID="$FRESHNESS_AUTHORITY_KEY_ID" \
 KAGEMUSHA_IOS_DEVICE_EVIDENCE_FRESHNESS_TRUSTED_PUBLIC_KEY=/run/secrets/kagemusha-ios-freshness-authority-ed25519.pub.pem \
+KAGEMUSHA_V4_PROMOTION_ID="$PROMOTION_ID" \
+KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT="/Library/SORA/Kagemusha/catalog-revalidation/$PROMOTION_ID.json" \
   /absolute/root-custodied/reviewed-iroha/ci/check_kagemusha_production_readiness.sh promotion
 ```
+
+The checked-in workflow is deliberately named as readiness verification, not
+promotion. Its gate authenticates a catalog that already contains
+`promotion-record-v4.norito`; it does not publish that record, write a validator
+qualification seal, prepare or submit an activation, or archive a
+workflow-identity-bound durable receipt. Verification success is not promotion,
+and the workflow does not invoke `promote-release-v4`.
+
+The local Kagami publication boundary is non-circular. `promote-release-v4`
+first authenticates the exact sixteen-file pre-promotion candidate, including
+the release, cryptographic-review, and physical-device approval roles. It
+requires `--promotion-record` to be the exact canonical absent
+`<bundle-dir>/promotion-record-v4.norito` leaf, publishes the derived record with
+the descriptor-relative no-replace durable writer, and then runs the full exact
+seventeen-file promoted-release verifier. The command reports success only from
+that post-publication verification pass. `verify-release-v4` remains a distinct
+verification-only command and always requires the complete seventeen-file
+inventory.
+
+That local primitive does not make the protected workflow a publisher. The
+authenticated tool controller still needs a dedicated exact-argument promotion
+publisher: its generic writable-file mode pre-creates outputs and therefore
+conflicts with Kagami's create-new contract, while the readiness launcher denies
+every write. The dedicated controller path must authenticate the exact Kagami
+binary and sixteen-file candidate, allow only the fixed absent bundle leaf, and
+return the post-publication verification result without broadening its sandbox
+or filesystem authority.
+
+Only after that receipt may the workflow re-run the full readiness gate over
+the complete immutable release. Four separately protected validator jobs must
+then invoke `iroha3d --check-config` with
+`--write-kagemusha-catalog-qualification-seal` and each validator's admitted
+binary, config, genesis, and fixed new seal path; no repository variable can
+stand in for those host-local inputs. A separate live-operator workflow must use
+`prepare-activation-v4`, collect the required governance authorization, submit
+the transaction, and observe its future-height commit. Its final
+no-replace durable receipt must bind repository, workflow path/SHA, run
+id/attempt, reviewed closure, manifest, promotion publication receipt, all four
+seal digests, signed transaction hash, and committed block identity. Until
+those source contracts, four validator lanes, and runtime-only governance
+inputs exist, verification success is not promotion and no activation write is
+authorized.
 
 The signed JSON itself remains the release's
 `physical-device-benchmark.evidence`. The corridor verifies its exact external
 raw tree, trusted Ed25519 signature, physical-iOS invariants, the production
 policy, and the independently signed online freshness/consumption receipt at
 `<evidence-root>/<manifest-sha256>/online-freshness-consumption-receipt-v1.json`,
-then compares the signed candidate-record digest with the immutable candidate
-reconstructed by Kagami from the finalized release. All six iOS environment
-variables are an all-or-none input; a simulator, XCTest summary, missing or
-stale receipt, or raw tree for a different manifest digest fails closed.
+plus the fresh promotion-scoped catalog revalidation receipt at the fixed path
+above, then compares the signed candidate-record digest with the immutable
+candidate reconstructed by Kagami from the finalized release. All six iOS
+trust variables plus the promotion id and catalog receipt are an all-or-none
+input; a simulator, XCTest summary, missing or stale receipt, receipt for a
+different run attempt or release set, or raw tree for a different manifest
+digest fails closed.
 
 The policy path is always an explicit runtime input. No build-time environment
 variable or embedded policy selects a Kagemusha trust root.

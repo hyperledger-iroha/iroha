@@ -19134,19 +19134,6 @@ mod tests {
                 "{diagnostic}"
             );
         }
-        #[test]
-        fn runtime_budget_rejects_zero_underflow_and_overflow() {
-            for probe in [
-                storage_budget_probe(1_000, 200, 0),
-                storage_budget_probe(1_000, 199, 0),
-                storage_budget_probe(1_000, 1, u64::MAX),
-            ] {
-                assert!(
-                    derive_runtime_nexus_storage_budget(&[probe]).is_err(),
-                    "invalid capacity arithmetic must fail closed"
-                );
-            }
-        }
         #[cfg(unix)]
         include!("main/runtime_budget_and_config_tests.rs");
     }

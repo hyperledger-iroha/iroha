@@ -70,9 +70,7 @@ use selected_storage::validate_selected_peer_storage_paths_under_lock;
 pub use selected_storage::{SelectedPeerStoragePaths, resolve_selected_peer_storage_paths};
 #[cfg(test)]
 use snapshot_label::SNAPSHOT_LABEL_MAX_LEN;
-use snapshot_label::{
-    SNAPSHOT_STORAGE_LAYOUT, default_snapshot_slug, sanitize_snapshot_label,
-};
+use snapshot_label::{SNAPSHOT_STORAGE_LAYOUT, default_snapshot_slug, sanitize_snapshot_label};
 const DEFAULT_CHAIN_ID: &str = "mochi-local";
 const DEFAULT_TORII_BASE_PORT: u16 = 8080;
 const DEFAULT_P2P_BASE_PORT: u16 = 1337;

@@ -97,6 +97,31 @@ counter rollback, concurrent consumption, stale CMS creation, excessive risk,
 wrong App ID/key/type/root, unsafe state ancestors/SQLite sidecars, and blocking
 JWT descriptors fail closed in the focused test suite.
 
+The consumption receipt is immutable capture history, not a renewable status
+object. A catalog may retain up to 16 releases for rollback/audit, so a later
+promotion must not rewrite an older release or pretend its five-minute receipt
+is current. Instead, the authority's `revalidate-catalog` operation validates
+every historical envelope and original consumption receipt in full, refreshes
+each embedded App Attest receipt with Apple, and emits one bounded
+`iroha.kagemusha.ios.app_attest_catalog_revalidation_receipt.v1`. That receipt
+binds a single-use nonzero promotion ID, the canonical ordered digest of every
+release manifest/evidence/original-receipt triple, and a fresh Apple status,
+refreshed-receipt digest, App Attest key ID, and risk metric for every release.
+It expires within five minutes. The SQLite authority reserves the promotion ID
+before signing; crash recovery can recover only the identical unexpired
+payload, while catalog rebinding, status substitution, and revival after expiry
+fail closed.
+
+The request consumed by `revalidate-catalog` uses schema
+`iroha.kagemusha.ios.app_attest_catalog_revalidation_request.v1`, carries the
+same promotion ID, and lists canonical absolute paths to each signed envelope,
+raw artifact root, original consumption receipt, and prepared capture-app
+measurement. DeviceCheck credentials remain runtime-only. The ordinary
+`validate_production_signed_evidence` entrypoint always rejects an expired
+consumption receipt; only the dedicated authority/promotion historical
+entrypoint omits that one current-time comparison, and its callers must then
+require the separate current exact-catalog receipt.
+
 DeviceCheck JWTs enter only through an owner-private bounded file or inherited
 regular-file descriptor and are never stored or logged. Production operations
 must still provision and rotate the independent Ed25519 authority key and
@@ -154,11 +179,18 @@ envelope and signs its freshness/replay receipt.
 Promotion additionally requires the production policy through
 `KAGEMUSHA_IOS_DEVICE_EVIDENCE_PRODUCTION_POLICY`. The gate snapshots that
 policy, the trusted lab-signing key, and both reviewed iOS validators before
-validation. The standalone production checker additionally requires
-`--freshness-receipt`, `--trusted-freshness-key-id`, and
+validation. Multi-release promotion also requires
+`KAGEMUSHA_V4_PROMOTION_ID` and the root-custodied receipt at
+`KAGEMUSHA_IOS_DEVICE_EVIDENCE_CATALOG_REVALIDATION_RECEIPT`; the receipt must
+stay outside the immutable evidence root and bind the exact complete release
+set observed by the gate. A stale original receipt alone, a fresh receipt for a
+different promotion, an omitted historical release, or a substituted evidence
+or consumption-receipt digest fails closed. The standalone production checker
+additionally requires `--freshness-receipt`, `--trusted-freshness-key-id`, and
 `--trusted-freshness-public-key`; the promotion gate must snapshot equivalent
-root-custodied inputs before activation. It also requires the production envelope's
-`release_manifest_sha256` to equal the enclosing catalog directory name.
+root-custodied inputs before activation. It also requires the production
+envelope's `release_manifest_sha256` to equal the enclosing catalog directory
+name.
 `scripts/build_kagemusha_production_ios_policy.py` provides the strict
 no-replace constructor for this policy and validates every emitted byte through
 the same production parser before publication; policy choice and root-custody
@@ -172,7 +204,8 @@ prepared capture-app measurement/executable substitution, assertion-signature
 tampering, RP-ID substitution, fake and expired
 certificates, static revocation, nonce substitution, receipt-signature and
 evidence-digest substitution, stale online revocation status, counter rollback,
-and one-time consumption-ID reuse. The repository's pinned Apple App
+one-time consumption-ID reuse, two time-separated catalog releases, catalog
+substitution, stale catalog status, and cross-promotion replay. The repository's pinned Apple App
 Attestation P-384 root and Apple's complete published 2026 attestation object
 are real parser/signature/wire fixtures; synthetic certificate chains remain
 test-only and are never production evidence. The primary vector proves the

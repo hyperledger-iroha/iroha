@@ -865,15 +865,15 @@ fn proof_bound_da_commitment(batch: &TransitionBatch) -> Result<Option<[u8; 32]>
     }
 }
 fn encode_optional_da_commitment(commitment: Option<[u8; 32]>) -> Vec<u8> {
-    match commitment {
-        None => vec![0; 33],
-        Some(commitment) => {
+    commitment.map_or_else(
+        || vec![0; 33],
+        |commitment| {
             let mut encoded = Vec::with_capacity(33);
             encoded.push(1);
             encoded.extend_from_slice(&commitment);
             encoded
-        }
-    }
+        },
+    )
 }
 fn require_concrete_execution_batch(
     batch: &TransitionBatch,
@@ -916,6 +916,55 @@ fn require_transfer_claim_witnesses(
     }
     Ok(())
 }
+fn decode_bound_remote_spend_claims(
+    encoded_claims: &[u8],
+    binding: &AxtFastpqBinding,
+) -> Result<Vec<AxtRemoteSpendClaimV1>> {
+    let claims: Vec<AxtRemoteSpendClaimV1> = decode_from_bytes(encoded_claims)
+        .map_err(|source| Error::TransferMetadataDecode { source })?;
+    if encode_canonical_norito(&claims)?.as_slice() != encoded_claims {
+        return Err(Error::InvalidAxtBinding {
+            details: "remote-spend claim metadata must use canonical Norito bytes".into(),
+        });
+    }
+    let commitments: Vec<_> = claims
+        .iter()
+        .map(compute_remote_spend_claim_commitment_v1)
+        .collect();
+    if commitments != binding.remote_spend_intent_commitments {
+        return Err(Error::InvalidAxtBinding {
+            details: "remote-spend claim metadata does not exactly reconstruct the binding commitment set"
+                .into(),
+        });
+    }
+    Ok(claims)
+}
+
+fn canonical_remote_spend_source_asset(binding: &AxtFastpqBinding) -> Result<AssetDefinitionId> {
+    let source_asset_literal = binding
+        .effect_binding
+        .as_ref()
+        .and_then(|effect| effect.source_asset_definition_id.as_deref())
+        .ok_or_else(|| Error::InvalidAxtBinding {
+            details: "remote-spend commitments require one exact source_asset_definition_id".into(),
+        })?;
+    let source_asset: AssetDefinitionId =
+        source_asset_literal
+            .parse()
+            .map_err(|error| Error::InvalidAxtBinding {
+                details: format!(
+                    "remote-spend source_asset_definition_id is not canonical: {error}"
+                ),
+            })?;
+    if source_asset.to_string() != source_asset_literal {
+        return Err(Error::InvalidAxtBinding {
+            details: "remote-spend source_asset_definition_id must use its canonical literal"
+                .into(),
+        });
+    }
+    Ok(source_asset)
+}
+
 fn require_remote_spend_transcript_linkage(
     batch: &TransitionBatch,
     binding: &AxtFastpqBinding,
@@ -946,45 +995,8 @@ fn require_remote_spend_transcript_linkage(
     })?;
     let _canonical_flags =
         norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    let claims: Vec<AxtRemoteSpendClaimV1> = decode_from_bytes(encoded_claims)
-        .map_err(|source| Error::TransferMetadataDecode { source })?;
-    if encode_canonical_norito(&claims)?.as_slice() != encoded_claims.as_slice() {
-        return Err(Error::InvalidAxtBinding {
-            details: "remote-spend claim metadata must use canonical Norito bytes".into(),
-        });
-    }
-    let commitments: Vec<_> = claims
-        .iter()
-        .map(compute_remote_spend_claim_commitment_v1)
-        .collect();
-    if commitments != binding.remote_spend_intent_commitments {
-        return Err(Error::InvalidAxtBinding {
-            details: "remote-spend claim metadata does not exactly reconstruct the binding commitment set"
-                .into(),
-        });
-    }
-
-    let source_asset_literal = binding
-        .effect_binding
-        .as_ref()
-        .and_then(|effect| effect.source_asset_definition_id.as_deref())
-        .ok_or_else(|| Error::InvalidAxtBinding {
-            details: "remote-spend commitments require one exact source_asset_definition_id".into(),
-        })?;
-    let source_asset: AssetDefinitionId =
-        source_asset_literal
-            .parse()
-            .map_err(|error| Error::InvalidAxtBinding {
-                details: format!(
-                    "remote-spend source_asset_definition_id is not canonical: {error}"
-                ),
-            })?;
-    if source_asset.to_string() != source_asset_literal {
-        return Err(Error::InvalidAxtBinding {
-            details: "remote-spend source_asset_definition_id must use its canonical literal"
-                .into(),
-        });
-    }
+    let claims = decode_bound_remote_spend_claims(encoded_claims, binding)?;
+    let source_asset = canonical_remote_spend_source_asset(binding)?;
 
     let transcripts =
         decode_transcripts(&batch.metadata)?.ok_or_else(|| Error::MissingMetadata {
@@ -1938,14 +1950,27 @@ mod tests {
         ));
     }
     #[test]
-    fn generic_prover_rejects_root_changing_opaque_axt_carrier() {
+    fn generic_prover_and_verifier_reject_root_changing_opaque_axt_carrier() {
         let binding = sample_binding();
         let batch = real_authorization_batch(&binding);
 
-        let error = Prover::canonical(DEFAULT_PARAMETER)
-            .expect("prover")
+        let prover = Prover::canonical(DEFAULT_PARAMETER).expect("prover");
+        let error = prover
             .prove(&batch)
             .expect_err("generic state semantics must reject an opaque AXT carrier");
+        assert!(matches!(
+            error,
+            Error::InvalidProofSemantics {
+                profile: "transfer_state_transition",
+                ..
+            }
+        ));
+
+        let raw_proof = prover
+            .prove_raw_statement(&batch)
+            .expect("attacker can generate a cryptographically valid opaque statement");
+        let error = crate::verify(&batch, &raw_proof)
+            .expect_err("generic verification must not infer opaque semantics from metadata");
         assert!(matches!(
             error,
             Error::InvalidProofSemantics {
@@ -2537,6 +2562,19 @@ mod tests {
         ));
     }
     #[test]
+    fn canonical_remote_account_rejects_padded_i105() {
+        let binding = remote_transfer_binding();
+        let claim = real_transfer_claim(&binding);
+        let padded = format!(" {} ", claim.from);
+        let error = canonical_remote_account(&padded, "from")
+            .expect_err("padded I105 account text must fail closed");
+        assert!(matches!(
+            error,
+            Error::InvalidAxtBinding { details }
+                if details.contains("must use canonical I105 text")
+        ));
+    }
+    #[test]
     fn remote_spend_claim_rejects_opaque_profile_and_wrong_asset() {
         let mut opaque_binding = remote_transfer_binding();
         opaque_binding.claim_type = "authorization".to_owned();
@@ -2583,6 +2621,83 @@ mod tests {
             error,
             Error::InvalidAxtBinding { details }
                 if details.contains("asset other than source_asset_definition_id")
+        ));
+    }
+    #[test]
+    fn remote_spend_claim_rejects_asset_substitution_against_transfer_transcript() {
+        let mut binding = remote_transfer_binding();
+        let mut batch = real_transfer_claim_batch(&binding);
+        batch.metadata.remove(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY);
+        let mut claims: Vec<AxtRemoteSpendClaimV1> = decode_from_bytes(
+            batch
+                .metadata
+                .get(AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY)
+                .expect("remote-spend claim metadata"),
+        )
+        .expect("decode remote-spend claims");
+        let wrong_domain = DomainId::try_new("other", "universal").expect("domain id");
+        let wrong_asset =
+            AssetDefinitionId::derive_from_components(wrong_domain, "rose".parse().unwrap());
+        claims[0].asset_definition_id = wrong_asset.clone();
+        binding.effect_binding = Some(transfer_effect_binding(&wrong_asset));
+        binding.remote_spend_intent_commitments =
+            vec![compute_remote_spend_claim_commitment_v1(&claims[0])];
+        set_axt_remote_spend_claims(&mut batch, &binding, &claims)
+            .expect("attach substituted claim and matching outer commitment");
+
+        let error = bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect_err("claim asset substitution must not rewrite the transfer transcript");
+        let Error::InvalidAxtBinding { details } = error else {
+            panic!("expected an invalid AXT binding error, got {error:?}");
+        };
+        assert_eq!(
+            details,
+            "remote-spend proof contains a transfer for an asset other than source_asset_definition_id"
+        );
+    }
+    #[test]
+    fn verifier_rejects_fresh_opaque_proof_with_remote_spend_claim() {
+        let mut binding = remote_transfer_binding();
+        binding.claim_type = "authorization".to_owned();
+        let mut batch = unbound_axt_batch(&binding);
+        batch.push(StateTransition::new(
+            b"account/axt/opaque".to_vec(),
+            b"pending".to_vec(),
+            b"authorized".to_vec(),
+            OperationKind::MetaSet,
+        ));
+        batch.sort();
+        let claim = real_transfer_claim(&binding);
+        set_axt_remote_spend_claims(&mut batch, &binding, &[claim])
+            .expect("attach attacker-selected remote-spend claim preimage");
+
+        let error = bind_axt_batch(&mut batch, &binding, [0x42; 32], Some([0x24; 32]))
+            .expect_err("safe binder must reject an opaque remote-spend claim");
+        assert!(matches!(
+            error,
+            Error::InvalidAxtBinding { details }
+                if details.contains("opaque AXT proofs cannot authorize handles")
+        ));
+
+        // Model a custom producer that bypasses the safe binder after it has inserted all
+        // canonical proof metadata, then creates a fresh proof for the attacker-selected batch.
+        let seal = axt_batch_seal(&batch, &binding).expect("seal attacker-selected batch");
+        batch
+            .metadata
+            .insert(AXT_FASTPQ_BATCH_SEAL_METADATA_KEY.into(), seal.to_vec());
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove_raw_statement(&batch)
+            .expect("fresh cryptographic proof for attacker-selected opaque rows");
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("attacker payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        let error = verify_axt_proof_envelope(&envelope)
+            .expect_err("verifier must independently reject opaque remote-spend claims");
+        assert!(matches!(
+            error,
+            Error::InvalidAxtBinding { details }
+                if details.contains("opaque AXT proofs cannot authorize handles")
         ));
     }
     #[test]
@@ -2689,6 +2804,10 @@ mod tests {
     #[test]
     fn verify_axt_envelope_accepts_embedded_batch_and_proof() {
         let binding = sample_binding();
+        assert!(
+            binding.remote_spend_intent_commitments.is_empty(),
+            "legitimate opaque carriers cannot contain remote-spend commitments"
+        );
         let batch = real_authorization_batch(&binding);
         let proof = Prover::canonical(DEFAULT_PARAMETER)
             .expect("prover")

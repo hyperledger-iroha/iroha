@@ -348,7 +348,8 @@ pub fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
     verify_with_semantics(batch, proof, ProofSemantics::TransferStateTransition)
 }
 
-pub(crate) fn verify_with_semantics(
+/// Verify a proof under an explicitly selected, caller-authenticated semantic profile.
+pub fn verify_with_semantics(
     batch: &TransitionBatch,
     proof: &Proof,
     semantics: ProofSemantics,
@@ -378,7 +379,8 @@ pub fn verify_with_limits(
     )
 }
 
-pub(crate) fn verify_with_limits_and_semantics(
+/// Verify a proof under explicit resource limits and a caller-authenticated semantic profile.
+pub fn verify_with_limits_and_semantics(
     batch: &TransitionBatch,
     proof: &Proof,
     limits: VerifyLimits,

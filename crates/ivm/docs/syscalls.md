@@ -416,8 +416,8 @@ AXT host flow
 - 0xB1 AXT_TOUCH — Args: `r10=&DataSpaceId`, `r11=&NoritoBytes(TouchManifest)` or `0`. Declares the manifest of keys touched for the dataspace within the current envelope. Gas: G_axt + bytes.
 - 0xB2 AXT_COMMIT — Args: none. Validates recorded handles, manifests, and proofs for the active envelope and clears host state on success. Gas: G_axt + entries.
 - 0xB3 VERIFY_DS_PROOF — Args: `r10=&DataSpaceId`, `r11=&ProofBlob` (or `0` to clear). Associates dataspace proof material with the active envelope. Gas: G_verify + bytes.
-- 0xB4 USE_ASSET_HANDLE — Args: `r10=&AssetHandle`, `r11=&NoritoBytes(RemoteSpendIntent)`, `r12=&ProofBlob` (optional). Validates capability bindings/budgets and records spend intents for later commit checks. Gas: G_axt + bytes.
-- Default and WSV hosts enforce descriptor membership, capability binding equality, budget checks, and proof presence before permitting commit.
+- 0xB4 USE_ASSET_HANDLE — Args: `r10=&AssetHandle`, `r11=&NoritoBytes(RemoteSpendIntent)`, `r12=&ProofBlob` (optional). Validates the issuer-signed asset identity, capability bindings/budgets, and records spend intents for later commit checks. Gas: G_axt + bytes.
+- Default and WSV hosts enforce descriptor membership, exact equality between the issuer-signed handle asset and the intent/proof asset, capability binding equality, asset-scoped budget checks, and proof presence before permitting commit.
 
 AXT FastPQ proofs authenticate the exact manifest root, optional DA commitment,
 optional committed amount, and optional expiry in metadata inserted before the
@@ -426,14 +426,17 @@ hosts reject any mismatch, including `None`/`Some` relabelling. The complete
 canonical metadata map is committed as eight raw Blake2b-256 `u32` trace limbs.
 This is a first-release hard cut: proofs produced without the required metadata
 or with the retired single-field metadata projection must be regenerated.
-`RemoteSpendIntent.op` also carries the exact `AssetDefinitionId` and V1 accepts
-only the canonical `transfer` operation. Every handle use must consume one
+`AssetHandle` and `RemoteSpendIntent.op` both carry the exact
+`AssetDefinitionId`; the handle field is part of the mandatory issuer-signature
+payload, and V1 accepts only the canonical `transfer` operation. Every handle
+use must consume one
 proof-bound claim containing that handle's replay identity, asset, canonical
 accounts, and effective amount, matched one-for-one to a concrete FASTPQ
 transfer transcript. The `authorization` and `compliance` labels select an
 opaque-effect profile and do not themselves prove authority; such proofs cannot
-authorize a remote spend. Pre-change handles, claims, proofs, and JSON fixtures
-must be regenerated together.
+authorize a remote spend. A handle/intent asset mismatch fails at both USE and
+COMMIT and during block admission. Pre-change handles, claims, proofs, and JSON
+fixtures must be regenerated together.
 
 Native asset escrow
 - 0xB8 ESCROW_OPEN_OFFER — Args: `r10=&Name(escrow)`, `r11=&AssetDefinitionId`, `r12=&Quantity`, `r13=&NoritoBytes(Vec<Hash>)` or `0` → 0. Gas: G_escrow + bytes. Queues `OpenAssetEscrow`; the seller authority locks funds into the deterministic protocol custody account.

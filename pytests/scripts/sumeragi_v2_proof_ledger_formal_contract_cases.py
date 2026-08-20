@@ -40,7 +40,9 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('block/autonomous_merge_carrier_content_tests.rs'),
         Path('block/exact_quorum_cardinality_tests.rs'),
         Path('block/autonomous_anchor_network_tests.rs'),
+        Path('block/sccp_soracloud_validation_tests.rs'),
         Path('block/canonical_genesis_validation_tests.rs'),
+        Path('block/axt_shared_budget_across_envelopes_test.rs'),
         Path('block/scheduler_variant_tests.rs'),
         Path('block/native_amx_exact_quorum_cardinality_tests.rs'),
         Path('block/native_amx_and_dag_tests.rs'),
@@ -114,6 +116,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('kura/test_fault_injection_state.rs'),
         Path('kura/test_fault_injection_controls.rs'),
         Path('kura/file_error_support.rs'),
+        Path('kura/tests/00_bounded_sidecar_read_tests.rs'),
         Path('kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs'),
         Path('kura/tests/01_prune_capacity_support.rs'),
         Path('kura/tests/01a_retained_eviction_and_rewrite_tail.rs'),
@@ -182,6 +185,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path('crates/iroha_core/src/queue.rs'): (
         Path('queue/canonical_terminal_cleanup.rs'),
         Path('queue/nexus_reconfigure_manifest_reload_tests.rs'),
+        Path('queue/privacy_governance_compliance_tests.rs'),
         Path('queue/plan_journal_startup_atomicity_tests.rs'),
         Path('queue/global_guard_claim_conflict_tests.rs'),
         Path('queue/transaction_guard_return_tests.rs'),
@@ -204,6 +208,15 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('journal_direct_file_io.rs'),
         Path('plan_journal_bounds_tests.rs'),
         Path('plan_journal_replay_tests.rs'),
+    ),
+    Path('crates/iroha_core/src/smartcontracts/ivm/host.rs'): (
+        Path('host/core_codec_and_contract_tests.rs'),
+        Path('host/core_query_pagination_tests.rs'),
+        Path('host/nested_contract_state_and_rollback_tests.rs'),
+        Path('host/zk_verification_tests.rs'),
+        Path('host/prepared_public_arguments_tests.rs'),
+        Path('host/pointer_abi_validation_tests.rs'),
+        Path('host/pointer_abi_and_sm_tests.rs'),
     ),
     Path('crates/iroha_core/src/state.rs'): (
         Path('state/vpn_lease_validation.rs'),
@@ -249,7 +262,10 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('main/startup_tail_tests.rs'),
     ),
     Path('integration_tests/tests/taira_public_localnet.rs'): (
-        Path('taira_public_localnet_config_digest_test.rs'),
+        Path('taira_public_localnet/unit_tests.rs'),
+    ),
+    Path('integration_tests/tests/taira_public_localnet/unit_tests.rs'): (
+        Path('config_digest_test.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/mod.rs'): (
         Path('fair_v2_ingress_selector.rs'),
@@ -269,6 +285,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/sumeragi/v2.rs'): (
         Path('v2_authenticated_recovered_adapter_startup_impl.rs'),
+        Path('v2_wire_registry_and_authentication.rs'),
         Path('tests/v2_adapter_main_00.rs'),
         Path('tests/v2_adapter_main_01.rs'),
         Path('tests/v2_adapter_main_02.rs'),
@@ -452,8 +469,11 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lane_work_effect_queue.rs'),
     ),
     Path('integration_tests/tests/sumeragi_v2_runner.rs'): (
-        Path('sumeragi_v2_runner/restart_timing_test.rs'),
+        Path('sumeragi_v2_runner/prepare_qc_split_tests.rs'),
         Path('sumeragi_v2_runner/status_validation_helpers.rs'),
+    ),
+    Path('integration_tests/tests/sumeragi_v2_runner/prepare_qc_split_tests.rs'): (
+        Path('restart_timing_test.rs'),
     ),
     Path('crates/iroha_sumeragi_core/src/verus_proofs.rs'): (
         Path('verus_proofs/production_transition_contracts.rs'),
@@ -496,6 +516,15 @@ REVIEWED_RUST_INCLUDE_MANIFEST_COMPANIONS = {
     Path("crates/iroha_config/src/parameters/actual.rs"): (
         Path("crates/iroha_config/src/parameters/actual/tests.rs"),
     ),
+    Path("integration_tests/tests/taira_public_localnet.rs"): (
+        Path("integration_tests/tests/taira_public_localnet/unit_tests.rs"),
+    ),
+    Path("integration_tests/tests/sumeragi_v2_runner.rs"): (
+        Path(
+            "integration_tests/tests/sumeragi_v2_runner/"
+            "prepare_qc_split_tests.rs"
+        ),
+    ),
     Path("crates/iroha_core/src/sumeragi/v2_lane_work.rs"): (
         Path("crates/iroha_core/src/sumeragi/tests/v2_lane_work_lifecycle_and_recovery_cases.rs"),
     ),
@@ -535,10 +564,10 @@ REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS = tuple(
     for parent in REVIEWED_RUST_INCLUDE_MANIFESTS
     if parent not in REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS
 )
-assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 57
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 11
-assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 11
-assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 46
+assert len(REVIEWED_RUST_INCLUDE_MANIFESTS) == 60
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS) == 13
+assert len(set(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)) == 13
+assert len(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS) == 47
 assert set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS).isdisjoint(REVIEWED_RUST_INCLUDE_MANIFEST_NESTED_PARENTS)
 assert (
     set(REVIEWED_RUST_INCLUDE_MANIFEST_OWNERS)

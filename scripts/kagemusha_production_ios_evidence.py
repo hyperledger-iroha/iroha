@@ -5,9 +5,11 @@ without using App Attest.  This module defines a separate production envelope
 which binds that exact run to a governed policy and verifies the App Attest
 certificate chain, attestation nonce, and assertion cryptographically.  A
 separately signed online-authority receipt is also verified as an exact claim
-of current Apple revocation status and one-time freshness consumption.  The
-promotion path succeeds only with that receipt and an independently pinned
-authority key.
+of current Apple revocation status and one-time freshness consumption. Ordinary
+validation requires that original receipt to remain current. Promotion instead
+validates it as immutable consumption history and requires a separate current,
+promotion-scoped exact-catalog receipt under an independently pinned authority
+key.
 
 The repository authority in
 ``kagemusha_app_attest_freshness_authority.py`` supplies durable challenge,
@@ -58,6 +60,12 @@ SECURE_ENCLAVE_KEY_PROFILE = "dcappattest-generated-secure-enclave-key-v1"
 FRESHNESS_RECEIPT_SCHEMA = (
     "iroha.kagemusha.ios.app_attest_online_freshness_consumption_receipt.v1"
 )
+CATALOG_REVALIDATION_BINDING_SCHEMA = (
+    "iroha.kagemusha.ios.app_attest_catalog_revalidation_binding.v1"
+)
+CATALOG_REVALIDATION_RECEIPT_SCHEMA = (
+    "iroha.kagemusha.ios.app_attest_catalog_revalidation_receipt.v1"
+)
 ONLINE_REVOCATION_SOURCE = "apple-app-attest-online-status-authority-v1"
 MISSING_FRESHNESS_RECEIPT = (
     "production App Attest requires a separately signed online-authority "
@@ -66,6 +74,8 @@ MISSING_FRESHNESS_RECEIPT = (
 
 MAX_POLICY_BYTES = 1024 * 1024
 MAX_FRESHNESS_RECEIPT_BYTES = 64 * 1024
+MAX_CATALOG_REVALIDATION_RECEIPT_BYTES = 256 * 1024
+MAX_CATALOG_REVALIDATION_RELEASES = 16
 MAX_PLATFORM_OBJECT_BYTES = 128 * 1024
 MAX_CERTIFICATE_BYTES = 64 * 1024
 MAX_RECEIPT_BYTES = 64 * 1024
@@ -220,6 +230,42 @@ FRESHNESS_RECEIPT_FIELDS = frozenset(
         "previous_assertion_counter",
         "assertion_counter",
         "certificate_chain_sha256",
+        "signer_key_id",
+        "signer_public_key_sha256",
+        "signature_algorithm",
+        "signature_payload_sha256",
+        "signature",
+    }
+)
+CATALOG_REVALIDATION_BINDING_FIELDS = frozenset(
+    {
+        "release_manifest_sha256",
+        "evidence_sha256",
+        "consumption_receipt_sha256",
+    }
+)
+CATALOG_REVALIDATION_RELEASE_STATUS_FIELDS = frozenset(
+    set(CATALOG_REVALIDATION_BINDING_FIELDS)
+    | {
+        "app_attest_key_id",
+        "apple_status_checked_at_unix_ms",
+        "apple_status",
+        "apple_status_source",
+        "refreshed_apple_receipt_sha256",
+        "risk_metric",
+    }
+)
+CATALOG_REVALIDATION_RECEIPT_FIELDS = frozenset(
+    {
+        "schema",
+        "version",
+        "receipt_id",
+        "promotion_id",
+        "catalog_sha256",
+        "issued_at_unix_ms",
+        "expires_at_unix_ms",
+        "status",
+        "release_statuses",
         "signer_key_id",
         "signer_public_key_sha256",
         "signature_algorithm",
@@ -1731,6 +1777,99 @@ def _positive_unix_ms(value: Any, label: str, errors: list[str]) -> Optional[int
     return value
 
 
+def catalog_revalidation_binding(
+    release_manifest_sha256: str,
+    evidence_payload: bytes,
+    consumption_receipt_payload: bytes,
+) -> dict[str, str]:
+    """Return the immutable identity of one release's App Attest evidence.
+
+    The short-lived catalog receipt deliberately binds digests of the already
+    authenticated immutable envelope and its original one-time-consumption
+    receipt. It never replaces or refreshes either historical object.
+    """
+
+    if (
+        not isinstance(release_manifest_sha256, str)
+        or SHA256_RE.fullmatch(release_manifest_sha256) is None
+        or release_manifest_sha256 == "0" * 64
+    ):
+        raise ValueError("catalog release manifest digest must be nonzero lowercase SHA-256")
+    if not isinstance(evidence_payload, bytes) or not evidence_payload:
+        raise ValueError("catalog signed evidence bytes must be nonempty")
+    if (
+        not isinstance(consumption_receipt_payload, bytes)
+        or not consumption_receipt_payload
+    ):
+        raise ValueError("catalog consumption receipt bytes must be nonempty")
+    return {
+        "release_manifest_sha256": release_manifest_sha256,
+        "evidence_sha256": hashlib.sha256(evidence_payload).hexdigest(),
+        "consumption_receipt_sha256": hashlib.sha256(
+            consumption_receipt_payload
+        ).hexdigest(),
+    }
+
+
+def catalog_revalidation_digest(
+    bindings: list[dict[str, str]], candidate_module: Any
+) -> str:
+    """Hash one canonical, ordered, duplicate-free immutable release catalog."""
+
+    if not isinstance(bindings, list) or not (
+        1 <= len(bindings) <= MAX_CATALOG_REVALIDATION_RELEASES
+    ):
+        raise ValueError(
+            "catalog revalidation binding must contain between 1 and "
+            f"{MAX_CATALOG_REVALIDATION_RELEASES} releases"
+        )
+    normalized: list[dict[str, str]] = []
+    prior_manifest = ""
+    observed_evidence: set[str] = set()
+    observed_consumptions: set[str] = set()
+    for index, binding in enumerate(bindings):
+        if not isinstance(binding, dict) or set(binding) != set(
+            CATALOG_REVALIDATION_BINDING_FIELDS
+        ):
+            raise ValueError(
+                f"catalog revalidation binding[{index}] fields are not exact"
+            )
+        normalized_binding: dict[str, str] = {}
+        for field in sorted(CATALOG_REVALIDATION_BINDING_FIELDS):
+            value = binding.get(field)
+            if (
+                not isinstance(value, str)
+                or SHA256_RE.fullmatch(value) is None
+                or value == "0" * 64
+            ):
+                raise ValueError(
+                    f"catalog revalidation binding[{index}].{field} must be "
+                    "nonzero lowercase SHA-256"
+                )
+            normalized_binding[field] = value
+        manifest = normalized_binding["release_manifest_sha256"]
+        evidence = normalized_binding["evidence_sha256"]
+        consumption = normalized_binding["consumption_receipt_sha256"]
+        if manifest <= prior_manifest:
+            raise ValueError(
+                "catalog revalidation releases must be strictly ordered by manifest digest"
+            )
+        if evidence in observed_evidence:
+            raise ValueError("catalog revalidation reuses signed evidence bytes")
+        if consumption in observed_consumptions:
+            raise ValueError("catalog revalidation reuses a consumption receipt")
+        prior_manifest = manifest
+        observed_evidence.add(evidence)
+        observed_consumptions.add(consumption)
+        normalized.append(normalized_binding)
+    payload = {
+        "schema": CATALOG_REVALIDATION_BINDING_SCHEMA,
+        "version": 1,
+        "releases": normalized,
+    }
+    return hashlib.sha256(candidate_module.canonical_json_bytes(payload)).hexdigest()
+
+
 def _validate_online_freshness_receipt(
     receipt_path: Path,
     trusted_key_id: str,
@@ -1744,6 +1883,7 @@ def _validate_online_freshness_receipt(
     lab_signer_key_id: str,
     lab_signer_public_key_sha256: str,
     evaluation_time_unix_ms: int,
+    require_current_at_evaluation: bool,
     candidate_module: Any,
     errors: list[str],
 ) -> None:
@@ -1893,7 +2033,7 @@ def _validate_online_freshness_receipt(
             errors.append("online freshness/consumption receipt lifetime exceeds five minutes")
         if consumed_at > evaluation_time_unix_ms + MAX_ONLINE_CLOCK_SKEW_MS:
             errors.append("online freshness/consumption receipt consumption is in the future")
-        if evaluation_time_unix_ms > expires_at:
+        if require_current_at_evaluation and evaluation_time_unix_ms > expires_at:
             errors.append("online freshness/consumption receipt is expired")
         evidence_delay = issued_at - facts.evaluated_at_unix_ms
         if not -MAX_ONLINE_CLOCK_SKEW_MS <= evidence_delay <= MAX_ONLINE_RECEIPT_LIFETIME_MS:
@@ -2019,7 +2159,261 @@ def _validate_online_freshness_receipt(
             errors.append(str(error))
 
 
-def validate_production_signed_evidence(
+def validate_catalog_revalidation_receipt(
+    receipt_path: Path,
+    trusted_key_id: str,
+    trusted_public_key_path: Path,
+    expected_promotion_id: str,
+    expected_bindings: list[dict[str, str]],
+    lab_signer_key_id: str,
+    lab_signer_public_key_path: Path,
+    candidate_module: Any,
+    *,
+    evaluation_time_unix_ms: Optional[int] = None,
+) -> list[str]:
+    """Validate current status for one exact immutable multi-release catalog.
+
+    This receipt is intentionally separate from each release's durable
+    one-time-consumption receipt. The latter proves capture-time freshness and
+    replay protection; this object proves current Apple status for one unique
+    promotion and the complete immutable catalog without rewriting history.
+    """
+
+    errors: list[str] = []
+    receipt_snapshot = None
+    authority_key_snapshot = None
+    lab_key_snapshot = None
+    try:
+        candidate_module._validate_key_id(
+            trusted_key_id, "trusted catalog revalidation authority key id"
+        )
+        if (
+            not isinstance(expected_promotion_id, str)
+            or SHA256_RE.fullmatch(expected_promotion_id) is None
+            or expected_promotion_id == "0" * 64
+        ):
+            errors.append(
+                "expected catalog promotion id must be nonzero lowercase SHA-256"
+            )
+            return errors
+        expected_catalog_sha256 = catalog_revalidation_digest(
+            expected_bindings, candidate_module
+        )
+        receipt_snapshot = candidate_module._snapshot_private_file(
+            receipt_path.resolve(strict=True),
+            "catalog revalidation receipt",
+            maximum=MAX_CATALOG_REVALIDATION_RECEIPT_BYTES,
+            retain_payload=True,
+        )
+        receipt = candidate_module.parse_strict_json(
+            receipt_snapshot.payload, "catalog revalidation receipt"
+        )
+        authority_key_snapshot = candidate_module._snapshot_key_file(
+            trusted_public_key_path,
+            "catalog revalidation authority public key",
+            private=False,
+        )
+        authority_public_der = candidate_module._public_key_der_from_payload(
+            authority_key_snapshot.payload
+        )
+        lab_key_snapshot = candidate_module._snapshot_key_file(
+            lab_signer_public_key_path,
+            "lab signer public key",
+            private=False,
+        )
+        lab_public_der = candidate_module._public_key_der_from_payload(
+            lab_key_snapshot.payload
+        )
+    except (OSError, ValueError, candidate_module.EvidenceError) as error:
+        return errors + [str(error)]
+
+    if (
+        _exact_fields(
+            receipt,
+            CATALOG_REVALIDATION_RECEIPT_FIELDS,
+            "catalog revalidation receipt",
+            errors,
+        )
+        is None
+    ):
+        return errors
+    if receipt.get("schema") != CATALOG_REVALIDATION_RECEIPT_SCHEMA:
+        errors.append(
+            "catalog revalidation receipt schema must be "
+            f"{CATALOG_REVALIDATION_RECEIPT_SCHEMA}"
+        )
+    if receipt.get("version") != 1 or isinstance(receipt.get("version"), bool):
+        errors.append("catalog revalidation receipt version must be integer 1")
+    receipt_id = _nonzero_digest(
+        receipt.get("receipt_id"), "catalog revalidation receipt receipt_id", errors
+    )
+    promotion_id = _nonzero_digest(
+        receipt.get("promotion_id"),
+        "catalog revalidation receipt promotion_id",
+        errors,
+    )
+    if receipt_id is not None and receipt_id == promotion_id:
+        errors.append("catalog revalidation receipt id must differ from promotion id")
+    if promotion_id is not None and promotion_id != expected_promotion_id:
+        errors.append("catalog revalidation receipt does not bind this promotion id")
+    catalog_sha256 = _nonzero_digest(
+        receipt.get("catalog_sha256"),
+        "catalog revalidation receipt catalog_sha256",
+        errors,
+    )
+    if catalog_sha256 is not None and catalog_sha256 != expected_catalog_sha256:
+        errors.append("catalog revalidation receipt does not bind the exact release catalog")
+    issued_at = _positive_unix_ms(
+        receipt.get("issued_at_unix_ms"),
+        "catalog revalidation receipt issued_at_unix_ms",
+        errors,
+    )
+    expires_at = _positive_unix_ms(
+        receipt.get("expires_at_unix_ms"),
+        "catalog revalidation receipt expires_at_unix_ms",
+        errors,
+    )
+    if evaluation_time_unix_ms is None:
+        evaluation_time_unix_ms = time.time_ns() // 1_000_000
+    if (
+        isinstance(evaluation_time_unix_ms, bool)
+        or not isinstance(evaluation_time_unix_ms, int)
+        or evaluation_time_unix_ms <= 0
+    ):
+        errors.append("catalog revalidation evaluation time must be positive Unix milliseconds")
+    if issued_at is not None and expires_at is not None:
+        if not issued_at < expires_at:
+            errors.append("catalog revalidation receipt issuance/expiry order is invalid")
+        if expires_at - issued_at > MAX_ONLINE_RECEIPT_LIFETIME_MS:
+            errors.append("catalog revalidation receipt lifetime exceeds five minutes")
+        if (
+            isinstance(evaluation_time_unix_ms, int)
+            and not isinstance(evaluation_time_unix_ms, bool)
+        ):
+            if issued_at > evaluation_time_unix_ms + MAX_ONLINE_CLOCK_SKEW_MS:
+                errors.append("catalog revalidation receipt issuance is in the future")
+            if evaluation_time_unix_ms > expires_at:
+                errors.append("catalog revalidation receipt is expired")
+    if receipt.get("status") != "catalog-revalidated-for-one-promotion":
+        errors.append(
+            "catalog revalidation receipt must attest catalog-revalidated-for-one-promotion"
+        )
+
+    statuses = receipt.get("release_statuses")
+    if not isinstance(statuses, list) or len(statuses) != len(expected_bindings):
+        errors.append(
+            "catalog revalidation receipt release statuses must exactly cover the catalog"
+        )
+        statuses = []
+    for index, status in enumerate(statuses):
+        label = f"catalog revalidation receipt release_statuses[{index}]"
+        if not isinstance(status, dict) or set(status) != set(
+            CATALOG_REVALIDATION_RELEASE_STATUS_FIELDS
+        ):
+            errors.append(f"{label} fields are not exact")
+            continue
+        expected = expected_bindings[index]
+        for field in CATALOG_REVALIDATION_BINDING_FIELDS:
+            observed = _nonzero_digest(status.get(field), f"{label}.{field}", errors)
+            if observed is not None and observed != expected.get(field):
+                errors.append(f"{label}.{field} does not bind the exact immutable release")
+        key_id = status.get("app_attest_key_id")
+        if not isinstance(key_id, str) or not key_id or len(key_id) > 1024:
+            errors.append(f"{label}.app_attest_key_id is invalid")
+        checked_at = _positive_unix_ms(
+            status.get("apple_status_checked_at_unix_ms"),
+            f"{label}.apple_status_checked_at_unix_ms",
+            errors,
+        )
+        if status.get("apple_status") != "good":
+            errors.append(f"{label}.apple_status must be good")
+        if status.get("apple_status_source") != ONLINE_REVOCATION_SOURCE:
+            errors.append(f"{label}.apple_status_source is unsupported")
+        _nonzero_digest(
+            status.get("refreshed_apple_receipt_sha256"),
+            f"{label}.refreshed_apple_receipt_sha256",
+            errors,
+        )
+        risk_metric = status.get("risk_metric")
+        if (
+            isinstance(risk_metric, bool)
+            or not isinstance(risk_metric, int)
+            or not 0 <= risk_metric <= 0x7FFFFFFF
+        ):
+            errors.append(f"{label}.risk_metric is invalid")
+        if checked_at is not None and issued_at is not None:
+            age = issued_at - checked_at
+            if not -MAX_ONLINE_CLOCK_SKEW_MS <= age <= MAX_ONLINE_REVOCATION_AGE_MS:
+                errors.append(f"{label} Apple status is not fresh at catalog issuance")
+
+    authority_public_key_sha256 = hashlib.sha256(authority_public_der).hexdigest()
+    lab_public_key_sha256 = hashlib.sha256(lab_public_der).hexdigest()
+    if receipt.get("signer_key_id") != trusted_key_id:
+        errors.append("catalog revalidation receipt signer key id is not trusted")
+    if receipt.get("signer_public_key_sha256") != authority_public_key_sha256:
+        errors.append("catalog revalidation receipt signer public key is not trusted")
+    if (
+        trusted_key_id == lab_signer_key_id
+        or authority_public_key_sha256 == lab_public_key_sha256
+    ):
+        errors.append(
+            "catalog revalidation authority must be cryptographically independent from the lab signer"
+        )
+    if receipt.get("signature_algorithm") != "ed25519":
+        errors.append("catalog revalidation receipt signature must be ed25519")
+    try:
+        signature_payload = candidate_module.canonical_signature_payload(receipt)
+    except candidate_module.EvidenceError as error:
+        errors.append(str(error))
+        return errors
+    if receipt.get("signature_payload_sha256") != hashlib.sha256(
+        signature_payload
+    ).hexdigest():
+        errors.append("catalog revalidation receipt signature payload digest mismatch")
+    signature_text = receipt.get("signature")
+    if not isinstance(signature_text, str) or re.fullmatch(
+        r"[0-9a-f]{128}", signature_text
+    ) is None:
+        errors.append("catalog revalidation receipt signature must be 64 lowercase hex bytes")
+    else:
+        try:
+            candidate_module._verify_ed25519_bytes(
+                authority_public_der[len(candidate_module.ED25519_SPKI_PREFIX) :],
+                signature_payload,
+                bytes.fromhex(signature_text),
+            )
+        except candidate_module.EvidenceError as error:
+            errors.append(str(error))
+
+    for snapshot, label, maximum in (
+        (
+            receipt_snapshot,
+            "catalog revalidation receipt",
+            MAX_CATALOG_REVALIDATION_RECEIPT_BYTES,
+        ),
+    ):
+        if snapshot is not None:
+            try:
+                candidate_module._require_private_file_snapshot_unchanged(
+                    snapshot, label, maximum=maximum
+                )
+            except candidate_module.EvidenceError as error:
+                errors.append(str(error))
+    for snapshot, label in (
+        (authority_key_snapshot, "catalog revalidation authority public key"),
+        (lab_key_snapshot, "lab signer public key"),
+    ):
+        if snapshot is not None:
+            try:
+                candidate_module._require_key_snapshot_unchanged(
+                    snapshot, label, private=False
+                )
+            except candidate_module.EvidenceError as error:
+                errors.append(str(error))
+    return errors
+
+
+def _validate_production_signed_evidence(
     evidence_path: Path,
     artifact_root: Path,
     trusted_key_id: str,
@@ -2031,15 +2425,18 @@ def validate_production_signed_evidence(
     trusted_freshness_key_id: Optional[str] = None,
     trusted_freshness_public_key_path: Optional[Path] = None,
     evaluation_time_unix_ms: Optional[int] = None,
+    require_current_freshness_receipt: bool,
 ) -> list[str]:
-    """Validate the production envelope and online-authority receipt.
+    """Shared implementation for current and catalog-historical validation.
 
     Repository-local validation covers the complete static X.509 path, leaf
     nonce, certificate time, policy revocations, and exact online receipt
     signature/bindings.  A valid receipt and independently pinned authority key
-    are the success path.  Production operations remain responsible for
-    reviewing the authority's durable issuance/consumption state before
-    provisioning that key.
+    are the success path. Production operations remain responsible for
+    reviewing the authority's durable issuance/consumption state. The public
+    production entrypoint always requires current freshness. The
+    distinct historical entrypoint exists only for the online authority and
+    promotion gate, which separately require a current exact-catalog receipt.
     """
 
     errors: list[str] = []
@@ -2232,6 +2629,7 @@ def validate_production_signed_evidence(
                     lab_signer_key_id=trusted_key_id,
                     lab_signer_public_key_sha256=trusted_digest,
                     evaluation_time_unix_ms=evaluation_time_unix_ms,
+                    require_current_at_evaluation=require_current_freshness_receipt,
                     candidate_module=candidate_module,
                     errors=errors,
                 )
@@ -2261,6 +2659,71 @@ def validate_production_signed_evidence(
             errors.append(str(error))
 
     return errors
+
+
+def validate_production_signed_evidence(
+    evidence_path: Path,
+    artifact_root: Path,
+    trusted_key_id: str,
+    trusted_public_key_path: Path,
+    production_policy_path: Path,
+    candidate_module: Any,
+    *,
+    freshness_receipt_path: Optional[Path] = None,
+    trusted_freshness_key_id: Optional[str] = None,
+    trusted_freshness_public_key_path: Optional[Path] = None,
+    evaluation_time_unix_ms: Optional[int] = None,
+) -> list[str]:
+    """Validate production evidence with a currently valid consumption receipt."""
+
+    return _validate_production_signed_evidence(
+        evidence_path,
+        artifact_root,
+        trusted_key_id,
+        trusted_public_key_path,
+        production_policy_path,
+        candidate_module,
+        freshness_receipt_path=freshness_receipt_path,
+        trusted_freshness_key_id=trusted_freshness_key_id,
+        trusted_freshness_public_key_path=trusted_freshness_public_key_path,
+        evaluation_time_unix_ms=evaluation_time_unix_ms,
+        require_current_freshness_receipt=True,
+    )
+
+
+def validate_historical_production_evidence_for_catalog_revalidation(
+    evidence_path: Path,
+    artifact_root: Path,
+    trusted_key_id: str,
+    trusted_public_key_path: Path,
+    production_policy_path: Path,
+    candidate_module: Any,
+    *,
+    freshness_receipt_path: Path,
+    trusted_freshness_key_id: str,
+    trusted_freshness_public_key_path: Path,
+    evaluation_time_unix_ms: Optional[int] = None,
+) -> list[str]:
+    """Authenticate immutable history before requiring fresh catalog status.
+
+    This does not make a stale receipt current. It retains every signature,
+    prompt-issuance, lifetime, exact-binding, and one-time-consumption check so
+    the authority/gate can then require a separate current catalog receipt.
+    """
+
+    return _validate_production_signed_evidence(
+        evidence_path,
+        artifact_root,
+        trusted_key_id,
+        trusted_public_key_path,
+        production_policy_path,
+        candidate_module,
+        freshness_receipt_path=freshness_receipt_path,
+        trusted_freshness_key_id=trusted_freshness_key_id,
+        trusted_freshness_public_key_path=trusted_freshness_public_key_path,
+        evaluation_time_unix_ms=evaluation_time_unix_ms,
+        require_current_freshness_receipt=False,
+    )
 
 
 def build_production_signed_evidence(

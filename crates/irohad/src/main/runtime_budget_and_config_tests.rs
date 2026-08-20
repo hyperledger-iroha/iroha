@@ -1,5 +1,19 @@
 // Runtime storage-budget and fail-closed daemon configuration regressions.
 #[test]
+fn runtime_budget_rejects_zero_underflow_and_overflow() {
+    for probe in [
+        storage_budget_probe(1_000, 200, 0),
+        storage_budget_probe(1_000, 199, 0),
+        storage_budget_probe(1_000, 1, u64::MAX),
+    ] {
+        assert!(
+            derive_runtime_nexus_storage_budget(&[probe]).is_err(),
+            "invalid capacity arithmetic must fail closed"
+        );
+    }
+}
+
+#[test]
 fn budget_root_allows_ancestor_symlink_but_rejects_exact_and_dangling_links() -> eyre::Result<()> {
     use std::os::unix::fs::symlink;
     let temp = tempfile::tempdir()?;

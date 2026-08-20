@@ -19,6 +19,9 @@ SELF_TESTS=(
   --self-test-bad-proof-signature
   --self-test-bad-artifact-signature
   --self-test-missing-export-pair
+  --self-test-missing-generated-kagemusha-rust-symbol
+  --self-test-missing-generated-transaction-signer
+  --self-test-bad-generated-transaction-signer-signature
   --self-test-forbidden-retired-transaction-signer
   --self-test-missing-protocol-export
   --self-test-bad-receiver-key-signature
@@ -193,12 +196,6 @@ TRANSACTION_SIGNER_EXPORTS = TRANSACTION_SIGNER_BASE_EXPORTS | {
     f"{name}_alg" for name in TRANSACTION_SIGNER_BASE_EXPORTS
 }
 
-def rust_exports(prefix: str) -> set[str]:
-    return set(re.findall(
-        rf'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+({re.escape(prefix)}[a-z0-9_]+)\s*\(',
-        rust,
-    ))
-
 def header_exports(prefix: str) -> set[str]:
     return set(re.findall(
         rf'(?:int32_t|uint32_t|void)\s+({re.escape(prefix)}[a-z0-9_]+)\s*\(',
@@ -216,6 +213,109 @@ def split_parameters(value: str) -> list[str]:
     if not value or value == "void":
         return []
     return [part.strip() for part in value.split(",") if part.strip()]
+
+def generated_template_signature(template_name: str) -> tuple[str, list[str]]:
+    match = re.search(
+        rf'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
+        rf'{re.escape(f"${template_name}")}\s*'
+        rf'\((.*?)\)\s*->\s*([^\s{{]+)\s*{{',
+        rust,
+        re.S,
+    )
+    if match is None:
+        raise SystemExit(f"cannot parse generated Rust FFI template: ${template_name}")
+    return match.group(2), split_parameters(match.group(1))
+
+def signer_template_suffix(template_name: str) -> tuple[str, list[str]]:
+    match = re.search(
+        rf'pub\s+unsafe\s+extern\s+"C"\s+fn\s+'
+        rf'{re.escape(f"${template_name}")}\s*\(\s*'
+        r'\$\(\s*\$argument\s*:\s*\$argument_type\s*,\s*\)\*\s*'
+        rf'(.*?)\)\s*->\s*([^\s{{]+)\s*{{',
+        rust,
+        re.S,
+    )
+    if match is None:
+        raise SystemExit(f"cannot parse signer Rust FFI template: ${template_name}")
+    return match.group(2), split_parameters(match.group(1))
+
+GENERATED_RUST_SIGNATURES: dict[str, tuple[str, list[str]]] = {}
+
+def register_generated_signature(
+    name: str,
+    return_type: str,
+    parameters: list[str],
+) -> None:
+    if name in GENERATED_RUST_SIGNATURES:
+        raise SystemExit(f"duplicate generated Rust FFI export: {name}")
+    GENERATED_RUST_SIGNATURES[name] = (return_type, parameters)
+
+signer_default_return, signer_default_suffix = signer_template_suffix("default")
+signer_algorithm_return, signer_algorithm_suffix = signer_template_suffix("with_algorithm")
+signer_invocation_pattern = re.compile(
+    r'define_ed25519_signed_transaction_wrapper!\s*\{\s*'
+    r'(?P<default>connect_norito_encode_[a-z0-9_]+_signed_transaction)\s*=>\s*'
+    r'(?P<algorithm>connect_norito_encode_[a-z0-9_]+_signed_transaction_alg)\s*'
+    r'\((?P<arguments>.*?)\)\s*'
+    r'identifiers:\s*\(\s*'
+    r'(?P<algorithm_code>[A-Za-z_][A-Za-z0-9_]*)\s*,\s*'
+    r'(?P<signed_bytes>[A-Za-z_][A-Za-z0-9_]*)\s*,\s*'
+    r'(?P<hash_bytes>[A-Za-z_][A-Za-z0-9_]*)\s*\)\s*;',
+    re.S,
+)
+for match in signer_invocation_pattern.finditer(rust):
+    default_name = match.group("default")
+    algorithm_name = match.group("algorithm")
+    if algorithm_name != f"{default_name}_alg":
+        raise SystemExit(
+            f"generated signer algorithm export must pair with {default_name}: {algorithm_name}"
+        )
+    arguments = split_parameters(match.group("arguments"))
+    register_generated_signature(
+        default_name,
+        signer_default_return,
+        arguments + signer_default_suffix,
+    )
+    algorithm_suffix = [
+        parameter.replace("$algorithm_code", match.group("algorithm_code"))
+        for parameter in signer_algorithm_suffix
+    ]
+    register_generated_signature(
+        algorithm_name,
+        signer_algorithm_return,
+        arguments + algorithm_suffix,
+    )
+
+kagemusha_lifecycle_invocation_pattern = re.compile(
+    r'^\s*kagemusha_recursive_spend_lifecycle_exports!\s*\{(?P<body>.*?)^\s*\}',
+    re.M | re.S,
+)
+kagemusha_lifecycle_name_pattern = re.compile(
+    r'=>\s*'
+    r'(?P<name>connect_norito_kagemusha_recursive_spend_'
+    r'(?:candidate_lab_)?(?P<role>init|append|verify|redeem)_v4)\s*,',
+)
+for invocation in kagemusha_lifecycle_invocation_pattern.finditer(rust):
+    for match in kagemusha_lifecycle_name_pattern.finditer(invocation.group("body")):
+        return_type, parameters = generated_template_signature(f'{match.group("role")}_name')
+        register_generated_signature(match.group("name"), return_type, parameters)
+
+DIRECT_RUST_EXPORTS = set(re.findall(
+    r'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(',
+    rust,
+))
+generated_direct_overlap = set(GENERATED_RUST_SIGNATURES) & DIRECT_RUST_EXPORTS
+if generated_direct_overlap:
+    raise SystemExit(
+        f"Rust FFI exports are both direct and macro-generated: {sorted(generated_direct_overlap)}"
+    )
+
+def rust_exports(prefix: str) -> set[str]:
+    return {
+        name
+        for name in DIRECT_RUST_EXPORTS | set(GENERATED_RUST_SIGNATURES)
+        if name.startswith(prefix)
+    }
 
 def canonical_rust_type(value: str) -> str:
     value = " ".join(value.strip().split())
@@ -249,6 +349,15 @@ def canonical_c_type(value: str) -> str:
     return "".join(match.group(1).split())
 
 def rust_signature(name: str) -> tuple[str, list[str]]:
+    generated = GENERATED_RUST_SIGNATURES.get(name)
+    if generated is not None:
+        return_type, raw_parameters = generated
+        parameters = []
+        for parameter in raw_parameters:
+            if ":" not in parameter:
+                raise SystemExit(f"cannot parse generated Rust FFI parameter for {name}: {parameter}")
+            parameters.append(canonical_rust_type(parameter.split(":", 1)[1]))
+        return canonical_rust_type(return_type), parameters
     match = re.search(
         rf'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+{re.escape(name)}\s*'
         rf'\((.*?)\)\s*(?:->\s*([^\s{{]+))?\s*{{',
@@ -285,6 +394,12 @@ def require_signature_parity(names: set[str]) -> None:
             )
 
 def rust_parameter_names(name: str) -> list[str]:
+    generated = GENERATED_RUST_SIGNATURES.get(name)
+    if generated is not None:
+        return [
+            parameter.split(":", 1)[0].strip()
+            for parameter in generated[1]
+        ]
     match = re.search(
         rf'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+{re.escape(name)}\s*'
         rf'\((.*?)\)\s*(?:->\s*[^\s{{]+)?\s*{{',
@@ -678,10 +793,25 @@ if [[ "${MODE}" == --self-test-* ]]; then
         "connect_norito_kagemusha_recursive_spend_bundle_summary_v4" \
         "removed_connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
       ;;
+    --self-test-missing-generated-kagemusha-rust-symbol)
+      replace_once "${tmp_rust}" \
+        '        => connect_norito_kagemusha_recursive_spend_redeem_v4, "krv4-redeem";' \
+        '        => removed_connect_norito_kagemusha_recursive_spend_redeem_v4, "krv4-redeem";'
+      ;;
+    --self-test-missing-generated-transaction-signer)
+      replace_once "${tmp_rust}" \
+        "    connect_norito_encode_burn_signed_transaction =>" \
+        "    removed_connect_norito_encode_burn_signed_transaction =>"
+      ;;
+    --self-test-bad-generated-transaction-signer-signature)
+      replace_once "${tmp_rust}" \
+        '$algorithm_code: u8,' \
+        '$algorithm_code: u16,'
+      ;;
     --self-test-forbidden-retired-transaction-signer)
       replace_once "${tmp_rust}" \
-        'pub unsafe extern "C" fn connect_norito_encode_burn_signed_transaction(' \
-        'pub unsafe extern "C" fn connect_norito_encode_shield_signed_transaction('
+        "    connect_norito_encode_burn_signed_transaction =>" \
+        "    connect_norito_encode_shield_signed_transaction =>"
       ;;
     --self-test-missing-protocol-export)
       replace_once "${tmp_rust}" \

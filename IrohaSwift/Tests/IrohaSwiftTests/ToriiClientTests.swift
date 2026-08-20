@@ -528,10 +528,8 @@ final class ToriiClientTests: XCTestCase {
     ) throws -> [String: ToriiJSONValue] {
         let feePayment = try JSONDecoder().decode(
             ToriiJSONValue.self,
-            from: FeePaymentIntent.authority(
-                chargeLimits: [],
-                gasLimit: nil
-            ).canonicalJSONData()
+            from: FeePaymentIntent.authority(chargeLimits: [], gasLimit: nil)
+                .canonicalJSONData()
         )
         return [
             "domain": domain,
@@ -540,7 +538,9 @@ final class ToriiClientTests: XCTestCase {
             "instructions": .object([:]),
             "time_to_live_ms": .number(100_000),
             "fee_payment": feePayment,
-            "admission_intent": .object(["intent": .string("ordinary"), "value": .null]),
+            "admission_intent": .object(
+                ["intent": .string("ordinary"), "value": .null]
+            ),
             "metadata": .object([:]),
             "attachments": .null,
         ]

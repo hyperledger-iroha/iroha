@@ -38,6 +38,11 @@ to:
   SNS lease transition). Candidate assembly now defers such work without
   poisoning proposals, but the immutable obligation otherwise remains pending
   until canonical application.
+- TODO: define an irreversible, issuer-authenticated AXT handle-family
+  generation/retirement protocol. V1 keeps cumulative family-budget records
+  permanently because lane, dataspace, slot, and configuration changes do not
+  prove that an old signed family can never become usable again; safe retirement
+  must permit bounded compaction without resetting any remaining allowance.
 - Validate the bounded high-view pacemaker and corrected selected-Serve
   late-Fetch regression in the four-validator loss/hold/heal corridor. The
   promotion canary must submit real work, observe it commit within the finite
@@ -1423,9 +1428,9 @@ source inventory consistency, not execution evidence.
 Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending structural
-source check. The reviewed Rust include topology contains 57 parents and 340
+source check. The reviewed Rust include topology contains 60 parents and 354
 direct entries; its canonical payload SHA-256 is
-`efe1f1598aff2fe7d27c9f9149de36561ee0b686dba8b21118ff1031fe6a9f5d`.
+`bc7f733fabfaa6ceba84337a50c686a890decaef953862f94963cfdc80707ab6`.
 The release-inventory contract is statically reconciled at 91/864/522, and the
 structural model/source contract suite passes. The aggregate proof-ledger
 checker and static Apalache-runner contract remain under current-source

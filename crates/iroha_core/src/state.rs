@@ -109,14 +109,15 @@ use iroha_data_model::{
     name::Name,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
-        AUTOSCALE_META_MANAGED, AxtEnvelopeRecord, AxtHandleFragment, AxtHandleReplayKey,
-        AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError,
-        AxtReplayRecord, DataSpaceCatalog, DataSpaceId, DomainCommittee, DomainEndorsement,
-        DomainEndorsementPolicy, DomainEndorsementRecord, FeeDebitSource, FeeSponsorBudgetCounter,
-        FeeSponsorBudgetCounterKey, FeeSponsorEnrollment, FeeSponsorEnrollmentKey,
-        FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
-        FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey, FeeSponsorVault,
-        FeeSponsorVaultKey, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId,
+        AUTOSCALE_META_MANAGED, AxtEnvelopeRecord, AxtHandleBudgetKey, AxtHandleBudgetRecord,
+        AxtHandleCounterRecord, AxtHandleFragment, AxtHandleReplayKey, AxtPolicyBinding,
+        AxtPolicyEntry, AxtPolicySnapshot, AxtPolicySnapshotValidationError, AxtReplayRecord,
+        DataSpaceCatalog, DataSpaceId,
+        DomainCommittee, DomainEndorsement, DomainEndorsementPolicy, DomainEndorsementRecord,
+        FeeDebitSource, FeeSponsorBudgetCounter, FeeSponsorBudgetCounterKey, FeeSponsorEnrollment,
+        FeeSponsorEnrollmentKey, FeeSponsorProgram, FeeSponsorProgramId,
+        FeeSponsorProgramLifecycle, FeeSponsorProgramRevision, FeeSponsorProgramRevisionKey,
+        FeeSponsorVault, FeeSponsorVaultKey, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneId,
         LaneLifecycleParameterV1, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
         LaneRelayError, MAX_ACTIVE_EXECUTION_LANES, PublicLaneRewardRecord, PublicLaneStakeShare,
         PublicLaneValidatorRecord, PublicLaneValidatorStatus, UniversalAccountId,
@@ -494,7 +495,7 @@ pub(crate) fn account_label_is_pii(label: &AccountAlias) -> bool {
 pub(crate) fn current_axt_slot_from_block(header: &BlockHeader, slot_length_ms: NonZeroU64) -> u64 {
     header.creation_time_ms / slot_length_ms.get()
 }
-fn retain_until_slot_for_handle(
+pub(crate) fn retain_until_slot_for_handle(
     handle: &AxtHandleFragment,
     nexus: &iroha_config::parameters::actual::Nexus,
     current_slot: u64,
@@ -507,6 +508,38 @@ fn retain_until_slot_for_handle(
     );
     let retention_cap = current_slot.saturating_add(nexus.axt.replay_retention_slots.get());
     expiry_slot.max(retention_cap)
+}
+fn resolve_axt_handle_budget_amount(
+    record: &AxtEnvelopeRecord,
+    fragment: &AxtHandleFragment,
+) -> Result<Quantity, Error> {
+    let selected_proof = fragment.proof.as_ref().or_else(|| {
+        record
+            .proofs
+            .iter()
+            .find(|proof| proof.dsid == fragment.intent.asset_dsid)
+            .map(|proof| &proof.proof)
+    });
+    let resolved = ivm::axt::resolve_handle_amount_components(
+        fragment.intent.asset_dsid,
+        fragment.intent.op.amount.as_ref(),
+        selected_proof.map(|proof| proof.payload.as_slice()),
+    )
+    .map_err(|error| {
+        Error::InvariantViolation(
+            format!("committed AXT handle amount cannot be resolved: {error:?}").into(),
+        )
+    })?;
+    let fragment_amount_matches = fragment.intent.op.amount.as_ref().map_or_else(
+        || fragment.amount.is_none(),
+        |amount| fragment.amount.as_ref() == Some(amount),
+    );
+    if !fragment_amount_matches || fragment.amount_commitment != resolved.amount_commitment {
+        return Err(Error::InvariantViolation(
+            "committed AXT handle amount fields do not match the selected proof statement".into(),
+        ));
+    }
+    Ok(resolved.amount)
 }
 fn advance_axt_policy_for_handle(
     mut policy: AxtPolicyEntry,
@@ -703,7 +736,9 @@ macro_rules! with_world_overlay_fields {
             uaid_dataspaces,
             space_directory_manifests,
             axt_policies,
+            axt_handle_counters,
             axt_replay_ledger,
+            axt_handle_budget_ledger,
             sccp_registry,
             sccp_outbound_pending_usage,
             sccp_outbound_pending_messages,
@@ -3715,12 +3750,14 @@ pub struct World {
     /// Capability manifest records keyed by UAID (Space Directory).
     #[norito(skip)]
     pub(crate) space_directory_manifests: Storage<UniversalAccountId, SpaceDirectoryManifestSet>,
-    /// Per-dataspace AXT policy entries derived from Space Directory manifests.
-    #[norito(skip)]
+    /// Consensus-persisted per-dataspace AXT policy and handle-counter ratchets.
     pub(crate) axt_policies: Storage<DataSpaceId, AxtPolicyEntry>,
-    /// Bounded replay ledger for AXT handles.
-    #[norito(skip)]
+    /// Permanent per-dataspace AXT handle-counter ratchets.
+    pub(crate) axt_handle_counters: Storage<DataSpaceId, AxtHandleCounterRecord>,
+    /// Consensus-persisted replay ledger for unexpired AXT handles.
     pub(crate) axt_replay_ledger: Storage<AxtHandleReplayKey, AxtReplayRecord>,
+    /// Consensus-persisted cumulative spend for issuer-signed AXT handle families.
+    pub(crate) axt_handle_budget_ledger: Storage<AxtHandleBudgetKey, AxtHandleBudgetRecord>,
     /// First-class typed SCCP governance registry.
     pub(crate) sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1>,
     /// Exact consensus-accounted usage of payload-bearing pending outbox entries.
@@ -4375,12 +4412,16 @@ pub struct WorldBlock<'world> {
     #[norito(skip)]
     pub(crate) space_directory_manifests:
         StorageBlock<'world, UniversalAccountId, SpaceDirectoryManifestSet>,
-    /// Per-dataspace AXT policy entries derived from Space Directory manifests.
-    #[norito(skip)]
+    /// Consensus-persisted per-dataspace AXT policy and handle-counter ratchets.
     pub(crate) axt_policies: StorageBlock<'world, DataSpaceId, AxtPolicyEntry>,
-    /// Bounded replay ledger for AXT handles.
-    #[norito(skip)]
+    /// Permanent per-dataspace AXT handle-counter ratchets for this block scope.
+    pub(crate) axt_handle_counters:
+        StorageBlock<'world, DataSpaceId, AxtHandleCounterRecord>,
+    /// Consensus-persisted replay ledger for unexpired AXT handles.
     pub(crate) axt_replay_ledger: StorageBlock<'world, AxtHandleReplayKey, AxtReplayRecord>,
+    /// Consensus-persisted cumulative AXT handle-family spend for this block scope.
+    pub(crate) axt_handle_budget_ledger:
+        StorageBlock<'world, AxtHandleBudgetKey, AxtHandleBudgetRecord>,
     /// First-class typed SCCP governance registry for this block scope.
     pub(crate) sccp_registry: CellBlock<'world, iroha_data_model::bridge::SccpRegistryV1>,
     /// Exact pending outbox usage for this block scope.
@@ -5199,7 +5240,9 @@ impl<'world> WorldBlock<'world> {
             uaid_dataspaces,
             space_directory_manifests,
             axt_policies,
+            axt_handle_counters,
             axt_replay_ledger,
+            axt_handle_budget_ledger,
             sccp_outbound_pending_messages,
             sccp_outbound_message_locator,
             sccp_outbound_message_index,
@@ -5566,9 +5609,15 @@ pub struct WorldTransaction<'block, 'world> {
         StorageTransaction<'block, 'world, UniversalAccountId, SpaceDirectoryManifestSet>,
     /// Per-dataspace AXT policy entries derived from Space Directory manifests.
     pub(crate) axt_policies: StorageTransaction<'block, 'world, DataSpaceId, AxtPolicyEntry>,
+    /// Permanent per-dataspace AXT handle-counter ratchets.
+    pub(crate) axt_handle_counters:
+        StorageTransaction<'block, 'world, DataSpaceId, AxtHandleCounterRecord>,
     /// Bounded replay ledger for AXT handles.
     pub(crate) axt_replay_ledger:
         StorageTransaction<'block, 'world, AxtHandleReplayKey, AxtReplayRecord>,
+    /// Consensus-persisted cumulative AXT handle-family spend for this transaction.
+    pub(crate) axt_handle_budget_ledger:
+        StorageTransaction<'block, 'world, AxtHandleBudgetKey, AxtHandleBudgetRecord>,
     /// First-class typed SCCP governance registry for this transaction.
     pub(crate) sccp_registry:
         CellTransaction<'block, 'world, iroha_data_model::bridge::SccpRegistryV1>,
@@ -7661,8 +7710,13 @@ pub struct WorldView<'world> {
         StorageView<'world, UniversalAccountId, SpaceDirectoryManifestSet>,
     /// Per-dataspace AXT policy entries derived from Space Directory manifests.
     pub(crate) axt_policies: StorageView<'world, DataSpaceId, AxtPolicyEntry>,
+    /// Permanent per-dataspace AXT handle-counter ratchets.
+    pub(crate) axt_handle_counters: StorageView<'world, DataSpaceId, AxtHandleCounterRecord>,
     /// Bounded replay ledger for AXT handles.
     pub(crate) axt_replay_ledger: StorageView<'world, AxtHandleReplayKey, AxtReplayRecord>,
+    /// Consensus-persisted cumulative AXT handle-family spend view.
+    pub(crate) axt_handle_budget_ledger:
+        StorageView<'world, AxtHandleBudgetKey, AxtHandleBudgetRecord>,
     /// First-class typed SCCP governance registry view.
     pub(crate) sccp_registry: CellView<'world, iroha_data_model::bridge::SccpRegistryV1>,
     /// Exact pending outbox usage view.
@@ -11311,7 +11365,9 @@ enum ApplyTopologyAuthority {
     V2Finality,
 }
 /// Immutable AXT authorization snapshot captured before block effects.
-/// Freezes policy, issuer/key, and replay ledger; accepted handles separately advance counters.
+/// Freezes policy and issuer/key state; accepted handles separately advance
+/// counters. Replay and budget records are hydrated on demand from the parent
+/// MVCC undo log so block construction is not linear in historical entries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AxtBlockStartSnapshot {
     policy_snapshot: AxtPolicySnapshot,
@@ -11322,8 +11378,26 @@ pub struct AxtBlockStartSnapshot {
             crate::nexus::space_directory::AxtIssuerResolutionError,
         >,
     >,
-    replay_ledger: BTreeMap<AxtHandleReplayKey, AxtReplayRecord>,
 }
+
+/// Project permanent per-dataspace handle counters into a policy snapshot.
+///
+/// Policy rows are replaceable routing/manifest projections; their embedded
+/// counter is only a cache. The separate ratchet is consensus authority and
+/// therefore wins across manifest rotation, lane rebind, and policy removal.
+pub(crate) fn project_axt_handle_counters(
+    world: &(impl WorldReadOnly + ?Sized),
+    snapshot: &mut AxtPolicySnapshot,
+) {
+    let counters = world.axt_handle_counters();
+    for binding in &mut snapshot.entries {
+        if let Some(record) = counters.get(&binding.dsid) {
+            binding.policy.next_handle_counter = record.next();
+        }
+    }
+    snapshot.version = AxtPolicySnapshot::compute_version(&snapshot.entries);
+}
+
 impl AxtBlockStartSnapshot {
     fn capture(state_block: &StateBlock<'_>) -> Self {
         let mut policy_snapshot = WorldReadOnly::axt_policy_snapshot(state_block.world());
@@ -11333,6 +11407,7 @@ impl AxtBlockStartSnapshot {
             )
             .unwrap_or_default();
         }
+        project_axt_handle_counters(state_block.world(), &mut policy_snapshot);
         let current_slot = current_axt_slot_from_block(
             &state_block._curr_block,
             state_block.nexus.axt.slot_length_ms,
@@ -11358,16 +11433,9 @@ impl AxtBlockStartSnapshot {
                 )
             })
             .collect();
-        let replay_ledger = state_block
-            .world()
-            .axt_replay_ledger()
-            .iter()
-            .map(|(key, record)| (*key, *record))
-            .collect();
         Self {
             policy_snapshot,
             issuer_bindings,
-            replay_ledger,
         }
     }
     /// Return the exact policy identity and initial counters captured at block start.
@@ -11394,11 +11462,6 @@ impl AxtBlockStartSnapshot {
             .ok_or(crate::nexus::space_directory::AxtIssuerResolutionError::MissingManifest)?
             .as_ref()
             .map_err(|error| *error)
-    }
-    /// Return a replay record that existed before any effect of this block.
-    #[must_use]
-    pub fn replay_record(&self, key: &AxtHandleReplayKey) -> Option<&AxtReplayRecord> {
-        self.replay_ledger.get(key)
     }
     fn policy_with_counters(&self, counters: &BTreeMap<DataSpaceId, u64>) -> AxtPolicySnapshot {
         let mut snapshot = self.policy_snapshot.clone();
@@ -11684,6 +11747,30 @@ impl<'state> StateBlock<'state> {
         self.axt_block_start_snapshot
             .as_deref()
             .expect("StateBlock constructors must freeze AXT authorization before use")
+    }
+    /// Read one cumulative handle-family record from the immutable parent WSV.
+    ///
+    /// Block admission runs after candidate execution has staged state. The
+    /// storage undo log retains the first pre-block value for a touched family,
+    /// while untouched families can be read directly from the current map.
+    /// This keeps the authoritative lookup constant-space without treating a
+    /// candidate-local update as parent-state consumption.
+    pub(crate) fn axt_handle_budget_record_at_block_start(
+        &self,
+        key: &AxtHandleBudgetKey,
+    ) -> Option<&AxtHandleBudgetRecord> {
+        self.world.axt_handle_budget_ledger.get_before_block(key)
+    }
+    /// Read one exact-use guard from the immutable parent WSV.
+    ///
+    /// Candidate execution may already have inserted or refreshed the same
+    /// replay key. Admission must consult the first pre-block value from the
+    /// storage undo log rather than reject its own staged effect.
+    pub(crate) fn axt_replay_record_at_block_start(
+        &self,
+        key: &AxtHandleReplayKey,
+    ) -> Option<&AxtReplayRecord> {
+        self.world.axt_replay_ledger.get_before_block(key)
     }
     fn axt_execution_policy_snapshot(&self) -> AxtPolicySnapshot {
         self.axt_block_start_snapshot()
@@ -12006,16 +12093,88 @@ impl<'state> StateBlock<'state> {
         }
     }
     fn record_replayed_axt_envelope(&mut self, envelope: &AxtEnvelopeRecord, current_slot: u64) {
-        // The embedded policy snapshot is the deterministic post-state. Kura
-        // replay installs it before this method, so replay must only rebuild
-        // the replay ledger and must never advance the counter a second time.
+        // The permanent per-dataspace ratchet is independent of the replaceable
+        // policy projection. Exact replay keys make both the counter advance
+        // and cumulative charge idempotent when a snapshot already contains
+        // this exact committed use.
+        let mut counter_updates = BTreeMap::<DataSpaceId, AxtHandleCounterRecord>::new();
+        let mut budget_updates = BTreeMap::<AxtHandleBudgetKey, AxtHandleBudgetRecord>::new();
+        let mut replay_records = Vec::with_capacity(envelope.handles.len());
         for handle in &envelope.handles {
             let retain_until_slot = retain_until_slot_for_handle(handle, &self.nexus, current_slot);
-            let key = AxtHandleReplayKey::from_handle(handle.intent.asset_dsid, &handle.handle);
+            let replay_key =
+                AxtHandleReplayKey::from_handle(handle.intent.asset_dsid, &handle.handle);
+            let budget_key = AxtHandleBudgetKey::from_handle(&handle.handle);
+            if self.world.axt_replay_ledger.get(&replay_key).is_none() {
+                let counter = counter_updates
+                    .entry(handle.intent.asset_dsid)
+                    .or_insert_with(|| {
+                        self.world
+                            .axt_handle_counters
+                            .get(&handle.intent.asset_dsid)
+                            .copied()
+                            .unwrap_or_else(AxtHandleCounterRecord::initial)
+                    });
+                counter
+                    .try_advance(handle.handle.sub_nonce)
+                    .expect("committed AXT replay must advance the permanent dataspace counter");
+                assert_eq!(
+                    budget_key.asset_dsid(),
+                    handle.intent.asset_dsid,
+                    "committed AXT replay handle budget key must match its intent dataspace"
+                );
+                let amount = resolve_axt_handle_budget_amount(envelope, handle)
+                    .expect("committed AXT replay amount must resolve from its selected proof");
+                let budget_record = budget_updates.entry(budget_key.clone()).or_insert_with(|| {
+                    self.world
+                        .axt_handle_budget_ledger
+                        .get(&budget_key)
+                        .cloned()
+                        .unwrap_or_else(AxtHandleBudgetRecord::empty)
+                });
+                budget_record
+                    .try_consume(&budget_key, &amount, retain_until_slot)
+                    .expect("committed AXT replay must remain within its signed family budget");
+            } else {
+                let counter = counter_updates
+                    .get(&handle.intent.asset_dsid)
+                    .copied()
+                    .or_else(|| {
+                        self.world
+                            .axt_handle_counters
+                            .get(&handle.intent.asset_dsid)
+                            .copied()
+                    })
+                    .expect("persisted AXT replay key must retain its permanent counter ratchet");
+                assert!(
+                    counter.next() > handle.handle.sub_nonce,
+                    "persisted AXT replay key must have an already-advanced counter ratchet"
+                );
+                assert!(
+                    self.world
+                        .axt_handle_budget_ledger
+                        .get(&budget_key)
+                        .is_some(),
+                    "persisted AXT replay key must retain its cumulative family budget record"
+                );
+            }
+            replay_records.push((replay_key, handle.intent.asset_dsid, retain_until_slot));
+        }
+        for (dataspace, counter) in counter_updates {
+            self.world.axt_handle_counters.insert(dataspace, counter);
+            if let Some(mut policy) = self.world.axt_policies.get(&dataspace).copied() {
+                policy.next_handle_counter = counter.next();
+                self.world.axt_policies.insert(dataspace, policy);
+            }
+        }
+        for (key, record) in budget_updates {
+            self.world.axt_handle_budget_ledger.insert(key, record);
+        }
+        for (key, dataspace, retain_until_slot) in replay_records {
             self.world.axt_replay_ledger.insert(
                 key,
                 AxtReplayRecord {
-                    dataspace: handle.intent.asset_dsid,
+                    dataspace,
                     used_slot: current_slot,
                     retain_until_slot,
                 },
@@ -12062,6 +12221,47 @@ impl<'state> StateBlock<'state> {
         snapshot: &AxtPolicySnapshot,
     ) -> Result<(), AxtPolicySnapshotValidationError> {
         snapshot.validate()?;
+        let mut initialize_counters = Vec::new();
+        for binding in &snapshot.entries {
+            let expected_counter = self
+                .world
+                .axt_handle_counters
+                .get(&binding.dsid)
+                .copied()
+                .map_or_else(
+                    || {
+                        if binding.policy.manifest_root == [0; 32] {
+                            0
+                        } else {
+                            AxtHandleCounterRecord::initial().next()
+                        }
+                    },
+                    |record| record.next(),
+                );
+            if binding.policy.next_handle_counter != expected_counter {
+                return Err(
+                    AxtPolicySnapshotValidationError::CounterRatchetMismatch {
+                        dataspace: binding.dsid,
+                        policy_next: binding.policy.next_handle_counter,
+                        ratchet_next: expected_counter,
+                    },
+                );
+            }
+            if binding.policy.manifest_root != [0; 32]
+                && self
+                    .world
+                    .axt_handle_counters
+                    .get(&binding.dsid)
+                    .is_none()
+            {
+                initialize_counters.push(binding.dsid);
+            }
+        }
+        for dataspace in initialize_counters {
+            self.world
+                .axt_handle_counters
+                .insert(dataspace, AxtHandleCounterRecord::initial());
+        }
         if self.axt_policy_snapshot() == *snapshot {
             #[cfg(feature = "telemetry")]
             self.telemetry.set_axt_policy_snapshot_version(snapshot);
@@ -12124,20 +12324,15 @@ impl<'state> StateBlock<'state> {
             }
             return None;
         };
-        let existing: BTreeMap<_, _> = self
-            .world
-            .axt_policies
-            .iter()
-            .map(|(dsid, policy)| (*dsid, *policy))
-            .collect();
         for binding in &mut snap.entries {
-            if let Some(prev) = existing.get(&binding.dsid) {
-                if prev.manifest_root == binding.policy.manifest_root
-                    && prev.target_lane == binding.policy.target_lane
-                    && prev.active_handle_era == binding.policy.active_handle_era
-                {
-                    binding.policy.next_handle_counter = prev.next_handle_counter;
-                }
+            if let Some(record) = self.world.axt_handle_counters.get(&binding.dsid) {
+                binding.policy.next_handle_counter = record.next();
+            } else if binding.policy.manifest_root != [0; 32] {
+                let initial = AxtHandleCounterRecord::initial();
+                binding.policy.next_handle_counter = initial.next();
+                self.world
+                    .axt_handle_counters
+                    .insert(binding.dsid, initial);
             }
         }
         snap.version = AxtPolicySnapshot::compute_version(&snap.entries);
@@ -18663,8 +18858,12 @@ macro_rules! world_ro_accessors {
             storage space_directory_manifests: UniversalAccountId => SpaceDirectoryManifestSet;
             /// Per-dataspace AXT policy entries derived from Space Directory manifests.
             storage axt_policies: DataSpaceId => AxtPolicyEntry;
+            /// Permanent per-dataspace AXT handle-counter ratchets.
+            storage axt_handle_counters: DataSpaceId => AxtHandleCounterRecord;
             /// Bounded replay ledger keyed by handle fingerprint.
             storage axt_replay_ledger: AxtHandleReplayKey => AxtReplayRecord;
+            /// Cumulative spend keyed by the complete issuer-signed handle family.
+            storage axt_handle_budget_ledger: AxtHandleBudgetKey => AxtHandleBudgetRecord;
             /// Consensus-accounted usage of payload-bearing pending SCCP entries.
             cell_copy sccp_outbound_pending_usage: SccpOutboundPendingUsageV1;
             /// Pending outbound SCCP payload registry keyed by exact lane and lane-bound message id.
@@ -19153,7 +19352,9 @@ pub trait WorldReadOnly {
             .collect();
         entries.sort_by_key(|binding| binding.dsid);
         let version = AxtPolicySnapshot::compute_version(&entries);
-        AxtPolicySnapshot { version, entries }
+        let mut snapshot = AxtPolicySnapshot { version, entries };
+        project_axt_handle_counters(self, &mut snapshot);
+        snapshot
     }
     world_ro_accessors!(runtime_and_proofs, declaration);
     /// Iterate proof records for one backend using the proof id key prefix.
@@ -20244,7 +20445,9 @@ impl<'world> WorldBlock<'world> {
             vpn_settled_leases_by_account,
             uaid_dataspaces,
             axt_policies,
+            axt_handle_counters,
             axt_replay_ledger,
+            axt_handle_budget_ledger,
             sccp_registry,
             sccp_outbound_pending_usage,
             sccp_outbound_pending_messages,
@@ -20579,7 +20782,9 @@ impl<'world> WorldBlock<'world> {
         account_roles.commit();
         uaid_dataspaces.commit();
         axt_policies.commit();
+        axt_handle_counters.commit();
         axt_replay_ledger.commit();
+        axt_handle_budget_ledger.commit();
         sccp_registry.commit();
         sccp_outbound_pending_usage.commit();
         sccp_outbound_pending_messages.commit();
@@ -20998,11 +21203,11 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         use std::collections::btree_map::Entry;
         self.axt_current_slot = current_slot;
         self.axt_lane_config = lane_config.clone();
-        let existing_policies: BTreeMap<_, _> = self
-            .axt_policies
+        let durable_counters: BTreeMap<_, _> = self
+            .axt_handle_counters
             .view()
             .iter()
-            .map(|(dsid, policy)| (*dsid, *policy))
+            .map(|(dsid, record)| (*dsid, *record))
             .collect();
         let mut had_active_manifest = false;
         let lane_for_dataspace = self.axt_lane_map.clone();
@@ -21044,24 +21249,18 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                     };
                     let mut manifest_root = [0u8; 32];
                     manifest_root.copy_from_slice(record.manifest_hash.as_ref());
-                    let mut entry = AxtPolicyEntry {
+                    let entry = AxtPolicyEntry {
                         manifest_root,
                         target_lane,
                         active_handle_era: record
                             .lifecycle
                             .activated_epoch
                             .unwrap_or(record.manifest.activation_epoch),
-                        next_handle_counter: 1,
+                        next_handle_counter: durable_counters
+                            .get(dsid)
+                            .map_or(1, AxtHandleCounterRecord::next),
                         current_slot,
                     };
-                    if let Some(existing) = existing_policies.get(dsid) {
-                        if existing.manifest_root == entry.manifest_root
-                            && existing.target_lane == entry.target_lane
-                            && existing.active_handle_era == entry.active_handle_era
-                        {
-                            entry.next_handle_counter = existing.next_handle_counter;
-                        }
-                    }
                     let activated_epoch = record.lifecycle.activated_epoch;
                     match bindings.entry(*dsid) {
                         Entry::Vacant(slot) => {
@@ -21093,21 +21292,15 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                         continue;
                     };
                     bindings.insert(*dsid, {
-                        let mut entry = AxtPolicyEntry {
+                        let entry = AxtPolicyEntry {
                             manifest_root: [0; 32],
                             target_lane,
                             active_handle_era: 0,
-                            next_handle_counter: 0,
+                            next_handle_counter: durable_counters
+                                .get(dsid)
+                                .map_or(0, AxtHandleCounterRecord::next),
                             current_slot,
                         };
-                        if let Some(existing) = existing_policies.get(dsid) {
-                            if existing.manifest_root == entry.manifest_root
-                                && existing.target_lane == entry.target_lane
-                                && existing.active_handle_era == entry.active_handle_era
-                            {
-                                entry.next_handle_counter = existing.next_handle_counter;
-                            }
-                        }
                         (entry, None)
                     });
                 }
@@ -21146,6 +21339,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .map(|(dsid, _)| *dsid)
             .collect();
         for (dsid, (policy, _)) in &bindings {
+            if policy.manifest_root != [0; 32] && !durable_counters.contains_key(dsid) {
+                self.axt_handle_counters
+                    .insert(*dsid, AxtHandleCounterRecord::initial());
+            }
             self.axt_policies.insert(*dsid, *policy);
             stale.remove(dsid);
             snapshot_entries.push(AxtPolicyBinding {
@@ -21753,7 +21950,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             vpn_settled_leases_by_account,
             uaid_dataspaces,
             axt_policies,
+            axt_handle_counters,
             axt_replay_ledger,
+            axt_handle_budget_ledger,
             sccp_registry,
             sccp_outbound_pending_usage,
             sccp_outbound_pending_messages,
@@ -22098,7 +22297,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         account_roles.apply();
         uaid_dataspaces.apply();
         axt_policies.apply();
+        axt_handle_counters.apply();
         axt_replay_ledger.apply();
+        axt_handle_budget_ledger.apply();
         sccp_registry.apply();
         sccp_outbound_pending_usage.apply();
         sccp_outbound_pending_messages.apply();
@@ -24136,7 +24337,38 @@ impl State {
         StateReadOnly::axt_policy_snapshot(&view)
     }
     /// Install or update a dataspace AXT policy entry.
-    pub fn set_axt_policy(&mut self, dsid: DataSpaceId, policy: AxtPolicyEntry) {
+    pub fn set_axt_policy(&mut self, dsid: DataSpaceId, mut policy: AxtPolicyEntry) {
+        let existing_counter = self.world.axt_handle_counters.view().get(&dsid).copied();
+        let requested_counter = if policy.next_handle_counter == 0 {
+            None
+        } else {
+            Some(
+                AxtHandleCounterRecord::try_from_next(policy.next_handle_counter)
+                    .expect("explicit AXT policy counter must be non-zero"),
+            )
+        };
+        let counter = match (existing_counter, requested_counter) {
+            (Some(existing), Some(requested)) if existing.next() >= requested.next() => {
+                Some(existing)
+            }
+            (Some(_), Some(requested)) | (None, Some(requested)) => Some(requested),
+            (Some(existing), None) => Some(existing),
+            (None, None) => None,
+        };
+        if policy.manifest_root != [0; 32] {
+            assert!(
+                counter.is_some(),
+                "an active AXT policy requires a permanent non-zero counter ratchet"
+            );
+        }
+        if let Some(counter) = counter {
+            policy.next_handle_counter = counter.next();
+            let mut block = self.world.axt_handle_counters.block();
+            block.insert(dsid, counter);
+            block.commit();
+        } else {
+            policy.next_handle_counter = 0;
+        }
         let mut block = self.world.axt_policies.block();
         let mut tx = block.transaction();
         tx.insert(dsid, policy);
@@ -24197,27 +24429,47 @@ impl State {
             block.commit();
             return None;
         };
-        let mut block = self.world.axt_policies.block();
-        let mut tx = block.transaction();
-        let existing: BTreeMap<_, _> = tx
+        let existing_policies: BTreeMap<_, _> = self
+            .world
+            .axt_policies
             .view()
             .iter()
             .map(|(dsid, policy)| (*dsid, *policy))
             .collect();
+        let durable_counters: BTreeMap<_, _> = self
+            .world
+            .axt_handle_counters
+            .view()
+            .iter()
+            .map(|(dsid, record)| (*dsid, *record))
+            .collect();
+        let mut initial_counter_dsids = Vec::new();
         for binding in &mut snap.entries {
-            if let Some(prev) = existing.get(&binding.dsid) {
-                if prev.manifest_root == binding.policy.manifest_root
-                    && prev.target_lane == binding.policy.target_lane
-                {
-                    binding.policy.active_handle_era =
-                        binding.policy.active_handle_era.max(prev.active_handle_era);
-                    binding.policy.next_handle_counter = binding
-                        .policy
-                        .next_handle_counter
-                        .max(prev.next_handle_counter);
-                }
+            if let Some(previous) = existing_policies.get(&binding.dsid)
+                && previous.manifest_root == binding.policy.manifest_root
+                && previous.target_lane == binding.policy.target_lane
+            {
+                binding.policy.active_handle_era = binding
+                    .policy
+                    .active_handle_era
+                    .max(previous.active_handle_era);
+            }
+            if let Some(record) = durable_counters.get(&binding.dsid) {
+                binding.policy.next_handle_counter = record.next();
+            } else if binding.policy.manifest_root != [0; 32] {
+                binding.policy.next_handle_counter = AxtHandleCounterRecord::initial().next();
+                initial_counter_dsids.push(binding.dsid);
             }
         }
+        if !initial_counter_dsids.is_empty() {
+            let mut block = self.world.axt_handle_counters.block();
+            for dsid in initial_counter_dsids {
+                block.insert(dsid, AxtHandleCounterRecord::initial());
+            }
+            block.commit();
+        }
+        let mut block = self.world.axt_policies.block();
+        let mut tx = block.transaction();
         snap.version = AxtPolicySnapshot::compute_version(&snap.entries);
         let existing_keys: Vec<_> = tx.view().iter().map(|(dsid, _)| *dsid).collect();
         for dsid in existing_keys {
@@ -28219,32 +28471,6 @@ impl State {
             !Self::verified_lane_relay_record_touches_lane(record, lanes_to_reset)
         });
     }
-    fn axt_replay_ledger_keys_for_lanes(
-        replay_ledger: &impl StorageReadOnly<AxtHandleReplayKey, AxtReplayRecord>,
-        lanes_to_reset: &BTreeSet<LaneId>,
-    ) -> Vec<AxtHandleReplayKey> {
-        if lanes_to_reset.is_empty() {
-            return Vec::new();
-        }
-        replay_ledger
-            .iter()
-            .filter_map(|(key, _)| lanes_to_reset.contains(&key.target_lane).then_some(*key))
-            .collect()
-    }
-    fn prune_axt_replay_ledger_for_lanes(&self, lanes_to_reset: &BTreeSet<LaneId>) {
-        let stale_keys = {
-            let replay_ledger = self.world.axt_replay_ledger.view();
-            Self::axt_replay_ledger_keys_for_lanes(&replay_ledger, lanes_to_reset)
-        };
-        if stale_keys.is_empty() {
-            return;
-        }
-        let mut tx = self.world.axt_replay_ledger.block();
-        for key in stale_keys {
-            tx.remove(key);
-        }
-        tx.commit();
-    }
     fn direct_lane_block_application_marker_keys_for_lanes(
         markers: &impl StorageReadOnly<DirectLaneBlockApplicationKey, DirectLaneBlockApplicationMarker>,
         lanes_to_reset: &BTreeSet<LaneId>,
@@ -28295,11 +28521,6 @@ impl State {
     ) {
         if lanes_to_reset.is_empty() {
             return;
-        }
-        let stale_axt_replay_keys =
-            Self::axt_replay_ledger_keys_for_lanes(&world.axt_replay_ledger, lanes_to_reset);
-        for key in stale_axt_replay_keys {
-            world.axt_replay_ledger.remove(key);
         }
         Self::prune_da_pin_intent_world_block_indexes_for_lanes(world, lanes_to_reset);
         Self::prune_direct_lane_block_application_markers_from_world_block(world, lanes_to_reset);
@@ -38600,7 +38821,6 @@ impl State {
         );
         self.reset_lane_scoped_runtime_state(&lanes_to_reset, true);
         self.record_da_lane_reset_watermarks(&active_reset_lanes, reset_height);
-        self.prune_axt_replay_ledger_for_lanes(&lanes_to_reset);
         self.prune_da_pin_intent_world_indexes_for_lanes(&lanes_to_reset);
         self.prune_direct_lane_block_application_markers_for_lanes(&lanes_to_reset);
         self.prune_public_lane_economic_state_for_lanes(&lanes_to_reset);
@@ -38726,22 +38946,6 @@ impl State {
             let mut tx = self.world.axt_policies.block();
             for dataspace_id in stale_axt_policies {
                 tx.remove(dataspace_id);
-            }
-            tx.commit();
-        }
-        // Drop replay-ledger entries bound to removed dataspaces so replay
-        // state cannot retain stale dataspace references after catalog updates.
-        let stale_replay_keys: Vec<AxtHandleReplayKey> = self
-            .world
-            .axt_replay_ledger
-            .view()
-            .iter()
-            .filter_map(|(key, _)| (!dataspace_ids.contains(&key.asset_dsid)).then_some(*key))
-            .collect();
-        if !stale_replay_keys.is_empty() {
-            let mut tx = self.world.axt_replay_ledger.block();
-            for key in stale_replay_keys {
-                tx.remove(key);
             }
             tx.commit();
         }
@@ -39089,7 +39293,6 @@ impl State {
             (lanes_to_reset, active_lane_ids)
         };
         if !lanes_to_reset.is_empty() {
-            self.prune_axt_replay_ledger_for_lanes(&lanes_to_reset);
             self.prune_da_pin_intent_world_indexes_for_lanes(&lanes_to_reset);
             self.prune_direct_lane_block_application_markers_for_lanes(&lanes_to_reset);
             self.prune_public_lane_economic_state_for_lanes(&lanes_to_reset);
@@ -39425,7 +39628,6 @@ impl State {
     }
     fn prune_committed_lane_lifecycle_state(&self, update: &LaneLifecycleCatalogUpdate) {
         if !update.lanes_to_reset.is_empty() {
-            self.prune_axt_replay_ledger_for_lanes(&update.lanes_to_reset);
             self.prune_da_pin_intent_world_indexes_for_lanes(&update.lanes_to_reset);
             self.prune_direct_lane_block_application_markers_for_lanes(&update.lanes_to_reset);
             self.prune_public_lane_economic_state_for_lanes(&update.lanes_to_reset);
@@ -46653,6 +46855,8 @@ impl<'state> StateBlock<'state> {
                 .canonical_carrier_commit_metadata_authorization
                 .is_some()
             || self.world.axt_replay_ledger.is_dirty()
+            || self.world.axt_handle_counters.is_dirty()
+            || self.world.axt_handle_budget_ledger.is_dirty()
             || !self.world.merge_execution_write_set_bytes().is_empty()
             || !self.world.external_event_buf.is_empty()
             || !self.direct_committed_entrypoints.is_empty()
@@ -48870,10 +49074,6 @@ impl<'state> StateBlock<'state> {
             let height = block.as_ref().header().height().get();
             self.stage_da_pin_intent_bundle(height, bundle.intents.clone());
         }
-        if let Some(snapshot) = block.as_ref().axt_policy_snapshot() {
-            self.install_axt_policy_snapshot(snapshot)
-                .expect("committed block must contain a canonical AXT policy snapshot");
-        }
         let current_slot =
             current_axt_slot_from_block(&block.as_ref().header(), self.nexus.axt.slot_length_ms);
         if let Some(envelopes) = block.as_ref().axt_envelopes() {
@@ -48885,6 +49085,10 @@ impl<'state> StateBlock<'state> {
                 );
                 self.apply_replayed_axt_envelopes(envelopes, current_slot);
             }
+        }
+        if let Some(snapshot) = block.as_ref().axt_policy_snapshot() {
+            self.install_axt_policy_snapshot(snapshot)
+                .expect("committed block must contain a canonical AXT policy snapshot");
         }
         if let Some(effects) = signed_block.npos_consensus_effects() {
             let now_ms = signed_block.header().creation_time_ms;
@@ -56223,10 +56427,50 @@ impl StateTransaction<'_, '_> {
     /// Returns an invariant violation when a handle does not match the exact
     /// committed manifest era and next per-dataspace counter.
     pub fn record_axt_envelope(&mut self, record: AxtEnvelopeRecord) -> Result<(), Error> {
+        let budget_updates = self.stage_axt_handle_budget_updates(&record)?;
         self.update_axt_policies_from_envelope(&record)?;
+        for (key, budget_record) in budget_updates {
+            self.world
+                .axt_handle_budget_ledger
+                .insert(key, budget_record);
+        }
         self.record_axt_replay_entries(&record);
         self.pending_axt_envelopes.push(record);
         Ok(())
+    }
+    fn stage_axt_handle_budget_updates(
+        &self,
+        record: &AxtEnvelopeRecord,
+    ) -> Result<BTreeMap<AxtHandleBudgetKey, AxtHandleBudgetRecord>, Error> {
+        let current_slot = self.axt_current_slot();
+        let mut updates = BTreeMap::<AxtHandleBudgetKey, AxtHandleBudgetRecord>::new();
+        for fragment in &record.handles {
+            let key = AxtHandleBudgetKey::from_handle(&fragment.handle);
+            if key.asset_dsid() != fragment.intent.asset_dsid {
+                return Err(Error::InvariantViolation(
+                    "committed AXT handle budget key does not match the intent dataspace".into(),
+                ));
+            }
+            let amount = resolve_axt_handle_budget_amount(record, fragment)?;
+            let retain_until_slot =
+                retain_until_slot_for_handle(fragment, &self.nexus, current_slot);
+            let budget_record = updates.entry(key.clone()).or_insert_with(|| {
+                self.world
+                    .axt_handle_budget_ledger
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(AxtHandleBudgetRecord::empty)
+            });
+            budget_record
+                .try_consume(&key, &amount, retain_until_slot)
+                .map_err(|error| {
+                    Error::InvariantViolation(
+                        format!("committed AXT handle family exceeds its signed budget: {error}")
+                            .into(),
+                    )
+                })?;
+        }
+        Ok(updates)
     }
     /// Stage one correlated native independent-batch leg outcome for block persistence.
     ///
@@ -56261,6 +56505,7 @@ impl StateTransaction<'_, '_> {
     ) -> Result<(), Error> {
         let current_slot = self.axt_current_slot();
         let mut advanced = BTreeMap::<DataSpaceId, AxtPolicyEntry>::new();
+        let mut counter_updates = BTreeMap::<DataSpaceId, AxtHandleCounterRecord>::new();
         for handle in &record.handles {
             let dsid = handle.intent.asset_dsid;
             let frozen_policy = self
@@ -56302,21 +56547,47 @@ impl StateTransaction<'_, '_> {
                 next_handle_counter,
                 ..frozen_policy
             };
+            let counter = counter_updates.entry(dsid).or_insert_with(|| {
+                self.world
+                    .axt_handle_counters
+                    .get(&dsid)
+                    .copied()
+                    .unwrap_or_else(AxtHandleCounterRecord::initial)
+            });
+            if counter.next() != next_handle_counter {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "AXT permanent counter {} for dataspace {} disagrees with block counter {}",
+                        counter.next(),
+                        dsid.as_u64(),
+                        next_handle_counter
+                    )
+                    .into(),
+                ));
+            }
+            counter.try_advance(handle.handle.sub_nonce).map_err(|error| {
+                Error::InvariantViolation(
+                    format!(
+                        "AXT envelope failed permanent counter advancement for dataspace {}: {error}",
+                        dsid.as_u64()
+                    )
+                    .into(),
+                )
+            })?;
             advanced.insert(
                 dsid,
                 advance_axt_policy_for_handle(policy, handle, current_slot)?,
             );
         }
+        for (dsid, counter) in counter_updates {
+            self.world.axt_handle_counters.insert(dsid, counter);
+        }
         for (dsid, policy) in advanced {
             self.axt_next_handle_counters_after_block
                 .insert(dsid, policy.next_handle_counter);
-            if self
-                .world
-                .axt_policies
-                .get(&dsid)
-                .is_some_and(|current| axt_policy_identity_matches(current, &policy))
-            {
-                self.world.axt_policies.insert(dsid, policy);
+            if let Some(mut current_policy) = self.world.axt_policies.get(&dsid).copied() {
+                current_policy.next_handle_counter = policy.next_handle_counter;
+                self.world.axt_policies.insert(dsid, current_policy);
             }
         }
         Ok(())

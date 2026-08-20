@@ -1742,6 +1742,10 @@ mod tests {
         use crate::axt::{AssetHandle, GroupBinding, HandleBudget, HandleSubject};
         use iroha_data_model::nexus::{DataSpaceId, LaneId};
         AssetHandle {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             scope: vec!["transfer".to_owned()],
             subject: HandleSubject {
                 account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
@@ -2203,6 +2207,10 @@ mod tests {
             format!("0x{}", hex::encode(bytes))
         }
         let valid_handle = AssetHandle {
+            asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+            ])
+            .expect("valid AXT fixture asset id"),
             scope: vec!["transfer".to_owned()],
             subject: HandleSubject {
                 account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
@@ -2403,59 +2411,7 @@ mod tests {
             );
         }
     }
-    #[test]
-    fn codegen_rejects_noncanonical_or_invalid_literal_remote_spend_intents() {
-        use crate::axt::{RemoteSpendIntent, SpendOp};
-        use iroha_data_model::nexus::DataSpaceId;
-        let invalid = RemoteSpendIntent {
-            asset_dsid: DataSpaceId::new(7),
-            op: SpendOp {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"),
-                kind: String::new(),
-                from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
-                to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned(),
-                amount: Some("1".parse().expect("canonical quantity")),
-            },
-        };
-        let valid = RemoteSpendIntent {
-            asset_dsid: DataSpaceId::new(7),
-            op: SpendOp {
-                asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"),
-                kind: "transfer".to_owned(),
-                from: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".to_owned(),
-                to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".to_owned(),
-                amount: Some("1".parse().expect("canonical quantity")),
-            },
-        };
-        let alternate = alternate_norito_hex(&valid);
-        assert_ne!(alternate, canonical_norito_hex(&valid));
-        let handle = canonical_norito_hex(&sample_asset_handle());
-        for intent in [canonical_norito_hex(&invalid), alternate] {
-            let error = compile_with_injected_ir(vec![
-                ir::Instr::DataRef {
-                    dest: ir::Temp(0),
-                    kind: ir::DataRefKind::AssetHandle,
-                    value: handle.clone(),
-                },
-                ir::Instr::DataRef {
-                    dest: ir::Temp(1),
-                    kind: ir::DataRefKind::NoritoBytes,
-                    value: intent,
-                },
-                ir::Instr::UseAssetHandle {
-                    handle: ir::Temp(0),
-                    intent: ir::Temp(1),
-                    proof: None,
-                },
-            ])
-            .expect_err("literal remote spend intents must fail closed during full codegen");
-            assert!(
-                error.contains("invalid AXT remote spend intent literal")
-                    && error.contains("canonical, context-valid RemoteSpendIntent frame"),
-                "unexpected compiler error: {error}"
-            );
-        }
-    }
+    include!("compiler/tests/axt_remote_spend_access_tests.rs");
     #[test]
     fn shared_host_requests_drive_canonical_roots_tally_and_vrf_access_hints() {
         use ivm_abi::host_payload::{RootsGetRequest, VoteGetTallyRequest, VrfEpochSeedRequest};
@@ -20298,6 +20254,7 @@ fn add_asset_handle_access(
     let handle_key = format!("axt:asset_handle:{}", hex::encode(digest));
     set.reads.insert(handle_key.clone());
     set.writes.insert(handle_key);
+    add_asset_definition_ownership_r(set, &handle.asset_definition_id);
     add_axt_dataspace_rw(set, intent.asset_dsid);
     if let Some(origin) = handle.subject.origin_dsid {
         add_axt_dataspace_rw(set, origin);

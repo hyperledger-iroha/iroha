@@ -1,6 +1,7 @@
 //! Unit coverage for Taira localnet configuration and simulation helpers.
 
 use super::*;
+use iroha_config_base::toml::TomlSource;
 
 #[test]
 fn simulation_config_defaults_are_valid() {
@@ -1067,4 +1068,4 @@ fn write_summary_persists_local_and_durable_evidence() {
             .contains("workspace_source_manifest_sha256")
     );
 }
-include!("taira_public_localnet_config_digest_test.rs");
+include!("config_digest_test.rs");

@@ -231,6 +231,18 @@ mod block {
         pub fn revert_map(&self) -> &BTreeMap<K, Option<V>> {
             &self.revert
         }
+        /// Read the value that existed before this block's first mutation of `key`.
+        ///
+        /// The block undo log retains the first pre-block value across direct
+        /// mutations and applied child transactions. An undo entry containing
+        /// `None` means the key was absent before the block; an untouched key is
+        /// read from the current map.
+        pub fn get_before_block(&self, key: &K) -> Option<&V> {
+            match self.revert_map().get(key) {
+                Some(previous) => previous.as_ref(),
+                None => self.get(key),
+            }
+        }
         /// Return whether this block has staged any storage mutation.
         pub fn is_dirty(&self) -> bool {
             self.dirty
@@ -822,5 +834,84 @@ mod tests {
         let revert = block.revert_map();
         assert!(revert.contains_key(&1));
         assert!(revert.contains_key(&2));
+    }
+    #[test]
+    fn get_before_block_tracks_first_value_across_direct_mutations() {
+        let storage = Storage::from_iter([(1_u64, 10_u64), (2, 20), (4, 40)]);
+        let mut block = storage.block();
+
+        assert_eq!(block.get_before_block(&1), Some(&10), "untouched value");
+        assert_eq!(block.get_before_block(&3), None, "untouched absence");
+
+        block.insert(1, 11);
+        block.insert(1, 12);
+        assert_eq!(block.get(&1), Some(&12));
+        assert_eq!(block.get_before_block(&1), Some(&10));
+
+        block.insert(3, 30);
+        block.insert(3, 31);
+        assert_eq!(block.get(&3), Some(&31));
+        assert_eq!(block.get_before_block(&3), None);
+
+        assert_eq!(block.remove(2), Some(20));
+        assert_eq!(block.get(&2), None);
+        assert_eq!(block.get_before_block(&2), Some(&20));
+
+        *block.get_mut(&4).expect("existing fixture value") += 1;
+        assert_eq!(block.get_before_block(&4), Some(&40));
+    }
+    #[test]
+    fn get_before_block_observes_only_applied_transaction_mutations() {
+        let storage = Storage::from_iter([(1_u64, 10_u64)]);
+        let mut block = storage.block();
+
+        {
+            let mut transaction = block.transaction();
+            transaction.insert(1, 11);
+            transaction.insert(2, 20);
+        }
+        assert_eq!(block.get(&1), Some(&10));
+        assert_eq!(block.get(&2), None);
+        assert_eq!(block.get_before_block(&1), Some(&10));
+        assert_eq!(block.get_before_block(&2), None);
+
+        {
+            let mut transaction = block.transaction();
+            transaction.insert(1, 12);
+            transaction.insert(2, 21);
+            transaction.apply();
+        }
+        assert_eq!(block.get(&1), Some(&12));
+        assert_eq!(block.get(&2), Some(&21));
+        assert_eq!(block.get_before_block(&1), Some(&10));
+        assert_eq!(block.get_before_block(&2), None);
+
+        {
+            let mut transaction = block.transaction();
+            transaction.insert(1, 13);
+            transaction.apply();
+        }
+        assert_eq!(block.get_before_block(&1), Some(&10));
+    }
+    #[test]
+    fn get_before_block_uses_reverted_state_as_new_block_baseline() {
+        let storage = Storage::from_iter([(1_u64, 10_u64)]);
+        {
+            let mut block = storage.block();
+            block.insert(1, 11);
+            block.insert(2, 20);
+            block.commit();
+        }
+
+        let mut reverted = storage.block_and_revert();
+        assert_eq!(reverted.get(&1), Some(&10));
+        assert_eq!(reverted.get(&2), None);
+        assert_eq!(reverted.get_before_block(&1), Some(&10));
+        assert_eq!(reverted.get_before_block(&2), None);
+
+        reverted.insert(1, 12);
+        reverted.insert(2, 21);
+        assert_eq!(reverted.get_before_block(&1), Some(&10));
+        assert_eq!(reverted.get_before_block(&2), None);
     }
 }

@@ -530,8 +530,10 @@ populated four-role closure diagnostic. Use
 prepasses, print exact source/equation/term and compiled-protocol point counts,
 and derive checked V6 Poseidon, historical raw V5 SHA, and counterfactual
 compressed-source SHA geometry.
-Use `probe-compact-k17-ipa-audit-bridge` only to reproduce the rejected V7 IPA
-experiment against those authentic inventories. The probe constructs
+`probe-compact-k17-ipa-audit-bridge` is retired and deliberately rejected by
+both the benchmark binary and its authenticated wrapper. The following records
+the rejected V7 IPA experiment against those authentic inventories; the
+historical probe constructed
 an injective coefficient vector containing the domain/version, parity, parent
 selectors, exact stage ranges, compressed non-identity sources, ordered
 source-indexed coefficients, compiled-protocol structure digest, transcript

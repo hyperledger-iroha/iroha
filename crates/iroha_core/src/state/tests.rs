@@ -60,15 +60,15 @@ use iroha_data_model::{
     name::Name,
     nexus::{
         AssetHandle, AssetHandleDraft, AssetPermissionManifest, AxtBinding, AxtDescriptor,
-        AxtEnvelopeRecord, AxtFastpqBinding, AxtHandleFragment, AxtHandleIssuerContextV1,
-        AxtHandleReplayKey, AxtPolicyEntry, AxtPolicySnapshot, AxtProofEnvelope, AxtProofFragment,
-        AxtRejectReason, AxtTouchFragment, AxtTouchSpec, DataSpaceCatalog, DataSpaceId,
-        DataSpaceMetadata, GroupBinding, HandleBudget, HandleSubject, LaneCatalog, LaneConfig,
-        LaneFastpqProofMaterial, LaneFinalityAuthorityV1, LaneFinalityStatement, LaneId,
-        LaneRelayEmergencyValidatorSet, LaneRelayEnvelope, LaneRelayError, LaneSchedulerPolicy,
-        LaneSettlementBufferPolicy, LaneStorageProfile, LaneVisibility, ManifestVersion, ProofBlob,
-        PublicLaneRewardRole, PublicLaneRewardShare, PublicLaneUnbonding, RemoteSpendIntent,
-        ShardId, SpendOp, TouchManifest,
+        AxtEnvelopeRecord, AxtFastpqBinding, AxtHandleBudgetKey, AxtHandleBudgetRecord,
+        AxtHandleFragment, AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtPolicyEntry,
+        AxtPolicySnapshot, AxtProofEnvelope, AxtProofFragment, AxtRejectReason, AxtTouchFragment,
+        AxtTouchSpec, DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, GroupBinding, HandleBudget,
+        HandleSubject, LaneCatalog, LaneConfig, LaneFastpqProofMaterial, LaneFinalityAuthorityV1,
+        LaneFinalityStatement, LaneId, LaneRelayEmergencyValidatorSet, LaneRelayEnvelope,
+        LaneRelayError, LaneSchedulerPolicy, LaneSettlementBufferPolicy, LaneStorageProfile,
+        LaneVisibility, ManifestVersion, ProofBlob, PublicLaneRewardRole, PublicLaneRewardShare,
+        PublicLaneUnbonding, RemoteSpendIntent, ShardId, SpendOp, TouchManifest,
     },
     peer::PeerId,
     proof::{ProofId, ProofRecord, ProofStatus},
@@ -1112,6 +1112,21 @@ state_test! { sync world_and_world_block_keep_snapshot_skip_annotations_in_sync
     let_row! { world_block = source .split_once("pub struct WorldBlock<'world> {") .and_then(|(_, tail)| tail.split_once("\n}\n\nimpl<'world> WorldBlock")) .map(|(body, _)| body) .expect("WorldBlock declaration must remain discoverable") };
     let world_annotations = snapshot_skip_annotations(world);
     let block_annotations = snapshot_skip_annotations(world_block);
+    assert_eq!(
+        world_annotations.get("axt_policies"),
+        Some(&false),
+        "security-authoritative AXT handle-counter ratchets must be part of canonical snapshots"
+    );
+    assert_eq!(
+        world_annotations.get("axt_replay_ledger"),
+        Some(&false),
+        "security-authoritative AXT exact-use guards must be part of canonical snapshots"
+    );
+    assert_eq!(
+        world_annotations.get("axt_handle_budget_ledger"),
+        Some(&false),
+        "security-authoritative AXT family consumption must be part of canonical snapshots"
+    );
     for (field, world_skips) in &world_annotations {
         if *field == "external_event_buf" {
             // The staged canonical serializer deliberately substitutes the
@@ -1413,6 +1428,15 @@ fn axt_proof_blob_for(
     proof_seed: &[u8],
     expiry_slot: u64,
 ) -> ProofBlob {
+    axt_proof_blob_for_with_committed_amount(dsid, manifest_root, proof_seed, expiry_slot, None)
+}
+fn axt_proof_blob_for_with_committed_amount(
+    dsid: DataSpaceId,
+    manifest_root: [u8; 32],
+    proof_seed: &[u8],
+    expiry_slot: u64,
+    committed_amount: Option<u128>,
+) -> ProofBlob {
     let source_tx_commitment = axt_test_digest(b"axt-state-test:source-tx", &[proof_seed]);
     let claim_digest = axt_test_digest(b"axt-state-test:claim", &[proof_seed]);
     let witness_commitment = axt_test_digest(b"axt-state-test:witness", &[proof_seed]);
@@ -1437,17 +1461,36 @@ fn axt_proof_blob_for(
         &binding,
         manifest_root,
         None,
-        None,
+        committed_amount,
         Some(expiry_slot),
     )
     .expect("bind AXT state test batch");
     let_row! { proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER) .expect("FASTPQ prover") .prove_axt_bound(&batch, &binding) .expect("FASTPQ proof") };
     let_row! { fastpq_payload = fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload") };
-    let_row! { envelope = AxtProofEnvelope { dsid, manifest_root, da_commitment: None, proof: fastpq_payload, fastpq_binding: Some(binding), committed_amount: None, amount_commitment: None, } };
-    ProofBlob {
+    let mut envelope = AxtProofEnvelope {
+        dsid,
+        manifest_root,
+        da_commitment: None,
+        proof: fastpq_payload,
+        fastpq_binding: Some(binding),
+        committed_amount,
+        amount_commitment: None,
+    };
+    let mut proof = ProofBlob {
         payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
         expiry_slot: Some(expiry_slot),
+    };
+    if let Some(amount) = committed_amount {
+        let quantity = Quantity::from(amount);
+        envelope.amount_commitment = Some(ivm::axt::derive_amount_commitment(
+            dsid,
+            &quantity,
+            Some(proof.payload.as_slice()),
+        ));
+        proof.payload =
+            norito::to_bytes(&envelope).expect("encode commitment-bound proof envelope");
     }
+    proof
 }
 state_test! { sync deserialize_rejects_invalid_ram_lfe_program_policy_storage
     let owner = AccountId::new(crate::state::checked_keypair().public_key().clone());
@@ -1504,6 +1547,229 @@ fn deserialize_state_snapshot_value_with_kura(
 }
 fn deserialize_state_snapshot_value(value: norito::json::Value) -> Result<State, json::Error> {
     deserialize_state_snapshot_value_with_kura(value, Kura::blank_kura_for_testing())
+}
+fn state_with_axt_handle_budget_record(
+    consumed: u64,
+) -> (State, AxtHandleBudgetKey, AxtHandleBudgetRecord) {
+    let state = blank_state();
+    let handle = signed_axt_handle_for_block_freeze(
+        &crate::state::checked_keypair(),
+        AxtHandleIssuerContextV1::default(),
+        LaneId::SINGLE,
+        AxtBinding::new([0xA5; 32]),
+        1,
+        1,
+    );
+    let key = AxtHandleBudgetKey::from_handle(&handle);
+    let mut record = AxtHandleBudgetRecord::empty();
+    record
+        .try_consume(&key, &Quantity::from(consumed), 100)
+        .expect("fixture consumption fits its signed family budget");
+    {
+        let mut block = state.world.axt_handle_budget_ledger.block();
+        block.insert(key.clone(), record.clone());
+        block.commit();
+    }
+    (state, key, record)
+}
+state_test! { sync axt_handle_budget_ledger_survives_state_snapshot
+    let (state, key, record) = state_with_axt_handle_budget_record(5);
+    let snapshot = norito::json::to_value(&state).expect("serialize state budget ledger");
+    let restored = deserialize_state_snapshot_value(snapshot).expect("restore state budget ledger");
+    assert_eq!(
+        restored.world.axt_handle_budget_ledger.view().get(&key),
+        Some(&record),
+        "snapshot restart must preserve cumulative handle-family spend"
+    );
+}
+state_test! { sync axt_handle_budget_ledger_changes_canonical_state_hash
+    let empty = blank_state();
+    let (consumed, _, _) = state_with_axt_handle_budget_record(5);
+    assert_ne!(
+        crate::snapshot::canonical_state_snapshot_hash(&empty),
+        crate::snapshot::canonical_state_snapshot_hash(&consumed),
+        "cumulative AXT family spend must be authenticated by the canonical WSV hash"
+    );
+}
+state_test! { sync axt_handle_budget_ledger_is_required_in_state_snapshot
+    let (state, _, _) = state_with_axt_handle_budget_record(5);
+    let mut snapshot = norito::json::to_value(&state).expect("serialize state budget ledger");
+    let_row! { norito::json::Value::Object(root) = &mut snapshot else { panic!("state snapshot must be an object"); } };
+    let_row! { norito::json::Value::Object(world) = root .get_mut("world") .expect("state snapshot world") else { panic!("world snapshot must be an object"); } };
+    assert!(world.remove("axt_handle_budget_ledger").is_some());
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("a snapshot that erases cumulative handle budgets must fail closed");
+    assert!(
+        error.to_string().contains("axt_handle_budget_ledger"),
+        "unexpected missing-ledger error: {error}"
+    );
+}
+state_test! { sync axt_handle_budget_ledger_rejects_consumption_above_signed_limit
+    let (state, _, _) = state_with_axt_handle_budget_record(5);
+    let mut snapshot = norito::json::to_value(&state).expect("serialize state budget ledger");
+    let_row! { norito::json::Value::Object(root) = &mut snapshot else { panic!("state snapshot must be an object"); } };
+    let_row! { norito::json::Value::Object(world) = root .get_mut("world") .expect("state snapshot world") else { panic!("world snapshot must be an object"); } };
+    let_row! { norito::json::Value::Object(ledger) = world .get_mut("axt_handle_budget_ledger") .expect("budget ledger snapshot") else { panic!("budget ledger snapshot must be an object"); } };
+    let_row! { norito::json::Value::Object(blocks) = ledger .get_mut("blocks") .expect("budget ledger committed records") else { panic!("budget ledger records must be an object"); } };
+    let_row! { norito::json::Value::Object(record) = blocks .values_mut() .next() .expect("one budget record") else { panic!("budget record must be an object"); } };
+    record.insert(
+        "consumed".to_owned(),
+        norito::json::to_value(&Quantity::from(11_u64)).expect("serialize corrupt quantity"),
+    );
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("consumption above the signed family limit must fail closed");
+    assert!(
+        error.to_string().contains("axt_handle_budget_ledger"),
+        "unexpected corrupt-ledger error: {error}"
+    );
+}
+fn state_with_axt_replay_record() -> (State, AxtHandleReplayKey, AxtReplayRecord) {
+    let state = blank_state();
+    let key =
+        AxtHandleReplayKey::from_parts(DataSpaceId::UNIVERSAL, [0xC5; 32], 3, 7, LaneId::SINGLE);
+    let record = AxtReplayRecord {
+        dataspace: DataSpaceId::UNIVERSAL,
+        used_slot: 4,
+        retain_until_slot: 10,
+    };
+    {
+        let mut block = state.world.axt_replay_ledger.block();
+        block.insert(key, record);
+        block.commit();
+    }
+    (state, key, record)
+}
+state_test! { sync axt_replay_ledger_survives_serialized_state_snapshot
+    let (state, key, record) = state_with_axt_replay_record();
+    let snapshot = norito::json::to_value(&state).expect("serialize AXT replay ledger");
+    let restored = deserialize_state_snapshot_value(snapshot).expect("restore AXT replay ledger");
+    assert_eq!(
+        restored.world.axt_replay_ledger.view().get(&key),
+        Some(&record),
+        "snapshot restart must preserve unexpired exact-use guards"
+    );
+}
+state_test! { sync axt_replay_ledger_changes_canonical_state_hash
+    let empty = blank_state();
+    let (replay_guarded, _, _) = state_with_axt_replay_record();
+    assert_ne!(
+        crate::snapshot::canonical_state_snapshot_hash(&empty),
+        crate::snapshot::canonical_state_snapshot_hash(&replay_guarded),
+        "unexpired AXT exact-use guards must be authenticated by the canonical WSV hash"
+    );
+}
+state_test! { sync axt_replay_ledger_is_required_in_state_snapshot
+    let (state, _, _) = state_with_axt_replay_record();
+    let mut snapshot = norito::json::to_value(&state).expect("serialize AXT replay ledger");
+    let_row! { norito::json::Value::Object(root) = &mut snapshot else { panic!("state snapshot must be an object"); } };
+    let_row! { norito::json::Value::Object(world) = root .get_mut("world") .expect("state snapshot world") else { panic!("world snapshot must be an object"); } };
+    assert!(world.remove("axt_replay_ledger").is_some());
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("a snapshot that erases exact-use guards must fail closed");
+    assert!(
+        error.to_string().contains("axt_replay_ledger"),
+        "unexpected missing-replay-ledger error: {error}"
+    );
+}
+state_test! { sync axt_replay_ledger_rejects_invalid_persisted_record
+    let (state, _, _) = state_with_axt_replay_record();
+    let mut snapshot = norito::json::to_value(&state).expect("serialize AXT replay ledger");
+    let_row! { norito::json::Value::Object(root) = &mut snapshot else { panic!("state snapshot must be an object"); } };
+    let_row! { norito::json::Value::Object(world) = root .get_mut("world") .expect("state snapshot world") else { panic!("world snapshot must be an object"); } };
+    let_row! { norito::json::Value::Object(ledger) = world .get_mut("axt_replay_ledger") .expect("AXT replay ledger") else { panic!("AXT replay ledger must be an object"); } };
+    let_row! { norito::json::Value::Object(blocks) = ledger .get_mut("blocks") .expect("AXT replay records") else { panic!("AXT replay records must be an object"); } };
+    let_row! { norito::json::Value::Object(record) = blocks .values_mut() .next() .expect("one AXT replay record") else { panic!("AXT replay record must be an object"); } };
+    record.insert(
+        "retain_until_slot".to_owned(),
+        norito::json::to_value(&3_u64).expect("serialize invalid retention slot"),
+    );
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("a replay record whose retention precedes use must fail closed");
+    assert!(
+        error.to_string().contains("axt_replay_ledger"),
+        "unexpected corrupt-replay-ledger error: {error}"
+    );
+}
+state_test! { sync axt_policy_counter_survives_serialized_state_snapshot
+    let mut state = blank_state();
+    let dataspace = DataSpaceId::UNIVERSAL;
+    let manifest_root = [0xC6; 32];
+    state.set_axt_policy(
+        dataspace,
+        AxtPolicyEntry {
+            manifest_root,
+            target_lane: LaneId::SINGLE,
+            active_handle_era: 3,
+            next_handle_counter: 7,
+            current_slot: 4,
+        },
+    );
+    let snapshot = norito::json::to_value(&state).expect("serialize AXT policy ratchet");
+    let restored = deserialize_state_snapshot_value(snapshot).expect("restore AXT policy ratchet");
+    assert_eq!(
+        restored
+            .world
+            .axt_policies
+            .view()
+            .get(&dataspace)
+            .expect("restored AXT policy")
+            .next_handle_counter,
+        7,
+        "snapshot restart must preserve the next issuer-signed handle counter"
+    );
+    let context = AxtHandleIssuerContextV1 {
+        asset_dsid: dataspace,
+        issuer_manifest_root: manifest_root,
+        ..Default::default()
+    };
+    let handle = signed_axt_handle_for_block_freeze(
+        &crate::state::checked_keypair(),
+        context,
+        LaneId::SINGLE,
+        AxtBinding::new([0xC7; 32]),
+        3,
+        7,
+    );
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 5, 0);
+    let mut block = restored.block(header);
+    let mut transaction = block.transaction();
+    transaction
+        .record_axt_envelope(axt_envelope_for_block_freeze(
+            handle,
+            dataspace,
+            LaneId::SINGLE,
+            AxtBinding::new([0xC7; 32]),
+            1,
+        ))
+        .expect("the exact next nonce remains usable after snapshot restart");
+}
+state_test! { sync axt_policies_are_required_in_state_snapshot
+    let mut state = blank_state();
+    state.set_axt_policy(
+        DataSpaceId::UNIVERSAL,
+        AxtPolicyEntry {
+            manifest_root: [0xC8; 32],
+            target_lane: LaneId::SINGLE,
+            active_handle_era: 1,
+            next_handle_counter: 2,
+            current_slot: 1,
+        },
+    );
+    let mut snapshot = norito::json::to_value(&state).expect("serialize AXT policy ratchet");
+    let_row! { norito::json::Value::Object(root) = &mut snapshot else { panic!("state snapshot must be an object"); } };
+    let_row! { norito::json::Value::Object(world) = root .get_mut("world") .expect("state snapshot world") else { panic!("world snapshot must be an object"); } };
+    assert!(world.remove("axt_policies").is_some());
+    let error = deserialize_state_snapshot_value(snapshot)
+        .err()
+        .expect("a snapshot that erases handle-counter ratchets must fail closed");
+    assert!(
+        error.to_string().contains("axt_policies"),
+        "unexpected missing-policy error: {error}"
+    );
 }
 fn snapshot_state_with_numeric_asset() -> (State, AssetDefinitionId, AssetId) {
     let domain_id = DomainId::try_new("numeric_snapshot", "universal").expect("domain id");
@@ -11254,8 +11520,8 @@ state_test! { sync autoscale_scale_in_height_mismatch_does_not_publish_block_loc
             .world
             .axt_replay_ledger
             .get(&retired_replay_key)
-            .is_none(),
-        "block-local scale-in should prune retired-lane AXT replay records"
+            .is_some(),
+        "block-local scale-in must preserve unexpired retired-lane AXT replay records"
     );
     assert!(
         state_block
@@ -11910,8 +12176,8 @@ state_test! { sync autoscale_transition_drops_same_block_validator_and_axt_state
             .world
             .axt_replay_ledger
             .get(&retired_replay_key)
-            .is_none(),
-        "autoscale scale-in must prune same-block replay entries keyed by a retired lane"
+            .is_some(),
+        "autoscale scale-in must preserve same-block replay entries keyed by a retired lane"
     );
     assert!(
         state_block
@@ -12044,8 +12310,8 @@ state_test! { sync autoscale_transition_drops_same_block_validator_and_axt_state
         "committed state must retain surviving-lane validators as active"
     );
     assert!(
-        view.axt_replay_ledger().get(&retired_replay_key).is_none(),
-        "committed state must not retain same-block retired-lane replay state"
+        view.axt_replay_ledger().get(&retired_replay_key).is_some(),
+        "committed state must retain unexpired same-block retired-lane replay state"
     );
     assert!(
         view.axt_replay_ledger().get(&retained_replay_key).is_some(),
@@ -12054,8 +12320,8 @@ state_test! { sync autoscale_transition_drops_same_block_validator_and_axt_state
     assert!(
         view.axt_replay_ledger()
             .get(&late_retired_replay_key)
-            .is_none(),
-        "committed state must not retain retired-lane replay state inserted after block-local cleanup"
+            .is_some(),
+        "committed state must retain unexpired retired-lane replay state inserted after block-local cleanup"
     );
     assert!(
         view.axt_replay_ledger()
@@ -12293,8 +12559,8 @@ state_test! { sync committed_autoscale_lifecycle_prunes_persistent_reset_lane_st
     );
     let view = state.world.view();
     assert!(
-        view.axt_replay_ledger().get(&retired_replay_key).is_none(),
-        "committed autoscale lifecycle must prune retired-lane AXT replay records"
+        view.axt_replay_ledger().get(&retired_replay_key).is_some(),
+        "committed autoscale lifecycle must preserve unexpired retired-lane AXT replay records"
     );
     assert!(
         view.axt_replay_ledger().get(&retained_replay_key).is_some(),
@@ -12551,60 +12817,6 @@ fn verified_lane_relay_contract_state_keys_drop_reset_lane_key_despite_payload_m
             .get(&reset_map_key)
             .is_some(),
         "test setup keeps the mismatched map key outside the selector result"
-    );
-}
-state_test! { sync axt_replay_ledger_keys_for_lanes_selects_target_lane_only
-    let reset_lane = LaneId::new(1);
-    let survivor_lane = LaneId::new(2);
-    let reset_target_key =
-        AxtHandleReplayKey::from_parts(DataSpaceId::new(9), [0x31; 32], 7, 1, reset_lane);
-    let survivor_target_key = AxtHandleReplayKey::from_parts(
-        DataSpaceId::UNIVERSAL,
-        [0x32; 32],
-        7,
-        2,
-        survivor_lane,
-    );
-    let_row! { reset_dataspace_survivor_target_key = AxtHandleReplayKey::from_parts(DataSpaceId::new(9), [0x33; 32], 7, 3, survivor_lane) };
-    let world = World::default();
-    {
-        let mut tx = world.axt_replay_ledger.block();
-        tx.insert(
-            reset_target_key,
-            AxtReplayRecord {
-                dataspace: DataSpaceId::new(9),
-                used_slot: 10,
-                retain_until_slot: 100,
-            },
-        );
-        tx.insert(
-            survivor_target_key,
-            AxtReplayRecord {
-                dataspace: DataSpaceId::UNIVERSAL,
-                used_slot: 11,
-                retain_until_slot: 100,
-            },
-        );
-        tx.insert(
-            reset_dataspace_survivor_target_key,
-            AxtReplayRecord {
-                dataspace: DataSpaceId::new(u64::from(reset_lane.as_u32())),
-                used_slot: 12,
-                retain_until_slot: 100,
-            },
-        );
-        tx.commit();
-    }
-    let_row! { selected = State::axt_replay_ledger_keys_for_lanes( &world.axt_replay_ledger.view(), &BTreeSet::from([reset_lane]), ) .into_iter() .collect::<BTreeSet<_>>() };
-    assert_eq!(
-        selected,
-        BTreeSet::from([reset_target_key]),
-        "AXT replay cleanup must use the replay-key target lane, not dataspace metadata or unrelated surviving target lanes"
-    );
-    assert!(
-        State::axt_replay_ledger_keys_for_lanes(&world.axt_replay_ledger.view(), &BTreeSet::new())
-            .is_empty(),
-        "empty reset sets must not prune AXT replay entries"
     );
 }
 state_test! { sync da_pin_intent_index_prune_keys_select_embedded_and_index_lanes
@@ -13668,7 +13880,7 @@ state_test! { sync autoscale_transition_removes_explicit_stale_axt_policy_after_
         Some(preserved_policy)
     );
 }
-state_test! { sync autoscale_transition_prunes_axt_replay_ledger_for_retired_target_lane
+state_test! { sync autoscale_transition_preserves_axt_replay_ledger_for_retired_target_lane
     let (mut state, kura, retired_lane_id) = autoscale_retirement_test_state();
     let retired_key = AxtHandleReplayKey::from_parts(
         DataSpaceId::UNIVERSAL,
@@ -13714,8 +13926,8 @@ state_test! { sync autoscale_transition_prunes_axt_replay_ledger_for_retired_tar
             .world
             .axt_replay_ledger
             .get(&retired_key)
-            .is_none(),
-        "autoscale scale-in must prune replay entries keyed by a retired target lane"
+            .is_some(),
+        "autoscale scale-in cannot revive replay entries keyed by a retired target lane"
     );
     assert!(
         state_block
@@ -13727,9 +13939,9 @@ state_test! { sync autoscale_transition_prunes_axt_replay_ledger_for_retired_tar
     );
     insert_empty_transaction_block_for_test(&mut state_block);
     commit_state_block_with_empty_autoscale_queue(state_block)
-        .expect("autoscale scale-in block scope commits replay-ledger cleanup");
+        .expect("autoscale scale-in block scope commits while preserving replay state");
     let view = state.world.axt_replay_ledger.view();
-    assert!(view.get(&retired_key).is_none());
+    assert!(view.get(&retired_key).is_some());
     assert!(view.get(&retained_key).is_some());
 }
 state_test! { sync autoscale_transition_preserves_cross_lane_axt_replay_for_surviving_target_lane
@@ -13760,7 +13972,7 @@ state_test! { sync autoscale_transition_preserves_cross_lane_axt_replay_for_surv
     let second = autoscale_signed_block_with_committed_fragments(Some(&first), 200, 0);
     store_committed_autoscale_history_block_for_test(&state, &kura, &first);
     let binding = AxtBinding::new([0xD4; 32]);
-    let_row! { handle = AssetHandle { scope: vec!["transfer".into()], subject: HandleSubject { account: ALICE_ID.to_string(), origin_dsid: Some(dataspace), }, budget: HandleBudget { remaining: Quantity::from(10_u64), per_use: Some(Quantity::from(10_u64)), }, handle_era: 2, sub_nonce: 9, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: LaneId::SINGLE, axt_binding: binding, manifest_view_root: [0xC3; 32], expiry_slot: 100, max_clock_skew_ms: Some(0), issuer_context: Default::default(), issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), } };
+    let_row! { handle = AssetHandle { scope: vec!["transfer".into()], asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), subject: HandleSubject { account: ALICE_ID.to_string(), origin_dsid: Some(dataspace), }, budget: HandleBudget { remaining: Quantity::from(10_u64), per_use: Some(Quantity::from(10_u64)), }, handle_era: 2, sub_nonce: 9, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: LaneId::SINGLE, axt_binding: binding, manifest_view_root: [0xC3; 32], expiry_slot: 100, max_clock_skew_ms: Some(0), issuer_context: AxtHandleIssuerContextV1 { asset_dsid: dataspace, ..Default::default() }, issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), } };
     let replay_key = AxtHandleReplayKey::from_handle(dataspace, &handle);
     let_row! { envelope = AxtEnvelopeRecord { binding, lane: retired_envelope_lane, descriptor: AxtDescriptor { dsids: vec![dataspace], touches: Vec::new(), }, touches: Vec::new(), proofs: Vec::new(), handles: vec![AxtHandleFragment { handle, intent: RemoteSpendIntent { asset_dsid: dataspace, op: SpendOp { asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), kind: "transfer".into(), from: ALICE_ID.to_string(), to: BOB_ID.to_string(), amount: Some(Quantity::from(5_u64)), }, }, proof: None, amount: Some(Quantity::from(5_u64)), amount_commitment: None, }], commit_height: 2, } };
     let mut state_block = state.block(second.header());
@@ -14637,8 +14849,8 @@ fn assert_lane_scoped_cleanup_fixture_pruned_from_state_block(
             .world
             .axt_replay_ledger
             .get(&fixture.replay_key)
-            .is_none(),
-        "{context}: AXT replay entry should be pruned in the block overlay"
+            .is_some(),
+        "{context}: lane cleanup must preserve unexpired AXT replay state"
     );
     assert!(
         state_block
@@ -17714,7 +17926,7 @@ state_test! { sync set_nexus_prunes_axt_policies_for_removed_dataspaces
         "removed dataspace policy must be pruned by set_nexus"
     );
 }
-state_test! { sync set_nexus_prunes_axt_replay_entries_for_removed_dataspaces
+state_test! { sync set_nexus_preserves_axt_replay_entries_for_removed_dataspaces
     let mut state = blank_test_state();
     let retained = DataSpaceId::UNIVERSAL;
     let removed = DataSpaceId::new(7);
@@ -17730,9 +17942,7 @@ state_test! { sync set_nexus_prunes_axt_replay_entries_for_removed_dataspaces
     wb.axt_replay_ledger.insert(
         retained_key,
         AxtReplayRecord {
-            // Deliberately disagree with the key: catalog cleanup must trust
-            // the authenticated replay-key dataspace, not redundant metadata.
-            dataspace: removed,
+            dataspace: retained,
             used_slot: 1,
             retain_until_slot: 10,
         },
@@ -17740,7 +17950,7 @@ state_test! { sync set_nexus_prunes_axt_replay_entries_for_removed_dataspaces
     wb.axt_replay_ledger.insert(
         removed_key,
         AxtReplayRecord {
-            dataspace: retained,
+            dataspace: removed,
             used_slot: 1,
             retain_until_slot: 10,
         },
@@ -17753,14 +17963,51 @@ state_test! { sync set_nexus_prunes_axt_replay_entries_for_removed_dataspaces
     let replay_view = state.world.axt_replay_ledger.view();
     assert!(
         replay_view.get(&retained_key).is_some(),
-        "retained replay-key dataspace should remain despite stale value metadata"
+        "retained replay-key dataspace should remain"
     );
     assert!(
-        replay_view.get(&removed_key).is_none(),
-        "removed replay-key dataspace must be pruned despite retained value metadata"
+        replay_view.get(&removed_key).is_some(),
+        "dataspace removal cannot revive an unexpired exact handle use"
     );
 }
-state_test! { sync set_nexus_prunes_axt_replay_entries_for_reset_target_lanes
+state_test! { sync set_nexus_preserves_axt_family_budget_for_removed_dataspaces
+    let mut state = blank_test_state();
+    let retained = DataSpaceId::UNIVERSAL;
+    let removed = DataSpaceId::new(7);
+    state
+        .set_nexus(dataspace_retirement_nexus!(initial retained, removed))
+        .expect("set initial nexus config");
+    let handle = signed_axt_handle_for_block_freeze(
+        &crate::state::checked_keypair(),
+        AxtHandleIssuerContextV1 {
+            asset_dsid: removed,
+            ..Default::default()
+        },
+        LaneId::SINGLE,
+        AxtBinding::new([0xB7; 32]),
+        1,
+        1,
+    );
+    let key = AxtHandleBudgetKey::from_handle(&handle);
+    let mut record = AxtHandleBudgetRecord::empty();
+    record
+        .try_consume(&key, &Quantity::from(5_u64), 100)
+        .expect("fixture consumption");
+    {
+        let mut ledger = state.world.axt_handle_budget_ledger.block();
+        ledger.insert(key.clone(), record.clone());
+        ledger.commit();
+    }
+    state
+        .set_nexus(dataspace_retirement_nexus!(retained retained))
+        .expect("remove the handle dataspace");
+    assert_eq!(
+        state.world.axt_handle_budget_ledger.view().get(&key),
+        Some(&record),
+        "dataspace removal cannot reset a signed family that may become routable again"
+    );
+}
+state_test! { sync set_nexus_preserves_axt_replay_entries_for_reset_target_lanes
     let query_handle = LiveQueryStore::start_test();
     let rebound = DataSpaceId::new(8);
     let retained = DataSpaceId::new(9);
@@ -17806,8 +18053,8 @@ state_test! { sync set_nexus_prunes_axt_replay_entries_for_reset_target_lanes
         .expect("set updated nexus config");
     let replay_view = state.world.axt_replay_ledger.view();
     assert!(
-        replay_view.get(&reset_lane_key).is_none(),
-        "replay entry keyed by rebound lane must be pruned"
+        replay_view.get(&reset_lane_key).is_some(),
+        "lane rebound cannot revive an unexpired exact handle use"
     );
     assert!(
         replay_view.get(&retained_lane_key).is_some(),
@@ -27685,11 +27932,11 @@ fn axt_replay_ledger_survives_state_restart() {
     let_row! { touch_manifest = TouchManifest { read: vec!["orders/replay".into()], write: vec!["ledger/replay".into()], } };
     let_row! { proof_fragment = AxtProofFragment { dsid, proof: axt_proof_blob_for(dsid, manifest_root, b"state-restart", 5), } };
     let merchant_id = gen_account_in("wonderland").0;
-    let_row! { handle_fragment = AxtHandleFragment { handle: AssetHandle { scope: vec!["transfer".into()], subject: HandleSubject { account: authority.to_string(), origin_dsid: Some(dsid), }, budget: HandleBudget { remaining: Quantity::from(50_u64), per_use: Some(Quantity::from(50_u64)), }, handle_era: 2, sub_nonce: 5, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 2, }, target_lane: lane, axt_binding: binding, manifest_view_root: manifest_root, expiry_slot: 5, max_clock_skew_ms: Some(0), issuer_context: Default::default(), issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), }, intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), kind: "transfer".into(), from: authority.to_string(), to: merchant_id.to_string(), amount: Some(Quantity::from(10_u64)), }, }, proof: None, amount: Some(Quantity::from(10_u64)), amount_commitment: None, } };
+    let_row! { handle_fragment = AxtHandleFragment { handle: AssetHandle { scope: vec!["transfer".into()], asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), subject: HandleSubject { account: authority.to_string(), origin_dsid: Some(dsid), }, budget: HandleBudget { remaining: Quantity::from(50_u64), per_use: Some(Quantity::from(50_u64)), }, handle_era: 2, sub_nonce: 5, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 2, }, target_lane: lane, axt_binding: binding, manifest_view_root: manifest_root, expiry_slot: 5, max_clock_skew_ms: Some(0), issuer_context: AxtHandleIssuerContextV1 { asset_dsid: dsid, ..Default::default() }, issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), }, intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), kind: "transfer".into(), from: authority.to_string(), to: merchant_id.to_string(), amount: Some(Quantity::from(10_u64)), }, }, proof: None, amount: Some(Quantity::from(10_u64)), amount_commitment: None, } };
     let_row! { ivm_descriptor = ivm::axt::AxtDescriptor { dsids: descriptor.dsids.clone(), touches: descriptor .touches .iter() .map(|touch| ivm::axt::AxtTouchSpec { dsid: touch.dsid, read: touch.read.clone(), write: touch.write.clone(), }) .collect(), } };
     let_row! { ivm_manifest = ivm::axt::TouchManifest { read: touch_manifest.read.clone(), write: touch_manifest.write.clone(), } };
     let_row! { ivm_proof = ivm::axt::ProofBlob { payload: proof_fragment.proof.payload.clone(), expiry_slot: proof_fragment.proof.expiry_slot, } };
-    let_row! { ivm_handle = ivm::axt::AssetHandle { scope: handle_fragment.handle.scope.clone(), subject: ivm::axt::HandleSubject { account: handle_fragment.handle.subject.account.clone(), origin_dsid: handle_fragment.handle.subject.origin_dsid, }, budget: ivm::axt::HandleBudget { remaining: handle_fragment.handle.budget.remaining.clone(), per_use: handle_fragment.handle.budget.per_use.clone(), }, handle_era: handle_fragment.handle.handle_era, sub_nonce: handle_fragment.handle.sub_nonce, group_binding: ivm::axt::GroupBinding { composability_group_id: handle_fragment .handle .group_binding .composability_group_id .clone(), epoch_id: handle_fragment.handle.group_binding.epoch_id, }, target_lane: handle_fragment.handle.target_lane, axt_binding: handle_fragment.handle.axt_binding.as_bytes().to_vec(), manifest_view_root: handle_fragment.handle.manifest_view_root.to_vec(), expiry_slot: handle_fragment.handle.expiry_slot, max_clock_skew_ms: handle_fragment.handle.max_clock_skew_ms, issuer_context: handle_fragment.handle.issuer_context, issuer_signature: handle_fragment.handle.issuer_signature.clone(), } };
+    let_row! { ivm_handle = ivm::axt::AssetHandle { scope: handle_fragment.handle.scope.clone(), asset_definition_id: handle_fragment.handle.asset_definition_id.clone(), subject: ivm::axt::HandleSubject { account: handle_fragment.handle.subject.account.clone(), origin_dsid: handle_fragment.handle.subject.origin_dsid, }, budget: ivm::axt::HandleBudget { remaining: handle_fragment.handle.budget.remaining.clone(), per_use: handle_fragment.handle.budget.per_use.clone(), }, handle_era: handle_fragment.handle.handle_era, sub_nonce: handle_fragment.handle.sub_nonce, group_binding: ivm::axt::GroupBinding { composability_group_id: handle_fragment .handle .group_binding .composability_group_id .clone(), epoch_id: handle_fragment.handle.group_binding.epoch_id, }, target_lane: handle_fragment.handle.target_lane, axt_binding: handle_fragment.handle.axt_binding.as_bytes().to_vec(), manifest_view_root: handle_fragment.handle.manifest_view_root.to_vec(), expiry_slot: handle_fragment.handle.expiry_slot, max_clock_skew_ms: handle_fragment.handle.max_clock_skew_ms, issuer_context: handle_fragment.handle.issuer_context, issuer_signature: handle_fragment.handle.issuer_signature.clone(), } };
     let_row! { ivm_intent = ivm::axt::RemoteSpendIntent { asset_dsid: handle_fragment.intent.asset_dsid, op: ivm::axt::SpendOp { asset_definition_id: handle_fragment.intent.op.asset_definition_id.clone(), kind: handle_fragment.intent.op.kind.clone(), from: handle_fragment.intent.op.from.clone(), to: handle_fragment.intent.op.to.clone(), amount: handle_fragment.intent.op.amount.clone(), }, } };
     {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
@@ -27777,11 +28024,11 @@ fn axt_replay_ledger_prunes_after_retention_window() {
     let binding = descriptor.binding().expect("compute binding");
     let_row! { touch_manifest = TouchManifest { read: vec!["orders/replay".into()], write: vec!["ledger/replay".into()], } };
     let_row! { proof_fragment = AxtProofFragment { dsid, proof: axt_proof_blob_for(dsid, manifest_root, b"state-retention", 8), } };
-    let_row! { handle_fragment = AxtHandleFragment { handle: AssetHandle { scope: vec!["transfer".into()], subject: HandleSubject { account: authority.to_string(), origin_dsid: Some(dsid), }, budget: HandleBudget { remaining: Quantity::from(25_u64), per_use: Some(Quantity::from(25_u64)), }, handle_era: 1, sub_nonce: 1, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: lane, axt_binding: binding, manifest_view_root: manifest_root, expiry_slot: 8, max_clock_skew_ms: Some(0), issuer_context: Default::default(), issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), }, intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), kind: "transfer".into(), from: authority.to_string(), to: BOB_ID.to_string(), amount: Some(Quantity::from(5_u64)), }, }, proof: None, amount: Some(Quantity::from(5_u64)), amount_commitment: None, } };
+    let_row! { handle_fragment = AxtHandleFragment { handle: AssetHandle { scope: vec!["transfer".into()], asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), subject: HandleSubject { account: authority.to_string(), origin_dsid: Some(dsid), }, budget: HandleBudget { remaining: Quantity::from(25_u64), per_use: Some(Quantity::from(25_u64)), }, handle_era: 1, sub_nonce: 1, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: lane, axt_binding: binding, manifest_view_root: manifest_root, expiry_slot: 8, max_clock_skew_ms: Some(0), issuer_context: AxtHandleIssuerContextV1 { asset_dsid: dsid, ..Default::default() }, issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), }, intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), kind: "transfer".into(), from: authority.to_string(), to: BOB_ID.to_string(), amount: Some(Quantity::from(5_u64)), }, }, proof: None, amount: Some(Quantity::from(5_u64)), amount_commitment: None, } };
     let_row! { ivm_descriptor = ivm::axt::AxtDescriptor { dsids: descriptor.dsids.clone(), touches: descriptor .touches .iter() .map(|touch| ivm::axt::AxtTouchSpec { dsid: touch.dsid, read: touch.read.clone(), write: touch.write.clone(), }) .collect(), } };
     let_row! { ivm_manifest = ivm::axt::TouchManifest { read: touch_manifest.read.clone(), write: touch_manifest.write.clone(), } };
     let_row! { ivm_proof = ivm::axt::ProofBlob { payload: proof_fragment.proof.payload.clone(), expiry_slot: proof_fragment.proof.expiry_slot, } };
-    let_row! { ivm_handle = ivm::axt::AssetHandle { scope: handle_fragment.handle.scope.clone(), subject: ivm::axt::HandleSubject { account: handle_fragment.handle.subject.account.clone(), origin_dsid: handle_fragment.handle.subject.origin_dsid, }, budget: ivm::axt::HandleBudget { remaining: handle_fragment.handle.budget.remaining.clone(), per_use: handle_fragment.handle.budget.per_use.clone(), }, handle_era: handle_fragment.handle.handle_era, sub_nonce: handle_fragment.handle.sub_nonce, group_binding: ivm::axt::GroupBinding { composability_group_id: handle_fragment .handle .group_binding .composability_group_id .clone(), epoch_id: handle_fragment.handle.group_binding.epoch_id, }, target_lane: handle_fragment.handle.target_lane, axt_binding: handle_fragment.handle.axt_binding.as_bytes().to_vec(), manifest_view_root: handle_fragment.handle.manifest_view_root.to_vec(), expiry_slot: handle_fragment.handle.expiry_slot, max_clock_skew_ms: handle_fragment.handle.max_clock_skew_ms, issuer_context: handle_fragment.handle.issuer_context, issuer_signature: handle_fragment.handle.issuer_signature.clone(), } };
+    let_row! { ivm_handle = ivm::axt::AssetHandle { scope: handle_fragment.handle.scope.clone(), asset_definition_id: handle_fragment.handle.asset_definition_id.clone(), subject: ivm::axt::HandleSubject { account: handle_fragment.handle.subject.account.clone(), origin_dsid: handle_fragment.handle.subject.origin_dsid, }, budget: ivm::axt::HandleBudget { remaining: handle_fragment.handle.budget.remaining.clone(), per_use: handle_fragment.handle.budget.per_use.clone(), }, handle_era: handle_fragment.handle.handle_era, sub_nonce: handle_fragment.handle.sub_nonce, group_binding: ivm::axt::GroupBinding { composability_group_id: handle_fragment .handle .group_binding .composability_group_id .clone(), epoch_id: handle_fragment.handle.group_binding.epoch_id, }, target_lane: handle_fragment.handle.target_lane, axt_binding: handle_fragment.handle.axt_binding.as_bytes().to_vec(), manifest_view_root: handle_fragment.handle.manifest_view_root.to_vec(), expiry_slot: handle_fragment.handle.expiry_slot, max_clock_skew_ms: handle_fragment.handle.max_clock_skew_ms, issuer_context: handle_fragment.handle.issuer_context, issuer_signature: handle_fragment.handle.issuer_signature.clone(), } };
     let_row! { ivm_intent = ivm::axt::RemoteSpendIntent { asset_dsid: handle_fragment.intent.asset_dsid, op: ivm::axt::SpendOp { asset_definition_id: handle_fragment.intent.op.asset_definition_id.clone(), kind: handle_fragment.intent.op.kind.clone(), from: handle_fragment.intent.op.from.clone(), to: handle_fragment.intent.op.to.clone(), amount: handle_fragment.intent.op.amount.clone(), }, } };
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
     let mut block = state.block(header);
@@ -28120,6 +28367,10 @@ fn signed_axt_handle_for_block_freeze(
 ) -> AssetHandle {
     AssetHandleDraft {
         scope: vec!["transfer".into()],
+        asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+        ])
+        .expect("valid AXT fixture asset id"),
         subject: HandleSubject {
             account: ALICE_ID.to_string(),
             origin_dsid: Some(context.asset_dsid),
@@ -28164,7 +28415,11 @@ fn axt_envelope_for_block_freeze(
             intent: RemoteSpendIntent {
                 asset_dsid: dataspace,
                 op: SpendOp {
-                    asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"),
+                    asset_definition_id:
+                        iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                        ])
+                        .expect("valid AXT fixture asset id"),
                     kind: "transfer".into(),
                     from: ALICE_ID.to_string(),
                     to: BOB_ID.to_string(),
@@ -28363,7 +28618,7 @@ state_test! { sync recording_axt_envelope_is_transactional_and_advances_only_on_
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let binding = AxtBinding::new([0xAB; 32]);
-    let_row! { handle = iroha_data_model::nexus::AssetHandle { scope: vec!["transfer".into()], subject: HandleSubject { account: ALICE_ID.to_string(), origin_dsid: Some(dsid), }, budget: HandleBudget { remaining: Quantity::from(10_u64), per_use: Some(Quantity::from(10_u64)), }, handle_era: 1, sub_nonce: 1, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: lane, axt_binding: binding, manifest_view_root: [0xAA; 32], expiry_slot: 50, max_clock_skew_ms: Some(0), issuer_context: Default::default(), issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), } };
+    let_row! { handle = iroha_data_model::nexus::AssetHandle { scope: vec!["transfer".into()], asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), subject: HandleSubject { account: ALICE_ID.to_string(), origin_dsid: Some(dsid), }, budget: HandleBudget { remaining: Quantity::from(10_u64), per_use: Some(Quantity::from(10_u64)), }, handle_era: 1, sub_nonce: 1, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: lane, axt_binding: binding, manifest_view_root: [0xAA; 32], expiry_slot: 50, max_clock_skew_ms: Some(0), issuer_context: AxtHandleIssuerContextV1 { asset_dsid: dsid, ..Default::default() }, issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), } };
     let_row! { envelope = AxtEnvelopeRecord { binding, lane, descriptor: AxtDescriptor { dsids: vec![dsid], touches: Vec::new(), }, touches: Vec::new(), proofs: Vec::new(), handles: vec![AxtHandleFragment { handle: handle.clone(), intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), kind: "transfer".into(), from: ALICE_ID.to_string(), to: BOB_ID.to_string(), amount: Some(Quantity::from(5_u64)), }, }, proof: None, amount: Some(Quantity::from(5_u64)), amount_commitment: None, }], commit_height: 1, } };
     for (label, invalid_handle) in [
         (
@@ -28401,6 +28656,33 @@ state_test! { sync recording_axt_envelope_is_transactional_and_advances_only_on_
         Some(initial_policy),
         "invalid AXT sequences must be mutation-free"
     );
+    let mut split_budget_attack = envelope.clone();
+    split_budget_attack.handles[0].intent.op.amount = Some(Quantity::from(6_u64));
+    split_budget_attack.handles[0].amount = Some(Quantity::from(6_u64));
+    let mut second = split_budget_attack.handles[0].clone();
+    second.handle.sub_nonce = 2;
+    split_budget_attack.handles.push(second);
+    let split_budget_key = AxtHandleBudgetKey::from_handle(&handle);
+    {
+        let mut rejected = block.transaction();
+        assert!(
+            rejected.record_axt_envelope(split_budget_attack).is_err(),
+            "a later handle that exceeds the family budget must reject the whole envelope"
+        );
+    }
+    assert_eq!(
+        block.world.axt_policies.get(&dsid).copied(),
+        Some(initial_policy),
+        "a multi-handle budget failure must not advance policy"
+    );
+    assert!(
+        block
+            .world
+            .axt_handle_budget_ledger
+            .get(&split_budget_key)
+            .is_none(),
+        "a multi-handle budget failure must not publish partial consumption"
+    );
     {
         let mut rejected = block.transaction();
         rejected
@@ -28430,6 +28712,14 @@ state_test! { sync recording_axt_envelope_is_transactional_and_advances_only_on_
             .is_none(),
         "a rejected transaction must not publish its replay entry"
     );
+    assert!(
+        block
+            .world
+            .axt_handle_budget_ledger
+            .get(&split_budget_key)
+            .is_none(),
+        "dropping a staged transaction must roll back cumulative family consumption"
+    );
     let mut stx = block.transaction();
     stx.record_axt_envelope(envelope)
         .expect("exact AXT sequence should stage");
@@ -28442,6 +28732,250 @@ state_test! { sync recording_axt_envelope_is_transactional_and_advances_only_on_
     );
     let_row! { expected_slot = block .axt_policy_snapshot() .entries .first() .map_or(0, |entry| entry.policy.current_slot) };
     assert_eq!(updated.current_slot, expected_slot);
+}
+state_test! { sync recording_hidden_axt_amount_charges_consensus_budget
+    let mut state = State::new_for_testing(
+        World::new(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
+    let dsid = DataSpaceId::new(35);
+    let lane = LaneId::new(2);
+    let manifest_root = [0xAE; 32];
+    state.set_axt_policy(
+        dsid,
+        AxtPolicyEntry {
+            manifest_root,
+            target_lane: lane,
+            active_handle_era: 1,
+            next_handle_counter: 1,
+            current_slot: 0,
+        },
+    );
+    let binding = AxtBinding::new([0xAF; 32]);
+    let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+        0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+    ])
+    .expect("valid AXT fixture asset id");
+    let proof = axt_proof_blob_for_with_committed_amount(
+        dsid,
+        manifest_root,
+        b"state-hidden-budget",
+        50,
+        Some(5),
+    );
+    let proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
+        .expect("decode hidden-amount proof envelope");
+    let handle = AssetHandle {
+        scope: vec!["transfer".into()],
+        asset_definition_id: asset_definition_id.clone(),
+        subject: HandleSubject {
+            account: ALICE_ID.to_string(),
+            origin_dsid: Some(dsid),
+        },
+        budget: HandleBudget {
+            remaining: Quantity::from(10_u64),
+            per_use: Some(Quantity::from(10_u64)),
+        },
+        handle_era: 1,
+        sub_nonce: 1,
+        group_binding: GroupBinding {
+            composability_group_id: vec![0; 32],
+            epoch_id: 1,
+        },
+        target_lane: lane,
+        axt_binding: binding,
+        manifest_view_root: manifest_root,
+        expiry_slot: 50,
+        max_clock_skew_ms: Some(0),
+        issuer_context: AxtHandleIssuerContextV1 {
+            asset_dsid: dsid,
+            ..Default::default()
+        },
+        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
+    };
+    let budget_key = AxtHandleBudgetKey::from_handle(&handle);
+    let envelope = AxtEnvelopeRecord {
+        binding,
+        lane,
+        descriptor: AxtDescriptor {
+            dsids: vec![dsid],
+            touches: Vec::new(),
+        },
+        touches: Vec::new(),
+        proofs: Vec::new(),
+        handles: vec![AxtHandleFragment {
+            handle,
+            intent: RemoteSpendIntent {
+                asset_dsid: dsid,
+                op: SpendOp {
+                    asset_definition_id,
+                    kind: "transfer".into(),
+                    from: ALICE_ID.to_string(),
+                    to: BOB_ID.to_string(),
+                    amount: None,
+                },
+            },
+            proof: Some(proof),
+            amount: None,
+            amount_commitment: proof_envelope.amount_commitment,
+        }],
+        commit_height: 1,
+    };
+    let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+    let mut block = state.block(header);
+    let mut stx = block.transaction();
+    stx.record_axt_envelope(envelope)
+        .expect("hidden proof scalar must stage exact budget consumption");
+    stx.apply();
+    assert_eq!(
+        block
+            .world
+            .axt_handle_budget_ledger
+            .get(&budget_key)
+            .expect("hidden amount must publish a cumulative family record")
+            .consumed(),
+        &Quantity::from(5_u64)
+    );
+}
+state_test! { sync axt_handle_budget_persists_across_state_block_commits
+    fn run_case(first_amount: u64, second_amount: u64) -> Result<Quantity, Error> {
+        let mut state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let dsid = DataSpaceId::new(36);
+        let lane = LaneId::new(2);
+        let manifest_root = [0xB0; 32];
+        let binding = AxtBinding::new([0xB1; 32]);
+        let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+        ])
+        .expect("valid AXT fixture asset id");
+        state.set_axt_policy(
+            dsid,
+            AxtPolicyEntry {
+                manifest_root,
+                target_lane: lane,
+                active_handle_era: 1,
+                next_handle_counter: 1,
+                current_slot: 0,
+            },
+        );
+        let make_envelope = |sub_nonce: u64, amount: u64, commit_height: u64| {
+            let proof = axt_proof_blob_for_with_committed_amount(
+                dsid,
+                manifest_root,
+                &[u8::try_from(sub_nonce).expect("small fixture counter")],
+                50,
+                Some(u128::from(amount)),
+            );
+            let proof_envelope = norito::decode_from_bytes::<AxtProofEnvelope>(&proof.payload)
+                .expect("decode hidden-amount proof envelope");
+            AxtEnvelopeRecord {
+                binding,
+                lane,
+                descriptor: AxtDescriptor {
+                    dsids: vec![dsid],
+                    touches: Vec::new(),
+                },
+                touches: Vec::new(),
+                proofs: Vec::new(),
+                handles: vec![AxtHandleFragment {
+                    handle: AssetHandle {
+                        scope: vec!["transfer".into()],
+                        asset_definition_id: asset_definition_id.clone(),
+                        subject: HandleSubject {
+                            account: ALICE_ID.to_string(),
+                            origin_dsid: Some(dsid),
+                        },
+                        budget: HandleBudget {
+                            remaining: Quantity::from(10_u64),
+                            per_use: Some(Quantity::from(10_u64)),
+                        },
+                        handle_era: 1,
+                        sub_nonce,
+                        group_binding: GroupBinding {
+                            composability_group_id: vec![0; 32],
+                            epoch_id: 1,
+                        },
+                        target_lane: lane,
+                        axt_binding: binding,
+                        manifest_view_root: manifest_root,
+                        expiry_slot: 50,
+                        max_clock_skew_ms: Some(0),
+                        issuer_context: AxtHandleIssuerContextV1 {
+                            asset_dsid: dsid,
+                            ..Default::default()
+                        },
+                        issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]),
+                    },
+                    intent: RemoteSpendIntent {
+                        asset_dsid: dsid,
+                        op: SpendOp {
+                            asset_definition_id: asset_definition_id.clone(),
+                            kind: "transfer".into(),
+                            from: ALICE_ID.to_string(),
+                            to: BOB_ID.to_string(),
+                            amount: None,
+                        },
+                    },
+                    proof: Some(proof),
+                    amount: None,
+                    amount_commitment: proof_envelope.amount_commitment,
+                }],
+                commit_height,
+            }
+        };
+        let first = make_envelope(1, first_amount, 1);
+        let budget_key = AxtHandleBudgetKey::from_handle(&first.handles[0].handle);
+        {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction.record_axt_envelope(first)?;
+            transaction.apply();
+            block.commit().expect("commit first AXT family spend");
+        }
+        assert_eq!(
+            state
+                .world
+                .axt_handle_budget_ledger
+                .view()
+                .get(&budget_key)
+                .expect("first block publishes cumulative family spend")
+                .consumed(),
+            &Quantity::from(first_amount)
+        );
+        {
+            let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 2, 0);
+            let mut block = state.block(header);
+            let mut transaction = block.transaction();
+            transaction.record_axt_envelope(make_envelope(2, second_amount, 2))?;
+            transaction.apply();
+            block.commit().expect("commit second AXT family spend");
+        }
+        Ok(state
+            .world
+            .axt_handle_budget_ledger
+            .view()
+            .get(&budget_key)
+            .expect("second block retains cumulative family spend")
+            .consumed()
+            .clone())
+    }
+
+    let error = run_case(7, 7)
+        .expect_err("two committed blocks cannot each reset the same signed family allowance");
+    assert!(
+        error.to_string().contains("signed budget"),
+        "unexpected cross-block budget rejection: {error}"
+    );
+    assert_eq!(
+        run_case(5, 5).expect("two blocks may consume the exact signed family allowance"),
+        Quantity::from(10_u64)
+    );
 }
 state_test! { sync kura_replay_records_handle_without_ratcheting_post_state_again
     let kura = Kura::blank_kura_for_testing();
@@ -28462,8 +28996,9 @@ state_test! { sync kura_replay_records_handle_without_ratcheting_post_state_agai
         },
     );
     let binding = AxtBinding::new([0xAD; 32]);
-    let_row! { handle = iroha_data_model::nexus::AssetHandle { scope: vec!["transfer".into()], subject: HandleSubject { account: ALICE_ID.to_string(), origin_dsid: Some(dsid), }, budget: HandleBudget { remaining: Quantity::from(10_u64), per_use: Some(Quantity::from(10_u64)), }, handle_era: 1, sub_nonce: 1, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: lane, axt_binding: binding, manifest_view_root: manifest_root, expiry_slot: 50, max_clock_skew_ms: Some(0), issuer_context: Default::default(), issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), } };
+    let_row! { handle = iroha_data_model::nexus::AssetHandle { scope: vec!["transfer".into()], asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), subject: HandleSubject { account: ALICE_ID.to_string(), origin_dsid: Some(dsid), }, budget: HandleBudget { remaining: Quantity::from(10_u64), per_use: Some(Quantity::from(10_u64)), }, handle_era: 1, sub_nonce: 1, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: lane, axt_binding: binding, manifest_view_root: manifest_root, expiry_slot: 50, max_clock_skew_ms: Some(0), issuer_context: AxtHandleIssuerContextV1 { asset_dsid: dsid, ..Default::default() }, issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), } };
     let replay_key = AxtHandleReplayKey::from_handle(dsid, &handle);
+    let budget_key = AxtHandleBudgetKey::from_handle(&handle);
     let_row! { envelope = AxtEnvelopeRecord { binding, lane, descriptor: AxtDescriptor { dsids: vec![dsid], touches: Vec::new(), }, touches: Vec::new(), proofs: Vec::new(), handles: vec![AxtHandleFragment { handle, intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), kind: "transfer".into(), from: ALICE_ID.to_string(), to: BOB_ID.to_string(), amount: Some(Quantity::from(5_u64)), }, }, proof: None, amount: Some(Quantity::from(5_u64)), amount_commitment: None, }], commit_height: 1, } };
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
     let mut state_block = state.block(header);
@@ -28486,6 +29021,16 @@ state_test! { sync kura_replay_records_handle_without_ratcheting_post_state_agai
             .get(&replay_key)
             .is_some(),
         "replay must still rebuild the replay ledger"
+    );
+    assert_eq!(
+        state_block
+            .world
+            .axt_handle_budget_ledger
+            .get(&budget_key)
+            .expect("replay must rebuild the cumulative family budget")
+            .consumed(),
+        &Quantity::from(5_u64),
+        "replaying the same exact handle twice must charge its family once"
     );
 }
 #[test]
@@ -28512,7 +29057,7 @@ fn axt_replay_ledger_records_and_prunes() {
             current_slot: 0,
         },
     );
-    let_row! { handle = iroha_data_model::nexus::AssetHandle { scope: vec!["transfer".into()], subject: iroha_data_model::nexus::HandleSubject { account: ALICE_ID.to_string(), origin_dsid: Some(dsid), }, budget: iroha_data_model::nexus::HandleBudget { remaining: Quantity::from(10_u64), per_use: Some(Quantity::from(10_u64)), }, handle_era: 1, sub_nonce: 1, group_binding: iroha_data_model::nexus::GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: lane, axt_binding: binding, manifest_view_root: [0xCC; 32], expiry_slot: 2, max_clock_skew_ms: Some(0), issuer_context: Default::default(), issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), } };
+    let_row! { handle = iroha_data_model::nexus::AssetHandle { scope: vec!["transfer".into()], asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), subject: iroha_data_model::nexus::HandleSubject { account: ALICE_ID.to_string(), origin_dsid: Some(dsid), }, budget: iroha_data_model::nexus::HandleBudget { remaining: Quantity::from(10_u64), per_use: Some(Quantity::from(10_u64)), }, handle_era: 1, sub_nonce: 1, group_binding: iroha_data_model::nexus::GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: lane, axt_binding: binding, manifest_view_root: [0xCC; 32], expiry_slot: 2, max_clock_skew_ms: Some(0), issuer_context: AxtHandleIssuerContextV1 { asset_dsid: dsid, ..Default::default() }, issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), } };
     let_row! { envelope = AxtEnvelopeRecord { binding, lane, descriptor: AxtDescriptor { dsids: vec![dsid], touches: Vec::new(), }, touches: Vec::new(), proofs: Vec::new(), handles: vec![AxtHandleFragment { handle: handle.clone(), intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), kind: "transfer".into(), from: ALICE_ID.to_string(), to: BOB_ID.to_string(), amount: Some(Quantity::from(5_u64)), }, }, proof: None, amount: Some(Quantity::from(5_u64)), amount_commitment: None, }], commit_height: 1, } };
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
     let mut block = state.block(header);
@@ -28538,7 +29083,11 @@ fn axt_replay_ledger_records_and_prunes() {
             intent: RemoteSpendIntent {
                 asset_dsid: dsid,
                 op: SpendOp {
-                    asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"),
+                    asset_definition_id:
+                        iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
+                            0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1,
+                        ])
+                        .expect("valid AXT fixture asset id"),
                     kind: "transfer".into(),
                     from: ALICE_ID.to_string(),
                     to: BOB_ID.to_string(),
@@ -28659,7 +29208,7 @@ fn axt_replay_ledger_persisted_from_block_rejects_reuse_on_validation() {
     let binding = descriptor.binding().expect("descriptor binding");
     let_row! { touch_fragment = AxtTouchFragment { dsid, manifest: TouchManifest { read: Vec::new(), write: Vec::new(), }, } };
     let_row! { proof_fragment = AxtProofFragment { dsid, proof: axt_proof_blob_for(dsid, manifest_root, b"persisted-block-replay", 5), } };
-    let_row! { handle_fragment = AxtHandleFragment { handle: AssetHandle { scope: vec!["transfer".into()], subject: HandleSubject { account: authority.to_string(), origin_dsid: Some(dsid), }, budget: HandleBudget { remaining: Quantity::from(10_u64), per_use: Some(Quantity::from(10_u64)), }, handle_era: 1, sub_nonce: 1, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: lane, axt_binding: binding, manifest_view_root: manifest_root, expiry_slot: 5, max_clock_skew_ms: Some(0), issuer_context: Default::default(), issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), }, intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), kind: "transfer".into(), from: authority.to_string(), to: merchant_id.to_string(), amount: Some(Quantity::from(5_u64)), }, }, proof: None, amount: Some(Quantity::from(5_u64)), amount_commitment: None, } };
+    let_row! { handle_fragment = AxtHandleFragment { handle: AssetHandle { scope: vec!["transfer".into()], asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), subject: HandleSubject { account: authority.to_string(), origin_dsid: Some(dsid), }, budget: HandleBudget { remaining: Quantity::from(10_u64), per_use: Some(Quantity::from(10_u64)), }, handle_era: 1, sub_nonce: 1, group_binding: GroupBinding { composability_group_id: vec![0; 32], epoch_id: 1, }, target_lane: lane, axt_binding: binding, manifest_view_root: manifest_root, expiry_slot: 5, max_clock_skew_ms: Some(0), issuer_context: AxtHandleIssuerContextV1 { asset_dsid: dsid, ..Default::default() }, issuer_signature: iroha_crypto::Signature::from_bytes(&[1_u8; 64]), }, intent: RemoteSpendIntent { asset_dsid: dsid, op: SpendOp { asset_definition_id: iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, 1]).expect("valid AXT fixture asset id"), kind: "transfer".into(), from: authority.to_string(), to: merchant_id.to_string(), amount: Some(Quantity::from(5_u64)), }, }, proof: None, amount: Some(Quantity::from(5_u64)), amount_commitment: None, } };
     let_row! { envelope = AxtEnvelopeRecord { binding, lane, descriptor, touches: vec![touch_fragment], proofs: vec![proof_fragment], handles: vec![handle_fragment.clone()], commit_height: 1, } };
     let snapshot = state.axt_policy_snapshot();
     let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(0));

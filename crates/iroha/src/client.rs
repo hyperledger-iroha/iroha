@@ -190,13 +190,11 @@ pub const CANONICAL_REQUEST_WITNESS_MAX_DECODED_BYTES_V1: usize = 3 * 1024 * 102
 /// Maximum canonical base64 bytes in one canonical V1 request-witness header.
 pub const CANONICAL_REQUEST_WITNESS_MAX_HEADER_BYTES_V1: usize = 1024 * 1024;
 pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SorafsEndpointMethod {
     Get,
     Post,
 }
-
 impl SorafsEndpointMethod {
     fn http(self) -> HttpMethod {
         match self {
@@ -205,13 +203,11 @@ impl SorafsEndpointMethod {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SorafsEndpointAuth {
     Anonymous,
     Account,
 }
-
 /// Exact transport contract for one `SoraFS` HTTP endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SorafsEndpoint<'a> {
@@ -222,7 +218,6 @@ struct SorafsEndpoint<'a> {
     accept: &'static str,
     max_response_bytes: Option<usize>,
 }
-
 impl<'a> SorafsEndpoint<'a> {
     const fn anonymous_json_get(path: &'a str) -> Self {
         Self {
@@ -234,14 +229,12 @@ impl<'a> SorafsEndpoint<'a> {
             max_response_bytes: None,
         }
     }
-
     const fn account_json_get(path: &'a str) -> Self {
         Self {
             auth: SorafsEndpointAuth::Account,
             ..Self::anonymous_json_get(path)
         }
     }
-
     const fn account_json_post(path: &'a str) -> Self {
         Self {
             path,

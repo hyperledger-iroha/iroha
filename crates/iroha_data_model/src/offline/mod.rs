@@ -6732,42 +6732,7 @@ impl KagemushaRecursiveSpendPublicStatementV4 {
 #[cfg(test)]
 mod kagemusha_v4_lifecycle_domain_tests {
     use super::*;
-    #[test]
-    fn abi21_lifecycle_digest_domains_are_distinct_from_v2() {
-        let v4 = [
-            KAGEMUSHA_TOPUP_PAYLOAD_DIGEST_DOMAIN_V4,
-            KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_SPLIT_BINDING_DIGEST_DOMAIN_V4,
-            KAGEMUSHA_REDEMPTION_TRANSITION_DIGEST_DOMAIN_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V4,
-        ];
-        assert_eq!(
-            v4.into_iter()
-                .collect::<std::collections::BTreeSet<_>>()
-                .len(),
-            v4.len()
-        );
-        assert_ne!(
-            KAGEMUSHA_TOPUP_PAYLOAD_DIGEST_DOMAIN_V4,
-            KAGEMUSHA_TOPUP_PAYLOAD_DIGEST_DOMAIN_V2
-        );
-        assert_ne!(
-            KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V4,
-            KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V2
-        );
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_SPLIT_BINDING_DIGEST_DOMAIN_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_SPLIT_BINDING_DIGEST_DOMAIN_V2
-        );
-        assert_ne!(
-            KAGEMUSHA_REDEMPTION_TRANSITION_DIGEST_DOMAIN_V4,
-            KAGEMUSHA_REDEMPTION_TRANSITION_DIGEST_DOMAIN_V2
-        );
-        assert_ne!(
-            KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V2
-        );
-    }
+    include!("kagemusha_v4_lifecycle_digest_domain_test.rs");
     #[test]
     fn abi21_operation_vector_rejects_noncanonical_pallas_elements() {
         let mut limbs = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4];

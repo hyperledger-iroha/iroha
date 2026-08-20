@@ -4157,57 +4157,6 @@ impl PartialEq for RuntimeEffectOwnership {
 }
 impl Eq for RuntimeEffectOwnership {}
 include!("v2_runtime_effect_ownership_core_impl.rs");
-fn append_optional_runtime_identity_bytes(identity: &mut Vec<u8>, value: Option<Vec<u8>>) {
-    match value {
-        None => identity.push(0),
-        Some(value) => {
-            identity.push(1);
-            append_runtime_identity_field(identity, &value);
-        }
-    }
-}
-fn append_optional_runtime_qc_statement(
-    identity: &mut Vec<u8>,
-    certificate: Option<&wire::QuorumCertificate>,
-) {
-    let Some(certificate) = certificate else {
-        identity.push(0);
-        return;
-    };
-    identity.push(1);
-    append_runtime_identity_field(identity, &certificate.round.encode());
-    append_runtime_identity_field(identity, &certificate.proposal_round.encode());
-    identity.push(certificate.phase as u8);
-    append_runtime_identity_field(identity, &certificate.subject.encode());
-    append_runtime_identity_field(identity, &certificate.execution_commitment.encode());
-}
-/// Closed classification of every production adapter effect.
-pub(crate) const fn production_adapter_effect_kind(effect: &AdapterEffect) -> u8 {
-    match effect {
-        AdapterEffect::Sign {
-            request: super::v2::SignRequest::Proposal(_),
-            ..
-        } => RUNTIME_EFFECT_KIND_SIGN_PROPOSAL,
-        AdapterEffect::Sign {
-            request: super::v2::SignRequest::Vote(_),
-            ..
-        } => RUNTIME_EFFECT_KIND_SIGN_VOTE,
-        AdapterEffect::Sign {
-            request: super::v2::SignRequest::TimeoutVote(_),
-            ..
-        } => RUNTIME_EFFECT_KIND_SIGN_TIMEOUT,
-        AdapterEffect::FetchBody { .. } => RUNTIME_EFFECT_KIND_FETCH_BODY,
-        AdapterEffect::StoreBody { .. } => RUNTIME_EFFECT_KIND_STORE_BODY,
-        AdapterEffect::ValidateBody { .. } => RUNTIME_EFFECT_KIND_VALIDATE_BODY,
-        AdapterEffect::Apply { .. } => RUNTIME_EFFECT_KIND_APPLY,
-        AdapterEffect::Broadcast(_) => RUNTIME_EFFECT_KIND_BROADCAST,
-        AdapterEffect::EnterView { .. } => RUNTIME_EFFECT_KIND_ENTER_VIEW,
-        AdapterEffect::ReportEquivocation { .. } => RUNTIME_EFFECT_KIND_REPORT_EQUIVOCATION,
-        AdapterEffect::ReportInvalidCertifiedBody { .. } => {
-            RUNTIME_EFFECT_KIND_REPORT_INVALID_CERTIFIED_BODY
-        }
-    }
-}
 /// Canonical exact identity bytes for every field of one production effect.
 ///
 /// These bytes are internal evidence only. They are never serialized as a wire

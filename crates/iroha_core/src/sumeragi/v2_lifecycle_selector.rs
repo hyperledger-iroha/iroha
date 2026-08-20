@@ -34,6 +34,14 @@ use crate::sumeragi::{
         DurableCertifiedFetchBodyReceipt, RecoveredDecisionFetchStoreBodyAuthorityV1, V2BodyStore,
         V2BodyStoreError,
     },
+    v2_core::{
+        CanonicalIdentityProjection, CheckedProductionTransition, IDENTITY_DOMAIN_CONTEXT,
+        IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_CANONICAL_PAYLOAD,
+        IDENTITY_KIND_CERTIFIED_BODY_REQUEST, IDENTITY_KIND_PAYLOAD_MANIFEST,
+        IDENTITY_KIND_WIRE_BLOCK_SUBJECT, IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+        ProductionHistoricalBodyPipelineTraceProjection, TagProjection,
+        check_production_historical_body_pipeline_transition,
+    },
     v2_effects::{
         CertifiedResponsePriorityCandidate, CertifiedResponsePriorityProbe, EffectExecutorError,
         EffectTransportError, EffectWorkId, RecoveredDecisionFetchResponseCandidateV1,
@@ -408,7 +416,28 @@ enum CertifiedFetchBodyPersistenceRetryFailure {
     CoordinatorStutter,
     Registry(CertifiedFetchCompletionError),
     Service(String),
+    RefinementRejected,
     OutputClosed,
+}
+fn retain_historical_body_pipeline_owner<T>(
+    checked_transition: Option<
+        CheckedProductionTransition<ProductionHistoricalBodyPipelineTraceProjection>,
+    >,
+    owner: T,
+) -> Result<
+    (
+        CheckedProductionTransition<ProductionHistoricalBodyPipelineTraceProjection>,
+        T,
+    ),
+    (CertifiedFetchBodyPersistenceRetryFailure, T),
+> {
+    match checked_transition {
+        Some(checked_transition) => Ok((checked_transition, owner)),
+        None => Err((
+            CertifiedFetchBodyPersistenceRetryFailure::RefinementRejected,
+            owner,
+        )),
+    }
 }
 /// Ownership-preserving failure from the pre-LedgerV1 half of Phase B.
 ///
@@ -433,6 +462,9 @@ impl CertifiedFetchBodyPersistenceRetryError {
             CertifiedFetchBodyPersistenceRetryFailure::CoordinatorStutter => "coordinator mutation",
             CertifiedFetchBodyPersistenceRetryFailure::Registry(_) => "registry preflight",
             CertifiedFetchBodyPersistenceRetryFailure::Service(_) => "service preflight",
+            CertifiedFetchBodyPersistenceRetryFailure::RefinementRejected => {
+                "historical body refinement"
+            }
             CertifiedFetchBodyPersistenceRetryFailure::OutputClosed => "consensus output closed",
         }
     }
@@ -456,6 +488,10 @@ impl CertifiedFetchBodyPersistenceRetryError {
             }
             CertifiedFetchBodyPersistenceRetryFailure::Registry(error) => format!("{error:?}"),
             CertifiedFetchBodyPersistenceRetryFailure::Service(error) => error.clone(),
+            CertifiedFetchBodyPersistenceRetryFailure::RefinementRejected => {
+                "durable certified Fetch completion failed its historical body-pipeline refinement"
+                    .to_owned()
+            }
             CertifiedFetchBodyPersistenceRetryFailure::OutputClosed => {
                 "consensus output admission is closed".to_owned()
             }
@@ -2010,6 +2046,117 @@ impl LifecycleCoordinator {
                 receipt
             );
         }
+        let Some(pending_request_hash) = executor_prepared
+            .task()
+            .certified_request()
+            .map(HashOf::new)
+        else {
+            let receipt = durable_registry.abort_before_dequeue();
+            retry!(
+                CertifiedFetchBodyPersistenceRetryFailure::CompletionIdentity,
+                receipt
+            );
+        };
+        let response = authenticated.response();
+        let response_manifest = &response.manifest;
+        let fetch_tag = candidate.fetch_tag();
+        let round = candidate.round();
+        let subject = candidate.subject();
+        let projected_durable_body = durable_registry.durable_body_receipt();
+        let owner_round = projected_durable_body.round();
+        let owner_subject = projected_durable_body.subject();
+        let historical_trace = ProductionHistoricalBodyPipelineTraceProjection {
+            context_id: CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                *candidate.context_id().0.as_ref(),
+            ),
+            context_height: candidate.height(),
+            request_hash: CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+                *candidate.request_hash().as_ref(),
+            ),
+            pending_request_hash: CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+                *pending_request_hash.as_ref(),
+            ),
+            authenticated_request_hash: CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CERTIFIED_BODY_REQUEST,
+                *response.request_hash.as_ref(),
+            ),
+            fetch_tag: TagProjection {
+                height: fetch_tag.height(),
+                view: fetch_tag.view(),
+                generation: fetch_tag.generation().get(),
+            },
+            round_context_id: CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                *round.context_id.0.as_ref(),
+            ),
+            round_height: round.height,
+            round_view: round.view,
+            subject: CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+                *HashOf::new(&subject).as_ref(),
+            ),
+            manifest_round_context_id: CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                *response_manifest.round.context_id.0.as_ref(),
+            ),
+            manifest_round_height: response_manifest.round.height,
+            manifest_round_view: response_manifest.round.view,
+            manifest_subject: CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+                *HashOf::new(&response_manifest.subject).as_ref(),
+            ),
+            response_manifest: CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_PAYLOAD_MANIFEST,
+                *candidate.canonical_manifest_hash().as_ref(),
+            ),
+            ready_manifest: CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_PAYLOAD_MANIFEST,
+                *projected_durable_body.manifest_hash().as_ref(),
+            ),
+            subject_payload_hash: CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CANONICAL_PAYLOAD,
+                *subject.payload_hash.as_ref(),
+            ),
+            body_payload_hash: CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_PAYLOAD,
+                IDENTITY_KIND_CANONICAL_PAYLOAD,
+                *candidate.body_payload_hash().as_ref(),
+            ),
+            owner_present_after: true,
+            owner_tag: TagProjection {
+                height: fetch_tag.height(),
+                view: fetch_tag.view(),
+                generation: fetch_tag.generation().get(),
+            },
+            owner_round_context_id: CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_CONTEXT,
+                IDENTITY_KIND_WIRE_HEIGHT_CONTEXT,
+                *projected_durable_body.context_id().0.as_ref(),
+            ),
+            owner_round_height: owner_round.height,
+            owner_round_view: owner_round.view,
+            owner_subject: CanonicalIdentityProjection::from_bytes(
+                IDENTITY_DOMAIN_SUBJECT,
+                IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+                *HashOf::new(&owner_subject).as_ref(),
+            ),
+            pending_fetch_present_after: false,
+            request_present_after: false,
+        };
         let exact_dequeue =
             match selector.into_exact_certified_fetch_dequeue(executor, id, &authenticated) {
                 Ok(prepared) => prepared,
@@ -2018,6 +2165,17 @@ impl LifecycleCoordinator {
                     retry!(error, receipt);
                 }
             };
+        let checked_transition =
+            check_production_historical_body_pipeline_transition(historical_trace);
+        let (checked_transition, durable_registry) =
+            match retain_historical_body_pipeline_owner(checked_transition, durable_registry) {
+                Ok(retained) => retained,
+                Err((failure, durable_registry)) => {
+                    let receipt = durable_registry.abort_before_dequeue();
+                    retry!(failure, receipt);
+                }
+            };
+        let _authorized_historical_pipeline = checked_transition.into_projection();
         let Some(operation) = output_guard.begin_fail_stop_operation() else {
             let receipt = durable_registry.abort_before_dequeue();
             retry!(
@@ -3958,5 +4116,20 @@ mod tests {
             FairV2IngressSourceClass::Authenticated,
             false,
         ));
+
+        struct MoveOnlyOwner(u64);
+        let rejected = check_production_historical_body_pipeline_transition(
+            ProductionHistoricalBodyPipelineTraceProjection::default(),
+        );
+        let Err((failure, retained)) =
+            retain_historical_body_pipeline_owner(rejected, MoveOnlyOwner(0xC3))
+        else {
+            panic!("an invalid historical-body projection must remain retryable")
+        };
+        assert!(matches!(
+            failure,
+            CertifiedFetchBodyPersistenceRetryFailure::RefinementRejected
+        ));
+        assert_eq!(retained.0, 0xC3);
     }
 }

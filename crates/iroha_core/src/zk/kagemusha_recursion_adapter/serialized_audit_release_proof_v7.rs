@@ -148,7 +148,7 @@ struct KagemushaSerializedProtocolSeedV7<C>
 where
     C: halo2_proofs::halo2curves::CurveAffine,
 {
-    protocol: snark_verifier::system::halo2::PlonkProtocol<C>,
+    protocol: PlonkProtocol<C>,
     structure_sha256: [u8; 32],
     identity_sha256: [u8; 32],
     proof: Vec<u8>,
@@ -628,9 +628,7 @@ fn kagemusha_serialized_eq_recursion_from_null_v7(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EqAffine,
     >,
-    protocol: snark_verifier::system::halo2::PlonkProtocol<
-        halo2_proofs::halo2curves::pasta::EqAffine,
-    >,
+    protocol: PlonkProtocol<halo2_proofs::halo2curves::pasta::EqAffine>,
     structure_sha256: [u8; 32],
     null: &KagemushaSerializedNullParentV7<halo2_proofs::halo2curves::pasta::EqAffine>,
 ) -> Result<KagemushaStepParityRecursionV4<halo2_proofs::halo2curves::pasta::EqAffine>, String> {
@@ -647,9 +645,7 @@ fn kagemusha_serialized_ep_recursion_from_null_v7(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<
         halo2_proofs::halo2curves::pasta::EpAffine,
     >,
-    protocol: snark_verifier::system::halo2::PlonkProtocol<
-        halo2_proofs::halo2curves::pasta::EpAffine,
-    >,
+    protocol: PlonkProtocol<halo2_proofs::halo2curves::pasta::EpAffine>,
     structure_sha256: [u8; 32],
     null: &KagemushaSerializedNullParentV7<halo2_proofs::halo2curves::pasta::EpAffine>,
 ) -> Result<KagemushaStepParityRecursionV4<halo2_proofs::halo2curves::pasta::EpAffine>, String> {
@@ -1666,10 +1662,8 @@ struct KagemushaSerializedReleaseMaterialV7 {
         halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EqAffine>,
     step_ep_verifying_key:
         halo2_proofs::plonk::VerifyingKey<halo2_proofs::halo2curves::pasta::EpAffine>,
-    step_eq_protocol:
-        snark_verifier::system::halo2::PlonkProtocol<halo2_proofs::halo2curves::pasta::EqAffine>,
-    step_ep_protocol:
-        snark_verifier::system::halo2::PlonkProtocol<halo2_proofs::halo2curves::pasta::EpAffine>,
+    step_eq_protocol: PlonkProtocol<halo2_proofs::halo2curves::pasta::EqAffine>,
+    step_ep_protocol: PlonkProtocol<halo2_proofs::halo2curves::pasta::EpAffine>,
     step_eq_structure_sha256: [u8; 32],
     step_ep_structure_sha256: [u8; 32],
     step_eq_break_points: Vec<Vec<u32>>,
@@ -1700,7 +1694,8 @@ fn prepare_kagemusha_serialized_release_material_v7(
         },
     };
 
-    let mut base = KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()?;
+    let mut base = KagemushaStepCircuitParamsV4::reviewed_first_release_generation_profile()
+        .map_err(|error| error.to_string())?;
     base.max_parent_proof_bytes = manifest.step_eq_proof_bytes;
     let reviewed_peak_bytes = kagemusha_serialized_generation_peak_bound_from_base_v7(&base)?;
     if reviewed_peak_bytes != KAGEMUSHA_SERIALIZED_REVIEWED_PEAK_BYTES_V7 {

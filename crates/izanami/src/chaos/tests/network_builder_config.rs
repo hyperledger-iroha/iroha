@@ -82,10 +82,7 @@ fn make_network_builder_emits_only_strict_sumeragi_v2_config() -> Result<()> {
     );
     assert_eq!(
         lookup(&["network", "max_total_connections"]).and_then(TomlValue::as_integer),
-        Some(
-            i64::try_from(IZANAMI_MAX_TOTAL_CONNECTIONS)
-                .expect("connection capacity fits TOML")
-        )
+        Some(i64::try_from(IZANAMI_MAX_TOTAL_CONNECTIONS).expect("connection capacity fits TOML"))
     );
     assert_eq!(
         lookup(&["sumeragi", "queues", "chunks"]).and_then(TomlValue::as_integer),

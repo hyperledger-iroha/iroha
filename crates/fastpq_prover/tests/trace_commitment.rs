@@ -286,15 +286,15 @@ fn trace_commitment_matches_golden_vectors() {
     let expectations: [(&str, &str); 3] = [
         (
             "transfer",
-            "130f8b12cc88ff9c5cdb18ec806f1150d2270109e8a098c9a4e76fcbafe0f2cd",
+            "199f25b17ab9ddbd719d72b84e0bff67aa40f102b9762ccb528ae9dfa19377b3",
         ),
         (
             "mint",
-            "04bed7722e55216cc980063b6ed9393e964bba3ef76c5892240f3a09274caa0b",
+            "97a23e989d042e78811747526a7aea8a0957a8840f9ce62b8f7ff408354dde0d",
         ),
         (
             "burn",
-            "9ba538400a7d03c24b62a60fb7c4e2dc0681d6e14477052e3968f76cb793fc81",
+            "b490e1f620e78728fbe9f025afd1d11d8bd5bd170d7cdc450d07fbc5d8c6b471",
         ),
     ];
     for (name, expected_hex) in expectations {

@@ -70,6 +70,12 @@ fn encoded_account(public_key_hex: &str) -> String {
     iroha_data_model::account::AccountId::new(public_key_hex.parse().expect("public key"))
         .to_string()
 }
+fn sample_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::derive_from_components(
+        DomainId::try_new("axt", "universal").expect("asset domain"),
+        "rose".parse().expect("asset name"),
+    )
+}
 fn sample_issuer_context() -> AxtHandleIssuerContextV1 {
     AxtHandleIssuerContextV1 {
         network_id: NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -85,6 +91,7 @@ fn sample_issuer_context() -> AxtHandleIssuerContextV1 {
 }
 fn sample_handle(binding: AxtBinding) -> AssetHandle {
     AssetHandle {
+        asset_definition_id: sample_asset_definition_id(),
         scope: vec!["register".into(), "transfer".into()],
         subject: HandleSubject {
             account: encoded_account(
@@ -131,10 +138,7 @@ fn sample_intent() -> RemoteSpendIntent {
     RemoteSpendIntent {
         asset_dsid: DataSpaceId::new(7),
         op: SpendOp {
-            asset_definition_id: AssetDefinitionId::derive_from_components(
-                DomainId::try_new("axt", "universal").expect("asset domain"),
-                "rose".parse().expect("asset name"),
-            ),
+            asset_definition_id: sample_asset_definition_id(),
             kind: "transfer".into(),
             from: encoded_account(
                 "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",

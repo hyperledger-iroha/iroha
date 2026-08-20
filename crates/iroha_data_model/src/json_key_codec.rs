@@ -63,6 +63,51 @@ impl_nested_json_key_codec!(
     crate::musubi::MusubiAliasNameV1,
     crate::musubi::MusubiAliasHistoryKeyV1,
 );
+// AXT budget families use their complete typed issuer-signed identity as the
+// consensus storage key. Require the one canonical Norito JSON spelling so
+// two snapshot keys cannot decode to the same budget family.
+impl JsonKeyCodec for crate::nexus::AxtHandleBudgetKey {
+    fn encode_json_key(&self, out: &mut String) {
+        let mut encoded = String::new();
+        norito::json::JsonSerialize::json_serialize(self, &mut encoded);
+        json::write_json_string(&encoded, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let mut parser = json::Parser::new(encoded);
+        let decoded = norito::json::JsonDeserialize::json_deserialize(&mut parser)?;
+        let mut canonical = String::new();
+        norito::json::JsonSerialize::json_serialize(&decoded, &mut canonical);
+        if canonical != encoded {
+            return Err(json::Error::Message(
+                "AXT handle budget key must use canonical JSON".into(),
+            ));
+        }
+        Ok(decoded)
+    }
+}
+// Replay-ledger keys are consensus snapshot identities as well. Apply the
+// same exact-spelling rule as budget keys so aliases cannot split replay state.
+impl JsonKeyCodec for crate::nexus::AxtHandleReplayKey {
+    fn encode_json_key(&self, out: &mut String) {
+        let mut encoded = String::new();
+        norito::json::JsonSerialize::json_serialize(self, &mut encoded);
+        json::write_json_string(&encoded, out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        let mut parser = json::Parser::new(encoded);
+        let decoded = norito::json::JsonDeserialize::json_deserialize(&mut parser)?;
+        let mut canonical = String::new();
+        norito::json::JsonSerialize::json_serialize(&decoded, &mut canonical);
+        if canonical != encoded {
+            return Err(json::Error::Message(
+                "AXT handle replay key must use canonical JSON".into(),
+            ));
+        }
+        Ok(decoded)
+    }
+}
 impl JsonKeyCodec for crate::domain::DomainId {
     fn encode_json_key(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);

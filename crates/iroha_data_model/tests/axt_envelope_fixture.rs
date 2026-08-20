@@ -1,10 +1,12 @@
 //! Regression guard for the AXT envelope fixtures (handles/proofs/touches).
 use hex::encode;
 use iroha_data_model::nexus::{
-    AxtDescriptor, AxtHandleFragment, AxtProofFragment, TouchManifest, compute_descriptor_binding,
-    proof_envelope_shape_matches_manifest, validate_descriptor,
+    AxtDescriptor, AxtHandleFragment, AxtHandleReplayKey, AxtProofEnvelope, AxtProofFragment,
+    AxtRemoteSpendClaimV1, TouchManifest, compute_descriptor_binding,
+    compute_remote_spend_claim_commitment_v1, proof_envelope_shape_matches_manifest,
+    validate_descriptor,
 };
-use norito::{json, to_bytes};
+use norito::{decode_from_bytes, json, to_bytes};
 #[derive(Debug, Clone, norito::json::JsonDeserialize)]
 struct DescriptorFixture {
     descriptor: AxtDescriptor,
@@ -67,6 +69,62 @@ fn envelope_fixtures_align_with_descriptor_binding() {
         assert_eq!(
             handle.handle.manifest_view_root, manifest_root_bytes,
             "handle manifest root must reflect fixture manifest"
+        );
+        assert_eq!(
+            handle.handle.asset_definition_id, handle.intent.op.asset_definition_id,
+            "the issuer-signed handle asset must match the remote-spend intent"
+        );
+        let effective_amount = handle.amount.as_ref().expect("happy fixture amount");
+        assert_eq!(
+            handle.intent.op.amount.as_ref(),
+            Some(effective_amount),
+            "fixture clear amount must agree with the intent"
+        );
+        let attached_proof = handle.proof.as_ref().expect("happy fixture proof");
+        let proof_fragment = envelope
+            .proofs
+            .iter()
+            .find(|proof| proof.dsid == handle.intent.asset_dsid)
+            .expect("proof fragment for handle dataspace");
+        assert_eq!(
+            attached_proof, &proof_fragment.proof,
+            "handle must carry the canonical proof fragment for its dataspace"
+        );
+        let proof_envelope: AxtProofEnvelope = decode_from_bytes(&attached_proof.payload)
+            .expect("fixture proof payload decodes canonically");
+        assert_eq!(proof_envelope.dsid, handle.intent.asset_dsid);
+        assert_eq!(proof_envelope.manifest_root, manifest_root_bytes);
+        assert_eq!(
+            to_bytes(&proof_envelope).expect("re-encode proof envelope"),
+            attached_proof.payload,
+            "decoded proof envelope must round-trip byte-identically"
+        );
+        let fastpq_binding = proof_envelope
+            .fastpq_binding
+            .as_ref()
+            .expect("happy fixture FASTPQ binding");
+        let effect_binding = fastpq_binding
+            .effect_binding
+            .as_ref()
+            .expect("happy fixture effect binding");
+        let signed_asset_literal = handle.handle.asset_definition_id.to_string();
+        assert_eq!(
+            effect_binding.source_asset_definition_id.as_deref(),
+            Some(signed_asset_literal.as_str()),
+            "decoded proof effect must name the exact issuer-signed asset"
+        );
+        let claim = AxtRemoteSpendClaimV1::new(
+            AxtHandleReplayKey::from_handle(handle.intent.asset_dsid, &handle.handle),
+            handle.handle.asset_definition_id.clone(),
+            &handle.intent.op.kind,
+            &handle.intent.op.from,
+            &handle.intent.op.to,
+            effective_amount.clone(),
+        );
+        assert_eq!(
+            fastpq_binding.remote_spend_intent_commitments,
+            vec![compute_remote_spend_claim_commitment_v1(&claim)],
+            "decoded proof must commit to the exact canonical remote-spend preimage"
         );
     }
     let mut reject_seen = false;

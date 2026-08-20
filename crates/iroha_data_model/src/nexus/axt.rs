@@ -11,7 +11,7 @@ use crate::{
     nexus::{DataSpaceId, LaneId, UniversalAccountId},
 };
 use iroha_crypto::{Hash, HashOf, PrivateKey, PublicKey, Signature};
-use iroha_primitives::numeric::Quantity;
+use iroha_primitives::numeric::{NumericOperationError, Quantity};
 use iroha_schema::IntoSchema;
 use iroha_zkp_halo2::poseidon::hash_bytes as poseidon_hash_bytes;
 use norito::codec::{Decode, Encode, encode_adaptive};
@@ -488,6 +488,8 @@ impl Default for AxtHandleIssuerContextV1 {
 pub struct AssetHandleIssuerPayloadV1 {
     /// Immutable admission context reconstructed by the validating host.
     pub context: AxtHandleIssuerContextV1,
+    /// Exact asset definition this capability authorizes.
+    pub asset_definition_id: AssetDefinitionId,
     /// Declared operations permitted by the capability.
     pub scope: Vec<String>,
     /// Capability subject.
@@ -520,6 +522,8 @@ pub struct AssetHandleIssuerPayloadV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct AssetHandleDraft {
+    /// Exact asset definition authorized by the capability.
+    pub asset_definition_id: AssetDefinitionId,
     /// Declared permissions (example values such as "transfer").
     pub scope: Vec<String>,
     /// Subject bound to the capability.
@@ -553,6 +557,7 @@ impl AssetHandleDraft {
     ) -> AssetHandleIssuerPayloadV1 {
         AssetHandleIssuerPayloadV1 {
             context,
+            asset_definition_id: self.asset_definition_id.clone(),
             scope: self.scope.clone(),
             subject: self.subject.clone(),
             budget: self.budget.clone(),
@@ -604,6 +609,8 @@ impl AssetHandleDraft {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 pub struct AssetHandle {
+    /// Exact asset definition authorized by the issuer signature.
+    pub asset_definition_id: AssetDefinitionId,
     /// Declared permissions (example values such as "transfer").
     pub scope: Vec<String>,
     /// Subject bound to the capability.
@@ -639,6 +646,7 @@ impl AssetHandle {
         issuer_signature: Signature,
     ) -> Self {
         Self {
+            asset_definition_id: draft.asset_definition_id,
             scope: draft.scope,
             subject: draft.subject,
             budget: draft.budget,
@@ -658,6 +666,7 @@ impl AssetHandle {
     #[must_use]
     pub fn draft(&self) -> AssetHandleDraft {
         AssetHandleDraft {
+            asset_definition_id: self.asset_definition_id.clone(),
             scope: self.scope.clone(),
             subject: self.subject.clone(),
             budget: self.budget.clone(),
@@ -691,6 +700,281 @@ impl AssetHandle {
                 .draft()
                 .issuer_signature_preimage_v1(self.issuer_context),
         )
+    }
+}
+/// Canonical issuer-signed handle family used for cumulative budget accounting.
+///
+/// The key contains every field in [`AssetHandleIssuerPayloadV1`] except
+/// `next_handle_counter`. Sequential sub-nonces therefore spend one shared
+/// allowance, while a different signed capability statement remains a distinct
+/// family. The signature bytes are deliberately absent because they authenticate
+/// the statement but are not part of its identity.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct AxtHandleBudgetKey {
+    issuer_context: AxtHandleIssuerContextV1,
+    asset_definition_id: AssetDefinitionId,
+    scope: Vec<String>,
+    subject: HandleSubject,
+    budget: HandleBudget,
+    active_handle_era: u64,
+    group_binding: GroupBinding,
+    target_lane: LaneId,
+    axt_binding: AxtBinding,
+    manifest_view_root: [u8; 32],
+    expiry_slot: u64,
+    #[norito(required)]
+    max_clock_skew_ms: Option<u32>,
+}
+impl AxtHandleBudgetKey {
+    /// Derive a family key from the exact V1 statement authenticated by an issuer.
+    #[must_use]
+    pub fn from_issuer_payload_v1(payload: &AssetHandleIssuerPayloadV1) -> Self {
+        Self {
+            issuer_context: payload.context,
+            asset_definition_id: payload.asset_definition_id.clone(),
+            scope: payload.scope.clone(),
+            subject: payload.subject.clone(),
+            budget: payload.budget.clone(),
+            active_handle_era: payload.active_handle_era,
+            group_binding: payload.group_binding.clone(),
+            target_lane: payload.target_lane,
+            axt_binding: payload.axt_binding,
+            manifest_view_root: payload.manifest_view_root,
+            expiry_slot: payload.expiry_slot,
+            max_clock_skew_ms: payload.max_clock_skew_ms,
+        }
+    }
+
+    /// Derive the canonical family key for an admitted signed handle.
+    #[must_use]
+    pub fn from_handle(handle: &AssetHandle) -> Self {
+        Self::from_issuer_payload_v1(&handle.draft().issuer_payload_v1(handle.issuer_context))
+    }
+
+    /// Return the authenticated dataspace that issued this handle family.
+    #[must_use]
+    pub const fn asset_dsid(&self) -> DataSpaceId {
+        self.issuer_context.asset_dsid
+    }
+
+    /// Return the issuer-authorized execution lane for this handle family.
+    #[must_use]
+    pub const fn target_lane(&self) -> LaneId {
+        self.target_lane
+    }
+}
+/// Consensus-persisted cumulative consumption for one handle budget family.
+///
+/// `retain_until_slot` is monotonic audit metadata. V1 deliberately exposes no
+/// pruning predicate: slot-configuration changes could otherwise make a removed
+/// family usable again and reset its budget.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct AxtHandleBudgetRecord {
+    consumed: Quantity,
+    retain_until_slot: u64,
+}
+/// Failure returned while consuming a persisted handle-family budget.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum AxtHandleBudgetConsumeError {
+    /// A handle use must consume a non-zero amount.
+    #[error("handle budget consumption amount is zero")]
+    ZeroAmount,
+    /// Exact decimal accumulation exceeded the canonical quantity domain.
+    #[error("handle budget arithmetic failed: {0}")]
+    Arithmetic(#[from] NumericOperationError),
+    /// Cumulative consumption exceeded the issuer-signed remaining allowance.
+    #[error("handle budget cumulative consumption exceeds remaining allowance")]
+    RemainingExceeded,
+    /// Cumulative consumption exceeded the issuer-signed per-use allowance.
+    #[error("handle budget cumulative consumption exceeds per-use allowance")]
+    PerUseExceeded,
+}
+impl AxtHandleBudgetRecord {
+    /// Construct an empty cumulative record.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            consumed: Quantity::zero(),
+            retain_until_slot: 0,
+        }
+    }
+
+    /// Return the amount consumed by this family across committed blocks.
+    #[must_use]
+    pub const fn consumed(&self) -> &Quantity {
+        &self.consumed
+    }
+
+    /// Return the greatest consensus retention deadline observed for the family.
+    #[must_use]
+    pub const fn retain_until_slot(&self) -> u64 {
+        self.retain_until_slot
+    }
+
+    /// Validate a decoded persisted record against its authenticated family key.
+    ///
+    /// An empty record is only a transient accumulator created by [`Self::empty`]
+    /// and must never appear in committed state. `retain_until_slot` is audit
+    /// metadata and may be zero for a capability accepted at the genesis slot;
+    /// V1 therefore imposes no independent validity rule on it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtHandleBudgetConsumeError::ZeroAmount`] for an empty persisted
+    /// record, or the corresponding limit error when cumulative consumption
+    /// exceeds the issuer-signed `remaining` or `per_use` allowance.
+    pub fn validate_for_key(
+        &self,
+        key: &AxtHandleBudgetKey,
+    ) -> Result<(), AxtHandleBudgetConsumeError> {
+        Self::validate_consumed_for_key(&self.consumed, key)
+    }
+
+    /// Add one non-zero use while enforcing the issuer-signed aggregate limits.
+    ///
+    /// The record is unchanged on error. A successful update monotonically
+    /// retains the greatest supplied audit deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtHandleBudgetConsumeError`] for a zero amount, exact-decimal
+    /// overflow, or an issuer-signed `remaining`/`per_use` limit violation.
+    pub fn try_consume(
+        &mut self,
+        key: &AxtHandleBudgetKey,
+        amount: &Quantity,
+        retain_until_slot: u64,
+    ) -> Result<(), AxtHandleBudgetConsumeError> {
+        if amount.is_zero() {
+            return Err(AxtHandleBudgetConsumeError::ZeroAmount);
+        }
+        let consumed = self.consumed.checked_add(amount)?;
+        Self::validate_consumed_for_key(&consumed, key)?;
+        self.consumed = consumed;
+        self.retain_until_slot = self.retain_until_slot.max(retain_until_slot);
+        Ok(())
+    }
+
+    fn validate_consumed_for_key(
+        consumed: &Quantity,
+        key: &AxtHandleBudgetKey,
+    ) -> Result<(), AxtHandleBudgetConsumeError> {
+        if consumed.is_zero() {
+            return Err(AxtHandleBudgetConsumeError::ZeroAmount);
+        }
+        if consumed > &key.budget.remaining {
+            return Err(AxtHandleBudgetConsumeError::RemainingExceeded);
+        }
+        if key
+            .budget
+            .per_use
+            .as_ref()
+            .is_some_and(|limit| consumed > limit)
+        {
+            return Err(AxtHandleBudgetConsumeError::PerUseExceeded);
+        }
+        Ok(())
+    }
+}
+/// Permanent per-dataspace ratchet for AXT handle sub-nonces.
+///
+/// The record is consensus state independent of manifest, era, lane, and slot
+/// configuration. Once created it must never be removed or reset: policy
+/// snapshots project this value so a previously accepted handle can never
+/// become current again after policy rotation or node restart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(deny_unknown_fields)]
+pub struct AxtHandleCounterRecord {
+    next: u64,
+}
+/// Failure returned while validating or advancing an AXT handle counter ratchet.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum AxtHandleCounterError {
+    /// A persisted ratchet may never contain the reserved zero value.
+    #[error("AXT handle counter ratchet contains reserved zero value")]
+    ZeroNextCounter,
+    /// The presented sub-nonce is not the exact permanent next value.
+    #[error("handle sub-nonce mismatch: expected {expected}, found {actual}")]
+    SubNonceMismatch {
+        /// Exact next admissible sub-nonce.
+        expected: u64,
+        /// Caller-presented sub-nonce.
+        actual: u64,
+    },
+    /// The permanent counter cannot advance without wrapping.
+    #[error("AXT handle counter ratchet is exhausted")]
+    CounterExhausted,
+}
+impl AxtHandleCounterRecord {
+    /// Construct the first permanent counter value for a dataspace.
+    #[must_use]
+    pub const fn initial() -> Self {
+        Self { next: 1 }
+    }
+
+    /// Construct a validated record from authoritative persisted/setup state.
+    ///
+    /// Live handle consumption must use [`Self::try_advance`]; this constructor
+    /// exists for bounded snapshot decoding and explicit policy installation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtHandleCounterError::ZeroNextCounter`] for the reserved zero
+    /// value.
+    pub const fn try_from_next(next: u64) -> Result<Self, AxtHandleCounterError> {
+        if next == 0 {
+            return Err(AxtHandleCounterError::ZeroNextCounter);
+        }
+        Ok(Self { next })
+    }
+
+    /// Return the exact next admissible handle sub-nonce.
+    #[must_use]
+    pub const fn next(&self) -> u64 {
+        self.next
+    }
+
+    /// Validate a decoded persisted counter record.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtHandleCounterError::ZeroNextCounter`] when snapshot data
+    /// contains the reserved zero value.
+    pub const fn validate(&self) -> Result<(), AxtHandleCounterError> {
+        if self.next == 0 {
+            return Err(AxtHandleCounterError::ZeroNextCounter);
+        }
+        Ok(())
+    }
+
+    /// Consume the exact next sub-nonce and advance the permanent ratchet.
+    ///
+    /// The record is unchanged on error.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtHandleCounterError`] when the persisted value is invalid,
+    /// the presented sub-nonce is stale or caller-selected future state, or the
+    /// counter is exhausted.
+    pub fn try_advance(&mut self, presented: u64) -> Result<u64, AxtHandleCounterError> {
+        self.validate()?;
+        if presented != self.next {
+            return Err(AxtHandleCounterError::SubNonceMismatch {
+                expected: self.next,
+                actual: presented,
+            });
+        }
+        let advanced = self
+            .next
+            .checked_add(1)
+            .ok_or(AxtHandleCounterError::CounterExhausted)?;
+        self.next = advanced;
+        Ok(advanced)
     }
 }
 /// Error returned when a handle does not represent the one allowed ratchet step.
@@ -933,7 +1217,46 @@ pub struct AxtReplayRecord {
     /// Slot after which the replay guard can be evicted.
     pub retain_until_slot: u64,
 }
+/// Failure returned while validating a persisted AXT replay-ledger entry.
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+pub enum AxtReplayRecordValidationError {
+    /// The redundant record dataspace differs from the authoritative key.
+    #[error("replay record dataspace does not match its authoritative key")]
+    DataspaceMismatch,
+    /// A zeroed record cannot represent an accepted handle use.
+    #[error("replay record has zero use and retention slots")]
+    ZeroedSlots,
+    /// The retention deadline precedes the slot at which the handle was used.
+    #[error("replay record retention deadline precedes its use slot")]
+    RetentionBeforeUse,
+}
 impl AxtReplayRecord {
+    /// Validate a decoded persisted record against its authoritative replay key.
+    ///
+    /// The dataspace carried by the record is observational redundancy only;
+    /// authorization and lookup always use the key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AxtReplayRecordValidationError`] when the redundant dataspace
+    /// disagrees with the key, both slots are zero, or retention ends before
+    /// the recorded use.
+    pub fn validate_for_key(
+        &self,
+        key: &AxtHandleReplayKey,
+    ) -> Result<(), AxtReplayRecordValidationError> {
+        if self.dataspace != key.asset_dsid {
+            return Err(AxtReplayRecordValidationError::DataspaceMismatch);
+        }
+        if self.used_slot == 0 && self.retain_until_slot == 0 {
+            return Err(AxtReplayRecordValidationError::ZeroedSlots);
+        }
+        if self.retain_until_slot < self.used_slot {
+            return Err(AxtReplayRecordValidationError::RetentionBeforeUse);
+        }
+        Ok(())
+    }
+
     /// Determine whether the replay guard has expired for a given slot and retention window.
     ///
     /// Records with zeroed slots are treated as stale and expired.
@@ -944,7 +1267,7 @@ impl AxtReplayRecord {
         }
         let retention_cutoff = self.used_slot.saturating_add(retention_slots);
         let effective_until = core::cmp::max(self.retain_until_slot, retention_cutoff);
-        current_slot >= effective_until
+        current_slot > effective_until
     }
 }
 /// Aggregate record used to persist and replicate AXT envelopes.
@@ -1026,6 +1349,18 @@ pub enum AxtPolicySnapshotValidationError {
         expected: u64,
         /// Version advertised by the snapshot.
         actual: u64,
+    },
+    /// A policy projection disagrees with the permanent dataspace counter ratchet.
+    #[error(
+        "policy counter for dataspace {dataspace} is {policy_next}, permanent ratchet requires {ratchet_next}"
+    )]
+    CounterRatchetMismatch {
+        /// Dataspace whose projected counter is inconsistent.
+        dataspace: DataSpaceId,
+        /// Next counter advertised by the policy snapshot.
+        policy_next: u64,
+        /// Exact next counter held by permanent consensus state.
+        ratchet_next: u64,
     },
 }
 impl AxtPolicySnapshot {
@@ -1443,6 +1778,9 @@ mod tests {
     use super::*;
     use crate::domain::DomainId;
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::{bigint::BigInt, numeric::Numeric};
+    #[cfg(feature = "json")]
+    use mv::json::JsonKeyCodec;
     use norito::{decode_from_bytes, to_bytes};
     fn sample_descriptor(dsid: DataSpaceId) -> AxtDescriptor {
         AxtDescriptor {
@@ -1478,6 +1816,7 @@ mod tests {
     }
     fn sample_asset_handle_draft() -> AssetHandleDraft {
         AssetHandleDraft {
+            asset_definition_id: test_asset_definition_id(),
             scope: vec!["transfer".into()],
             subject: HandleSubject {
                 account: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV".into(),
@@ -1670,13 +2009,8 @@ mod tests {
             DomainId::try_new("axt", "universal").expect("domain"),
             "rose".parse().expect("asset name"),
         );
-        let replay_key = AxtHandleReplayKey::from_parts(
-            DataSpaceId::new(7),
-            [0xA5; 32],
-            11,
-            12,
-            LaneId::new(3),
-        );
+        let replay_key =
+            AxtHandleReplayKey::from_parts(DataSpaceId::new(7), [0xA5; 32], 11, 12, LaneId::new(3));
         let claim = AxtRemoteSpendClaimV1::new(
             replay_key,
             asset_definition,
@@ -1753,6 +2087,12 @@ mod tests {
         }
         let mut altered = Vec::new();
         let mut handle = signed.clone();
+        handle.asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("axt", "universal").expect("domain"),
+            "iris".parse().expect("asset name"),
+        );
+        altered.push(handle);
+        let mut handle = signed.clone();
         handle.scope.push("mint".into());
         altered.push(handle);
         let mut handle = signed.clone();
@@ -1793,6 +2133,282 @@ mod tests {
                 "altering an issuer-bound handle field must invalidate the signature"
             );
         }
+    }
+    #[test]
+    fn handle_budget_key_omits_only_counter_and_signature() {
+        let signed = sample_asset_handle();
+        let payload = signed.draft().issuer_payload_v1(signed.issuer_context);
+        let expected = AxtHandleBudgetKey::from_handle(&signed);
+        assert_eq!(
+            expected,
+            AxtHandleBudgetKey::from_issuer_payload_v1(&payload)
+        );
+        assert_eq!(expected.asset_dsid(), signed.issuer_context.asset_dsid);
+        assert_eq!(expected.target_lane(), signed.target_lane);
+
+        let mut next_counter = payload.clone();
+        next_counter.next_handle_counter = next_counter.next_handle_counter.saturating_add(1);
+        assert_eq!(
+            expected,
+            AxtHandleBudgetKey::from_issuer_payload_v1(&next_counter),
+            "sequential sub-nonces must share one cumulative family"
+        );
+        let mut other_signature = signed.clone();
+        other_signature.issuer_signature = Signature::from_bytes(&[0xA7; 64]);
+        assert_eq!(
+            expected,
+            AxtHandleBudgetKey::from_handle(&other_signature),
+            "signature encoding authenticates but does not identify the family"
+        );
+
+        let mut mutations = Vec::new();
+        let mut changed = payload.clone();
+        changed.context.network_id = test_network_id(b"other-budget-network");
+        mutations.push(changed);
+        let mut changed = payload.clone();
+        changed.asset_definition_id = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("axt", "universal").expect("domain"),
+            "iris".parse().expect("asset name"),
+        );
+        mutations.push(changed);
+        let mut changed = payload.clone();
+        changed.scope.push("mint".to_owned());
+        mutations.push(changed);
+        let mut changed = payload.clone();
+        changed.subject.origin_dsid = Some(DataSpaceId::new(99));
+        mutations.push(changed);
+        let mut changed = payload.clone();
+        changed.budget.remaining = Quantity::from(51_u64);
+        mutations.push(changed);
+        let mut changed = payload.clone();
+        changed.active_handle_era = changed.active_handle_era.saturating_add(1);
+        mutations.push(changed);
+        let mut changed = payload.clone();
+        changed.group_binding.epoch_id = changed.group_binding.epoch_id.saturating_add(1);
+        mutations.push(changed);
+        let mut changed = payload.clone();
+        changed.target_lane = LaneId::new(changed.target_lane.as_u32().saturating_add(1));
+        mutations.push(changed);
+        let mut changed = payload.clone();
+        changed.axt_binding = AxtBinding::new([0xA4; 32]);
+        mutations.push(changed);
+        let mut changed = payload.clone();
+        changed.manifest_view_root[0] ^= 1;
+        mutations.push(changed);
+        let mut changed = payload.clone();
+        changed.expiry_slot = changed.expiry_slot.saturating_add(1);
+        mutations.push(changed);
+        let mut changed = payload;
+        changed.max_clock_skew_ms = Some(26);
+        mutations.push(changed);
+        for changed in mutations {
+            assert_ne!(
+                expected,
+                AxtHandleBudgetKey::from_issuer_payload_v1(&changed),
+                "every other issuer-signed field must identify the budget family"
+            );
+        }
+    }
+    #[test]
+    fn handle_budget_record_enforces_limits_atomically_and_roundtrips() {
+        let mut handle = sample_asset_handle();
+        handle.budget.remaining = Quantity::from(50_u64);
+        handle.budget.per_use = Some(Quantity::from(10_u64));
+        let key = AxtHandleBudgetKey::from_handle(&handle);
+        let mut record = AxtHandleBudgetRecord::empty();
+        let empty = record.clone();
+        assert_eq!(
+            record.try_consume(&key, &Quantity::zero(), 20),
+            Err(AxtHandleBudgetConsumeError::ZeroAmount)
+        );
+        assert_eq!(record, empty, "failed consumption must be atomic");
+        record
+            .try_consume(&key, &Quantity::from(6_u64), 20)
+            .expect("first consumption");
+        record
+            .try_consume(&key, &Quantity::from(4_u64), 10)
+            .expect("exact per-use aggregate cap");
+        record
+            .validate_for_key(&key)
+            .expect("valid persisted record");
+        assert_eq!(record.consumed(), &Quantity::from(10_u64));
+        assert_eq!(record.retain_until_slot(), 20, "retention is monotonic");
+        let at_limit = record.clone();
+        assert_eq!(
+            record.try_consume(&key, &Quantity::from(1_u64), 30),
+            Err(AxtHandleBudgetConsumeError::PerUseExceeded)
+        );
+        assert_eq!(
+            record, at_limit,
+            "limit rejection must not mutate retention"
+        );
+
+        handle.budget.per_use = None;
+        let remaining_key = AxtHandleBudgetKey::from_handle(&handle);
+        let mut remaining = AxtHandleBudgetRecord::empty();
+        remaining
+            .try_consume(&remaining_key, &Quantity::from(50_u64), 40)
+            .expect("exact remaining cap");
+        let at_remaining = remaining.clone();
+        assert_eq!(
+            remaining.try_consume(&remaining_key, &Quantity::from(1_u64), 50),
+            Err(AxtHandleBudgetConsumeError::RemainingExceeded)
+        );
+        assert_eq!(remaining, at_remaining);
+
+        let mut fractional_handle = handle.clone();
+        fractional_handle.budget.remaining = Quantity::from(100_u64);
+        let fractional_key = AxtHandleBudgetKey::from_handle(&fractional_handle);
+        let mut fractional = AxtHandleBudgetRecord::empty();
+        fractional
+            .try_consume(
+                &fractional_key,
+                &"0.5".parse().expect("fractional quantity"),
+                60,
+            )
+            .expect("canonical exact decimals need not have equal scales");
+
+        let mut maximum_bytes = vec![0xFF_u8; 63];
+        maximum_bytes.push(0x7F);
+        let maximum = Quantity::from_canonical_numeric(Numeric::new(
+            BigInt::from_twos_bytes(&maximum_bytes).expect("signed maximum"),
+            0,
+        ))
+        .expect("signed maximum is a quantity");
+        let mut overflow_handle = handle;
+        overflow_handle.budget.remaining = maximum.clone();
+        let overflow_key = AxtHandleBudgetKey::from_handle(&overflow_handle);
+        let mut overflow = AxtHandleBudgetRecord {
+            consumed: maximum,
+            retain_until_slot: 70,
+        };
+        let before_overflow = overflow.clone();
+        assert_eq!(
+            overflow.try_consume(&overflow_key, &Quantity::from(1_u64), 80),
+            Err(AxtHandleBudgetConsumeError::Arithmetic(
+                NumericOperationError::MantissaOverflow
+            ))
+        );
+        assert_eq!(overflow, before_overflow);
+
+        assert_eq!(
+            AxtHandleBudgetRecord::empty().validate_for_key(&key),
+            Err(AxtHandleBudgetConsumeError::ZeroAmount),
+            "committed state must not contain empty accumulator records"
+        );
+        let over_remaining = AxtHandleBudgetRecord {
+            consumed: Quantity::from(51_u64),
+            retain_until_slot: 90,
+        };
+        assert_eq!(
+            over_remaining.validate_for_key(&remaining_key),
+            Err(AxtHandleBudgetConsumeError::RemainingExceeded)
+        );
+        let over_per_use = AxtHandleBudgetRecord {
+            consumed: Quantity::from(11_u64),
+            retain_until_slot: 90,
+        };
+        assert_eq!(
+            over_per_use.validate_for_key(&key),
+            Err(AxtHandleBudgetConsumeError::PerUseExceeded)
+        );
+
+        let key_bytes = to_bytes(&key).expect("encode budget key");
+        assert_eq!(
+            decode_from_bytes::<AxtHandleBudgetKey>(&key_bytes).expect("decode budget key"),
+            key
+        );
+        let record_bytes = to_bytes(&record).expect("encode budget record");
+        assert_eq!(
+            decode_from_bytes::<AxtHandleBudgetRecord>(&record_bytes)
+                .expect("decode budget record"),
+            record
+        );
+    }
+    #[test]
+    fn handle_counter_record_is_permanent_exact_and_checked() {
+        let mut record = AxtHandleCounterRecord::initial();
+        assert_eq!(record.next(), 1);
+        assert_eq!(record.validate(), Ok(()));
+        assert_eq!(
+            AxtHandleCounterRecord::try_from_next(7)
+                .expect("validated authoritative setup counter")
+                .next(),
+            7
+        );
+        assert_eq!(
+            AxtHandleCounterRecord::try_from_next(0),
+            Err(AxtHandleCounterError::ZeroNextCounter)
+        );
+
+        let before = record;
+        assert_eq!(
+            record.try_advance(2),
+            Err(AxtHandleCounterError::SubNonceMismatch {
+                expected: 1,
+                actual: 2,
+            })
+        );
+        assert_eq!(record, before, "future-value rejection must be atomic");
+        assert_eq!(record.try_advance(1), Ok(2));
+        assert_eq!(record.next(), 2);
+        assert_eq!(
+            record.try_advance(1),
+            Err(AxtHandleCounterError::SubNonceMismatch {
+                expected: 2,
+                actual: 1,
+            })
+        );
+
+        let invalid = AxtHandleCounterRecord { next: 0 };
+        assert_eq!(
+            invalid.validate(),
+            Err(AxtHandleCounterError::ZeroNextCounter)
+        );
+        let mut exhausted = AxtHandleCounterRecord { next: u64::MAX };
+        let before = exhausted;
+        assert_eq!(
+            exhausted.try_advance(u64::MAX),
+            Err(AxtHandleCounterError::CounterExhausted)
+        );
+        assert_eq!(exhausted, before, "overflow rejection must be atomic");
+
+        let encoded = to_bytes(&record).expect("encode handle counter ratchet");
+        assert_eq!(
+            decode_from_bytes::<AxtHandleCounterRecord>(&encoded)
+                .expect("decode handle counter ratchet"),
+            record
+        );
+        #[cfg(feature = "json")]
+        {
+            let value = norito::json::to_value(&record).expect("encode counter JSON");
+            assert_eq!(
+                norito::json::from_value::<AxtHandleCounterRecord>(value)
+                    .expect("decode counter JSON"),
+                record
+            );
+        }
+    }
+    #[cfg(feature = "json")]
+    #[test]
+    fn handle_budget_key_json_storage_key_roundtrips() {
+        let key = AxtHandleBudgetKey::from_handle(&sample_asset_handle());
+        let mut encoded = String::new();
+        key.encode_json_key(&mut encoded);
+        let mut parser = norito::json::Parser::new(&encoded);
+        let raw_key = parser.parse_string().expect("parse JSON storage key");
+        assert_eq!(
+            AxtHandleBudgetKey::decode_json_key(&raw_key).expect("decode JSON storage key"),
+            key
+        );
+        assert!(
+            AxtHandleBudgetKey::decode_json_key(&(raw_key.clone() + " ")).is_err(),
+            "non-canonical whitespace must not alias the canonical snapshot key"
+        );
+        assert!(
+            AxtHandleBudgetKey::decode_json_key(&(raw_key + "true")).is_err(),
+            "trailing JSON must not alias the canonical snapshot key"
+        );
     }
     #[test]
     fn handle_sequence_accepts_only_exact_checked_progression() {
@@ -1886,10 +2502,25 @@ mod tests {
             account: String,
         }
         #[derive(Encode)]
+        struct PreReleaseAssetHandleDraft {
+            scope: Vec<String>,
+            subject: HandleSubject,
+            budget: HandleBudget,
+            handle_era: u64,
+            sub_nonce: u64,
+            group_binding: GroupBinding,
+            target_lane: LaneId,
+            axt_binding: AxtBinding,
+            manifest_view_root: [u8; 32],
+            expiry_slot: u64,
+            max_clock_skew_ms: Option<u32>,
+        }
+        #[derive(Encode)]
         struct PreReleaseSpendOp {
             kind: String,
             from: String,
             to: String,
+            amount: Option<Quantity>,
         }
 
         let dsid = DataSpaceId::new(19);
@@ -1928,13 +2559,36 @@ mod tests {
         })
         .expect("encode pre-release handle subject");
         assert!(decode_from_bytes::<HandleSubject>(&shortened).is_err());
+        let draft = sample_asset_handle_draft();
+        let shortened = to_bytes(&PreReleaseAssetHandleDraft {
+            scope: draft.scope,
+            subject: draft.subject,
+            budget: draft.budget,
+            handle_era: draft.handle_era,
+            sub_nonce: draft.sub_nonce,
+            group_binding: draft.group_binding,
+            target_lane: draft.target_lane,
+            axt_binding: draft.axt_binding,
+            manifest_view_root: draft.manifest_view_root,
+            expiry_slot: draft.expiry_slot,
+            max_clock_skew_ms: draft.max_clock_skew_ms,
+        })
+        .expect("encode pre-asset-binding handle draft");
+        assert!(
+            decode_from_bytes::<AssetHandleDraft>(&shortened).is_err(),
+            "the V1 handle draft must require its issuer-signed asset definition"
+        );
         let shortened = to_bytes(&PreReleaseSpendOp {
             kind: "transfer".to_owned(),
             from: "sorau source".to_owned(),
             to: "sorau destination".to_owned(),
+            amount: None,
         })
-        .expect("encode pre-release spend operation");
-        assert!(decode_from_bytes::<SpendOp>(&shortened).is_err());
+        .expect("encode pre-asset-binding spend operation");
+        assert!(
+            decode_from_bytes::<SpendOp>(&shortened).is_err(),
+            "the V1 spend operation must require its exact asset definition"
+        );
     }
     #[test]
     fn axt_v1_json_requires_nullable_slots_and_rejects_unknown_fields() {
@@ -2011,6 +2665,15 @@ mod tests {
     #[test]
     fn axt_v1_json_requires_handle_and_envelope_collections() {
         let handle = sample_asset_handle();
+        let mut missing_asset = norito::json::to_value(&handle).expect("serialize asset handle");
+        missing_asset
+            .as_object_mut()
+            .expect("asset handle JSON object")
+            .remove("asset_definition_id");
+        assert!(
+            norito::json::from_value::<AssetHandle>(missing_asset).is_err(),
+            "the V1 asset handle must require its issuer-signed asset definition"
+        );
         let mut missing_skew = norito::json::to_value(&handle).expect("serialize asset handle");
         missing_skew
             .as_object_mut()
@@ -2097,12 +2760,45 @@ mod tests {
         let draft = sample_asset_handle_draft();
         assert_required_json_fields!(draft.subject, HandleSubject, ["origin_dsid"]);
         assert_required_json_fields!(draft.budget, HandleBudget, ["per_use"]);
-        assert_required_json_fields!(draft, AssetHandleDraft, ["max_clock_skew_ms"]);
+        assert_required_json_fields!(
+            draft,
+            AssetHandleDraft,
+            ["asset_definition_id", "max_clock_skew_ms"]
+        );
         let context = issuer_context(test_network_id(b"json-v1-network"), DataSpaceId::new(7));
         assert_required_json_fields!(
             draft.issuer_payload_v1(context),
             AssetHandleIssuerPayloadV1,
-            ["max_clock_skew_ms"]
+            ["asset_definition_id", "max_clock_skew_ms"]
+        );
+        let budget_key = AxtHandleBudgetKey::from_handle(&sample_asset_handle());
+        assert_required_json_fields!(
+            budget_key,
+            AxtHandleBudgetKey,
+            [
+                "issuer_context",
+                "asset_definition_id",
+                "scope",
+                "subject",
+                "budget",
+                "active_handle_era",
+                "group_binding",
+                "target_lane",
+                "axt_binding",
+                "manifest_view_root",
+                "expiry_slot",
+                "max_clock_skew_ms",
+            ]
+        );
+        assert_required_json_fields!(
+            AxtHandleBudgetRecord::empty(),
+            AxtHandleBudgetRecord,
+            ["consumed", "retain_until_slot"]
+        );
+        assert_required_json_fields!(
+            AxtHandleCounterRecord::initial(),
+            AxtHandleCounterRecord,
+            ["next"]
         );
 
         let op = SpendOp {
@@ -2112,7 +2808,7 @@ mod tests {
             to: draft.subject.account.clone(),
             amount: None,
         };
-        assert_required_json_fields!(op, SpendOp, ["amount"]);
+        assert_required_json_fields!(op, SpendOp, ["asset_definition_id", "amount"]);
         let fragment = AxtHandleFragment {
             handle: sample_asset_handle(),
             intent: RemoteSpendIntent {
@@ -2338,6 +3034,76 @@ mod tests {
         assert!(record.is_expired(5, 10));
     }
     #[test]
+    fn replay_record_expires_strictly_after_effective_deadline() {
+        let record = AxtReplayRecord {
+            dataspace: DataSpaceId::new(1),
+            used_slot: 10,
+            retain_until_slot: 20,
+        };
+        assert!(!record.is_expired(19, 5));
+        assert!(
+            !record.is_expired(20, 5),
+            "the handle remains valid through its inclusive expiry slot"
+        );
+        assert!(record.is_expired(21, 5));
+
+        assert!(
+            !record.is_expired(25, 15),
+            "the configured retention window is also inclusive"
+        );
+        assert!(record.is_expired(26, 15));
+    }
+    #[test]
+    fn replay_record_validation_uses_authoritative_key_and_canonical_storage_key() {
+        let key =
+            AxtHandleReplayKey::from_parts(DataSpaceId::new(7), [0xA5; 32], 3, 4, LaneId::new(2));
+        let record = AxtReplayRecord {
+            dataspace: DataSpaceId::new(7),
+            used_slot: 10,
+            retain_until_slot: 10,
+        };
+        assert_eq!(record.validate_for_key(&key), Ok(()));
+
+        let mut invalid = record;
+        invalid.dataspace = DataSpaceId::new(8);
+        assert_eq!(
+            invalid.validate_for_key(&key),
+            Err(AxtReplayRecordValidationError::DataspaceMismatch)
+        );
+        let invalid = AxtReplayRecord {
+            dataspace: DataSpaceId::new(7),
+            used_slot: 0,
+            retain_until_slot: 0,
+        };
+        assert_eq!(
+            invalid.validate_for_key(&key),
+            Err(AxtReplayRecordValidationError::ZeroedSlots)
+        );
+        let invalid = AxtReplayRecord {
+            dataspace: DataSpaceId::new(7),
+            used_slot: 11,
+            retain_until_slot: 10,
+        };
+        assert_eq!(
+            invalid.validate_for_key(&key),
+            Err(AxtReplayRecordValidationError::RetentionBeforeUse)
+        );
+
+        #[cfg(feature = "json")]
+        {
+            let mut encoded = String::new();
+            key.encode_json_key(&mut encoded);
+            let mut parser = norito::json::Parser::new(&encoded);
+            let raw_key = parser.parse_string().expect("parse JSON replay key");
+            assert_eq!(
+                AxtHandleReplayKey::decode_json_key(&raw_key)
+                    .expect("decode canonical JSON replay key"),
+                key
+            );
+            assert!(AxtHandleReplayKey::decode_json_key(&(raw_key + " ")).is_err());
+        }
+    }
+    #[test]
     fn descriptor_validation_accepts_valid_descriptor() {
         let descriptor = sample_descriptor(DataSpaceId::new(7));
         assert_eq!(validate_descriptor(&descriptor), Ok(()));
@@ -2408,6 +3174,7 @@ mod tests {
             }],
             handles: vec![AxtHandleFragment {
                 handle: AssetHandle {
+                    asset_definition_id: test_asset_definition_id(),
                     scope: vec!["transfer".into()],
                     subject: HandleSubject {
                         account: alice_account.clone(),
