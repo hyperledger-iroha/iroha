@@ -20,7 +20,11 @@ SPEC = importlib.util.spec_from_file_location("taira_devnet", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 module = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = module
-SPEC.loader.exec_module(module)
+sys.path.insert(0, str(MODULE_PATH.parent))
+try:
+    SPEC.loader.exec_module(module)
+finally:
+    sys.path.remove(str(MODULE_PATH.parent))
 
 
 def executable(path: Path, body: bytes = b"current binary\n") -> Path:
@@ -55,14 +59,18 @@ class FakeRuntime:
             target.mkdir(mode=0o700)
             for name in ("start.sh", "stop.sh"):
                 executable(target / name, b"#!/usr/bin/env bash\n")
+            genesis_hash = "a" * 63 + "b"
+            network_id = module.network_id_from_genesis_hash(genesis_hash)
             for index in range(module.PEER_COUNT):
                 (target / f"peer{index}.toml").write_text(
                     f'chain = "{module.DEFAULT_CHAIN_ID}"\n'
+                    f'[genesis]\nexpected_hash = "{network_id}"\n'
                     f'address = "addr:127.0.0.1:{api_port + index}#ABCD"\n',
                     encoding="utf-8",
                 )
-            network_id = "hash:" + "A" * 64 + "#ABCD"
-            (target / "genesis.expected_hash").write_text(network_id + "\n", encoding="utf-8")
+            (target / "genesis.expected_hash").write_text(
+                genesis_hash + "\n", encoding="utf-8"
+            )
             (target / "client.toml").write_text(
                 f'chain = "{module.DEFAULT_CHAIN_ID}"\n'
                 f'network_id = "{network_id}"\n'
@@ -327,6 +335,36 @@ class TairaDevnetTests(unittest.TestCase):
         with self.assertRaisesRegex(module.DevnetError, "not for canonical Taira"):
             module.check(args, run=runtime.run, request=runtime.request)
 
+    def test_check_rejects_client_network_id_checksum_drift(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        client = self.root / "state" / "network" / "client.toml"
+        contents = client.read_text(encoding="utf-8")
+        network_id = module.quoted_assignment(client, "network_id")
+        replacement = network_id[:-1] + ("0" if network_id[-1] != "0" else "1")
+        client.write_text(contents.replace(network_id, replacement), encoding="utf-8")
+        args = module.parser().parse_args(
+            ["--dir", str(self.root / "state"), "check", "--timeout-seconds", "1"]
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "does not match its genesis hash"):
+            module.check(args, run=runtime.run, request=runtime.request)
+
+    def test_check_rejects_peer_genesis_identity_drift(self) -> None:
+        runtime = FakeRuntime()
+        module.up(self.up_args(), run=runtime.run, request=runtime.request)
+        config = self.root / "state" / "network" / "peer2.toml"
+        contents = config.read_text(encoding="utf-8")
+        network_id = module.quoted_assignment(config, "expected_hash")
+        foreign = module.network_id_from_genesis_hash("1" * 63 + "3")
+        config.write_text(contents.replace(network_id, foreign), encoding="utf-8")
+        args = module.parser().parse_args(
+            ["--dir", str(self.root / "state"), "check", "--timeout-seconds", "1"]
+        )
+
+        with self.assertRaisesRegex(module.DevnetError, "genesis hash does not match"):
+            module.check(args, run=runtime.run, request=runtime.request)
+
     def test_full_public_doctor_is_opt_in(self) -> None:
         runtime = FakeRuntime()
         module.up(self.up_args("--full-doctor"), run=runtime.run, request=runtime.request)
@@ -378,6 +416,7 @@ class TairaDevnetTests(unittest.TestCase):
         command = module.cargo_build_command("local-release", Path("/tmp/taira-target"))
         self.assertEqual(command[0], str(REPO_ROOT / "scripts" / "cargo_fast.sh"))
         self.assertIn("--stable-local-metadata", command)
+        self.assertIn("--no-sccache", command)
         self.assertEqual(command[command.index("--target-dir") + 1], "/tmp/taira-target")
         self.assertEqual(command.count("--bin"), 3)
         rendered = " ".join(command)

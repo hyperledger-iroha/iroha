@@ -416,15 +416,24 @@ pub(in crate::sumeragi) enum ProductionLifecycleOutputAdmissionFailureV1<E> {
     /// LedgerV1 publication was attempted and the lifecycle owner is fail-closed.
     Durability,
 }
+/// Closed result of one lifecycle-owned output service attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum LifecycleOutputServiceDispositionV1 {
+    /// The output service durably accepted the complete exact occurrence.
+    Accepted,
+    /// The bounded service retained no occurrence, so the exact source must retry.
+    SourceRetained,
+}
 /// Ownership-preserving result of settling one runtime lifecycle output.
 #[derive(Debug)]
 #[must_use = "lifecycle output settlement must be observed"]
 pub(in crate::sumeragi) enum ProductionLifecycleOutputAdmissionSettlementV1<E> {
     /// Service I/O completed and the same lifecycle row is durably terminal.
     Completed,
-    /// A terminal duplicate was consumed without repeating service I/O.
+    /// A terminal duplicate or typed recovered-Broadcast retransmit was
+    /// consumed without repeating generic service I/O.
     AlreadyCompleted,
-    /// The exact owner remains parked behind an older lifecycle ordinal or capacity wait.
+    /// The exact owner remains parked behind ordering, capacity, or service backpressure.
     Deferred(PendingLifecycleOutputAdmissionV1),
     /// Settlement failed with the move-only output owner retained intact.
     Failed {
@@ -1074,7 +1083,7 @@ impl ProductionLifecycleOwnerV1 {
         execute: impl FnOnce(
             &AdapterEffect,
             &crate::sumeragi::v2_runtime::RuntimeEffectOwnership,
-        ) -> Result<(), E>,
+        ) -> Result<LifecycleOutputServiceDispositionV1, E>,
     ) -> ProductionLifecycleOutputAdmissionSettlementV1<E> {
         let mut execution = pending.into_existing_execution();
         let initial_join = match self
@@ -1091,6 +1100,10 @@ impl ProductionLifecycleOwnerV1 {
         };
         match initial_join {
             LifecycleOutputRegistryJoinV1::Ready(_) => {}
+            LifecycleOutputRegistryJoinV1::RecoveredBroadcastOwned
+            | LifecycleOutputRegistryJoinV1::TerminalDirectOutputDuplicate => {
+                return ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted;
+            }
             LifecycleOutputRegistryJoinV1::Deferred => {
                 return ProductionLifecycleOutputAdmissionSettlementV1::Deferred(
                     execution.into_pending(),
@@ -1183,18 +1196,31 @@ impl ProductionLifecycleOwnerV1 {
                     execution.into_pending(),
                 );
             }
-            Ok(LifecycleOutputRegistryJoinV1::Missing) | Err(_) => {
+            Ok(
+                LifecycleOutputRegistryJoinV1::Missing
+                | LifecycleOutputRegistryJoinV1::RecoveredBroadcastOwned
+                | LifecycleOutputRegistryJoinV1::TerminalDirectOutputDuplicate,
+            )
+            | Err(_) => {
                 return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
                     failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
                     pending: execution.into_pending(),
                 };
             }
         };
-        if let Err(error) = execution.execute_with(execute) {
-            return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
-                failure: ProductionLifecycleOutputAdmissionFailureV1::Service(error),
-                pending: execution.into_pending(),
-            };
+        match execution.execute_with(execute) {
+            Ok(LifecycleOutputServiceDispositionV1::Accepted) => {}
+            Ok(LifecycleOutputServiceDispositionV1::SourceRetained) => {
+                return ProductionLifecycleOutputAdmissionSettlementV1::Deferred(
+                    execution.into_pending(),
+                );
+            }
+            Err(error) => {
+                return ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Service(error),
+                    pending: execution.into_pending(),
+                };
+            }
         }
         let mut staged = self.coordinator.stage_durable_transaction();
         if staged
@@ -1524,6 +1550,7 @@ mod tests {
     };
     use super::*;
     use crate::sumeragi::{
+        v2::AdapterEquivocationEvidence,
         v2_body_store::V2BodyStore,
         v2_core::{EventTag, Generation},
         v2_runtime::{
@@ -2074,7 +2101,9 @@ mod tests {
                     |observed, _ownership| {
                         assert_eq!(observed, &effect);
                         called.set(called.get().saturating_add(1));
-                        Ok::<(), &'static str>(())
+                        Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                            LifecycleOutputServiceDispositionV1::Accepted,
+                        )
                     },
                 ),
                 ProductionLifecycleOutputAdmissionSettlementV1::Completed
@@ -2089,11 +2118,107 @@ mod tests {
             assert!(matches!(
                 owner.settle_lifecycle_output_admission(
                     fixture.output_pending(effect, 0xD1),
-                    |_effect, _ownership| -> Result<(), &'static str> {
+                    |_effect, _ownership| -> Result<
+                        LifecycleOutputServiceDispositionV1,
+                        &'static str,
+                    > {
                         panic!("terminal output duplicate must not repeat service I/O")
                     },
                 ),
                 ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
+            ));
+            assert_eq!(owner.coordinator.high_water(), 1);
+        });
+    }
+
+    #[test]
+    fn lifecycle_output_terminal_duplicate_with_new_runtime_root_stutters_exactly() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let mut owner = fixture.production_owner(64);
+            let ledger = TempDir::new().expect("temporary terminal duplicate ledger");
+            owner
+                .coordinator
+                .attach_empty_test_ledger(ledger.path())
+                .expect("attach terminal duplicate ledger");
+            let effect = fixture.effect(0xD6);
+            let calls = Cell::new(0_u8);
+            assert!(matches!(
+                owner.settle_lifecycle_output_admission(
+                    fixture.output_pending(effect.clone(), 0xD6),
+                    |_effect, _ownership| {
+                        calls.set(calls.get().saturating_add(1));
+                        Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                            LifecycleOutputServiceDispositionV1::Accepted,
+                        )
+                    },
+                ),
+                ProductionLifecycleOutputAdmissionSettlementV1::Completed
+            ));
+            assert_eq!(calls.get(), 1);
+
+            let rebound_tag = EventTag::new(
+                fixture.tag.height(),
+                fixture.tag.view(),
+                Generation::new(fixture.tag.generation().get().saturating_add(1)),
+            );
+            let rebound_ownership = bind_adapter_effect_batch_ownership(
+                core::slice::from_ref(&effect),
+                vec![RuntimeEffectOwnership::fresh_for_test(rebound_tag, 0xD7)],
+            )
+            .expect("bind byte-identical output under a fresh runtime root")
+            .pop()
+            .expect("one rebound output owner");
+            let rebound =
+                PendingLifecycleOutputAdmissionV1::seal_exact(effect.clone(), rebound_ownership)
+                    .unwrap_or_else(|_| panic!("seal byte-identical terminal output retry"));
+            assert!(matches!(
+                owner.settle_lifecycle_output_admission(
+                    rebound,
+                    |_effect, _ownership| -> Result<
+                        LifecycleOutputServiceDispositionV1,
+                        &'static str,
+                    > {
+                        panic!("exact terminal duplicate must not repeat service I/O")
+                    },
+                ),
+                ProductionLifecycleOutputAdmissionSettlementV1::AlreadyCompleted
+            ));
+            assert_eq!(calls.get(), 1);
+            assert_eq!(owner.coordinator.high_water(), 1);
+            assert!(owner.registry.registry().is_empty());
+
+            let mut drifted = effect;
+            let AdapterEffect::Broadcast(message) = &mut drifted else {
+                unreachable!("fixture output is one signed Broadcast")
+            };
+            let wire::ConsensusMessageV2Payload::Vote(vote) = &mut message.payload else {
+                unreachable!("fixture output is one signed Vote")
+            };
+            vote.signature.push(0xFF);
+            let drifted_ownership = bind_adapter_effect_batch_ownership(
+                core::slice::from_ref(&drifted),
+                vec![RuntimeEffectOwnership::fresh_for_test(rebound_tag, 0xD8)],
+            )
+            .expect("bind semantically drifted output")
+            .pop()
+            .expect("one drifted output owner");
+            let drifted = PendingLifecycleOutputAdmissionV1::seal_exact(drifted, drifted_ownership)
+                .unwrap_or_else(|_| panic!("seal drifted terminal output retry"));
+            assert!(matches!(
+                owner.settle_lifecycle_output_admission(
+                    drifted,
+                    |_effect, _ownership| -> Result<
+                        LifecycleOutputServiceDispositionV1,
+                        &'static str,
+                    > {
+                        panic!("semantic drift must fail before service I/O")
+                    },
+                ),
+                ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                    failure: ProductionLifecycleOutputAdmissionFailureV1::Registry,
+                    ..
+                }
             ));
             assert_eq!(owner.coordinator.high_water(), 1);
         });
@@ -2127,7 +2252,10 @@ mod tests {
             assert!(matches!(
                 owner.settle_lifecycle_output_admission(
                     fixture.output_pending(effect, 0xD3),
-                    |_effect, _ownership| -> Result<(), &'static str> {
+                    |_effect, _ownership| -> Result<
+                        LifecycleOutputServiceDispositionV1,
+                        &'static str,
+                    > {
                         panic!("a later output must not overtake the first Ready row")
                     },
                 ),
@@ -2168,12 +2296,110 @@ mod tests {
                 owner.settle_lifecycle_output_admission(pending, |observed, _ownership| {
                     assert_eq!(observed, &effect);
                     calls.set(calls.get().saturating_add(1));
-                    Ok::<(), &'static str>(())
+                    Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                        LifecycleOutputServiceDispositionV1::Accepted,
+                    )
                 }),
                 ProductionLifecycleOutputAdmissionSettlementV1::Completed
             ));
             assert_eq!(calls.get(), 1);
             assert_eq!(owner.coordinator.high_water(), 1);
+            assert!(owner.registry.registry().is_empty());
+        });
+    }
+
+    #[test]
+    fn lifecycle_output_malformed_equivocation_fails_before_service_or_admission() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let mut owner = fixture.production_owner(64);
+            let AdapterEffect::Broadcast(message) = fixture.effect(0xD8) else {
+                unreachable!("fixture output is one Vote broadcast")
+            };
+            let wire::ConsensusMessageV2Payload::Vote(vote) = message.payload else {
+                unreachable!("fixture output contains one Vote")
+            };
+            let effect = AdapterEffect::ReportEquivocation {
+                evidence: AdapterEquivocationEvidence::vote_for_test(vote.clone(), vote),
+            };
+            let AdapterEffect::ReportEquivocation { evidence } = &effect else {
+                unreachable!("fixture retains vote equivocation evidence")
+            };
+            assert!(evidence.validate_structure(&fixture.context).is_err());
+            let calls = Cell::new(0_u8);
+            let settlement = owner.settle_lifecycle_output_admission(
+                fixture.output_pending(effect, 0xD8),
+                |_effect, _ownership| {
+                    calls.set(calls.get().saturating_add(1));
+                    Ok::<LifecycleOutputServiceDispositionV1, ()>(
+                        LifecycleOutputServiceDispositionV1::Accepted,
+                    )
+                },
+            );
+            match settlement {
+                ProductionLifecycleOutputAdmissionSettlementV1::Failed {
+                    failure:
+                        ProductionLifecycleOutputAdmissionFailureV1::Projection(
+                            AdapterEffectAdmissionError::UnboundEffect,
+                        ),
+                    pending: _,
+                } => {}
+                other => {
+                    panic!("a non-conflicting pair must fail before output service: {other:?}")
+                }
+            };
+            assert_eq!(calls.get(), 0);
+            assert_eq!(owner.coordinator.high_water(), 0);
+            assert!(owner.coordinator.records.is_empty());
+            assert!(owner.registry.registry().is_empty());
+        });
+    }
+
+    #[test]
+    fn lifecycle_output_source_retained_retries_before_terminal_fsync() {
+        run_lifecycle_output_test_on_stack(|| {
+            let fixture = Fixture::new();
+            let mut owner = fixture.production_owner(64);
+            let ledger = TempDir::new().expect("temporary retained-output ledger");
+            owner
+                .coordinator
+                .attach_empty_test_ledger(ledger.path())
+                .expect("attach retained-output ledger");
+            let effect = fixture.effect(0xD9);
+            let calls = Cell::new(0_u8);
+            let ProductionLifecycleOutputAdmissionSettlementV1::Deferred(pending) = owner
+                .settle_lifecycle_output_admission(
+                    fixture.output_pending(effect.clone(), 0xD9),
+                    |observed, _ownership| {
+                        assert_eq!(observed, &effect);
+                        calls.set(calls.get().saturating_add(1));
+                        Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                            LifecycleOutputServiceDispositionV1::SourceRetained,
+                        )
+                    },
+                )
+            else {
+                panic!("source retention must return the exact Ready output owner")
+            };
+            assert_eq!(calls.get(), 1);
+            assert_eq!(owner.coordinator.high_water(), 1);
+            assert_eq!(owner.coordinator.records[&1].state, LifecycleState::Ready);
+            assert_eq!(owner.registry.registry().len(), 1);
+            assert!(matches!(
+                owner.settle_lifecycle_output_admission(pending, |observed, _ownership| {
+                    assert_eq!(observed, &effect);
+                    calls.set(calls.get().saturating_add(1));
+                    Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                        LifecycleOutputServiceDispositionV1::Accepted,
+                    )
+                }),
+                ProductionLifecycleOutputAdmissionSettlementV1::Completed
+            ));
+            assert_eq!(calls.get(), 2);
+            assert_eq!(
+                owner.coordinator.records[&1].state,
+                LifecycleState::Terminal(super::super::TerminalOutcome::Advanced)
+            );
             assert!(owner.registry.registry().is_empty());
         });
     }
@@ -2208,7 +2434,9 @@ mod tests {
                 pending: _,
             } = owner.settle_lifecycle_output_admission(pending, |_effect, _ownership| {
                 calls.set(calls.get().saturating_add(1));
-                Ok::<(), &'static str>(())
+                Ok::<LifecycleOutputServiceDispositionV1, &'static str>(
+                    LifecycleOutputServiceDispositionV1::Accepted,
+                )
             })
             else {
                 panic!("terminal LedgerV1 failure must enter restart-required state")

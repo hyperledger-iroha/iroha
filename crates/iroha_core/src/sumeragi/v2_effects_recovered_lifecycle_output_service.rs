@@ -9,9 +9,9 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         &mut self,
         effect: &AdapterEffect,
         services: &mut S,
-    ) -> Result<(), EffectExecutorError> {
+    ) -> Result<LifecycleOutputServiceDispositionV1, EffectExecutorError> {
         self.ensure_open()?;
-        let result = (|| -> Result<(), EffectExecutorError> {
+        let result = (|| -> Result<LifecycleOutputServiceDispositionV1, EffectExecutorError> {
             match effect {
                 AdapterEffect::Broadcast(message) => {
                     if matches!(
@@ -28,7 +28,14 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                             .map_err(|error| EffectExecutorError::Contract(error.to_string()))?;
                         services
                             .broadcast_consensus(message.clone())
-                            .map(|_| ())
+                            .map(|disposition| match disposition {
+                                ConsensusBroadcastDisposition::ExactServiceAccepted => {
+                                    LifecycleOutputServiceDispositionV1::Accepted
+                                }
+                                ConsensusBroadcastDisposition::SourceRetained => {
+                                    LifecycleOutputServiceDispositionV1::SourceRetained
+                                }
+                            })
                             .map_err(service_error)
                     }
                 }
@@ -42,14 +49,18 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                         })?;
                     services
                         .report_equivocation(evidence.to_wire())
-                        .map_err(service_error)
+                        .map_err(service_error)?;
+                    Ok(LifecycleOutputServiceDispositionV1::Accepted)
                 }
                 AdapterEffect::ReportInvalidCertifiedBody {
                     subject,
                     certificate,
-                } => services
-                    .report_invalid_certified_body(*subject, certificate.clone())
-                    .map_err(service_error),
+                } => {
+                    services
+                        .report_invalid_certified_body(*subject, certificate.clone())
+                        .map_err(service_error)?;
+                    Ok(LifecycleOutputServiceDispositionV1::Accepted)
+                }
                 AdapterEffect::Sign { .. }
                 | AdapterEffect::FetchBody { .. }
                 | AdapterEffect::StoreBody { .. }

@@ -450,7 +450,8 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "self.successor_store.load().ok().as_ref() != Some(successor_ledger)",
                     "owner_store.load().ok().as_ref() != Some(successor_ledger)",
                     "LifecycleLedgerV1::from_coordinator(&owner.coordinator)",
-                    "exactly_covers_recovered_ready_work(&owner.coordinator)",
+                    "owner.exact_lifecycle_output_ordinals_for_registry_census()",
+                    "exactly_covers_recovered_ready_work_with_owner_held_outputs(",
                     "fn exactly_matches_successor_owner(",
                     "self.successor_descends_from_retirement()",
                     "self.matches_successor_owner_ledger(owner, &self.successor_ledger)",
@@ -1282,7 +1283,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                     "fresh Serve exhaustive all-live registry census",
                     all_live_census.source,
                     "sign.dispatch_key.is_none()",
-                    3,
+                    4,
                 )
                 require_token_count(
                     registry_validate_path,
@@ -3505,7 +3506,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 (
                     "services.matches_lifecycle_body_store(body_store_identity)",
                     "if exact_ready != self.coordinator.ready_index",
-                    "work_class == LifecycleWorkClass::Broadcast",
+                    "record.work_class != LifecycleWorkClass::Broadcast",
                     "recovered_lifecycle_signed_broadcast_paired_next_vote_ordinal",
                     "attest_ready_recovered_lifecycle_signed_broadcast",
                     "for ready_ordinal in &exact_ready",
@@ -4896,7 +4897,7 @@ def _successor_recovery_source_fidelity_errors(repo_root: Path) -> list[str]:
                 (
                     "coordinator.fault.is_some() || coordinator.active_lease.is_some()",
                     "self.exact_recovered_wal_registry_slot()",
-                    "self.exactly_covers_ready_work_with_extra(coordinator, extra, None, true)",
+                    "self.exactly_covers_ready_work_with_extra( coordinator, extra, &std::collections::BTreeSet::new(), None, true, )",
                 ),
             )
             finalization_pair_link = region(

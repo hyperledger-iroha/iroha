@@ -393,6 +393,11 @@ match (admission, candidate_semantic_identity) {
     (RuntimeCandidateAdmissionDisposition::CoalescedRetry, Some(_)) => {
         let redispatch = if runtime_terminal_incumbent {
             false
+        } else if matches!(
+            fetch_authority_relation,
+            Some(RuntimeFetchAuthorityRelation::Stale)
+        ) {
+            false
         } else {
             Self::candidate_retry_is_redispatched(effect).ok_or_else(|| {
                 EffectExecutorError::Contract(
@@ -412,7 +417,7 @@ match (admission, candidate_semantic_identity) {
         retain_effect.push(true);
     }
 """,
-        "candidate admission must project only 0-to-1, 1-to-1, and 0-to-0 dispositions while runtime-owned terminals stutter",
+        "candidate admission must project only 0-to-1, 1-to-1, and 0-to-0 dispositions while runtime-owned terminals stutter and stale Fetch authority stutters",
         errors,
     )
     _require_rust_token_sequence(

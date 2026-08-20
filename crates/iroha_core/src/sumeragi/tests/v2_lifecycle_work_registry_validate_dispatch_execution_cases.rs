@@ -1149,8 +1149,20 @@ fn remote_ready_validate_preflight_still_requires_registered_manifest() {
 
 #[cfg(feature = "bls")]
 #[test]
-#[allow(clippy::too_many_lines)]
 fn local_proposal_intent_live_wal_sign_is_typed_dispatched_once_and_prepares_successors() {
+    let handle = std::thread::Builder::new()
+        .name("local-proposal-intent-live-wal-sign".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(local_proposal_intent_live_wal_sign_fixture)
+        .expect("spawn local ProposalIntent live-WAL Sign fixture");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+#[allow(clippy::too_many_lines)]
+fn local_proposal_intent_live_wal_sign_fixture() {
     let marker = 0xDE;
     let ReadyDurableValidateFixture {
         fixture,
@@ -1395,9 +1407,22 @@ fn local_proposal_intent_live_wal_sign_is_typed_dispatched_once_and_prepares_suc
             Some(payload),
             RecoveredLifecycleSignClassV1::ControlProposal,
         );
+    let unrelated_subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(
+            b"unrelated queued application completion block",
+        )),
+        payload_hash: Hash::new(b"unrelated queued application completion payload"),
+    };
+    runtime
+        .enqueue_application_completed(tag, unrelated_subject)
+        .expect("queue one unrelated application completion");
+    let queue_now = std::time::Instant::now();
+    let queue_before = runtime.queue_snapshot(queue_now);
+    assert_eq!(runtime.queued_commands(), 1);
     let preview = runtime
         .prepare_recovered_lifecycle_sign_completion(authority)
-        .expect("preview exact signed local Proposal");
+        .expect("preview exact signed local Proposal ahead of queued ingress");
     assert_eq!(
         preview.shape(),
         crate::sumeragi::v2::RecoveredLifecycleSignAdapterSuccessorShapeV1::ProposalPrepareWal
@@ -1408,6 +1433,9 @@ fn local_proposal_intent_live_wal_sign_is_typed_dispatched_once_and_prepares_suc
                 crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1::ProposalPrepareWal
             )
         );
+    drop(preview);
+    assert_eq!(runtime.queued_commands(), 1);
+    assert_eq!(runtime.queue_snapshot(queue_now), queue_before);
 }
 
 #[cfg(feature = "bls")]
@@ -1641,6 +1669,10 @@ fn assert_ready_validate_vote_sign_live_transaction(
             )
                 && sign.dispatch_key.is_none()
     ));
+    let child_sign_effect = match &child_work.kind {
+        ConcreteLifecycleWorkKind::DurableLiveWalSign(sign) => sign.admission.bound.effect.clone(),
+        _ => unreachable!("reserved Validate successor remains one live-WAL Sign"),
+    };
     assert_eq!(
         coordinator.records[&lease.ordinal()].state,
         LifecycleState::Terminal(TerminalOutcome::Advanced)
@@ -1794,6 +1826,173 @@ fn assert_ready_validate_vote_sign_live_transaction(
             .prepare_recovered_lifecycle_sign_dispatch(&coordinator, &sign_lease),
         Err(RecoveredLifecycleSignDispatchProjectionErrorV1::AlreadyDispatched)
     ));
+
+    if sign_phase == wire::GlobalPhase::Prepare {
+        let AdapterEffect::Sign {
+            tag: sign_tag,
+            request,
+        } = child_sign_effect
+        else {
+            unreachable!("validated receiver successor remains one Vote Sign")
+        };
+        let SignRequest::Vote(local_vote) = &request else {
+            unreachable!("validated receiver successor remains one Prepare Vote Sign")
+        };
+        let roster_len = u32::try_from(fixture.verified.context().roster.len())
+            .expect("fixture roster length fits a validator index");
+        let mut peer_vote = local_vote.clone();
+        peer_vote.signer = local_vote
+            .signer
+            .checked_add(1)
+            .expect("fixture signer advances")
+            % roster_len;
+        peer_vote.signature = vec![marker.wrapping_add(1); 96];
+        let peer_message =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(peer_vote));
+        let deferred = adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                peer_message.clone(),
+            ))
+            .expect("admit one authenticated peer Prepare behind the receiver Sign fence");
+        assert_eq!(
+            deferred.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+
+        let queue_projection = |adapter: &mut SumeragiV2Adapter| {
+            adapter
+                .status()
+                .expect("snapshot receiver deferred queues")
+                .liveness
+                .queues
+                .into_iter()
+                .filter(|status| {
+                    matches!(
+                        status.queue,
+                        wire::SumeragiV2QueueKind::DeferredCompletion
+                            | wire::SumeragiV2QueueKind::DeferredProgress
+                            | wire::SumeragiV2QueueKind::DeferredNormal
+                    )
+                })
+                .map(|status| {
+                    (
+                        status.queue,
+                        status.depth,
+                        status.capacity,
+                        status.service_debt,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let queue_projection_before = queue_projection(&mut adapter);
+        assert_eq!(
+            queue_projection_before
+                .iter()
+                .find(|(queue, ..)| *queue == wire::SumeragiV2QueueKind::DeferredCompletion)
+                .map(|(_, depth, ..)| *depth),
+            Some(0)
+        );
+        assert_eq!(
+            queue_projection_before
+                .iter()
+                .find(|(queue, ..)| *queue == wire::SumeragiV2QueueKind::DeferredProgress)
+                .map(|(_, depth, ..)| *depth),
+            Some(0)
+        );
+        assert_eq!(
+            queue_projection_before
+                .iter()
+                .find(|(queue, ..)| *queue == wire::SumeragiV2QueueKind::DeferredNormal)
+                .map(|(_, depth, ..)| *depth),
+            Some(1)
+        );
+        let ordinals_before = adapter.all_deferred_admission_ordinals();
+        let authenticated_before = adapter.authenticated_deferred_admission_ordinals();
+        let (owned_tag, deferred_ordinal) = adapter
+            .deferred_authenticated_message_owner(&peer_message)
+            .expect("the exact authenticated peer Prepare retains one deferred owner");
+        assert_eq!(owned_tag, sign_tag);
+        let ownership_before = adapter
+            .deferred_occurrence_ownership(deferred_ordinal)
+            .expect("the deferred peer Prepare retains its opaque occurrence authority");
+        assert!(ownership_before.is_authenticated_ingress());
+        assert!(ownership_before.still_retained());
+
+        let keys = durable_store_keys(marker);
+        let signer =
+            usize::try_from(local_vote.signer).expect("fixture local Vote signer is representable");
+        let signature = iroha_crypto::Signature::try_new(
+            keys[signer].private_key(),
+            &request.signature_preimage(),
+        )
+        .expect("sign exact receiver Prepare Vote task");
+        let signature = signature.payload().to_vec();
+        let authority = crate::sumeragi::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1::for_test(
+            child_ordinal,
+            sign_tag,
+            request,
+            signature.clone(),
+            None,
+            RecoveredLifecycleSignClassV1::PhaseVote,
+        );
+        let preview = adapter
+            .prepare_recovered_lifecycle_sign_completion(authority)
+            .expect("preview receiver Prepare signature ahead of Busy-deferred peer ingress");
+        assert_eq!(
+            preview.settlement_family(),
+            Some(crate::sumeragi::v2::RecoveredLifecycleSignAdapterSettlementFamilyV1::Broadcast)
+        );
+        drop(preview);
+
+        assert_eq!(queue_projection(&mut adapter), queue_projection_before);
+        assert_eq!(adapter.all_deferred_admission_ordinals(), ordinals_before);
+        assert_eq!(
+            adapter.authenticated_deferred_admission_ordinals(),
+            authenticated_before
+        );
+        assert_eq!(
+            adapter.deferred_authenticated_message_owner(&peer_message),
+            Some((owned_tag, deferred_ordinal))
+        );
+        let ownership_after = adapter
+            .deferred_occurrence_ownership(deferred_ordinal)
+            .expect("drop retains the exact authenticated peer Prepare owner");
+        assert_eq!(ownership_after, ownership_before);
+        assert!(ownership_after.still_retained());
+        assert!(adapter.signature_fence_is_active());
+
+        let signed = adapter
+            .signature_completed(sign_tag, signature)
+            .expect("apply the same exact receiver Prepare signature after inert preview drop");
+        assert!(matches!(
+            signed.effects(),
+            [AdapterEffect::Broadcast(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Vote(_),
+                ..
+            })]
+        ));
+        let (_effects, evidence) = adapter
+            .drain_deferred_with_evidence()
+            .expect("service receiver peer Prepare after its Sign fence opens")
+            .expect("the exact Busy-deferred peer Prepare remains selectable");
+        assert!(evidence.validate_exact());
+        assert_eq!(evidence.admission_ordinal, deferred_ordinal);
+        assert_eq!(
+            evidence.priority,
+            crate::sumeragi::v2::DeferredPriority::Normal
+        );
+        assert_eq!(
+            evidence.service_cursor_before,
+            crate::sumeragi::v2::DeferredPriority::Completion
+        );
+        assert_eq!(
+            evidence.service_cursor_after,
+            crate::sumeragi::v2::DeferredPriority::Completion
+        );
+        assert_eq!(evidence.queue_lengths_before.completion, 0);
+        assert_eq!(evidence.queue_lengths_before.progress, 0);
+        assert_eq!(evidence.queue_lengths_before.normal, 1);
+    }
 }
 
 #[cfg(feature = "bls")]

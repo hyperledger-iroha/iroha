@@ -2684,6 +2684,21 @@ assert_restored_stage_seven_retirement_does_not_resurrect(0xBD, false, false, fa
         effects_path,
         drain,
         """
+if matches!(&owned.effect, AdapterEffect::Apply { .. })
+    && (!self.pending_durable_validate_admissions.is_empty()
+        || self.pending_live_wal_sign_admission.is_some()
+        || !self.pending_lifecycle_output_admissions.is_empty())
+{
+    break;
+}
+""",
+        "Apply must remain at the exact FIFO head until every lifecycle admission owner settles",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        drain,
+        """
 let pending_work_producer = Self::pending_work_producer(&owned.effect);
 match self.consume_one(owned.effect, owned.ownership, services) {
 """,

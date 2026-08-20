@@ -952,9 +952,22 @@ impl PreparedLifecycleCoordinatorOpen {
                 _prepared: self,
             });
         };
+        let Some(owner_held_outputs) =
+            recovery.exact_lifecycle_output_ordinals_for_registry_census(&self.coordinator)
+        else {
+            self.certified_serve_registry = Some(batch);
+            return Err(LifecycleOpenCommitError {
+                error: LifecycleOpenErrorKind::InvalidRecovery(
+                    "cold lifecycle output registry census is inconsistent",
+                )
+                .into(),
+                _prepared: self,
+            });
+        };
         let publication = registry.install_certified_serve_startup_batch_before_publication(
             batch,
             &self.coordinator,
+            &owner_held_outputs,
             || self.publish_durable_open(payload_store, recovery),
         );
         match publication {

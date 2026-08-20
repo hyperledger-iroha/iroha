@@ -2114,99 +2114,6 @@ pub(crate) struct RuntimeEffectOwnerAssignment {
     owner: RuntimeLifecycleOwner,
     causality: RuntimeEffectCausality,
 }
-/// One-shot runtime-only permit for minting authenticated remote Proposal replay evidence.
-///
-/// Only the production dispatch carrier can construct this value after the
-/// signed envelope and its frozen receiver ownership have met. The non-Copy
-/// marker prevents the same dispatch occurrence from minting two envelopes.
-#[derive(Debug)]
-pub(in crate::sumeragi) struct RemoteProposalReplayMintPermit {
-    _linearity: RemoteProposalReplayMintLinearity,
-}
-#[derive(Debug)]
-struct RemoteProposalReplayMintLinearity;
-impl Drop for RemoteProposalReplayMintLinearity {
-    fn drop(&mut self) {}
-}
-impl RemoteProposalReplayMintPermit {
-    fn new() -> Self {
-        Self {
-            _linearity: RemoteProposalReplayMintLinearity,
-        }
-    }
-}
-/// Exact authenticated Proposal plus its frozen direct-ingress carrier.
-///
-/// This value exists only between adapter dispatch and exact effect binding,
-/// or in the bounded deferred-ordinal map while the same Proposal waits behind
-/// reducer debt. It exposes no envelope, ingress, or scalar parts.
-pub(crate) struct AuthenticatedRemoteProposalDispatchOrigin {
-    authenticated: AuthenticatedConsensusMessage,
-    ingress: RuntimeIngressOwnershipEvidence,
-}
-impl AuthenticatedRemoteProposalDispatchOrigin {
-    fn new(
-        authenticated: AuthenticatedConsensusMessage,
-        ingress: RuntimeIngressOwnershipEvidence,
-    ) -> Option<Self> {
-        if !matches!(
-            authenticated.payload(),
-            wire::ConsensusMessageV2Payload::Proposal(_)
-        ) || !ingress.exactly_matches_authenticated(&authenticated)
-        {
-            return None;
-        }
-        Some(Self {
-            authenticated,
-            ingress,
-        })
-    }
-    fn rebind_retained_ingress(self, retained: RuntimeIngressOwnershipEvidence) -> Option<Self> {
-        if !retained.exactly_matches_authenticated(&self.authenticated) {
-            return None;
-        }
-        if self.ingress != retained {
-            let mut merged = self.ingress.clone();
-            merged.merge_downstream(retained.clone()).ok()?;
-            if merged != retained {
-                return None;
-            }
-        }
-        Some(Self {
-            authenticated: self.authenticated,
-            ingress: retained,
-        })
-    }
-    fn merge_retained(
-        self,
-        incumbent: Self,
-        retained: RuntimeIngressOwnershipEvidence,
-    ) -> Option<Self> {
-        if !self
-            .authenticated
-            .same_wire_envelope(&incumbent.authenticated)
-            || incumbent
-                .rebind_retained_ingress(retained.clone())
-                .is_none()
-        {
-            return None;
-        }
-        self.rebind_retained_ingress(retained)
-    }
-    fn bind_exact_fetch(
-        self,
-        effect: &AdapterEffect,
-        pending: PendingRuntimeEffectBinding,
-    ) -> Option<RemoteProposalFetchReplayEvidenceV1> {
-        RemoteProposalFetchReplayEvidenceV1::from_exact_authenticated_proposal(
-            RemoteProposalReplayMintPermit::new(),
-            self.authenticated,
-            self.ingress,
-            effect,
-            pending,
-        )
-    }
-}
 /// One-shot runtime-only permit for minting local pre-intent replay authority.
 ///
 /// Only the serialized active-view producer cut can construct this value. Its
@@ -3412,7 +3319,7 @@ impl PendingRuntimeEffectBinding {
     /// proposal round, subject, tag, and newly validated execution commitment.
     /// A Prepare- or Commit-authorized predecessor is rejected because those
     /// reducer states have different closed continuations. The returned value
-    /// remains inert deterministic data; only the future sealed Validate
+    /// remains inert deterministic data; only the live sealed Validate
     /// transaction may pair it with the adapter-produced signing request.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn project_validate_sign_prepare_successor(
@@ -9527,8 +9434,16 @@ pub(crate) trait RuntimeDriver {
         _origin: AuthenticatedRemoteProposalDispatchOrigin,
         _effects: &[Self::Effect],
         _ownership: &mut [RuntimeEffectOwnership],
-    ) -> Result<(), ()> {
+    ) -> Result<Option<AuthenticatedRemoteProposalDispatchOrigin>, ()> {
         Err(())
+    }
+    /// Return whether this exact Proposal remains the sole current-view Set-B
+    /// candidate waiting for periodic fallback to emit its ordinary Fetch.
+    fn remote_proposal_fetch_replay_is_dormant(
+        &self,
+        _origin: &AuthenticatedRemoteProposalDispatchOrigin,
+    ) -> bool {
+        false
     }
     /// Bind one scheduler-validated lifecycle to a timer transition whose
     /// compact driver method otherwise carries only the reducer tag.
@@ -9919,7 +9834,7 @@ impl RuntimeDriver for SumeragiV2Adapter {
         origin: AuthenticatedRemoteProposalDispatchOrigin,
         effects: &[Self::Effect],
         ownership: &mut [RuntimeEffectOwnership],
-    ) -> Result<(), ()> {
+    ) -> Result<Option<AuthenticatedRemoteProposalDispatchOrigin>, ()> {
         if effects.len() != ownership.len() {
             return Err(());
         }
@@ -9933,9 +9848,13 @@ impl RuntimeDriver for SumeragiV2Adapter {
             )
         });
         let Some((index, effect)) = fetches.next() else {
-            // An authenticated Proposal can terminate as ignored,
-            // equivocation, or policy rejection without owning Fetch work.
-            return Ok(());
+            // Set B deliberately waits one retransmission boundary before
+            // acquiring an ordinary Proposal body. Retain only that exact
+            // current candidate; every ignored, superseded, or certified
+            // Proposal terminates without latent ordinary-fetch authority.
+            return Ok(self
+                .remote_proposal_fetch_replay_is_dormant(&origin)
+                .then_some(origin));
         };
         if fetches.next().is_some() || ownership[index].remote_proposal_fetch_replay.is_some() {
             return Err(());
@@ -9945,7 +9864,15 @@ impl RuntimeDriver for SumeragiV2Adapter {
             .map_err(|_| ())?;
         let replay = origin.bind_exact_fetch(effect, pending).ok_or(())?;
         ownership[index].remote_proposal_fetch_replay = Some(replay);
-        Ok(())
+        Ok(None)
+    }
+    fn remote_proposal_fetch_replay_is_dormant(
+        &self,
+        origin: &AuthenticatedRemoteProposalDispatchOrigin,
+    ) -> bool {
+        origin
+            .exact_proposal()
+            .is_some_and(|proposal| self.retains_dormant_remote_proposal_fetch(proposal))
     }
     fn bind_selected_producer_lifecycle(
         &mut self,
@@ -10738,6 +10665,8 @@ pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
         BTreeMap<(RuntimeFreshRootKind, iroha_crypto::Hash), RuntimeLifecycleOwner>,
     /// At most one direct Proposal origin awaiting exact effect binding.
     pending_remote_proposal_replay: Option<AuthenticatedRemoteProposalDispatchOrigin>,
+    /// Exact current-view Set-B Proposal origin waiting for periodic fallback.
+    dormant_remote_proposal_replay: Option<AuthenticatedRemoteProposalDispatchOrigin>,
     pending_effect_ownership: Option<Vec<RuntimeEffectOwnership>>,
     external_lifecycle_owners: Vec<RuntimeLifecycleOwner>,
     external_lifecycle_owner_capacity: usize,
@@ -10826,6 +10755,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             retransmit_owner_physical_cut: None,
             dormant_fresh_lifecycle_owners: BTreeMap::new(),
             pending_remote_proposal_replay: None,
+            dormant_remote_proposal_replay: None,
             pending_effect_ownership: None,
             external_lifecycle_owners: Vec::new(),
             // Before the effect executor installs its configured pending-work
@@ -10936,6 +10866,55 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             }
         }
     }
+    fn reconcile_dormant_remote_proposal_replay(&mut self) {
+        let retain = self
+            .dormant_remote_proposal_replay
+            .as_ref()
+            .is_some_and(|origin| self.driver.remote_proposal_fetch_replay_is_dormant(origin));
+        if !retain {
+            self.dormant_remote_proposal_replay = None;
+        }
+    }
+    fn retain_dormant_remote_proposal_replay(
+        &mut self,
+        origin: AuthenticatedRemoteProposalDispatchOrigin,
+    ) -> Result<(), EnqueueError> {
+        if !self.driver.remote_proposal_fetch_replay_is_dormant(&origin) {
+            return Err(EnqueueError::FailClosed);
+        }
+        let retained = match self.dormant_remote_proposal_replay.take() {
+            None => origin,
+            Some(incumbent)
+                if self
+                    .driver
+                    .remote_proposal_fetch_replay_is_dormant(&incumbent)
+                    && incumbent.same_authenticated_proposal(&origin) =>
+            {
+                incumbent
+            }
+            Some(incumbent) => {
+                self.dormant_remote_proposal_replay = Some(incumbent);
+                return Err(EnqueueError::FailClosed);
+            }
+        };
+        self.dormant_remote_proposal_replay = Some(retained);
+        Ok(())
+    }
+    fn bind_or_retain_remote_proposal_replay(
+        &mut self,
+        origin: AuthenticatedRemoteProposalDispatchOrigin,
+        effects: &[D::Effect],
+        ownership: &mut [RuntimeEffectOwnership],
+    ) -> Result<(), EnqueueError> {
+        let dormant = self
+            .driver
+            .bind_remote_proposal_fetch_replay(origin, effects, ownership)
+            .map_err(|()| EnqueueError::FailClosed)?;
+        if let Some(dormant) = dormant {
+            self.retain_dormant_remote_proposal_replay(dormant)?;
+        }
+        Ok(())
+    }
     fn retain_effect_ownership(
         &mut self,
         source: RuntimeEffectSource,
@@ -10943,11 +10922,22 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         parent_statement: Option<&RuntimeCandidateSemanticStatement>,
         effects: &[D::Effect],
     ) -> Result<(), EnqueueError> {
+        let dormant_retransmit = if source == RuntimeEffectSource::Retransmit {
+            self.dormant_remote_proposal_replay.take()
+        } else {
+            self.reconcile_dormant_remote_proposal_replay();
+            None
+        };
+        if self.pending_remote_proposal_replay.is_some() && dormant_retransmit.is_some() {
+            return Err(EnqueueError::FailClosed);
+        }
         if effects.is_empty() {
-            if let Some(origin) = self.pending_remote_proposal_replay.take() {
-                self.driver
-                    .bind_remote_proposal_fetch_replay(origin, effects, &mut [])
-                    .map_err(|()| EnqueueError::FailClosed)?;
+            let origin = self
+                .pending_remote_proposal_replay
+                .take()
+                .or(dormant_retransmit);
+            if let Some(origin) = origin {
+                self.bind_or_retain_remote_proposal_replay(origin, effects, &mut [])?;
             }
             return Ok(());
         }
@@ -11050,9 +11040,10 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             ownership.push(evidence);
         }
         if let Some(origin) = self.pending_remote_proposal_replay.take() {
-            self.driver
-                .bind_remote_proposal_fetch_replay(origin, effects, &mut ownership)
-                .map_err(|()| EnqueueError::FailClosed)?;
+            self.bind_or_retain_remote_proposal_replay(origin, effects, &mut ownership)?;
+        }
+        if let Some(origin) = dormant_retransmit {
+            self.bind_or_retain_remote_proposal_replay(origin, effects, &mut ownership)?;
         }
         self.pending_effect_ownership = Some(ownership);
         Ok(())
@@ -14806,6 +14797,11 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     pub(crate) const fn driver(&self) -> &D {
         &self.driver
     }
+    /// Return whether one exact current-view Set-B Proposal replay origin is
+    /// waiting for periodic fallback to publish its ordinary Fetch.
+    pub(crate) const fn has_dormant_remote_proposal_replay(&self) -> bool {
+        self.dormant_remote_proposal_replay.is_some()
+    }
     /// Mutably borrow the driver for tests which must hold an exact
     /// persistence crash cut across runtime construction.
     #[cfg(test)]
@@ -14997,8 +14993,8 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         authority: super::v2_worker::RecoveredLifecycleSignAdapterCompletionAuthorityV1,
     ) -> Result<super::v2::PreparedRecoveredLifecycleSignAdapterCompletionV1<'_>, AdapterError>
     {
+        // Queued ingress is inert; only active mutation debts exclude Completion.
         if self.fail_closed
-            || self.ingress.len() != 0
             || self.pending_effect_ownership.is_some()
             || self.last_scheduler_ownership.is_some()
             || !self.pending_leader_wire_terminals.is_empty()

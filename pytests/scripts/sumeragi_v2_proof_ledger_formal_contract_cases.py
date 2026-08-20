@@ -285,6 +285,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lifecycle_replay_authority_certified_serve.rs'),
         Path('v2_lifecycle_replay_authority_certified_body.rs'),
         Path('v2_lifecycle_replay_authority_payload_projection.rs'),
+        Path('v2_lifecycle_replay_authority_output_recovery.rs'),
         Path('tests/v2_lifecycle_replay_authority_fixtures.rs'),
         Path('tests/v2_lifecycle_replay_authority_cases.rs'),
     ),
@@ -293,10 +294,15 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lifecycle_work_registry_validate_recovery_parent.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs'): (
+        Path('v2_lifecycle_work_registry_validate_completion_impl.rs'),
+        Path('v2_lifecycle_work_registry_access_impl.rs'),
         Path('v2_lifecycle_work_registry_validate_recovery_execution_impl.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs'): (
         Path('v2_lifecycle_work_registry_pre_admission.rs'),
+        Path('v2_lifecycle_work_registry_live_wal_sign.rs'),
+        Path('v2_lifecycle_work_registry_output.rs'),
+        Path('v2_lifecycle_work_registry_live_validate_children.rs'),
         Path('v2_lifecycle_work_registry_recovered_wal.rs'),
         Path('v2_lifecycle_work_registry_validate_recovery.rs'),
         Path('v2_lifecycle_work_registry_validate_execution.rs'),

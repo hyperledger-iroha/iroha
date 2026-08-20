@@ -536,6 +536,8 @@ fn enter_view_and_fetch_authority_upgrade_retain_the_protected_fetch_owner() {
         certified_sources: Vec::new(),
         certificate: None,
     };
+    let ordinary_ownership = authenticated_proposal_fetch_ownership(&fixture, &ordinary, 9_023);
+    executor.runtime.exact_effect_ownership = Some((ordinary.clone(), ordinary_ownership));
     executor
         .consume_effects(vec![ordinary], &mut services)
         .expect("start the ordinary protected-body acquisition");
@@ -586,6 +588,75 @@ fn enter_view_and_fetch_authority_upgrade_retain_the_protected_fetch_owner() {
             .fetch_tasks
             .iter()
             .all(|task| { task.id() == work_id && task.ownership() == original.ownership() })
+    );
+    assert!(!executor.status().fail_closed);
+}
+#[test]
+fn enter_view_and_ordinary_fetch_retry_preserve_authenticated_replay_owner() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let ordinary = AdapterEffect::FetchBody {
+        tag: tag(0),
+        round: fixture.manifest.round,
+        subject: fixture.manifest.subject,
+        manifest: Some(fixture.manifest.clone()),
+        certified_sources: Vec::new(),
+        certificate: None,
+    };
+    let ordinary_ownership = authenticated_proposal_fetch_ownership(&fixture, &ordinary, 9_024);
+    executor.runtime.exact_effect_ownership = Some((ordinary.clone(), ordinary_ownership));
+    executor
+        .consume_effects(vec![ordinary.clone()], &mut services)
+        .expect("start the authenticated ordinary protected-body acquisition");
+    let original = services.fetch_tasks[0].clone();
+    assert!(
+        original
+            .ownership()
+            .exact_remote_proposal_fetch_replay(&ordinary)
+            .is_some()
+    );
+
+    executor.runtime.effect_owners.clear();
+    executor.runtime.round_tag = Some(tag(1));
+    executor.runtime.locked_body = Some((fixture.manifest.round, fixture.manifest.subject));
+    let prepare = fixture.qc(wire::GlobalPhase::Prepare);
+    let mut timeout = timeout_at_view(&fixture, 0);
+    timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+    let mut retry = ordinary;
+    let AdapterEffect::FetchBody { tag: retry_tag, .. } = &mut retry else {
+        unreachable!("ordinary fixture remains FetchBody")
+    };
+    *retry_tag = tag(1);
+    executor
+        .consume_effects(
+            vec![
+                AdapterEffect::EnterView {
+                    tag: tag(1),
+                    certificate: timeout,
+                    protected_lock: Some(prepare),
+                },
+                retry.clone(),
+            ],
+            &mut services,
+        )
+        .expect("post-EnterView ordinary retry retains the authenticated Fetch owner");
+
+    assert_eq!(executor.pending_fetches.len(), 1);
+    let pending = executor
+        .pending_fetches
+        .values()
+        .next()
+        .expect("one protected Fetch remains live");
+    assert_eq!(pending.task.tag, tag(1));
+    assert_eq!(pending.task.ownership(), original.ownership());
+    assert!(
+        pending
+            .task
+            .ownership()
+            .exact_remote_proposal_fetch_replay(&retry)
+            .is_some(),
+        "the post-prefix Same carrier must keep the exact authenticated Proposal envelope"
     );
     assert!(!executor.status().fail_closed);
 }
@@ -741,7 +812,7 @@ fn adapter_effect_retry_policy_is_closed_over_all_eleven_effect_classes() {
 #[test]
 fn retained_effect_tail_is_fifo_and_refilters_after_durable_decision() {
     let fixture = Fixture::new();
-    let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
+    let mut executor = fixture.executor(EffectQueueConfig::new(2, 4, 1 << 20, 4));
     let mut services = fixture.services();
     executor
         .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
@@ -760,8 +831,21 @@ fn retained_effect_tail_is_fifo_and_refilters_after_durable_decision() {
             &mut services,
         )
         .expect("dispatch prefix and retain exact causal suffix");
-    assert_eq!(services.effect_service_order, vec!["broadcast"]);
+    assert!(services.effect_service_order.is_empty());
     assert_eq!(executor.status().effect_dispatch_queue.depth, 2);
+    assert_eq!(executor.pending_lifecycle_output_admissions.len(), 1);
+    // The production runner settles this exact Broadcast owner before it
+    // re-enters the retained suffix. Keep the move-only owner alive locally
+    // while this executor-only fixture exercises the subsequent FIFO drain.
+    let output_key = *executor
+        .pending_lifecycle_output_admissions
+        .keys()
+        .next()
+        .expect("one parked Broadcast owner");
+    let _settled_broadcast_owner = executor
+        .pending_lifecycle_output_admissions
+        .remove(&output_key)
+        .expect("transfer the exact Broadcast owner to lifecycle settlement");
     let first = services.sign_tasks[0].clone();
     let signature = Signature::new(
         fixture.validator_keys[0].private_key(),
@@ -778,10 +862,8 @@ fn retained_effect_tail_is_fifo_and_refilters_after_durable_decision() {
             .expect("drain exact retained suffix"),
         EffectExecutorStep::Advanced { effects: 2 }
     );
-    assert_eq!(
-        services.effect_service_order,
-        vec!["broadcast", "sign", "equivocation"]
-    );
+    assert_eq!(services.effect_service_order, vec!["sign"]);
+    assert_eq!(executor.pending_lifecycle_output_admissions.len(), 1);
     let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
     let mut services = fixture.services();
     executor
@@ -814,7 +896,8 @@ fn retained_effect_tail_is_fifo_and_refilters_after_durable_decision() {
             .expect("Decision refilters retained suffix before retry"),
         EffectExecutorStep::Advanced { effects: 1 }
     );
-    assert_eq!(services.broadcasts, vec![exact_commit]);
+    assert!(services.broadcasts.is_empty());
+    assert_eq!(executor.pending_lifecycle_output_admissions.len(), 1);
     assert_eq!(services.sign_tasks.len(), 1);
     assert!(executor.retained_effect_batch.is_none());
     assert!(!executor.status().fail_closed);
@@ -855,11 +938,11 @@ fn retained_effect_tail_stops_at_next_blocked_producer_without_reordering() {
     assert_eq!(
         executor
             .step(Instant::now(), &mut services)
-            .expect("drain through the synchronous prefix only"),
-        EffectExecutorStep::Advanced { effects: 2 }
+            .expect("drain only the first producer before output capacity"),
+        EffectExecutorStep::Advanced { effects: 1 }
     );
-    assert_eq!(services.effect_service_order, vec!["sign", "equivocation"]);
-    assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
+    assert_eq!(services.effect_service_order, vec!["sign"]);
+    assert_eq!(executor.status().effect_dispatch_queue.depth, 2);
     assert_eq!(executor.pending_signatures.len(), 1);
     let second = services.sign_tasks[1].clone();
     let signature = Signature::new(
@@ -874,16 +957,129 @@ fn retained_effect_tail_stops_at_next_blocked_producer_without_reordering() {
     assert_eq!(
         executor
             .step(Instant::now(), &mut services)
+            .expect("transfer the ordered diagnostic before the final producer"),
+        EffectExecutorStep::Advanced { effects: 1 }
+    );
+    assert_eq!(services.effect_service_order, vec!["sign"]);
+    assert_eq!(executor.status().effect_dispatch_queue.depth, 1);
+    assert_eq!(executor.pending_lifecycle_output_admissions.len(), 1);
+    assert!(executor.pending_signatures.is_empty());
+    // Production settles the move-only output owner before re-entering this
+    // retained suffix. Model that transfer without executing diagnostic I/O.
+    let output_key = *executor
+        .pending_lifecycle_output_admissions
+        .keys()
+        .next()
+        .expect("one parked equivocation owner");
+    let _settled_equivocation_owner = executor
+        .pending_lifecycle_output_admissions
+        .remove(&output_key)
+        .expect("transfer the exact equivocation owner to lifecycle settlement");
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
             .expect("drain the final producer without overtaking"),
         EffectExecutorStep::Advanced { effects: 1 }
     );
-    assert_eq!(
-        services.effect_service_order,
-        vec!["sign", "equivocation", "sign"]
-    );
+    assert_eq!(services.effect_service_order, vec!["sign", "sign"]);
     assert_eq!(executor.pending_signatures.len(), 1);
     assert!(executor.retained_effect_batch.is_none());
     assert!(!executor.status().fail_closed);
+}
+#[test]
+fn lifecycle_output_waits_at_saturated_pending_capacity_without_losing_fifo_owner() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::new(1, 4, 1 << 20, 4));
+    let mut services = fixture.services();
+    executor
+        .consume_effects(vec![timeout_sign(&fixture, 0)], &mut services)
+        .expect("fill the sole pending-work position");
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let output = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::QuorumCertificate(commit),
+    ));
+    assert_eq!(
+        executor
+            .consume_effects(vec![output.clone()], &mut services)
+            .expect("retain lifecycle output behind saturated pending work"),
+        0
+    );
+    assert!(executor.pending_lifecycle_output_admissions.is_empty());
+    let retained = executor
+        .retained_effect_batch
+        .as_ref()
+        .expect("retain the exact output occurrence");
+    let retained_output = retained.effects.front().expect("one retained output");
+    assert_eq!(retained_output.effect, output);
+    assert!(
+        retained_output
+            .ownership
+            .exactly_binds_adapter_effect(&retained_output.effect)
+    );
+    let sign = services.sign_tasks[0].clone();
+    let signature = Signature::new(
+        fixture.validator_keys[0].private_key(),
+        &sign.request.signature_preimage(),
+    )
+    .payload()
+    .to_vec();
+    executor
+        .complete_consensus_signature(sign.id(), signature, &mut services)
+        .expect("release pending-work capacity");
+    assert_eq!(
+        executor
+            .step(Instant::now(), &mut services)
+            .expect("transfer the retained output into lifecycle admission"),
+        EffectExecutorStep::Advanced { effects: 1 }
+    );
+    assert_eq!(executor.pending_lifecycle_output_admissions.len(), 1);
+    assert_eq!(executor.status().pending_outputs, 1);
+    assert!(executor.retained_effect_batch.is_none());
+    assert!(services.broadcasts.is_empty());
+    assert!(!executor.status().fail_closed);
+}
+#[test]
+fn lifecycle_output_key_collision_preserves_incumbent_move_only_owner() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let commit = fixture.qc(wire::GlobalPhase::Commit);
+    let output = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+        wire::ConsensusMessageV2Payload::QuorumCertificate(commit),
+    ));
+    let first_assignment = executor.runtime.test_effect_ownership(&output);
+    let first =
+        bind_adapter_effect_batch_ownership(std::slice::from_ref(&output), vec![first_assignment])
+            .expect("bind the one-effect incumbent output")
+            .pop()
+            .expect("one incumbent output binding");
+    executor
+        .park_lifecycle_output_admission(output.clone(), first.clone())
+        .expect("park the incumbent output owner");
+
+    let companion = timeout_sign(&fixture, 1);
+    let foreign_effects = [output.clone(), companion.clone()];
+    let output_assignment = executor.runtime.test_effect_ownership(&output);
+    let companion_assignment = executor.runtime.test_effect_ownership(&companion);
+    let foreign = bind_adapter_effect_batch_ownership(
+        &foreign_effects,
+        vec![output_assignment, companion_assignment],
+    )
+    .expect("bind a foreign positional occurrence of the same output")
+    .remove(0);
+    assert!(!first.exactly_matches_bound_effect_occurrence(&foreign, &output));
+    assert!(matches!(
+        executor.park_lifecycle_output_admission(output.clone(), foreign.clone()),
+        Err(EffectExecutorError::Contract(message))
+            if message == "lifecycle output admission key collided with a foreign owner"
+    ));
+    assert_eq!(executor.pending_lifecycle_output_admissions.len(), 1);
+    let incumbent = executor
+        .pending_lifecycle_output_admissions
+        .values()
+        .next()
+        .expect("incumbent output owner survived the collision");
+    assert!(incumbent.exactly_matches_retry(&output, &first));
+    assert!(!incumbent.exactly_matches_retry(&output, &foreign));
 }
 #[test]
 fn pending_work_producer_inventory_is_exhaustive_and_source_linked() {
@@ -936,7 +1132,7 @@ fn pending_work_producer_inventory_is_exhaustive_and_source_linked() {
         ),
         (
             AdapterEffect::Broadcast(proposal(&fixture)),
-            None,
+            Some(PendingWorkProducer::Output),
             RestartEffectSource::DurableConsensusEvidence,
         ),
         (
@@ -952,7 +1148,7 @@ fn pending_work_producer_inventory_is_exhaustive_and_source_linked() {
             AdapterEffect::ReportEquivocation {
                 evidence: vote_equivocation_evidence(&fixture, 1),
             },
-            None,
+            Some(PendingWorkProducer::Output),
             RestartEffectSource::DurableAccountabilityEvidence,
         ),
         (
@@ -960,7 +1156,7 @@ fn pending_work_producer_inventory_is_exhaustive_and_source_linked() {
                 subject: fixture.manifest.subject,
                 certificate,
             },
-            None,
+            Some(PendingWorkProducer::Output),
             RestartEffectSource::DiagnosticOnly,
         ),
     ];

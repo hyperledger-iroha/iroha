@@ -1786,11 +1786,13 @@ fn advance_executor(
     limit: usize,
 ) -> Result<bool, V2RunnerError> {
     for _ in 0..limit.max(1) {
-        if super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
-            lifecycle_owner,
-            executor,
-            services,
-        )? || executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0
+        if recovered_lifecycle_output_requires_yield(
+            super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
+                lifecycle_owner,
+                executor,
+                services,
+            )?,
+        ) || executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0
             || executor.has_pending_live_wal_sign_admission()
             || executor.settle_pending_lifecycle_output_admissions(lifecycle_owner, services)? > 0
             || executor.has_pending_lifecycle_output_admissions()
@@ -1810,11 +1812,13 @@ fn advance_executor(
                 let _ = reconcile_executor_locked_body(executor, services)?;
             }
         }
-        if super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
-            lifecycle_owner,
-            executor,
-            services,
-        )? || executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0
+        if recovered_lifecycle_output_requires_yield(
+            super::v2_lifecycle_coordinator::settle_one_recovered_lifecycle_output(
+                lifecycle_owner,
+                executor,
+                services,
+            )?,
+        ) || executor.settle_pending_live_wal_sign_admission(lifecycle_owner, services)? > 0
             || executor.has_pending_live_wal_sign_admission()
             || executor.settle_pending_lifecycle_output_admissions(lifecycle_owner, services)? > 0
             || executor.has_pending_lifecycle_output_admissions()
@@ -1825,6 +1829,18 @@ fn advance_executor(
         }
     }
     Ok(false)
+}
+fn recovered_lifecycle_output_requires_yield(
+    settlement: super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1,
+) -> bool {
+    match settlement {
+        super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Completed
+        | super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::SourceRetained => {
+            true
+        }
+        super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Empty
+        | super::v2_lifecycle_coordinator::RecoveredLifecycleOutputSettlementV1::Deferred => false,
+    }
 }
 fn reconcile_executor_locked_body(
     executor: &mut V2EffectExecutor,

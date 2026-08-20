@@ -1546,15 +1546,11 @@ pub(in crate::sumeragi) fn settle_one_recovered_lifecycle_output(
     owner: &mut ProductionLifecycleOwnerV1,
     executor: &mut V2EffectExecutor<SerializedV2Runtime>,
     services: &mut ProductionV2Services,
-) -> Result<bool, EffectExecutorError> {
+) -> Result<super::RecoveredLifecycleOutputSettlementV1, EffectExecutorError> {
     match owner.settle_next_recovered_lifecycle_output(|effect| {
         executor.execute_recovered_lifecycle_output_service(effect, services)
     }) {
-        Ok(super::open::RecoveredLifecycleOutputSettlementV1::Completed) => Ok(true),
-        Ok(
-            super::open::RecoveredLifecycleOutputSettlementV1::Empty
-            | super::open::RecoveredLifecycleOutputSettlementV1::Deferred,
-        ) => Ok(false),
+        Ok(settlement) => Ok(settlement),
         Err(super::open::RecoveredLifecycleOutputSettlementErrorV1::Service(error)) => Err(error),
         Err(super::open::RecoveredLifecycleOutputSettlementErrorV1::InvalidAuthority(reason)) => {
             services
@@ -2477,11 +2473,20 @@ impl ProductionLifecycleOwnerV1 {
         {
             return Err(ProductionLifecycleLaunchErrorV1::InvalidOwner);
         }
+        let Some(owner_held_outputs) = self.exact_lifecycle_output_ordinals_for_registry_census()
+        else {
+            return Err(ProductionLifecycleLaunchErrorV1::InvalidOwner);
+        };
         if {
             let registry = self.registry.registry_mut();
-            !registry.exactly_covers_recovered_ready_work(&self.coordinator)
-                && !registry
-                    .exactly_covers_recovered_ready_work_and_wal_authority(&self.coordinator)
+            !registry.exactly_covers_recovered_ready_work_with_owner_held_outputs(
+                &self.coordinator,
+                &owner_held_outputs,
+            ) && !registry
+                .exactly_covers_recovered_ready_work_and_wal_authority_with_owner_held_outputs(
+                    &self.coordinator,
+                    &owner_held_outputs,
+                )
         } {
             return Err(ProductionLifecycleLaunchErrorV1::InvalidOwner);
         }
@@ -2622,9 +2627,16 @@ impl ProductionLifecycleOwnerV1 {
         {
             return Err(ProductionLifecycleLaunchErrorV1::OwnershipMismatch);
         }
-        while settle_one_recovered_lifecycle_output(&mut self, &mut executor, &mut services)
-            .map_err(ProductionLifecycleLaunchErrorV1::Executor)?
-        {}
+        loop {
+            match settle_one_recovered_lifecycle_output(&mut self, &mut executor, &mut services)
+                .map_err(ProductionLifecycleLaunchErrorV1::Executor)?
+            {
+                super::RecoveredLifecycleOutputSettlementV1::Completed => {}
+                super::RecoveredLifecycleOutputSettlementV1::Empty
+                | super::RecoveredLifecycleOutputSettlementV1::Deferred
+                | super::RecoveredLifecycleOutputSettlementV1::SourceRetained => break,
+            }
+        }
         self.body_store_identity = Some(body_store_identity);
         construction.complete();
         Ok(Box::new(LaunchedProductionLifecycleV1 {

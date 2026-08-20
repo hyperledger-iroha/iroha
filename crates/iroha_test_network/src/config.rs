@@ -2180,7 +2180,7 @@ mod tests {
         let mut saw_soracloud_permission = false;
         let mut saw_parliament_permission = false;
         let mut saw_read_all_permission = false;
-        for tx in block.0.transactions_vec() {
+        for tx in block.0.external_transactions() {
             let Executable::Instructions(instrs) = tx.instructions() else {
                 continue;
             };

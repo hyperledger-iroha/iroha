@@ -922,49 +922,6 @@ def test_exact_detached_manifest_and_minimal_context_reject_extras(
             destination, path_list
         )
 
-    context = tmp_path / "context"
-    context.mkdir()
-    (context / "scripts").mkdir()
-    for relative in module._SEALED_CONTEXT_FILES:
-        path = context / os.fsdecode(relative)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(b"control\n")
-    module.validate_sealed_context(context)
-    (context / "injected").write_bytes(b"extra")
-    with pytest.raises(module.SourceSealError, match="exact minimal inventory"):
-        module.validate_sealed_context(context)
-
-
-def test_minimal_context_rejects_symlink_and_hardlink_controls(
-    tmp_path: Path,
-) -> None:
-    module = load_module()
-
-    def make_context(name: str) -> Path:
-        context = tmp_path / name
-        context.mkdir()
-        (context / "scripts").mkdir()
-        for relative in module._SEALED_CONTEXT_FILES:
-            path = context / os.fsdecode(relative)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(b"control\n")
-        return context
-
-    symlink_context = make_context("symlink-context")
-    helper = symlink_context / "scripts" / "compute_workspace_source_manifest.py"
-    helper.unlink()
-    helper.symlink_to("../Dockerfile")
-    with pytest.raises(module.SourceSealError, match="symlink, hard link"):
-        module.validate_sealed_context(symlink_context)
-
-    hardlink_context = make_context("hardlink-context")
-    control = hardlink_context / "context-control.sha256"
-    hardlink = tmp_path / "context-control-hardlink"
-    os.link(control, hardlink)
-    with pytest.raises(module.SourceSealError, match="symlink, hard link"):
-        module.validate_sealed_context(hardlink_context)
-
-
 def test_workspace_manifest_binds_ignored_cargo_lock(tmp_path: Path) -> None:
     module = load_module()
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)

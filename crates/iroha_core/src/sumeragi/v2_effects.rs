@@ -107,9 +107,10 @@ use super::{
         LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
     },
     v2_lifecycle_coordinator::{
-        AdmissionDecision, LifecycleOutputAdmissionKeyV1, PendingDurableValidateAdmissionV1,
-        PendingLifecycleOutputAdmissionV1, PendingLiveWalSignAdmissionV1,
-        PreparedLocalBodyValidateReplayPreAdmission, PreparedRemoteProposalFetchReplayPreAdmission,
+        AdmissionDecision, LifecycleOutputAdmissionKeyV1, LifecycleOutputServiceDispositionV1,
+        PendingDurableValidateAdmissionV1, PendingLifecycleOutputAdmissionV1,
+        PendingLiveWalSignAdmissionV1, PreparedLocalBodyValidateReplayPreAdmission,
+        PreparedRemoteProposalFetchReplayPreAdmission,
         PreparedRemoteProposalStoreReplayPreAdmission,
         PreparedRemoteProposalStoredReplayPreAdmission,
         ProductionDurableValidateAdmissionSettlementV1,
@@ -974,6 +975,7 @@ impl BodyFetchTask {
         if !tag.strictly_advances(self.tag) {
             return None;
         }
+        let previous_effect = self.adapter_effect();
         let mut rebound = self.clone();
         rebound.tag = tag;
         let rebound_effect = AdapterEffect::FetchBody {
@@ -987,10 +989,21 @@ impl BodyFetchTask {
                 .as_ref()
                 .map(|request| request.certificate.clone()),
         };
-        rebound.ownership = rebound
+        rebound.ownership = if rebound
             .ownership
-            .rebind_same_adapter_effect(&rebound_effect)
-            .ok()?;
+            .exact_remote_proposal_fetch_replay(&previous_effect)
+            .is_some()
+        {
+            rebound
+                .ownership
+                .rebind_fetch_consumer(&previous_effect, &rebound_effect)
+                .ok()?
+        } else {
+            rebound
+                .ownership
+                .rebind_same_adapter_effect(&rebound_effect)
+                .ok()?
+        };
         Some(rebound)
     }
     /// Whether `self` is the exact later-incarnation consumer binding of `previous`.
@@ -1218,6 +1231,8 @@ pub(crate) struct EffectExecutorStatus {
     pub pending_stores: usize,
     /// Outstanding deterministic-validation operations.
     pub pending_validations: usize,
+    /// Signed/diagnostic outputs awaiting lifecycle-owned execution.
+    pub pending_outputs: usize,
     /// Durable Apply operations waiting for an exact merge sidecar.
     pub deferred_application_merge_work: usize,
     /// Outstanding durable application operations.
@@ -1417,8 +1432,8 @@ pub(crate) enum CompletionDisposition {
     /// fetched, authenticated, and installed for a deterministic retry.
     Deferred,
     /// Authenticated remote data completed an acquisition but proved
-    /// noncanonical, so that acquisition was retired without advancing the
-    /// reducer.
+    /// noncanonical, so that acquisition was reset for an exact retry without
+    /// advancing the reducer.
     Rejected,
     /// The work identifier was already completed or belongs to an old owner.
     Stale,
@@ -1430,7 +1445,8 @@ pub(crate) enum AuthenticatedChunkDisposition {
     /// The chunk was retained or completed one canonical reconstruction.
     Accepted,
     /// The committed chunk set reconstructed invalid or noncanonical body data;
-    /// the service retired that remote acquisition without a local failure.
+    /// the service reset that remote acquisition for retry without a local
+    /// failure.
     Rejected,
 }
 /// Executor authority for retiring or retaining one exact leader-wire chunk.
@@ -2037,25 +2053,6 @@ struct PendingStore {
     task: BodyStoreTask,
     consumer: Option<StoreConsumer>,
 }
-/// Exact signed-Proposal replay owner retained beside the ordinary body pipeline.
-///
-/// The stage changes only after the corresponding runtime or body-store cut
-/// commits. No variant exposes replay evidence, pending bindings, or a caller-
-/// selected lifecycle address.
-#[allow(variant_size_differences)]
-enum RemoteProposalReplayStageV1 {
-    Fetch {
-        work_id: EffectWorkId,
-        replay: PreparedRemoteProposalFetchReplayPreAdmission,
-    },
-    BodyAvailable(PreparedRemoteProposalFetchReplayPreAdmission),
-    StoreAdmission(PreparedRemoteProposalStoreReplayPreAdmission),
-    Store {
-        work_id: EffectWorkId,
-        replay: PreparedRemoteProposalStoreReplayPreAdmission,
-    },
-    Stored(PreparedRemoteProposalStoredReplayPreAdmission),
-}
 #[derive(Clone, Debug)]
 struct PendingApply {
     task: ApplyTask,
@@ -2519,15 +2516,6 @@ struct LocalProposalIntentProjection {
     command_identity: LocalProposalReadyCommandIdentity,
     effect: AdapterEffect,
     ownership: RuntimeEffectOwnership,
-}
-/// Exhaustive source inventory of effects which may create pending work.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PendingWorkProducer {
-    Sign,
-    Fetch,
-    Store,
-    Validate,
-    Apply,
 }
 /// Restart authority for one reducer-emitted adapter effect.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3207,6 +3195,9 @@ pub(crate) struct V2EffectExecutor<R = SerializedV2Runtime> {
     /// Durable local/remote Validate owners awaiting the sole lifecycle cut.
     pending_durable_validate_admissions:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), PendingDurableValidateAdmissionV1>,
+    /// Inert exact owners retained after lifecycle consumes a Validate pre-admission; only proven retries can stutter.
+    durable_validate_retry_seals:
+        BTreeMap<(wire::ConsensusRound, wire::BlockSubject), DurableValidateRetrySealV1>,
     /// One fsynced ProposalIntent Sign waiting for lifecycle admission.
     pending_live_wal_sign_admission: Option<PendingLiveWalSignAdmissionV1>,
     /// Signed/diagnostic outputs awaiting exact lifecycle-row execution.
@@ -3441,7 +3432,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
 }
 
 include!("v2_effects_recovered_lifecycle_output_service.rs");
-
 include!("v2_effects_lifecycle_admission_settlement.rs");
 
 impl V2EffectExecutor<SerializedV2Runtime> {
@@ -4132,8 +4122,10 @@ impl V2EffectExecutor<SerializedV2Runtime> {
             && self.finality_completion.is_some()
             && self.retained_effect_batch.is_none()
             && self.parked_effect_batch.is_none()
+            && !self.runtime.has_dormant_remote_proposal_replay()
             && self.remote_proposal_replay.is_empty()
             && self.pending_durable_validate_admissions.is_empty()
+            && self.durable_validate_retry_seals_are_finalization_inert()
             && self.pending_live_wal_sign_admission.is_none()
             && self.pending_lifecycle_output_admissions.is_empty()
             && self.recovered_decision_fetch_request_index_is_exact_and_empty()
@@ -4607,6 +4599,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             local_store_replay: BTreeMap::new(),
             remote_proposal_replay: BTreeMap::new(),
             pending_durable_validate_admissions: BTreeMap::new(),
+            durable_validate_retry_seals: BTreeMap::new(),
             pending_live_wal_sign_admission: None,
             pending_lifecycle_output_admissions: BTreeMap::new(),
             local_proposal_ready_replay: BTreeMap::new(),
@@ -4885,6 +4878,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .remote_proposal_replay
             .keys()
             .chain(self.pending_durable_validate_admissions.keys())
+            .chain(self.durable_validate_retry_seals.keys())
             .copied()
         {
             if key_is_superseded(key.0, key.1) {
@@ -5117,6 +5111,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.body_pipeline_owners
             .retain(|key, _| !superseded_keys.contains(key));
         self.remote_proposal_replay
+            .retain(|key, _| !superseded_keys.contains(key));
+        self.durable_validate_retry_seals
             .retain(|key, _| !superseded_keys.contains(key));
         if retire_retained {
             self.retained_locked_body = None;
@@ -5863,9 +5859,44 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 })
                 .unwrap_or(pending.task.tag);
             let key = (effective_tag, pending.task.round, pending.task.subject);
-            if let Some(existing) =
-                retained_fetch_lineages.insert(key, pending.task.ownership().clone())
-                && existing != *pending.task.ownership()
+            let effective_ownership = if effective_tag == pending.task.tag {
+                pending.task.ownership().clone()
+            } else {
+                pending
+                    .task
+                    .rebind_consumer(effective_tag)
+                    .ok_or_else(|| {
+                        EffectExecutorError::Contract(
+                            "protected body-fetch ownership could not rebind before lineage retention"
+                                .to_owned(),
+                        )
+                    })?
+                    .ownership()
+                    .clone()
+            };
+            let candidate_identity = effective_ownership
+                .candidate_semantic_identity()
+                .ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "protected body-fetch ownership omitted its candidate identity".to_owned(),
+                    )
+                })?;
+            let candidate_owner = retained_candidate_owners
+                .get_mut(&candidate_identity)
+                .ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "protected body-fetch lineage omitted its retained candidate owner"
+                            .to_owned(),
+                    )
+                })?;
+            if *candidate_owner != effective_ownership {
+                return Err(EffectExecutorError::Contract(
+                    "protected body-fetch rebind changed its immutable lifecycle owner".to_owned(),
+                ));
+            }
+            *candidate_owner = effective_ownership.clone();
+            if let Some(existing) = retained_fetch_lineages.insert(key, effective_ownership.clone())
+                && existing != effective_ownership
             {
                 return Err(EffectExecutorError::Contract(
                     "one body-fetch lineage had conflicting exact owners".to_owned(),
@@ -5913,6 +5944,45 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         let mut retained_validation_lineages =
             BTreeMap::<(wire::ConsensusRound, wire::BlockSubject), RuntimeEffectOwnership>::new();
+        // A protected Proposal can finish Store before EnterView or Decision
+        // emits its Prepare/Commit Validate carrier. Retain the Store's exact
+        // causal root as the incumbent Validate lineage; the normal authority
+        // adoption below may strengthen only its candidate statement before
+        // the move-only replay token is consumed.
+        for effect in &effects {
+            let AdapterEffect::ValidateBody { round, subject, .. } = effect else {
+                continue;
+            };
+            let key = (*round, *subject);
+            let Some(RemoteProposalReplayStageV1::Stored {
+                replay,
+                ownership: store_ownership,
+            }) = self.remote_proposal_replay.get(&key)
+            else {
+                continue;
+            };
+            let receipt = self.durable_bodies.get(&key).ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "stored Proposal replay lost its exact durable body during retention"
+                        .to_owned(),
+                )
+            })?;
+            let incumbent = replay
+                .project_incumbent_validate_ownership(receipt, store_ownership, effect)
+                .ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "stored Proposal replay could not project its incumbent Validate owner"
+                            .to_owned(),
+                    )
+                })?;
+            if let Some(existing) = retained_validation_lineages.insert(key, incumbent.clone())
+                && existing != incumbent
+            {
+                return Err(EffectExecutorError::Contract(
+                    "one stored Proposal body had conflicting Validate incumbents".to_owned(),
+                ));
+            }
+        }
         if let Some(batch) = &self.parked_effect_batch {
             for owned in &batch.effects {
                 let (lineages, key) = match &owned.effect {
@@ -5937,6 +6007,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         let mut retire_parked_fetch_lineages = BTreeSet::new();
         let mut retire_parked_body_stage_lineages = BTreeSet::new();
         let mut runtime_terminal_commits = Vec::new();
+        let mut retained_validate_retry_seals = self.durable_validate_retry_seals.clone();
         let mut candidate_position = 0u8;
         for (index, (effect, evidence)) in effects.iter().zip(&mut ownership).enumerate() {
             let candidate = production_adapter_effect_candidate_semantic_identity(effect);
@@ -5952,6 +6023,70 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "one adapter macro-step effect position was not representable".to_owned(),
                 )
             })?;
+            if let AdapterEffect::ValidateBody { round, subject, .. } = effect
+                && let Some(seal) = retained_validate_retry_seals
+                    .get(&(*round, *subject))
+                    .cloned()
+            {
+                // The move-only Validate owner has already crossed (or is
+                // waiting at) lifecycle admission. A later reducer carrier
+                // may only prove an exact same-body authority refinement and
+                // then stutter here; it cannot redispatch validation or mint
+                // replacement replay authority.
+                let projected = seal
+                    .project_retry(effect, evidence)
+                    .map_err(EffectExecutorError::Contract)?;
+                let identity = projected
+                    .ownership
+                    .candidate_semantic_identity()
+                    .ok_or_else(|| {
+                        EffectExecutorError::Contract(
+                            "durable Validate retry seal omitted its candidate identity".to_owned(),
+                        )
+                    })?;
+                if retained_candidate_owners
+                    .get(&identity)
+                    .is_some_and(|existing| existing != &projected.ownership)
+                {
+                    return Err(EffectExecutorError::Contract(
+                        "durable Validate retry disagreed with an exact incumbent owner".to_owned(),
+                    ));
+                }
+                let admission =
+                    production_adapter_effect_candidate_admission_disposition(effect, 1, 1)
+                        .map_err(EffectExecutorError::Contract)?;
+                if admission != RuntimeCandidateAdmissionDisposition::CoalescedRetry {
+                    return Err(EffectExecutorError::Contract(
+                        "durable Validate retry did not classify as an exact owner stutter"
+                            .to_owned(),
+                    ));
+                }
+                let projection = production_adapter_effect_candidate_trace_projection(
+                    effect,
+                    &projected.ownership,
+                    effect_position,
+                    effect_count,
+                    candidate.as_ref().map_or(0, |_| candidate_position),
+                    candidate_count,
+                    1,
+                    1,
+                    true,
+                )
+                .map_err(EffectExecutorError::Contract)?;
+                let _authorized_validate_retry = check_production_effect_to_candidate_transition(
+                    projection,
+                )
+                .ok_or_else(|| {
+                    EffectExecutorError::Contract(
+                        "durable Validate retry failed its incumbent-owner refinement".to_owned(),
+                    )
+                })?;
+                *evidence = projected.ownership.clone();
+                retained_candidate_owners.insert(identity, projected.ownership.clone());
+                retained_validate_retry_seals.insert((*round, *subject), projected);
+                retain_effect.push(false);
+                continue;
+            }
             let mut candidate_semantic_identity = evidence.candidate_semantic_identity();
             let mut exact_incumbent = candidate_semantic_identity
                 .as_ref()
@@ -6181,6 +6316,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 (RuntimeCandidateAdmissionDisposition::CoalescedRetry, Some(_)) => {
                     let redispatch = if runtime_terminal_incumbent {
                         false
+                    } else if matches!(
+                        fetch_authority_relation,
+                        Some(RuntimeFetchAuthorityRelation::Stale)
+                    ) {
+                        // A weaker carrier can arrive after Prepare/Commit authority
+                        // already owns the one physical Fetch. For an ordinary
+                        // Proposal, its signed replay envelope belongs to the weaker
+                        // incoming lifecycle and cannot be rebound onto the certified
+                        // incumbent. The stronger task already performs the complete
+                        // acquisition, so every stale carrier terminates here.
+                        false
                     } else {
                         Self::candidate_retry_is_redispatched(effect).ok_or_else(|| {
                             EffectExecutorError::Contract(
@@ -6248,10 +6394,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 .commit_body_pipeline_candidate_terminals(&terminals)
                 .map_err(EffectExecutorError::Runtime)?;
         }
-        debug_assert!(effects.iter().all(|effect| {
-            Self::restart_effect_source(effect) != RestartEffectSource::DiagnosticOnly
-                || Self::pending_work_producer(effect).is_none()
-        }));
+        self.durable_validate_retry_seals = retained_validate_retry_seals;
+        debug_assert!(effects.iter().all(Self::diagnostic_pending_work_is_exact));
         let retained = effects
             .into_iter()
             .zip(ownership)
@@ -6456,6 +6600,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             else {
                 break;
             };
+            // Decision emits CommitQC before Apply. Keep Apply at the FIFO head until every
+            // lifecycle admission owner settles; other effects retain their batching behavior.
+            if matches!(&owned.effect, AdapterEffect::Apply { .. })
+                && (!self.pending_durable_validate_admissions.is_empty()
+                    || self.pending_live_wal_sign_admission.is_some()
+                    || !self.pending_lifecycle_output_admissions.is_empty())
+            {
+                break;
+            }
             let pending_work_producer = Self::pending_work_producer(&owned.effect);
             match self.consume_one(owned.effect, owned.ownership, services) {
                 Ok(()) => {
@@ -6486,19 +6639,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         self.publish_status(services)?;
         Ok(consumed)
-    }
-    fn pending_work_producer(effect: &AdapterEffect) -> Option<PendingWorkProducer> {
-        match effect {
-            AdapterEffect::Sign { .. } => Some(PendingWorkProducer::Sign),
-            AdapterEffect::FetchBody { .. } => Some(PendingWorkProducer::Fetch),
-            AdapterEffect::StoreBody { .. } => Some(PendingWorkProducer::Store),
-            AdapterEffect::ValidateBody { .. } => Some(PendingWorkProducer::Validate),
-            AdapterEffect::Apply { .. } => Some(PendingWorkProducer::Apply),
-            AdapterEffect::Broadcast(_)
-            | AdapterEffect::EnterView { .. }
-            | AdapterEffect::ReportEquivocation { .. }
-            | AdapterEffect::ReportInvalidCertifiedBody { .. } => None,
-        }
     }
     fn restart_effect_source(effect: &AdapterEffect) -> RestartEffectSource {
         match effect {
@@ -7215,8 +7355,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     )
                 })?;
             let prepared = PreparedLocalBodyValidateReplayPreAdmission::seal_exact_validate(
-                validate_effect,
-                validate_ownership,
+                validate_effect.clone(),
+                validate_ownership.clone(),
                 receipt.clone(),
                 validate_replay,
             )
@@ -7232,17 +7372,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.recovered_bodies
                 .entry(key)
                 .or_insert_with(|| (manifest.clone(), receipt));
-            let previous = self
-                .pending_durable_validate_admissions
-                .insert(key, prepared.into_pending_durable_validate_admission());
-            if previous.is_some() {
-                return Err(self.close(
-                    EffectExecutorError::Contract(
-                        "durable local Store duplicated its lifecycle Validate owner".to_owned(),
-                    ),
-                    services,
-                ));
-            }
+            self.install_pending_durable_validate_admission(
+                key,
+                &validate_effect,
+                &validate_ownership,
+                prepared.into_pending_durable_validate_admission(),
+            )
+            .map_err(|error| self.close(error, services))?;
         }
         self.publish_status(services)
             .map_err(|error| self.close(error, services))
@@ -7387,7 +7523,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     services,
                 ));
             }
-            Some(RemoteProposalReplayStageV1::Stored(_)) | None => false,
+            Some(RemoteProposalReplayStageV1::Stored { .. }) | None => false,
         };
         if completion.tag() != pending.task.tag()
             || pending.task.manifest() != &manifest
@@ -7540,9 +7676,22 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     ));
                 }
             };
-            let previous = self
-                .remote_proposal_replay
-                .insert(key, RemoteProposalReplayStageV1::Stored(stored));
+            if !stored.exactly_retains_owned_store(&receipt, pending.task.ownership()) {
+                return Err(self.close(
+                    EffectExecutorError::Contract(
+                        "Proposal Store completion changed its exact retained runtime owner"
+                            .to_owned(),
+                    ),
+                    services,
+                ));
+            }
+            let previous = self.remote_proposal_replay.insert(
+                key,
+                RemoteProposalReplayStageV1::Stored {
+                    replay: stored,
+                    ownership: pending.task.ownership().clone(),
+                },
+            );
             debug_assert!(previous.is_none());
         }
         match &pending.consumer {
@@ -7596,8 +7745,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 }
             };
             let prepared = PreparedLocalBodyValidateReplayPreAdmission::seal_exact_validate(
-                validate_effect,
-                validate_ownership,
+                validate_effect.clone(),
+                validate_ownership.clone(),
                 receipt.clone(),
                 validate_replay,
             )
@@ -7610,7 +7759,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     services,
                 )
             })?;
-            Some(prepared.into_pending_durable_validate_admission())
+            Some((
+                validate_effect,
+                validate_ownership,
+                prepared.into_pending_durable_validate_admission(),
+            ))
         } else {
             None
         };
@@ -7619,11 +7772,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.recovered_bodies
             .insert(key, (manifest.clone(), receipt.clone()));
         self.durable_bodies.insert(key, receipt.clone());
-        if let Some(pending) = projected_local_admission {
-            let previous = self
-                .pending_durable_validate_admissions
-                .insert(key, pending);
-            debug_assert!(previous.is_none());
+        if let Some((effect, ownership, pending)) = projected_local_admission {
+            self.install_pending_durable_validate_admission(key, &effect, &ownership, pending)
+                .map_err(|error| self.close(error, services))?;
         }
         self.publish_status(services)
             .map_err(|error| self.close(error, services))?;
@@ -8134,7 +8285,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         };
         let key = (pending.task.round, pending.task.subject);
-        let retirement = self
+        let _retirement = self
             .plan_pending_fetch_retirement(&pending)
             .map_err(|error| self.fail_closed_transport(error, services))?;
         let Some(owner) = self.body_pipeline_owners.get(&key).copied() else {
@@ -8152,9 +8303,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Err(error) = services.complete_body_reconstruction_fetch(&pending.task) {
             return Err(self.fail_closed_transport(error, services));
         }
-        self.commit_pending_fetch_retirement(retirement)
-            .map_err(|error| self.fail_closed_transport(error, services))?;
-        self.body_pipeline_owners.remove(&key);
+        // Reset the rejected reconstruction attempt without retiring its
+        // authenticated Proposal lineage. The reducer still records the body
+        // as Missing, so its next periodic Fetch is only a rediscovery and
+        // cannot mint a replacement replay owner. Re-enqueueing the same task
+        // is the service's idempotent retry seam: it opens a clean chunk
+        // session while preserving the exact work ID, lifecycle owner,
+        // Proposal replay, and any certified-request upgrade.
+        if let Err(error) = services.enqueue_body_fetch(pending.task) {
+            return Err(self.fail_closed_transport(error, services));
+        }
         Ok(CompletionDisposition::Rejected)
     }
     /// Authenticate and bind one certified response without claiming or
@@ -8699,6 +8857,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             pending_fetches: self.pending_fetches.len(),
             pending_stores: self.pending_stores.len(),
             pending_validations: self.pending_durable_validate_admissions.len(),
+            pending_outputs: self.pending_lifecycle_output_admissions.len(),
             deferred_application_merge_work,
             pending_applications: self.pending_applications.len(),
             ready_bodies: self.ready_bodies.len(),
@@ -8717,17 +8876,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             runtime_queues: self.runtime.queue_snapshot(captured_at),
             watchdog_threshold: self.runtime.watchdog_threshold(),
         }
-    }
-    /// Exact carrier block hashes still owned by retained missing-sidecar work.
-    pub(crate) fn deferred_merge_sidecar_blocks(&self) -> BTreeSet<HashOf<BlockHeader>> {
-        self.deferred_merge_work
-            .keys()
-            .filter_map(|work_id| {
-                self.pending_applications
-                    .get(work_id)
-                    .map(|pending| pending.task.subject().block_hash)
-            })
-            .collect()
     }
     /// Return whether the executor still owns this exact deferred Apply dependency.
     pub(crate) fn retains_deferred_merge_sidecar(
@@ -8776,39 +8924,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ) -> bool {
         Arc::ptr_eq(&self.output_guard, candidate)
     }
-    /// Park one signed or diagnostic output before any external service I/O.
-    fn park_lifecycle_output_admission(
-        &mut self,
-        effect: AdapterEffect,
-        ownership: RuntimeEffectOwnership,
-    ) -> Result<(), EffectExecutorError> {
-        if let Some(existing) = self
-            .pending_lifecycle_output_admissions
-            .values()
-            .find(|pending| pending.exactly_matches_retry(&effect, &ownership))
-        {
-            let _ = existing;
-            return Ok(());
-        }
-        self.ensure_pending_slot()?;
-        let pending =
-            PendingLifecycleOutputAdmissionV1::seal_exact(effect, ownership).map_err(|_| {
-                EffectExecutorError::Contract(
-                    "signed lifecycle output omitted its exact runtime binding".to_owned(),
-                )
-            })?;
-        let key = pending.key();
-        if self
-            .pending_lifecycle_output_admissions
-            .insert(key, pending)
-            .is_some()
-        {
-            return Err(EffectExecutorError::Contract(
-                "lifecycle output admission key collided with a foreign owner".to_owned(),
-            ));
-        }
-        Ok(())
-    }
     fn consume_one<S: V2EffectServices>(
         &mut self,
         effect: AdapterEffect,
@@ -8842,7 +8957,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         .get(&(body_round, vote.subject))
                         .ok_or_else(|| {
                             EffectExecutorError::Contract(
-                                "vote signing requires a recovered fsynced validation marker"
+                                "vote signing requires an exact fsynced validation marker"
                                     .to_owned(),
                             )
                         })?;
@@ -8887,7 +9002,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 certified_sources,
                 certificate,
             } => {
-                let proposal_replay = if certificate.is_none() {
+                let (proposal_replay, rediscovery_stutters) = if certificate.is_none() {
                     let exact_effect = AdapterEffect::FetchBody {
                         tag,
                         round,
@@ -8896,32 +9011,73 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         certified_sources: certified_sources.clone(),
                         certificate: None,
                     };
-                    Some(
-                        PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(
-                            exact_effect,
-                            ownership.clone(),
-                        )
-                        .map_err(|_| {
-                            EffectExecutorError::Contract(
-                                "ordinary Proposal FetchBody omitted its authenticated replay owner"
-                                    .to_owned(),
+                    let key = (round, subject);
+                    match self.remote_proposal_replay.get(&key) {
+                        Some(stage) => {
+                            if !stage.exactly_authenticates_fetch_rediscovery(&exact_effect) {
+                                return Err(EffectExecutorError::Contract(
+                                    "ordinary Proposal FetchBody changed its retained authenticated replay origin"
+                                        .to_owned(),
+                                ));
+                            }
+                            match stage {
+                                RemoteProposalReplayStageV1::Fetch { work_id, .. } => {
+                                    if !self.pending_fetches.get(work_id).is_some_and(|pending| {
+                                        pending.task.round == round
+                                            && pending.task.subject == subject
+                                    }) {
+                                        return Err(EffectExecutorError::Contract(
+                                            "ordinary Proposal Fetch replay lost its exact in-flight task"
+                                                .to_owned(),
+                                        ));
+                                    }
+                                    (None, false)
+                                }
+                                RemoteProposalReplayStageV1::StoreAdmission(_) => {
+                                    return Err(EffectExecutorError::Contract(
+                                        "ordinary Proposal Fetch rediscovery observed a transient Store admission"
+                                            .to_owned(),
+                                    ));
+                                }
+                                RemoteProposalReplayStageV1::BodyAvailable(_)
+                                | RemoteProposalReplayStageV1::Store { .. }
+                                | RemoteProposalReplayStageV1::Stored { .. } => (None, true),
+                            }
+                        }
+                        None => (
+                            Some(
+                            PreparedRemoteProposalFetchReplayPreAdmission::seal_exact_fetch(
+                                exact_effect,
+                                ownership.clone(),
                             )
-                        })?,
-                    )
+                            .map_err(|_| {
+                                EffectExecutorError::Contract(
+                                    "ordinary Proposal FetchBody omitted its authenticated replay owner"
+                                    .to_owned(),
+                                )
+                            })?,
+                            ),
+                            false,
+                        ),
+                    }
                 } else {
-                    None
+                    (None, false)
                 };
-                self.begin_fetch(
-                    tag,
-                    round,
-                    subject,
-                    manifest,
-                    certified_sources,
-                    certificate,
-                    ownership,
-                    proposal_replay,
-                    services,
-                )
+                if rediscovery_stutters {
+                    Ok(())
+                } else {
+                    self.begin_fetch(
+                        tag,
+                        round,
+                        subject,
+                        manifest,
+                        certified_sources,
+                        certificate,
+                        ownership,
+                        proposal_replay,
+                        services,
+                    )
+                }
             }
             AdapterEffect::StoreBody {
                 tag,
@@ -10234,10 +10390,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         (pending.task.manifest.round, pending.task.manifest.subject) == *key
                     })
                 }
-                RemoteProposalReplayStageV1::Stored(_) => self
-                    .durable_bodies
-                    .get(key)
-                    .is_some_and(|receipt| (receipt.round(), receipt.subject()) == *key),
+                RemoteProposalReplayStageV1::Stored { replay, ownership } => {
+                    self.durable_bodies.get(key).is_some_and(|receipt| {
+                        (receipt.round(), receipt.subject()) == *key
+                            && replay.exactly_retains_owned_store(receipt, ownership)
+                    })
+                }
             };
             if !exact {
                 return Err(EffectExecutorError::Contract(
@@ -10496,13 +10654,19 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 }
                 return self.store_body_inner(tag, round, subject, ownership, services);
             }
-            Some(RemoteProposalReplayStageV1::Stored(stored)) => {
+            Some(RemoteProposalReplayStageV1::Stored {
+                replay: stored,
+                ownership: stored_ownership,
+            }) => {
                 let receipt = self.durable_bodies.get(&key).ok_or_else(|| {
                     EffectExecutorError::Contract(
                         "durable Proposal replay lost its exact body receipt".to_owned(),
                     )
                 })?;
-                if !stored.exactly_matches_retry(&effect, receipt) {
+                if ownership != *stored_ownership
+                    || !stored.exactly_retains_owned_store(receipt, stored_ownership)
+                    || !stored.exactly_matches_retry(&effect, receipt)
+                {
                     return Err(EffectExecutorError::Contract(
                         "durable Proposal StoreBody retry changed its exact replay owner"
                             .to_owned(),
@@ -10555,7 +10719,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             unreachable!("serialized Store keeps the preflighted Proposal replay stage")
         };
         let stage = if let Some(receipt) = self.durable_bodies.get(&key).cloned() {
-            let stored = match store_replay.bind_durable_body(receipt) {
+            let stored = match store_replay.bind_durable_body(receipt.clone()) {
                 Ok(stored) => stored,
                 Err(error) => {
                     let previous = self.remote_proposal_replay.insert(
@@ -10568,7 +10732,15 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     ));
                 }
             };
-            RemoteProposalReplayStageV1::Stored(stored)
+            if !stored.exactly_retains_owned_store(&receipt, &ownership) {
+                return Err(EffectExecutorError::Contract(
+                    "Proposal Store replay changed its exact retained runtime owner".to_owned(),
+                ));
+            }
+            RemoteProposalReplayStageV1::Stored {
+                replay: stored,
+                ownership,
+            }
         } else {
             let Some(work_id) = self.pending_stores.iter().find_map(|(work_id, pending)| {
                 (pending.task.manifest.round == round && pending.task.manifest.subject == subject)
@@ -10672,86 +10844,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ownership,
             services,
         )
-    }
-    fn validate_body<S: V2EffectServices>(
-        &mut self,
-        tag: EventTag,
-        round: wire::ConsensusRound,
-        subject: wire::BlockSubject,
-        ownership: RuntimeEffectOwnership,
-        _services: &mut S,
-    ) -> Result<(), EffectExecutorError> {
-        let key = (round, subject);
-        let effect = AdapterEffect::ValidateBody {
-            tag,
-            round,
-            subject,
-        };
-        if let Some(pending) = self.pending_durable_validate_admissions.get(&key) {
-            if !pending.exactly_matches_retry(&effect, &ownership) {
-                return Err(EffectExecutorError::Contract(
-                    "ValidateBody retry changed its exact pending lifecycle owner".to_owned(),
-                ));
-            }
-            return Ok(());
-        }
-        let receipt = self.durable_bodies.get(&key).cloned().ok_or_else(|| {
-            EffectExecutorError::Contract(
-                "ValidateBody has no matching durable body receipt".to_owned(),
-            )
-        })?;
-        match self.remote_proposal_replay.get(&key) {
-            Some(RemoteProposalReplayStageV1::Fetch { .. })
-            | Some(RemoteProposalReplayStageV1::BodyAvailable(_))
-            | Some(RemoteProposalReplayStageV1::StoreAdmission(_))
-            | Some(RemoteProposalReplayStageV1::Store { .. }) => {
-                return Err(EffectExecutorError::Contract(
-                    "Proposal ValidateBody preceded its exact durable Store replay stage"
-                        .to_owned(),
-                ));
-            }
-            Some(RemoteProposalReplayStageV1::Stored(stored)) => {
-                let store_effect = AdapterEffect::StoreBody {
-                    tag,
-                    round,
-                    subject,
-                };
-                if !stored.exactly_matches_retry(&store_effect, &receipt) {
-                    return Err(EffectExecutorError::Contract(
-                        "Proposal ValidateBody changed its durable Store lineage".to_owned(),
-                    ));
-                }
-            }
-            None => {
-                return Err(EffectExecutorError::Contract(
-                    "ValidateBody omitted its mandatory lifecycle replay owner".to_owned(),
-                ));
-            }
-        }
-        let Some(RemoteProposalReplayStageV1::Stored(stored)) =
-            self.remote_proposal_replay.remove(&key)
-        else {
-            unreachable!("preflighted Proposal Store replay remains installed")
-        };
-        let validate = match stored.project_validate(effect, ownership) {
-            Ok(validate) => validate,
-            Err(error) => {
-                let previous = self.remote_proposal_replay.insert(
-                    key,
-                    RemoteProposalReplayStageV1::Stored(error.into_stored()),
-                );
-                debug_assert!(previous.is_none());
-                return Err(EffectExecutorError::Contract(
-                    "Proposal Store replay could not project its exact Validate successor"
-                        .to_owned(),
-                ));
-            }
-        };
-        let previous = self
-            .pending_durable_validate_admissions
-            .insert(key, validate.into_pending_durable_validate_admission());
-        debug_assert!(previous.is_none());
-        Ok(())
     }
     fn begin_store<S: V2EffectServices>(
         &mut self,
@@ -11540,11 +11632,22 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     })
                 })?;
         self.pending_signatures.clear();
-        // A durable Decision supersedes every volatile signed-Proposal body
-        // origin at this height, including the selected body's pre-Decision
-        // Fetch/Store lineage. Exact Decision/certified authority owns any
-        // remaining recovery work from this point onward.
-        self.remote_proposal_replay.clear();
+        // A durable Decision retires every competing signed-Proposal origin.
+        // Preserve only the selected body's already-fsynced Store lineage:
+        // the retained Validate still owns that exact causal root even though
+        // its candidate statement has monotonically acquired Commit authority.
+        // Earlier physical stages must instead restart from Decision recovery.
+        self.remote_proposal_replay.retain(|key, stage| {
+            !drain_decision_body
+                && *key == decision_body
+                && matches!(stage, RemoteProposalReplayStageV1::Stored { .. })
+        });
+        // A consumed Validate owner leaves an inert idempotence tombstone, not
+        // live work. Decision makes every competing body permanently stale;
+        // keep only the selected body's tombstone until rollover, and none
+        // once terminal body cleanup begins.
+        self.durable_validate_retry_seals
+            .retain(|key, _| !drain_decision_body && *key == decision_body);
         self.body_pipeline_owners.retain(|key, _| !retire_key(*key));
         self.ready_bodies.retain(|key, _| !retire_key(*key));
         if retire_retained {
@@ -12137,12 +12240,20 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.body_pipeline_owners.retain(|key, owner| {
             !tag.strictly_advances(owner.tag) || retained_apply_owners.contains(key)
         });
-        // Every token in this map originated from a Proposal dispatched by
-        // the superseded incarnation. Unprotected families retire with their
-        // physical stage; the protected family transfers to the authenticated
-        // PrepareQC/certified pipeline and must not be retagged as Proposal
-        // authority.
-        self.remote_proposal_replay.clear();
+        // Unprotected Proposal families retire with the superseded view.
+        // Preserve only the protected body's already-fsynced Store lineage:
+        // its later Prepare/Commit Validate carrier must first adopt this
+        // incumbent causal root before consuming the exact Proposal replay.
+        // Earlier physical stages restart from the certified pipeline.
+        self.remote_proposal_replay.retain(|key, stage| {
+            Some(*key) == protected_body
+                && matches!(stage, RemoteProposalReplayStageV1::Stored { .. })
+        });
+        // Retry seals are post-admission tombstones, so they own neither
+        // lifecycle capacity nor service work. Once the view advances, only
+        // the exact protected body can still emit a legitimate duplicate.
+        self.durable_validate_retry_seals
+            .retain(|key, _| Some(*key) == protected_body);
         let retain_local_producer = self.local_validator == Some(self.context.leader(tag.view()));
         self.runtime
             .reconcile_active_view_producer(tag, retain_local_producer)
@@ -12285,27 +12396,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             // it is restored before any ordinary runtime transition.
             max_service_debt: u64::from(self.parked_effect_batch.is_some()),
         }
-    }
-    fn allocate_work_id(&mut self) -> Result<EffectWorkId, EffectExecutorError> {
-        let id = EffectWorkId(self.next_work_id);
-        self.next_work_id = self
-            .next_work_id
-            .checked_add(1)
-            .ok_or(EffectExecutorError::WorkIdExhausted)?;
-        Ok(id)
-    }
-    fn pending_work(&self) -> usize {
-        self.pending_signatures
-            .len()
-            .checked_add(self.pending_fetches.len())
-            .and_then(|total| total.checked_add(self.pending_stores.len()))
-            .and_then(|total| total.checked_add(self.pending_durable_validate_admissions.len()))
-            .and_then(|total| {
-                total.checked_add(usize::from(self.pending_live_wal_sign_admission.is_some()))
-            })
-            .and_then(|total| total.checked_add(self.pending_lifecycle_output_admissions.len()))
-            .and_then(|total| total.checked_add(self.pending_applications.len()))
-            .unwrap_or(usize::MAX)
     }
     /// Validate the dedicated recovered-Fetch owner/reverse index and require
     /// it to be empty at a height-finalization boundary. These owners are not

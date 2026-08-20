@@ -829,10 +829,12 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry_validate_recovery_registry_impl.rs': (
         'v2_lifecycle_work_registry_validate_completion_impl.rs',
+        'v2_lifecycle_work_registry_access_impl.rs',
         'v2_lifecycle_work_registry_validate_recovery_execution_impl.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_lifecycle_work_registry.rs': (
         'v2_lifecycle_work_registry_pre_admission.rs',
+        'v2_lifecycle_work_registry_live_wal_sign.rs',
         'v2_lifecycle_work_registry_output.rs',
         'v2_lifecycle_work_registry_live_validate_children.rs',
         'v2_lifecycle_work_registry_recovered_wal.rs',
@@ -949,6 +951,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     'crates/iroha_core/src/sumeragi/v2_effects.rs': (
         'v2_effects_recovered_lifecycle_output_service.rs',
+        'v2_effects_lifecycle_admission_settlement.rs',
         'tests/v2_effects_main_00.rs',
         'tests/v2_effects_main_01.rs',
         'tests/v2_effects_main_02.rs',
@@ -3130,13 +3133,13 @@ _PRODUCTION_LIVENESS_NEW_REGRESSIONS = tuple(
 # semantic ordering fragments below so failures identify the violated seam.
 _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
     "consume_effects": (
-        "59deecb4349fb6061e438508940ffb96dd4dcc87169db3c23727f18267a3e6ce"
+        "f730685e45f440d58c4f275f20685af94fefd5bf0b94a9acc8efcd6004b35cbc"
     ),
     "retain_effect_batch": (
         "3976c357aa3b66c71eac8bf8003bab79e024f76e9e469468bb8fb86c4c58dcfe"
     ),
     "retain_effect_batch_at_frontier": (
-        "3fd22223cd2dcbdd41a8025b4ac8ca3bca9feff5c437bfbf3afa7cf4c11a9412"
+        "2ddf84d44bb686dab2766b7367b9731318e01ddbdf0aa693de069c7238661920"
     ),
     "preflight_effect_batch_frontier": (
         "d2debd37b0ef330c5dba99fd01e483e44edc4be3df5ccee02513ef7203f3f96d"
@@ -3148,7 +3151,7 @@ _PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256 = {
         "1deed24b38bdba50796b402def3fc3ef9e9eaad44c93449e8e96f1bdb38c430c"
     ),
     "drain_retained_effect_batch": (
-        "b796ca52147def7d7642b5f8c352f55e6ab2214b3c8d5c1a631ac5aa9c64bba5"
+        "51ba6c85e281bcf33d97a748bb43ae093649762429e256a986b386019e52c338"
     ),
     "consume_pacemaker_effects": (
         "36d01c500f897902a5680bf290b58076d1ca7b959fc6d20973f6df85900f92b2"

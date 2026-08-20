@@ -1732,3 +1732,71 @@ def test_total_checked_gate_rejects_in_flight_token_contract_weakening(
             source_entries=entries,
             root_dir=tmp_path,
         )
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_error"),
+    (
+        (
+            "let redispatch = if runtime_terminal_incumbent {\n"
+            "                        false",
+            "let redispatch = if runtime_terminal_incumbent {\n"
+            "                        true",
+            "runtime-owned terminals stutter",
+        ),
+        (
+            "                    } else if matches!(\n"
+            "                        fetch_authority_relation,\n"
+            "                        Some(RuntimeFetchAuthorityRelation::Stale)\n"
+            "                    ) {",
+            "                    } else if false && matches!(\n"
+            "                        fetch_authority_relation,\n"
+            "                        Some(RuntimeFetchAuthorityRelation::Stale)\n"
+            "                    ) {",
+            "stale Fetch authority stutter",
+        ),
+        (
+            ".adopt_incumbent_fetch_for_retry_or_authority(evidence, effect)",
+            ".adopt_incumbent_body_stage_for_retry_or_authority(evidence, effect)",
+            "Fetch authority upgrades must adopt, re-prove, and publish",
+        ),
+        (
+            ".adopt_incumbent_body_stage_for_retry_or_authority(evidence, effect)",
+            ".adopt_incumbent_fetch_for_retry_or_authority(evidence, effect)",
+            "Store and Validate authority upgrades must adopt and re-prove",
+        ),
+        (
+            "} else if matches!(\n"
+            "                        fetch_authority_relation,\n"
+            "                        Some(RuntimeFetchAuthorityRelation::Stale)\n"
+            "                    ) {",
+            "} else if matches!(\n"
+            "                        fetch_authority_relation,\n"
+            "                        Some(RuntimeFetchAuthorityRelation::Same)\n"
+            "                    ) {",
+            "stale Fetch authority stutters",
+        ),
+    ),
+)
+def test_retained_candidate_retry_semantics_survive_item_digest_refresh(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    """Refreshing the FIFO item seal cannot hide retry-owner drift."""
+
+    module = load_checker()
+    local_runner_service_fixture(tmp_path, module)
+    effects_path = tmp_path / "crates/iroha_core/src/sumeragi/v2_effects.rs"
+    item_name = "retain_effect_batch_at_frontier"
+    mutate_rust_item_source(module, effects_path, item_name, old, new)
+    items = module.rust_items(effects_path.read_text(encoding="utf-8"), item_name)
+    assert len(items) == 1
+    module._PRODUCTION_RETAINED_EFFECT_FIFO_ITEM_SHA256[item_name] = (
+        module._rust_item_token_sha256(items[0])
+    )
+
+    errors = module._effect_capacity_production_source_fidelity_errors(tmp_path)
+
+    assert any(expected_error in error for error in errors), errors

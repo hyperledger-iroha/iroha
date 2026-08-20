@@ -965,7 +965,7 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "52558a7c6976fc869b1e6214202190ef3eb0111231e8c49d990a7e36fe2c63d7"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/reducer.rs": (
-        "2c49ccb619002d185804b2fdd11d8b1bccf586157556b8580ea037a33039dee1"
+        "491e03a96675c67d16d97d432c7336a7ff69f3bd27553c3e12fbb8f7ed1ee4db"
     ),
     "crates/iroha_core/src/sumeragi/v2_core/types.rs": (
         "8fd2bbface65035fe2acc59274c514f88233875161915e02229851a3d08852a0"
@@ -974,7 +974,7 @@ _SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {
         "b78fe6b65194ff48919c35f8423f31714fb6da4a172d8a004720e5b23f0b0d50"
     ),
     "crates/iroha_core/src/sumeragi/v2_effects.rs": (
-        "34a7902ba92f218891701dbfcf648881efb890ba682fb56014fc2880a47ec620"
+        "15fcc3aa84aa1cb15548b911bb96d1cb7068e46fb04a871b29d76f2657d5bb66"
     ),
     "crates/iroha_core/src/sumeragi/v2_runner.rs": (
         "f02cb53c6df3cb69e24864f2ca74a56c2b22683b32b4bdc1573cd45b9caef6e5"

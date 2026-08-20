@@ -25,6 +25,11 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, NoReturn
 
+try:
+    from taira_constants import network_id_from_genesis_hash
+except ModuleNotFoundError:
+    from scripts.taira_constants import network_id_from_genesis_hash
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DIR = REPO_ROOT / "dist" / "taira-devnet"
@@ -209,13 +214,19 @@ def require_bundle_identity(target: Path, roots: Sequence[str]) -> None:
         limit=256,
         label="generated genesis hash",
     ).strip()
-    if not expected_hash or quoted_assignment(client, "network_id") != expected_hash:
+    try:
+        expected_network_id = network_id_from_genesis_hash(expected_hash)
+    except ValueError as error:
+        fail(f"generated genesis hash is invalid: {target / 'genesis.expected_hash'}: {error}")
+    if quoted_assignment(client, "network_id") != expected_network_id:
         fail(f"generated client network id does not match its genesis hash: {client}")
 
     for index, root in enumerate(roots):
         config = target / f"peer{index}.toml"
         if quoted_assignment(config, "chain") != DEFAULT_CHAIN_ID:
             fail(f"peer{index} config is not for canonical Taira: {config}")
+        if quoted_assignment(config, "expected_hash") != expected_network_id:
+            fail(f"peer{index} config genesis hash does not match the generated bundle: {config}")
         port = root.removeprefix("http://127.0.0.1:").removesuffix("/")
         address = re.compile(
             rf'^address = "addr:127\.0\.0\.1:{re.escape(port)}#[0-9A-Fa-f]{{4}}"$'
@@ -345,6 +356,7 @@ def cargo_build_command(profile: str, target_dir: Path) -> list[str]:
         "--target-dir",
         str(target_dir),
         "--stable-local-metadata",
+        "--no-sccache",
         "--",
         "build",
         "--locked",

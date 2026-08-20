@@ -1779,9 +1779,10 @@ impl ConcreteLifecycleWorkRegistry {
         &mut self,
         batch: PreparedCertifiedServeRegistryBatchV1,
         coordinator: &LifecycleCoordinator,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
         publish: impl FnOnce() -> Result<T, E>,
     ) -> Result<T, CertifiedServeRegistryBatchPublicationError<E>> {
-        if !batch.preflights_startup_registry(self, coordinator) {
+        if !batch.preflights_startup_registry(self, coordinator, owner_held_outputs) {
             return Err(CertifiedServeRegistryBatchPublicationError::Preflight(
                 batch,
             ));
@@ -2245,15 +2246,31 @@ impl ConcreteLifecycleWorkRegistry {
         &self,
         coordinator: &LifecycleCoordinator,
     ) -> bool {
-        self.exactly_covers_recovered_ready_body_pipeline_with_extra(
+        let owner_held_outputs =
+            Self::owner_held_output_ordinals(coordinator, RecoveredWalRegistrySlotV1::None);
+        self.exactly_covers_recovered_ready_body_pipeline_with_extra_and_outputs(
             coordinator,
             RecoveredWalRegistrySlotV1::None,
+            &owner_held_outputs,
         )
     }
     fn exactly_covers_recovered_ready_body_pipeline_with_extra(
         &self,
         coordinator: &LifecycleCoordinator,
         extra: RecoveredWalRegistrySlotV1,
+    ) -> bool {
+        let owner_held_outputs = Self::owner_held_output_ordinals(coordinator, extra);
+        self.exactly_covers_recovered_ready_body_pipeline_with_extra_and_outputs(
+            coordinator,
+            extra,
+            &owner_held_outputs,
+        )
+    }
+    fn exactly_covers_recovered_ready_body_pipeline_with_extra_and_outputs(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        extra: RecoveredWalRegistrySlotV1,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
     ) -> bool {
         let live_body_pipeline = coordinator
             .records
@@ -2269,7 +2286,12 @@ impl ConcreteLifecycleWorkRegistry {
             })
             .collect::<Vec<_>>();
         self.entries.len() == live_body_pipeline.len() + extra.cardinality()
-            && self.exact_optional_recovered_wal_authority(coordinator, extra, false)
+            && self.exact_optional_recovered_wal_authority(
+                coordinator,
+                extra,
+                owner_held_outputs,
+                false,
+            )
             && live_body_pipeline.into_iter().all(|record| {
                 if record.state != super::LifecycleState::Ready || record.physical_slots.len() != 1
                 {
@@ -2357,9 +2379,24 @@ impl ConcreteLifecycleWorkRegistry {
         &self,
         coordinator: &LifecycleCoordinator,
     ) -> bool {
-        self.exactly_covers_recovered_ready_work_with_extra(
+        let owner_held_outputs =
+            Self::owner_held_output_ordinals(coordinator, RecoveredWalRegistrySlotV1::None);
+        self.exactly_covers_recovered_ready_work_with_extra_and_outputs(
             coordinator,
             RecoveredWalRegistrySlotV1::None,
+            &owner_held_outputs,
+        )
+    }
+    /// Verify startup coverage while authenticated cold outputs remain owner-held.
+    pub(super) fn exactly_covers_recovered_ready_work_with_owner_held_outputs(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
+    ) -> bool {
+        self.exactly_covers_recovered_ready_work_with_extra_and_outputs(
+            coordinator,
+            RecoveredWalRegistrySlotV1::None,
+            owner_held_outputs,
         )
     }
     /// Verify exact startup coverage beside the one recovered-WAL authority.
@@ -2370,8 +2407,29 @@ impl ConcreteLifecycleWorkRegistry {
         let Some(sign) = self.exact_recovered_wal_registry_slot() else {
             return false;
         };
+        let owner_held_outputs = Self::owner_held_output_ordinals(coordinator, sign);
         !matches!(sign, RecoveredWalRegistrySlotV1::None)
-            && self.exactly_covers_recovered_ready_work_with_extra(coordinator, sign)
+            && self.exactly_covers_recovered_ready_work_with_extra_and_outputs(
+                coordinator,
+                sign,
+                &owner_held_outputs,
+            )
+    }
+    /// Verify WAL-authority startup coverage beside authenticated cold outputs.
+    pub(super) fn exactly_covers_recovered_ready_work_and_wal_authority_with_owner_held_outputs(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
+    ) -> bool {
+        let Some(sign) = self.exact_recovered_wal_registry_slot() else {
+            return false;
+        };
+        !matches!(sign, RecoveredWalRegistrySlotV1::None)
+            && self.exactly_covers_recovered_ready_work_with_extra_and_outputs(
+                coordinator,
+                sign,
+                owner_held_outputs,
+            )
     }
 
     /// Verify a bijection between every nonterminal logical row and every
@@ -2989,7 +3047,27 @@ impl ConcreteLifecycleWorkRegistry {
         coordinator: &LifecycleCoordinator,
         extra: RecoveredWalRegistrySlotV1,
     ) -> bool {
-        self.exactly_covers_ready_work_with_extra(coordinator, extra, None, false)
+        let owner_held_outputs = Self::owner_held_output_ordinals(coordinator, extra);
+        self.exactly_covers_recovered_ready_work_with_extra_and_outputs(
+            coordinator,
+            extra,
+            &owner_held_outputs,
+        )
+    }
+
+    fn exactly_covers_recovered_ready_work_with_extra_and_outputs(
+        &self,
+        coordinator: &LifecycleCoordinator,
+        extra: RecoveredWalRegistrySlotV1,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
+    ) -> bool {
+        self.exactly_covers_ready_work_with_extra(
+            coordinator,
+            extra,
+            owner_held_outputs,
+            None,
+            false,
+        )
     }
 
     /// Verify the complete live registry immediately before final retirement.
@@ -3008,12 +3086,19 @@ impl ConcreteLifecycleWorkRegistry {
         let Some(extra) = self.exact_recovered_wal_registry_slot() else {
             return false;
         };
-        self.exactly_covers_ready_work_with_extra(coordinator, extra, None, true)
+        self.exactly_covers_ready_work_with_extra(
+            coordinator,
+            extra,
+            &std::collections::BTreeSet::new(),
+            None,
+            true,
+        )
     }
     fn exactly_covers_ready_work_with_extra(
         &self,
         coordinator: &LifecycleCoordinator,
         extra: RecoveredWalRegistrySlotV1,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
         active_serve: Option<&TurnLease>,
         allow_refanned_broadcast: bool,
     ) -> bool {
@@ -3036,6 +3121,7 @@ impl ConcreteLifecycleWorkRegistry {
             && self.exact_optional_recovered_wal_authority(
                 coordinator,
                 extra,
+                owner_held_outputs,
                 allow_refanned_broadcast,
             )
             && live.into_iter().all(|record| {
@@ -3143,7 +3229,13 @@ impl ConcreteLifecycleWorkRegistry {
         let Some(sign) = self.exact_recovered_wal_registry_slot() else {
             return false;
         };
-        self.exactly_covers_ready_work_with_extra(coordinator, sign, Some(lease), false)
+        self.exactly_covers_ready_work_with_extra(
+            coordinator,
+            sign,
+            &std::collections::BTreeSet::new(),
+            Some(lease),
+            false,
+        )
     }
     /// Prove the complete private registry and exact active Serve lease without
     /// consulting caller-supplied request material.
@@ -3277,13 +3369,29 @@ impl ConcreteLifecycleWorkRegistry {
         &self,
         coordinator: &LifecycleCoordinator,
         extra: RecoveredWalRegistrySlotV1,
+        owner_held_outputs: &std::collections::BTreeSet<u128>,
         allow_refanned_broadcast: bool,
     ) -> bool {
+        if owner_held_outputs.iter().any(|ordinal| {
+            coordinator.records.get(ordinal).is_none_or(|record| {
+                !matches!(record.state, super::LifecycleState::Ready)
+                    || !matches!(
+                        record.work_class,
+                        LifecycleWorkClass::Broadcast
+                            | LifecycleWorkClass::EquivocationReport
+                            | LifecycleWorkClass::InvalidBodyReport
+                    )
+                    || extra.contains_record(record)
+            })
+        }) {
+            return false;
+        }
         let unsupported_live = coordinator
             .records
             .values()
             .filter(|record| {
                 !matches!(record.state, super::LifecycleState::Terminal(_))
+                    && !owner_held_outputs.contains(&record.ordinal)
                     && !matches!(
                         record.work_class,
                         LifecycleWorkClass::Fetch
@@ -3469,10 +3577,11 @@ impl ConcreteLifecycleWorkRegistry {
                 })
             }
             RecoveredWalRegistrySlotV1::DecisionStore(address) => {
-                let [record] = unsupported_live.as_slice() else {
+                let Some(record) = coordinator.records.get(&address.ordinal) else {
                     return false;
                 };
-                if record.ordinal != address.ordinal
+                if !unsupported_live.is_empty()
+                    || record.ordinal != address.ordinal
                     || record.owner != address.owner
                     || record.work_class != LifecycleWorkClass::Store
                     || record.state != super::LifecycleState::Ready

@@ -8,6 +8,24 @@
 compile_error!(
     "the test-network message controller requires Unix openat/no-follow and ownership semantics"
 );
+use iroha_core::NetworkMessage;
+use iroha_crypto::Hash;
+use iroha_crypto::HashOf;
+use iroha_data_model::{
+    block::{
+        BlockHeader,
+        consensus_v2::{
+            BlockSubject, ConsensusMessageV2Payload, ExecutionCommitment, GlobalPhase,
+            MAX_VALIDATORS_PER_HEIGHT, PayloadManifest, ValidatorIndex,
+        },
+    },
+    peer::{Peer, PeerId},
+};
+use iroha_p2p::network::NetworkReplyRoute;
+use norito::{
+    codec::Encode,
+    json::{Map, Value},
+};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     env,
@@ -19,35 +37,19 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
-use iroha_core::NetworkMessage;
-use iroha_crypto::Hash;
-use iroha_crypto::HashOf;
-use iroha_data_model::{
-    block::{
-        BlockHeader,
-        consensus_v2::{
-            BlockSubject, ConsensusMessageV2Payload, ExecutionCommitment, GlobalPhase,
-            MAX_VALIDATORS_PER_HEIGHT, ValidatorIndex,
-        },
-    },
-    peer::{Peer, PeerId},
-};
-use iroha_p2p::network::NetworkReplyRoute;
-use norito::{
-    codec::Encode,
-    json::{Map, Value},
-};
 /// Environment variable consumed only by the feature-isolated test daemon.
 pub(crate) const CONTROL_DIR_ENV: &str = "IROHA_TEST_CONSENSUS_MESSAGE_CONTROL_DIR";
 const CONTROL_FILE: &str = "command.norito.json";
 const ACK_FILE: &str = "ack.norito.json";
-const FORMAT_VERSION: u64 = 4;
+const FORMAT_VERSION: u64 = 5;
 const MAX_COMMAND_BYTES: usize = 64 * 1024;
 const MAX_ACK_BYTES: usize = 1024 * 1024;
 const MAX_RULES: usize = 256;
 const MAX_HOLDS: usize = 1_024;
 const MAX_HELD_BYTES: usize = 64 * 1024 * 1024;
 const MAX_RELEASES: usize = MAX_HOLDS;
+/// Bound pre-consensus Proposal evidence independently of message volume.
+const MAX_PROPOSAL_ROUND_EVIDENCE: usize = MAX_HOLDS;
 const MAX_SENDER_BYTES: usize = 256;
 const MAX_KIND_BYTES: usize = 64;
 const MAX_HASH_BYTES: usize = 128;
@@ -145,6 +147,8 @@ struct MessageMeta {
     height: Option<u64>,
     view: Option<u64>,
     block_hash: Option<HashOf<BlockHeader>>,
+    manifest_hash: Option<HashOf<PayloadManifest>>,
+    chunk_index: Option<u32>,
     subject: Option<BlockSubject>,
     execution_commitment: Option<ExecutionCommitment>,
     signer: Option<ValidatorIndex>,
@@ -157,23 +161,194 @@ struct Rule {
     sender: PeerId,
     authenticated_via: PeerId,
     kind: MessageKind,
-    height: u64,
-    view: u64,
+    height: Option<u64>,
+    view: Option<u64>,
     block_hash: Option<HashOf<BlockHeader>>,
+    manifest_hash: Option<HashOf<PayloadManifest>>,
+    chunk_index: Option<u32>,
+    proposal_height: Option<u64>,
+    proposal_view: Option<u64>,
     action: Action,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ProposalManifestRoute {
+    sender: PeerId,
+    authenticated_via: PeerId,
+    manifest_hash: HashOf<PayloadManifest>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ProposalRound {
+    height: u64,
+    view: u64,
+}
+
 impl Rule {
     fn matches(&self, meta: &MessageMeta) -> bool {
         self.sender == meta.sender
             && self.authenticated_via == meta.authenticated_via
             && self.kind == meta.kind
-            && Some(self.height) == meta.height
-            && Some(self.view) == meta.view
+            && self.height == meta.height
+            && self.view == meta.view
             && self
                 .block_hash
                 .as_ref()
                 .is_none_or(|expected| meta.block_hash.as_ref() == Some(expected))
+            && (self.kind != MessageKind::PayloadChunk
+                || self.chunk_index == meta.chunk_index
+                    && self
+                        .manifest_hash
+                        .as_ref()
+                        .is_none_or(|expected| meta.manifest_hash.as_ref() == Some(expected)))
     }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        if self.sender != other.sender
+            || self.authenticated_via != other.authenticated_via
+            || self.kind != other.kind
+        {
+            return false;
+        }
+        if self.kind == MessageKind::PayloadChunk {
+            if self.chunk_index != other.chunk_index {
+                return false;
+            }
+            return match (self.manifest_hash, other.manifest_hash) {
+                (Some(left), Some(right))
+                    if self.proposal_height.is_none() && other.proposal_height.is_none() =>
+                {
+                    left == right
+                }
+                _ => true,
+            };
+        }
+        self.height == other.height
+            && self.view == other.view
+            && (self.block_hash.is_none()
+                || other.block_hash.is_none()
+                || self.block_hash == other.block_hash)
+    }
+}
+
+fn rule_matches_with_proposal_evidence(
+    rule: &Rule,
+    meta: &MessageMeta,
+    proposal_round_evidence: &BTreeMap<ProposalManifestRoute, ProposalRound>,
+) -> bool {
+    let matches = rule.matches(meta);
+    if !matches || rule.kind != MessageKind::PayloadChunk || rule.manifest_hash.is_some() {
+        return matches;
+    }
+    let (Some(manifest_hash), Some(height), Some(view)) =
+        (meta.manifest_hash, rule.proposal_height, rule.proposal_view)
+    else {
+        return true;
+    };
+    let route = ProposalManifestRoute {
+        sender: meta.sender.clone(),
+        authenticated_via: meta.authenticated_via.clone(),
+        manifest_hash,
+    };
+    proposal_round_evidence
+        .get(&route)
+        .is_none_or(|round| *round == (ProposalRound { height, view }))
+}
+
+fn record_proposal_round_evidence<R, O>(
+    state: &mut State<R, O>,
+    meta: &MessageMeta,
+    height: u64,
+    view: u64,
+    manifest_hash: HashOf<PayloadManifest>,
+) -> Result<bool, ControlError> {
+    let route = ProposalManifestRoute {
+        sender: meta.sender.clone(),
+        authenticated_via: meta.authenticated_via.clone(),
+        manifest_hash,
+    };
+    let round = ProposalRound { height, view };
+    if let Some(existing) = state.proposal_round_evidence.get(&route) {
+        return if *existing == round {
+            Ok(false)
+        } else {
+            Err(ControlError::InvalidMessageDescriptor)
+        };
+    }
+    while state.proposal_round_evidence.len() >= MAX_PROPOSAL_ROUND_EVIDENCE {
+        let Some(oldest) = state.proposal_round_evidence_order.pop_front() else {
+            state.proposal_round_evidence.clear();
+            break;
+        };
+        state.proposal_round_evidence.remove(&oldest);
+    }
+    state.proposal_round_evidence.insert(route.clone(), round);
+    state.proposal_round_evidence_order.push_back(route);
+    Ok(true)
+}
+
+fn resolve_deferred_chunk_rules<R, O>(
+    state: &mut State<R, O>,
+    meta: &MessageMeta,
+) -> Result<bool, ControlError> {
+    if meta.kind != MessageKind::Proposal {
+        return Ok(false);
+    }
+    let (Some(height), Some(view), Some(manifest_hash)) =
+        (meta.height, meta.view, meta.manifest_hash)
+    else {
+        return Err(ControlError::InvalidMessageDescriptor);
+    };
+    let evidence_changed =
+        record_proposal_round_evidence(state, meta, height, view, manifest_hash)?;
+    let mut resolved = false;
+    for rule in state.rules.iter_mut().filter(|rule| {
+        rule.kind == MessageKind::PayloadChunk
+            && rule.sender == meta.sender
+            && rule.authenticated_via == meta.authenticated_via
+            && rule.proposal_height == Some(height)
+            && rule.proposal_view == Some(view)
+    }) {
+        match rule.manifest_hash {
+            None => {
+                rule.manifest_hash = Some(manifest_hash);
+                resolved = true;
+            }
+            Some(existing) if existing != manifest_hash => {
+                return Err(ControlError::InvalidMessageDescriptor);
+            }
+            Some(_) => {}
+        }
+    }
+    let mut releases_changed = false;
+    if (evidence_changed || resolved) && state.drain_next_rules.is_none() {
+        let mismatched = state
+            .held
+            .iter()
+            .filter_map(|(sequence, entry)| {
+                (entry.descriptor.meta.kind == MessageKind::PayloadChunk
+                    && !state.rules.iter().any(|rule| {
+                        rule.action == Action::Hold
+                            && rule_matches_with_proposal_evidence(
+                                rule,
+                                &entry.descriptor.meta,
+                                &state.proposal_round_evidence,
+                            )
+                    }))
+                .then_some(*sequence)
+            })
+            .collect::<Vec<_>>();
+        let mut release_pending = state
+            .release_pending
+            .iter()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let prior_len = release_pending.len();
+        release_pending.extend(mismatched);
+        releases_changed = release_pending.len() != prior_len;
+        state.release_pending = release_pending.into_iter().collect();
+    }
+    Ok(resolved || releases_changed)
 }
 #[derive(Debug)]
 struct Command {
@@ -229,6 +404,10 @@ struct State<R = NetworkReplyRoute, O = ()> {
     command_digest: Option<Hash>,
     last_seen_digest: Option<Hash>,
     rules: Vec<Rule>,
+    // FIFO-bounded facts learned from Proposals on this exact authenticated
+    // route. They disambiguate compact chunks, which carry no round fields.
+    proposal_round_evidence: BTreeMap<ProposalManifestRoute, ProposalRound>,
+    proposal_round_evidence_order: VecDeque<ProposalManifestRoute>,
     queue_capacity: usize,
     held: BTreeMap<u64, HeldEntry<R, O>>,
     held_bytes: usize,
@@ -253,6 +432,8 @@ impl<R, O> Default for State<R, O> {
             command_digest: None,
             last_seen_digest: None,
             rules: Vec::new(),
+            proposal_round_evidence: BTreeMap::new(),
+            proposal_round_evidence_order: VecDeque::new(),
             queue_capacity: MAX_HOLDS,
             held: BTreeMap::new(),
             held_bytes: 0,
@@ -479,17 +660,33 @@ impl<R, O> Controller<R, O> {
         if state.fatal {
             return Ok((Admission::Consumed, None));
         }
+        let resolved_rule = match resolve_deferred_chunk_rules(&mut state, &meta) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                state.fatal = true;
+                state.last_error = Some(error.code().to_owned());
+                drop(state);
+                self.publish_ack()?;
+                return Err(error);
+            }
+        };
         let draining = state.drain_next_rules.is_some();
         let action = if draining {
             Action::Hold
         } else if let Some(action) = state
             .rules
             .iter()
-            .find(|rule| rule.matches(&meta))
+            .find(|rule| {
+                rule_matches_with_proposal_evidence(rule, &meta, &state.proposal_round_evidence)
+            })
             .map(|rule| rule.action)
         {
             action
         } else {
+            drop(state);
+            if resolved_rule {
+                self.publish_ack()?;
+            }
             return Ok((
                 Admission::Pass,
                 Some((peer, message, size_bytes, reply_route, ownership)),
@@ -771,16 +968,7 @@ fn parse_command(bytes: &[u8]) -> Result<Command, ControlError> {
     let mut rules = Vec::with_capacity(rules_value.len());
     for value in rules_value {
         let rule = parse_rule(value)?;
-        if rules.iter().any(|prior: &Rule| {
-            prior.sender == rule.sender
-                && prior.authenticated_via == rule.authenticated_via
-                && prior.kind == rule.kind
-                && prior.height == rule.height
-                && prior.view == rule.view
-                && (prior.block_hash.is_none()
-                    || rule.block_hash.is_none()
-                    || prior.block_hash == rule.block_hash)
-        }) {
+        if rules.iter().any(|prior: &Rule| prior.overlaps(&rule)) {
             return Err(ControlError::AmbiguousRule);
         }
         rules.push(rule);
@@ -815,8 +1003,12 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
             "action",
             "authenticated_via",
             "block_hash",
+            "chunk_index",
             "height",
             "kind",
+            "manifest_hash",
+            "proposal_height",
+            "proposal_view",
             "sender",
             "view",
         ],
@@ -871,33 +1063,80 @@ fn parse_rule(value: &Value) -> Result<Rule, ControlError> {
             .get("kind")
             .ok_or(ControlError::InvalidField("kind"))?,
     )?;
+    let height = optional_u64(object, "height")?;
+    let view = optional_u64(object, "view")?;
+    let manifest_hash = match object.get("manifest_hash") {
+        Some(Value::Null) => None,
+        Some(value) => {
+            let value = value
+                .as_str()
+                .ok_or(ControlError::InvalidField("manifest_hash"))?;
+            if value.is_empty() || value.len() > MAX_HASH_BYTES {
+                return Err(ControlError::FieldTooLarge("manifest_hash"));
+            }
+            let parsed = value
+                .parse::<HashOf<PayloadManifest>>()
+                .map_err(|_| ControlError::InvalidField("manifest_hash"))?;
+            if parsed.to_string() != value {
+                return Err(ControlError::NonCanonicalField("manifest_hash"));
+            }
+            Some(parsed)
+        }
+        None => return Err(ControlError::InvalidField("manifest_hash")),
+    };
+    let chunk_index = optional_u64(object, "chunk_index")?
+        .map(u32::try_from)
+        .transpose()
+        .map_err(|_| ControlError::InvalidField("chunk_index"))?;
+    let proposal_height = optional_u64(object, "proposal_height")?;
+    let proposal_view = optional_u64(object, "proposal_view")?;
+    let proposal_binding_valid = match (proposal_height, proposal_view) {
+        (None, None) => true,
+        (Some(height), Some(_)) => height > 0,
+        _ => false,
+    };
+    let action = Action::parse(
+        object
+            .get("action")
+            .ok_or(ControlError::InvalidField("action"))?,
+    )?;
+    let valid_coordinates = if kind == MessageKind::PayloadChunk {
+        height.is_none()
+            && view.is_none()
+            && block_hash.is_none()
+            && chunk_index.is_some()
+            && proposal_binding_valid
+            && (manifest_hash.is_some() || proposal_height.is_some())
+            && (manifest_hash.is_some() || action == Action::Hold)
+    } else {
+        height.is_some_and(|height| height > 0)
+            && view.is_some()
+            && manifest_hash.is_none()
+            && chunk_index.is_none()
+            && proposal_height.is_none()
+            && proposal_view.is_none()
+    };
     if matches!(
         kind,
-        MessageKind::PayloadChunk
-            | MessageKind::CommitCertificateRequest
-            | MessageKind::VrfCommit
-            | MessageKind::VrfReveal
+        MessageKind::CommitCertificateRequest | MessageKind::VrfCommit | MessageKind::VrfReveal
     ) {
         return Err(ControlError::KindHasNoExactRound);
+    }
+    if !valid_coordinates {
+        return Err(ControlError::InvalidField("coordinates"));
     }
     Ok(Rule {
         sender,
         authenticated_via,
         kind,
-        height: {
-            let height = required_u64(object, "height")?;
-            if height == 0 {
-                return Err(ControlError::InvalidField("height"));
-            }
-            height
-        },
-        view: required_u64(object, "view")?,
+        height,
+        view,
         block_hash,
-        action: Action::parse(
-            object
-                .get("action")
-                .ok_or(ControlError::InvalidField("action"))?,
-        )?,
+        manifest_hash,
+        chunk_index,
+        proposal_height,
+        proposal_view,
+        action,
     })
 }
 fn exact_object<'a>(value: &'a Value, fields: &[&str]) -> Result<&'a Map, ControlError> {
@@ -912,6 +1151,16 @@ fn required_u64(object: &Map, field: &'static str) -> Result<u64, ControlError> 
         .get(field)
         .and_then(Value::as_u64)
         .ok_or(ControlError::InvalidField(field))
+}
+fn optional_u64(object: &Map, field: &'static str) -> Result<Option<u64>, ControlError> {
+    match object.get(field) {
+        Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .map(Some)
+            .ok_or(ControlError::InvalidField(field)),
+        None => Err(ControlError::InvalidField(field)),
+    }
 }
 fn canonical_json(value: &Value) -> Result<Vec<u8>, ControlError> {
     norito::json::to_json(value)
@@ -1032,6 +1281,10 @@ fn descriptor_value(descriptor: &HeldDescriptor) -> Result<Value, ControlError> 
         ),
         ("certificate_signers", Value::Array(certificate_signers)),
         (
+            "chunk_index",
+            descriptor.meta.chunk_index.map_or(Value::Null, Value::from),
+        ),
+        (
             "cited_responder",
             descriptor
                 .meta
@@ -1048,6 +1301,14 @@ fn descriptor_value(descriptor: &HeldDescriptor) -> Result<Value, ControlError> 
             descriptor.meta.height.map_or(Value::Null, Value::from),
         ),
         ("kind", Value::from(descriptor.meta.kind.as_str())),
+        (
+            "manifest_hash",
+            descriptor
+                .meta
+                .manifest_hash
+                .as_ref()
+                .map_or(Value::Null, |hash| Value::from(hash.to_string())),
+        ),
         ("sender", Value::from(descriptor.meta.sender.to_string())),
         ("sequence", Value::from(descriptor.sequence)),
         (
@@ -1081,10 +1342,28 @@ fn rule_value(rule: &Rule) -> Value {
                 .as_ref()
                 .map_or(Value::Null, |hash| Value::from(hash.to_string())),
         ),
-        ("height", Value::from(rule.height)),
+        (
+            "chunk_index",
+            rule.chunk_index.map_or(Value::Null, Value::from),
+        ),
+        ("height", rule.height.map_or(Value::Null, Value::from)),
         ("kind", Value::from(rule.kind.as_str())),
+        (
+            "manifest_hash",
+            rule.manifest_hash
+                .as_ref()
+                .map_or(Value::Null, |hash| Value::from(hash.to_string())),
+        ),
+        (
+            "proposal_height",
+            rule.proposal_height.map_or(Value::Null, Value::from),
+        ),
+        (
+            "proposal_view",
+            rule.proposal_view.map_or(Value::Null, Value::from),
+        ),
         ("sender", Value::from(rule.sender.to_string())),
-        ("view", Value::from(rule.view)),
+        ("view", rule.view.map_or(Value::Null, Value::from)),
     ])
 }
 fn object_value<const N: usize>(entries: [(&str, Value); N]) -> Value {
@@ -1207,6 +1486,8 @@ fn message_meta(
                     height: Some(value.height),
                     view: None,
                     block_hash: None,
+                    manifest_hash: None,
+                    chunk_index: None,
                     subject: None,
                     execution_commitment: None,
                     signer: None,
@@ -1246,6 +1527,17 @@ fn message_meta(
         ConsensusMessageV2Payload::CertifiedBodyResponse(value) => Some(value.responder),
         _ => None,
     };
+    let (manifest_hash, chunk_index) = match &message.payload {
+        ConsensusMessageV2Payload::Proposal(value) => (Some(HashOf::new(&value.manifest)), None),
+        ConsensusMessageV2Payload::PayloadManifest(value) => (Some(HashOf::new(value)), None),
+        ConsensusMessageV2Payload::PayloadChunk(value) => {
+            (Some(value.manifest_hash), Some(value.index))
+        }
+        ConsensusMessageV2Payload::CertifiedBodyResponse(value) => {
+            (Some(HashOf::new(&value.manifest)), None)
+        }
+        _ => (None, None),
+    };
     let meta = MessageMeta {
         sender,
         authenticated_via: authenticated_via.clone(),
@@ -1253,6 +1545,8 @@ fn message_meta(
         height: round.map(|round| round.height),
         view: round.map(|round| round.view),
         block_hash: subject.map(|subject| subject.block_hash),
+        manifest_hash,
+        chunk_index,
         subject,
         execution_commitment,
         signer,
@@ -1284,6 +1578,8 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
             .any(|pair| pair[0] >= pair[1])
         || meta.block_hash != meta.subject.map(|subject| subject.block_hash)
         || meta.execution_commitment.is_some() && meta.subject.is_none()
+        || meta.kind == MessageKind::PayloadChunk
+            && (meta.manifest_hash.is_some() != meta.chunk_index.is_some())
     {
         return Err(ControlError::InvalidMessageDescriptor);
     }
@@ -1292,6 +1588,8 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
     let has_single_signer = meta.signer.is_some();
     let has_cited_responder = meta.cited_responder.is_some();
     let has_certificate_signers = !meta.certificate_signers.is_empty();
+    let has_manifest_hash = meta.manifest_hash.is_some();
+    let has_chunk_index = meta.chunk_index.is_some();
     if (meta.kind == MessageKind::CertifiedBodyResponse) != has_cited_responder {
         return Err(ControlError::InvalidMessageDescriptor);
     }
@@ -1303,6 +1601,8 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
                 && meta.execution_commitment.is_none()
                 && has_single_signer
                 && !has_certificate_signers
+                && has_manifest_hash
+                && !has_chunk_index
         }
         MessageKind::PrepareVote | MessageKind::CommitVote => {
             has_round && has_subject_and_execution && has_single_signer && !has_certificate_signers
@@ -1331,13 +1631,26 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
                 && meta.execution_commitment.is_none()
                 && !has_single_signer
                 && !has_certificate_signers
+                && has_manifest_hash
+                && !has_chunk_index
         }
-        MessageKind::PayloadChunk | MessageKind::VrfCommit | MessageKind::VrfReveal => {
+        MessageKind::PayloadChunk => {
             meta.height.is_none()
                 && meta.view.is_none()
                 && has_no_subject_or_execution
                 && has_single_signer
                 && !has_certificate_signers
+                && has_manifest_hash
+                && has_chunk_index
+        }
+        MessageKind::VrfCommit | MessageKind::VrfReveal => {
+            meta.height.is_none()
+                && meta.view.is_none()
+                && has_no_subject_or_execution
+                && has_single_signer
+                && !has_certificate_signers
+                && !has_manifest_hash
+                && !has_chunk_index
         }
         MessageKind::CertifiedBodyResponse => {
             has_round
@@ -1345,6 +1658,8 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
                 && meta.execution_commitment.is_none()
                 && !has_single_signer
                 && !has_certificate_signers
+                && has_manifest_hash
+                && !has_chunk_index
         }
         MessageKind::CommitCertificateRequest => {
             meta.height.is_some()
@@ -1354,6 +1669,16 @@ fn validate_message_meta(meta: &MessageMeta) -> Result<(), ControlError> {
                 && !has_certificate_signers
         }
     };
+    if !matches!(
+        meta.kind,
+        MessageKind::Proposal
+            | MessageKind::PayloadManifest
+            | MessageKind::PayloadChunk
+            | MessageKind::CertifiedBodyResponse
+    ) && (has_manifest_hash || has_chunk_index)
+    {
+        return Err(ControlError::InvalidMessageDescriptor);
+    }
     if valid {
         Ok(())
     } else {
@@ -1631,11 +1956,13 @@ impl std::fmt::Display for ControlError {
 impl std::error::Error for ControlError {}
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use super::*;
     use iroha_core::sumeragi::message::{BlockMessage, BlockMessageWire};
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::block::consensus_v2::{ConsensusMessageV2, PayloadChunk, PayloadManifest};
+    use iroha_data_model::block::consensus_v2::{
+        ConsensusMessageV2, PayloadChunk, PayloadManifest,
+    };
+    use std::sync::Arc;
     use tempfile::tempdir;
     fn peer(marker: u8) -> PeerId {
         let key = KeyPair::try_from_seed(vec![marker; 32], Algorithm::Ed25519)
@@ -1643,6 +1970,9 @@ mod tests {
         PeerId::new(key.public_key().clone())
     }
     fn hash(marker: u8) -> HashOf<BlockHeader> {
+        HashOf::from_untyped_unchecked(Hash::prehashed([marker; Hash::LENGTH]))
+    }
+    fn manifest_hash(marker: u8) -> HashOf<PayloadManifest> {
         HashOf::from_untyped_unchecked(Hash::prehashed([marker; Hash::LENGTH]))
     }
     fn subject(marker: u8) -> BlockSubject {
@@ -1732,6 +2062,13 @@ mod tests {
                 (Some(9), None, None, None, None, None, Vec::new())
             }
         };
+        let (manifest_hash, chunk_index) = match kind {
+            MessageKind::Proposal
+            | MessageKind::PayloadManifest
+            | MessageKind::CertifiedBodyResponse => (Some(manifest_hash(0x33)), None),
+            MessageKind::PayloadChunk => (Some(manifest_hash(0x33)), Some(7)),
+            _ => (None, None),
+        };
         MessageMeta {
             sender: sender.clone(),
             authenticated_via: sender,
@@ -1739,6 +2076,8 @@ mod tests {
             height,
             view,
             block_hash: subject.map(|subject| subject.block_hash),
+            manifest_hash,
+            chunk_index,
             subject,
             execution_commitment,
             signer,
@@ -1776,11 +2115,71 @@ mod tests {
             authenticated_via: sender.clone(),
             sender,
             kind,
-            height,
-            view,
+            height: Some(height),
+            view: Some(view),
             block_hash: Some(hash(1)),
+            manifest_hash: None,
+            chunk_index: None,
+            proposal_height: None,
+            proposal_view: None,
             action: Action::Hold,
         }
+    }
+    fn proposal_meta_at(height: u64, view: u64, manifest_marker: u8) -> MessageMeta {
+        MessageMeta {
+            height: Some(height),
+            view: Some(view),
+            manifest_hash: Some(manifest_hash(manifest_marker)),
+            ..valid_meta(MessageKind::Proposal)
+        }
+    }
+    fn chunk_meta_for(proposal: &MessageMeta, index: u32) -> MessageMeta {
+        MessageMeta {
+            sender: proposal.sender.clone(),
+            authenticated_via: proposal.authenticated_via.clone(),
+            manifest_hash: proposal.manifest_hash,
+            chunk_index: Some(index),
+            ..valid_meta(MessageKind::PayloadChunk)
+        }
+    }
+    fn deferred_chunk_rule_for(
+        proposal_route: &MessageMeta,
+        height: u64,
+        view: u64,
+        index: u32,
+    ) -> Rule {
+        Rule {
+            sender: proposal_route.sender.clone(),
+            authenticated_via: proposal_route.authenticated_via.clone(),
+            kind: MessageKind::PayloadChunk,
+            height: None,
+            view: None,
+            block_hash: None,
+            manifest_hash: None,
+            chunk_index: Some(index),
+            proposal_height: Some(height),
+            proposal_view: Some(view),
+            action: Action::Hold,
+        }
+    }
+    fn retain_chunk(state: &mut State<NetworkReplyRoute>, sequence: u64, chunk: MessageMeta) {
+        let authenticated_via = chunk.authenticated_via.clone();
+        state.held.insert(
+            sequence,
+            HeldEntry {
+                descriptor: HeldDescriptor {
+                    sequence,
+                    meta: chunk,
+                    size_bytes: 1,
+                },
+                peer: transport_peer(42),
+                authenticated_via,
+                message: chunk_message(7),
+                reply_route: None,
+                ownership: None,
+            },
+        );
+        state.held_bytes += 1;
     }
     #[test]
     fn matcher_is_exact_across_every_rule_dimension() {
@@ -1793,6 +2192,8 @@ mod tests {
             height: Some(9),
             view: Some(3),
             block_hash: Some(hash(1)),
+            manifest_hash: None,
+            chunk_index: None,
             subject: None,
             execution_commitment: None,
             signer: Some(0),
@@ -1829,6 +2230,245 @@ mod tests {
         ] {
             assert!(!rule.matches(&changed));
         }
+    }
+    #[test]
+    fn payload_chunk_matcher_binds_authenticated_manifest_and_index_without_round() {
+        let sender = peer(5);
+        let chunk_rule = Rule {
+            sender: sender.clone(),
+            authenticated_via: sender.clone(),
+            kind: MessageKind::PayloadChunk,
+            height: None,
+            view: None,
+            block_hash: None,
+            manifest_hash: Some(manifest_hash(0x44)),
+            chunk_index: Some(7),
+            proposal_height: None,
+            proposal_view: None,
+            action: Action::Hold,
+        };
+        let exact = MessageMeta {
+            sender: sender.clone(),
+            authenticated_via: sender,
+            kind: MessageKind::PayloadChunk,
+            height: None,
+            view: None,
+            block_hash: None,
+            manifest_hash: Some(manifest_hash(0x44)),
+            chunk_index: Some(7),
+            subject: None,
+            execution_commitment: None,
+            signer: Some(0),
+            cited_responder: None,
+            certificate_signers: Vec::new(),
+            envelope_digest: Hash::new(b"exact-chunk-envelope"),
+        };
+        assert!(chunk_rule.matches(&exact));
+        for changed in [
+            MessageMeta {
+                authenticated_via: peer(6),
+                ..exact.clone()
+            },
+            MessageMeta {
+                manifest_hash: Some(manifest_hash(0x45)),
+                ..exact.clone()
+            },
+            MessageMeta {
+                chunk_index: Some(8),
+                ..exact.clone()
+            },
+            MessageMeta {
+                height: Some(9),
+                view: Some(0),
+                ..exact.clone()
+            },
+        ] {
+            assert!(!chunk_rule.matches(&changed));
+        }
+
+        let deferred = Rule {
+            manifest_hash: None,
+            proposal_height: Some(9),
+            proposal_view: Some(2),
+            ..chunk_rule
+        };
+        assert!(
+            deferred.matches(&MessageMeta {
+                manifest_hash: Some(manifest_hash(0x45)),
+                ..exact
+            }),
+            "an unresolved Hold rule retains an authenticated candidate instead of racing it"
+        );
+    }
+    #[test]
+    fn authenticated_proposal_atomically_resolves_deferred_chunk_rule() {
+        let proposal = valid_meta(MessageKind::Proposal);
+        let mut state = State::<NetworkReplyRoute>::default();
+        state.rules.push(Rule {
+            sender: proposal.sender.clone(),
+            authenticated_via: proposal.authenticated_via.clone(),
+            kind: MessageKind::PayloadChunk,
+            height: None,
+            view: None,
+            block_hash: None,
+            manifest_hash: None,
+            chunk_index: Some(7),
+            proposal_height: proposal.height,
+            proposal_view: proposal.view,
+            action: Action::Hold,
+        });
+        for (sequence, chunk) in [
+            (1, valid_meta(MessageKind::PayloadChunk)),
+            (
+                2,
+                MessageMeta {
+                    manifest_hash: Some(manifest_hash(0x34)),
+                    ..valid_meta(MessageKind::PayloadChunk)
+                },
+            ),
+        ] {
+            state.held.insert(
+                sequence,
+                HeldEntry {
+                    descriptor: HeldDescriptor {
+                        sequence,
+                        meta: chunk,
+                        size_bytes: 1,
+                    },
+                    peer: transport_peer(42),
+                    authenticated_via: proposal.authenticated_via.clone(),
+                    message: chunk_message(7),
+                    reply_route: None,
+                    ownership: None,
+                },
+            );
+            state.held_bytes += 1;
+        }
+        assert!(resolve_deferred_chunk_rules(&mut state, &proposal).expect("resolve rule"));
+        assert_eq!(state.rules[0].manifest_hash, proposal.manifest_hash);
+        assert!(state.rules[0].matches(&valid_meta(MessageKind::PayloadChunk)));
+        assert_eq!(
+            state.release_pending,
+            VecDeque::from([2]),
+            "a provisionally retained chunk from another manifest is released"
+        );
+        assert!(!resolve_deferred_chunk_rules(&mut state, &proposal).expect("idempotent resolve"));
+    }
+    #[test]
+    fn prior_round_proposal_evidence_bypasses_unresolved_future_chunk_rule() {
+        let prior_proposal = proposal_meta_at(9, 0, 0x31);
+        let mut state = State::<NetworkReplyRoute>::default();
+        state
+            .rules
+            .push(deferred_chunk_rule_for(&prior_proposal, 10, 0, 7));
+
+        assert!(
+            !resolve_deferred_chunk_rules(&mut state, &prior_proposal)
+                .expect("record prior-round evidence"),
+            "a non-target Proposal must not resolve the future-round rule"
+        );
+        assert_eq!(state.rules[0].manifest_hash, None);
+        let prior_chunk = chunk_meta_for(&prior_proposal, 7);
+        assert!(state.rules[0].matches(&prior_chunk));
+        assert!(
+            !rule_matches_with_proposal_evidence(
+                &state.rules[0],
+                &prior_chunk,
+                &state.proposal_round_evidence,
+            ),
+            "the same authenticated route proves this compact chunk belongs to the prior round"
+        );
+        let other_via = peer(43);
+        let other_route_chunk = MessageMeta {
+            authenticated_via: other_via,
+            ..prior_chunk
+        };
+        let other_route_rule = deferred_chunk_rule_for(&other_route_chunk, 10, 0, 7);
+        assert!(rule_matches_with_proposal_evidence(
+            &other_route_rule,
+            &other_route_chunk,
+            &state.proposal_round_evidence,
+        ));
+    }
+    #[test]
+    fn prior_round_proposal_releases_provisional_chunk_without_resolving_future_rule() {
+        let prior_proposal = proposal_meta_at(9, 0, 0x32);
+        let mut state = State::<NetworkReplyRoute>::default();
+        state
+            .rules
+            .push(deferred_chunk_rule_for(&prior_proposal, 10, 0, 7));
+        retain_chunk(&mut state, 1, chunk_meta_for(&prior_proposal, 7));
+
+        assert!(
+            resolve_deferred_chunk_rules(&mut state, &prior_proposal)
+                .expect("release prior-round provisional hold")
+        );
+        assert_eq!(state.rules[0].manifest_hash, None);
+        assert_eq!(state.release_pending, VecDeque::from([1]));
+    }
+    #[test]
+    fn target_round_proposal_resolves_rule_and_keeps_matching_chunk_held() {
+        let target_proposal = proposal_meta_at(10, 0, 0x33);
+        let mut state = State::<NetworkReplyRoute>::default();
+        state
+            .rules
+            .push(deferred_chunk_rule_for(&target_proposal, 10, 0, 7));
+        let target_chunk = chunk_meta_for(&target_proposal, 7);
+        retain_chunk(&mut state, 1, target_chunk.clone());
+
+        assert!(
+            resolve_deferred_chunk_rules(&mut state, &target_proposal)
+                .expect("resolve target-round rule")
+        );
+        assert_eq!(state.rules[0].manifest_hash, target_proposal.manifest_hash);
+        assert!(rule_matches_with_proposal_evidence(
+            &state.rules[0],
+            &target_chunk,
+            &state.proposal_round_evidence,
+        ));
+        assert!(state.release_pending.is_empty());
+    }
+    #[test]
+    fn proposal_round_evidence_is_fifo_bounded() {
+        let mut state = State::<NetworkReplyRoute>::default();
+        let base = proposal_meta_at(1, 0, 0x34);
+        let manifest_for = |sequence: u64| {
+            HashOf::<PayloadManifest>::from_untyped_unchecked(Hash::new(sequence.to_le_bytes()))
+        };
+        for sequence in
+            0..=u64::try_from(MAX_PROPOSAL_ROUND_EVIDENCE).expect("evidence bound fits u64")
+        {
+            let proposal = MessageMeta {
+                height: Some(sequence + 1),
+                manifest_hash: Some(manifest_for(sequence)),
+                ..base.clone()
+            };
+            record_proposal_round_evidence(
+                &mut state,
+                &proposal,
+                sequence + 1,
+                0,
+                manifest_for(sequence),
+            )
+            .expect("record bounded Proposal evidence");
+        }
+        assert_eq!(
+            state.proposal_round_evidence.len(),
+            MAX_PROPOSAL_ROUND_EVIDENCE
+        );
+        assert_eq!(
+            state.proposal_round_evidence_order.len(),
+            MAX_PROPOSAL_ROUND_EVIDENCE
+        );
+        assert!(
+            !state
+                .proposal_round_evidence
+                .contains_key(&ProposalManifestRoute {
+                    sender: base.sender.clone(),
+                    authenticated_via: base.authenticated_via.clone(),
+                    manifest_hash: manifest_for(0),
+                })
+        );
     }
     #[test]
     fn descriptor_contract_accepts_every_v2_payload_shape() {
@@ -1891,6 +2531,12 @@ mod tests {
         invented_chunk_round.height = Some(9);
         invented_chunk_round.view = Some(2);
         cases.push(invented_chunk_round);
+        let mut missing_chunk_manifest = valid_meta(MessageKind::PayloadChunk);
+        missing_chunk_manifest.manifest_hash = None;
+        cases.push(missing_chunk_manifest);
+        let mut missing_chunk_index = valid_meta(MessageKind::PayloadChunk);
+        missing_chunk_index.chunk_index = None;
+        cases.push(missing_chunk_index);
         let mut missing_vote_signer = valid_meta(MessageKind::PrepareVote);
         missing_vote_signer.signer = None;
         cases.push(missing_vote_signer);
@@ -1963,10 +2609,10 @@ mod tests {
             "independent authenticated relays are distinct rule dimensions"
         );
         let mut zero_height = specific.clone();
-        zero_height.height = 0;
+        zero_height.height = Some(0);
         assert!(matches!(
             parse_command(&command(vec![rule_value(&zero_height)])),
-            Err(ControlError::InvalidField("height"))
+            Err(ControlError::InvalidField("coordinates"))
         ));
         let mut invalid_sender = rule_value(&wildcard);
         invalid_sender
@@ -1994,6 +2640,96 @@ mod tests {
         assert!(matches!(
             parse_command(&command(vec![uppercase_hash])),
             Err(ControlError::NonCanonicalField("block_hash"))
+        ));
+    }
+    #[test]
+    fn payload_chunk_rule_roundtrips_and_rejects_incompatible_coordinates() {
+        let sender = peer(7);
+        let chunk_rule = Rule {
+            sender: sender.clone(),
+            authenticated_via: sender,
+            kind: MessageKind::PayloadChunk,
+            height: None,
+            view: None,
+            block_hash: None,
+            manifest_hash: Some(manifest_hash(0x55)),
+            chunk_index: Some(11),
+            proposal_height: None,
+            proposal_view: None,
+            action: Action::Hold,
+        };
+        let command = |rule: Value| {
+            canonical_json(&object_value([
+                ("drain", Value::from(false)),
+                ("queue_capacity", Value::from(4_u64)),
+                ("release", Value::Array(Vec::new())),
+                ("revision", Value::from(1_u64)),
+                ("rules", Value::Array(vec![rule])),
+                ("version", Value::from(FORMAT_VERSION)),
+            ]))
+            .expect("canonical chunk command")
+        };
+        let parsed =
+            parse_command(&command(rule_value(&chunk_rule))).expect("parse exact chunk rule");
+        assert_eq!(parsed.rules, vec![chunk_rule.clone()]);
+        assert_eq!(rule_value(&parsed.rules[0]), rule_value(&chunk_rule));
+
+        let mutate = |field: &str, value: Value| {
+            let mut encoded = rule_value(&chunk_rule);
+            encoded
+                .as_object_mut()
+                .expect("chunk rule object")
+                .insert(field.to_owned(), value);
+            command(encoded)
+        };
+        for invalid in [
+            mutate("height", Value::from(9_u64)),
+            mutate("view", Value::from(0_u64)),
+            mutate("block_hash", Value::from(hash(1).to_string())),
+            mutate("manifest_hash", Value::Null),
+            mutate("chunk_index", Value::Null),
+            mutate("proposal_height", Value::from(9_u64)),
+        ] {
+            assert!(matches!(
+                parse_command(&invalid),
+                Err(ControlError::InvalidField("coordinates"))
+            ));
+        }
+
+        let deferred = Rule {
+            manifest_hash: None,
+            proposal_height: Some(9),
+            proposal_view: Some(2),
+            ..chunk_rule.clone()
+        };
+        let parsed = parse_command(&command(rule_value(&deferred)))
+            .expect("parse Proposal-bound deferred chunk rule");
+        assert_eq!(parsed.rules, vec![deferred.clone()]);
+        let resolved = Rule {
+            manifest_hash: Some(manifest_hash(0x55)),
+            ..deferred.clone()
+        };
+        assert_eq!(
+            parse_command(&command(rule_value(&resolved)))
+                .expect("parse resolved exact chunk rule")
+                .rules,
+            vec![resolved]
+        );
+        let invalid_deferred_drop = Rule {
+            action: Action::Drop,
+            ..deferred
+        };
+        assert!(matches!(
+            parse_command(&command(rule_value(&invalid_deferred_drop))),
+            Err(ControlError::InvalidField("coordinates"))
+        ));
+
+        let mut round_with_chunk_coordinates = rule(peer(7), MessageKind::PrepareVote, 9, 0);
+        round_with_chunk_coordinates.proposal_height = Some(9);
+        round_with_chunk_coordinates.proposal_view = Some(2);
+        assert!(matches!(
+            parse_command(&command(rule_value(&round_with_chunk_coordinates))),
+            Err(ControlError::InvalidField("coordinates"))
         ));
     }
     #[test]
@@ -2171,9 +2907,13 @@ mod tests {
             sender: sender.id().clone(),
             authenticated_via: sender.id().clone(),
             kind: MessageKind::PrepareVote,
-            height: 9,
-            view: 2,
+            height: Some(9),
+            view: Some(2),
             block_hash: None,
+            manifest_hash: None,
+            chunk_index: None,
+            proposal_height: None,
+            proposal_view: None,
             action: Action::Drop,
         }];
         {

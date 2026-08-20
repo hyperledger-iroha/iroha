@@ -8,8 +8,8 @@ use color_eyre::eyre::{Context, Report, Result, eyre};
 pub use config::chain_id;
 pub use consensus_message_control::{
     ConsensusMessageControl, ConsensusMessageControlAck, ConsensusMessageControlAction,
-    ConsensusMessageControlHeld, ConsensusMessageControlKind, ConsensusMessageControlRule,
-    NativeAmxFaultAck, NativeAmxFaultPhase,
+    ConsensusMessageControlHeld, ConsensusMessageControlKind, ConsensusMessageControlObservation,
+    ConsensusMessageControlRule, NativeAmxFaultAck, NativeAmxFaultPhase,
 };
 use core::{fmt, future::Future, time::Duration};
 use fslock::LockFile;

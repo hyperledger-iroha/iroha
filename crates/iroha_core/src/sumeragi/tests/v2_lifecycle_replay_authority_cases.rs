@@ -1537,6 +1537,23 @@ fn remote_proposal_replay_wrappers_are_opaque_exact_and_have_one_runtime_mint() 
             "remote Proposal replay wrapper omitted {required}"
         );
     }
+    assert!(
+        production.contains("fn remote_proposal_origin_matches_fetch("),
+        "later Proposal stages omitted the single authenticated Fetch-origin oracle"
+    );
+    assert_eq!(
+        production
+            .matches("fn exactly_matches_origin_fetch(")
+            .count(),
+        3,
+        "Store, Stored, and the retained family must all recheck one exact Fetch origin"
+    );
+    assert!(
+        production.contains("remote_proposal_fetch_effect(source).as_ref() == Some(effect)")
+            && production
+                .contains("exact_remote_proposal_fetch(authenticated, ingress, effect).is_some()",),
+        "Proposal Fetch rediscovery must re-authenticate both projected effect and signed ingress"
+    );
     for wrapper in [
         "RemoteProposalFetchReplayEvidenceV1",
         "RemoteProposalStoreReplayEvidenceV1",

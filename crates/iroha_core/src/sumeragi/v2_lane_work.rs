@@ -18023,7 +18023,7 @@ pub(super) mod tests {
         keys: &[KeyPair],
         carrier_view: wire::View,
     ) -> CertifiedMergeLedgerReference {
-        let signer_indices = (0..keys.len()).collect::<Vec<_>>();
+        let signer_indices = (0..adapter.context.quorum.min_signers as usize).collect::<Vec<_>>();
         missing_sidecar_reference_with_signers(adapter, keys, carrier_view, &signer_indices)
     }
     fn missing_sidecar_reference_with_signers(

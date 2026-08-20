@@ -93,7 +93,11 @@ impl PendingLifecycleOutputAdmissionV1 {
         ownership
             .exact_pending_adapter_effect_binding(effect)
             .is_ok_and(|pending| {
-                self.effect == *effect && self.pending == pending && self.ownership == *ownership
+                self.effect == *effect
+                    && self.pending == pending
+                    && self
+                        .ownership
+                        .exactly_matches_bound_effect_occurrence(ownership, effect)
             })
     }
 
@@ -212,10 +216,10 @@ impl PreparedLifecycleOutputExecutionV1 {
             .expect("sealed lifecycle output execution retains its exact binding")
     }
     /// Execute without separating the effect from its exact runtime owner.
-    pub(super) fn execute_with<E>(
+    pub(super) fn execute_with<T, E>(
         &self,
-        execute: impl FnOnce(&AdapterEffect, &RuntimeEffectOwnership) -> Result<(), E>,
-    ) -> Result<(), E> {
+        execute: impl FnOnce(&AdapterEffect, &RuntimeEffectOwnership) -> Result<T, E>,
+    ) -> Result<T, E> {
         execute(&self.effect, &self.ownership)
     }
 
@@ -333,15 +337,16 @@ impl PreparedLiveWalAdmissionV1 {
             .exactly_authorizes_candidate(active_context, candidate)
             && match &self.companion {
                 PreparedLiveWalCompanionV1::None => true,
-                PreparedLiveWalCompanionV1::LocalProposal(companion) => companion
-                    .exactly_matches_live_wal_sign_effect(&self.bound.effect)
-                    && matches!(
-                        &self.bound.effect,
-                        AdapterEffect::Sign {
-                            request: SignRequest::Proposal(_),
-                            ..
-                        }
-                    ),
+                PreparedLiveWalCompanionV1::LocalProposal(companion) => {
+                    companion.exactly_matches_live_wal_sign_effect(&self.bound.effect)
+                        && matches!(
+                            &self.bound.effect,
+                            AdapterEffect::Sign {
+                                request: SignRequest::Proposal(_),
+                                ..
+                            }
+                        )
+                }
             }
     }
 }
@@ -668,11 +673,9 @@ impl PreparedLifecycleAdmissionV1 {
         bound: BoundAdapterEffectV1,
     ) -> Option<Self> {
         let owner = match &bound.replay_origin {
-            BoundAdapterReplayOriginV1::LiveWal(_) => {
-                PreparedLifecycleAdmissionOwnerV1::LiveWal(
-                    PreparedLiveWalAdmissionV1::bound_only(bound),
-                )
-            }
+            BoundAdapterReplayOriginV1::LiveWal(_) => PreparedLifecycleAdmissionOwnerV1::LiveWal(
+                PreparedLiveWalAdmissionV1::bound_only(bound),
+            ),
             BoundAdapterReplayOriginV1::InvalidBodyReport(_) => {
                 PreparedLifecycleAdmissionOwnerV1::InvalidBodyReport(bound)
             }
@@ -770,7 +773,10 @@ impl PreparedLifecycleAdmissionV1 {
             candidate,
         };
         if !prepared.validates(active_context) {
-            let Self { owner, candidate: _ } = prepared;
+            let Self {
+                owner,
+                candidate: _,
+            } = prepared;
             let PreparedLifecycleAdmissionOwnerV1::LiveWal(live) = owner else {
                 unreachable!("local Proposal admission retains live WAL owner")
             };
@@ -1155,6 +1161,13 @@ impl PreparedRemoteProposalFetchReplayPreAdmission {
         self.replay_evidence
             .exactly_matches_fetch_pending(&self.effect, &self.pending)
     }
+    /// Authenticate a byte-identical periodic Fetch without minting another origin.
+    pub(in crate::sumeragi) fn exactly_authenticates_fetch_rediscovery(
+        &self,
+        effect: &AdapterEffect,
+    ) -> bool {
+        self.validates() && self.replay_evidence.exactly_matches_fetch(effect)
+    }
     /// Recheck an exact retry without replacing the retained signed origin.
     pub(in crate::sumeragi) fn exactly_matches_retry(
         &self,
@@ -1223,6 +1236,13 @@ impl PreparedRemoteProposalStoreReplayPreAdmission {
         self.replay_evidence
             .exactly_matches_store_pending(&self.effect, &self.pending)
     }
+    /// Authenticate the byte-identical Fetch origin after it has projected Store.
+    pub(in crate::sumeragi) fn exactly_authenticates_fetch_rediscovery(
+        &self,
+        effect: &AdapterEffect,
+    ) -> bool {
+        self.validates() && self.replay_evidence.exactly_matches_origin_fetch(effect)
+    }
     /// Recheck an exact Store retry without replacing its Proposal origin.
     pub(in crate::sumeragi) fn exactly_matches_retry(
         &self,
@@ -1284,6 +1304,13 @@ impl PreparedRemoteProposalStoredReplayPreAdmission {
                 .replay_evidence
                 .exactly_matches_store(&self.store_effect, &self.durable_receipt)
     }
+    /// Authenticate the byte-identical Fetch origin after durable Store completion.
+    pub(in crate::sumeragi) fn exactly_authenticates_fetch_rediscovery(
+        &self,
+        effect: &AdapterEffect,
+    ) -> bool {
+        self.validates() && self.replay_evidence.exactly_matches_origin_fetch(effect)
+    }
     /// Recheck the exact durable Store retry without releasing its Proposal
     /// lineage or accepting a replacement body frame.
     pub(in crate::sumeragi) fn exactly_matches_retry(
@@ -1300,6 +1327,55 @@ impl PreparedRemoteProposalStoredReplayPreAdmission {
             && self
                 .replay_evidence
                 .exactly_matches_store(store_effect, durable_receipt)
+    }
+    /// Prove that the executor retained the complete runtime owner from the
+    /// Store which minted this durable replay token.
+    pub(in crate::sumeragi) fn exactly_retains_owned_store(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        ownership: &RuntimeEffectOwnership,
+    ) -> bool {
+        ownership
+            .exact_pending_adapter_effect_binding(&self.store_effect)
+            .is_ok_and(|pending| {
+                self.exactly_matches_retry(&self.store_effect, durable_receipt)
+                    && pending == self.store_pending
+            })
+    }
+    /// Derive the only same-body Validate incumbent from the retained Store
+    /// owner without releasing the replay token or minting a new causal root.
+    pub(in crate::sumeragi) fn project_incumbent_validate_ownership(
+        &self,
+        durable_receipt: &DurableBodyReceipt,
+        store_ownership: &RuntimeEffectOwnership,
+        validate_effect: &AdapterEffect,
+    ) -> Option<RuntimeEffectOwnership> {
+        let (
+            AdapterEffect::StoreBody {
+                tag: store_tag,
+                round: store_round,
+                subject: store_subject,
+            },
+            AdapterEffect::ValidateBody {
+                tag: validate_tag,
+                round: validate_round,
+                subject: validate_subject,
+            },
+        ) = (&self.store_effect, validate_effect)
+        else {
+            return None;
+        };
+        if !self.exactly_retains_owned_store(durable_receipt, store_ownership)
+            || store_tag.height() != validate_tag.height()
+            || (store_tag != validate_tag && !validate_tag.strictly_advances(*store_tag))
+            || store_round != validate_round
+            || store_subject != validate_subject
+        {
+            return None;
+        }
+        store_ownership
+            .rebind_as_inherited_adapter_effect(validate_effect)
+            .ok()
     }
     /// Consume the durable Store family only through its exact Validate successor.
     #[allow(clippy::result_large_err)]
@@ -1325,6 +1401,74 @@ impl PreparedRemoteProposalStoredReplayPreAdmission {
             replay_evidence,
         } = self;
         match replay_evidence.project_exact_validate(
+            &store_effect,
+            &durable_receipt,
+            &effect,
+            &pending,
+        ) {
+            Ok(replay_evidence) => {
+                let validate = PreparedRemoteProposalValidateReplayPreAdmission {
+                    effect,
+                    pending,
+                    durable_receipt,
+                    replay_evidence,
+                };
+                debug_assert!(validate.validates());
+                Ok(validate)
+            }
+            Err(replay_evidence) => Err(RemoteProposalValidateReplayPreAdmissionError {
+                _stored: Self {
+                    store_effect,
+                    store_pending,
+                    durable_receipt,
+                    replay_evidence,
+                },
+                _effect: effect,
+                _ownership: ownership,
+            }),
+        }
+    }
+    /// Consume the ordinary Proposal Store family through the exact
+    /// Commit-authorized Validate retained for one durable Decision.
+    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn project_validate_after_durable_decision(
+        self,
+        effect: AdapterEffect,
+        ownership: RuntimeEffectOwnership,
+        decision_round: wire::ConsensusRound,
+        proposal_round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        execution_commitment: wire::ExecutionCommitment,
+    ) -> Result<
+        PreparedRemoteProposalValidateReplayPreAdmission,
+        RemoteProposalValidateReplayPreAdmissionError,
+    > {
+        let Ok(pending) = ownership.exact_pending_adapter_effect_binding(&effect) else {
+            return Err(RemoteProposalValidateReplayPreAdmissionError {
+                _stored: self,
+                _effect: effect,
+                _ownership: ownership,
+            });
+        };
+        if !ownership.binds_durable_decision_authority(
+            decision_round,
+            proposal_round,
+            subject,
+            execution_commitment,
+        ) {
+            return Err(RemoteProposalValidateReplayPreAdmissionError {
+                _stored: self,
+                _effect: effect,
+                _ownership: ownership,
+            });
+        }
+        let Self {
+            store_effect,
+            store_pending,
+            durable_receipt,
+            replay_evidence,
+        } = self;
+        match replay_evidence.project_exact_validate_after_durable_decision(
             &store_effect,
             &durable_receipt,
             &effect,
