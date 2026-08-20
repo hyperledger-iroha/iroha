@@ -810,6 +810,12 @@ impl PreparedRemoteProposalValidateReplayPreAdmission {
     ) -> Result<PreparedLifecycleAdmissionV1, Self> {
         PreparedDurableValidateAdmissionV1::RemoteProposal(self)
             .prepare(active_context, verified)
+            .map_err(|validate| match validate {
+                PreparedDurableValidateAdmissionV1::RemoteProposal(validate) => validate,
+                PreparedDurableValidateAdmissionV1::LocalBody(_) => {
+                    unreachable!("remote Proposal preparation retains its exact origin")
+                }
+            })
     }
     /// Consume the exact remote-Proposal Validate pre-admission into its
     /// closed durable carrier without accepting a manifest, receipt, pending
@@ -915,7 +921,14 @@ impl PreparedLocalBodyValidateReplayPreAdmission {
         active_context: LifecycleContext,
         verified: &VerifiedHeightContext,
     ) -> Result<PreparedLifecycleAdmissionV1, Self> {
-        PreparedDurableValidateAdmissionV1::LocalBody(self).prepare(active_context, verified)
+        PreparedDurableValidateAdmissionV1::LocalBody(self)
+            .prepare(active_context, verified)
+            .map_err(|validate| match validate {
+                PreparedDurableValidateAdmissionV1::LocalBody(validate) => validate,
+                PreparedDurableValidateAdmissionV1::RemoteProposal(_) => {
+                    unreachable!("local body preparation retains its exact origin")
+                }
+            })
     }
     #[allow(clippy::result_large_err)]
     fn into_durable_validate_carrier(

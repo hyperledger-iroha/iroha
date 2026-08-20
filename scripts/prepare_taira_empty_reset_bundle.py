@@ -1431,7 +1431,12 @@ def _privacy_projection(config_path: Path) -> dict[str, Any]:
     return payload
 
 
-def _validate_rendered_configs(output: Path, expected_hash: str) -> dict[str, str]:
+def _validate_rendered_configs(
+    output: Path,
+    expected_hash: str,
+    *,
+    designated_privacy_issuer_enabled: bool,
+) -> dict[str, str]:
     hashes: dict[str, str] = {}
     expected_hash_literal = renderer._format_literal("hash", expected_hash.upper())
     for index, slug in enumerate(SLUGS, start=1):
@@ -1447,12 +1452,15 @@ def _validate_rendered_configs(output: Path, expected_hash: str) -> dict[str, st
         issuer = config["torii"].get("privacy_bootle_lantern_issuer")
         if not isinstance(issuer, dict):
             fail(f"rendered {slug} config lacks the privacy issuer table")
-        if issuer.get("enabled") is not (index == 1):
-            fail("privacy issuer must be enabled on validator 1 only")
+        expected_issuer_enabled = designated_privacy_issuer_enabled and index == 1
+        if issuer.get("enabled") is not expected_issuer_enabled:
+            fail("rendered privacy issuer enablement differs from the selected reset mode")
         expected_state_dir = root / "runtime/privacy/bootle-lantern/issuer"
         if issuer.get("state_dir") != str(expected_state_dir):
             fail(f"rendered {slug} privacy state is not bundle-local")
-        if index > 1 and set(issuer) != renderer.TAIRA_PRIVACY_ISSUER_BASE_FIELDS:
+        if (
+            index > 1 or not designated_privacy_issuer_enabled
+        ) and set(issuer) != renderer.TAIRA_PRIVACY_ISSUER_BASE_FIELDS:
             fail(f"rendered {slug} retains dormant privacy issuer bindings")
         registry = config["nexus"].get("registry")
         if not isinstance(registry, dict) or (
@@ -1822,7 +1830,9 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 for tree in STATIC_TREES:
                     copy_private_tree(source_peer / tree, output_peer / tree)
             _validate_rendered_configs(
-                output, renderer.GENESIS_EXPECTED_HASH_PLACEHOLDER
+                output,
+                renderer.GENESIS_EXPECTED_HASH_PLACEHOLDER,
+                designated_privacy_issuer_enabled=production_privacy_mode,
             )
             _require_rendered_kagemusha_config_projection(
                 output,
@@ -1931,7 +1941,11 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
                 temporary_root=temporary,
             )
 
-        config_hashes = _validate_rendered_configs(output, expected_hash)
+        config_hashes = _validate_rendered_configs(
+            output,
+            expected_hash,
+            designated_privacy_issuer_enabled=production_privacy_mode,
+        )
         _validate_rendered_nevo_bindings(output, nevo_review)
         kagemusha_config_projection = (
             _require_rendered_kagemusha_config_projection(

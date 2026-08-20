@@ -143,7 +143,7 @@ def test_rendered_signer_executes_a_private_verified_snapshot(tmp_path: Path) ->
         b"printf signed >\"$signed\"\n"
         b"printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n' >\"$expected\"\n"
     )
-    output, kagami, _ = render_fixture(tmp_path, marker_body)
+    output, kagami, key = render_fixture(tmp_path, marker_body)
     unsigned = private_file(tmp_path / "unsigned.json", b"{}\n", 0o600)
     config = private_file(tmp_path / "config.toml", b"chain='taira'\n", 0o600)
     completed = subprocess.run(
@@ -158,7 +158,7 @@ def test_rendered_signer_executes_a_private_verified_snapshot(tmp_path: Path) ->
     executed = receipt["executable"]
     assert executed != str(kagami)
     assert "/.taira-genesis-sign-" in executed
-    assert receipt["key"].startswith("/dev/fd/")
+    assert receipt["key"] == str(key)
     assert not Path(executed).exists()
     assert list(tmp_path.glob(".taira-genesis-sign-*")) == []
 

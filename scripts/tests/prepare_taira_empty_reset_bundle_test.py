@@ -1358,7 +1358,7 @@ def test_prepare_recomposes_signed_reset_and_binds_all_four_reviewed_inputs(
     monkeypatch.setattr(
         reset_bundle,
         "_validate_rendered_configs",
-        lambda output, _expected: {
+        lambda output, _expected, **_kwargs: {
             slug: reset_bundle.sha256(output / "rendered" / slug / "config.toml")
             for slug in reset_bundle.SLUGS
         },
@@ -1465,7 +1465,7 @@ def test_prepare_removes_all_partial_output_when_native_signing_fails(
     monkeypatch.setattr(
         reset_bundle,
         "_validate_rendered_configs",
-        lambda output, _expected: {
+        lambda output, _expected, **_kwargs: {
             slug: reset_bundle.sha256(output / "rendered" / slug / "config.toml")
             for slug in reset_bundle.SLUGS
         },
@@ -1518,6 +1518,69 @@ def test_prepare_refuses_invalid_first_pass_before_using_external_signer(
 
     signer.assert_not_called()
     assert not args.output_bundle.exists()
+
+
+def test_local_reset_requires_all_rendered_privacy_issuers_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "bundle"
+    expected_hash = "ab" * 32
+    expected_hash_literal = reset_bundle.renderer._format_literal(
+        "hash", expected_hash.upper()
+    )
+    projections: dict[Path, dict[str, object]] = {}
+    for slug in reset_bundle.SLUGS:
+        config_path = output / "rendered" / slug / "config.toml"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_bytes(f"{slug}\n".encode())
+        issuer = {
+            "enabled": False,
+            "state_dir": str(
+                output
+                / "rendered"
+                / slug
+                / "runtime/privacy/bootle-lantern/issuer"
+            ),
+            "max_inflight": 2,
+            "authorization_lifetime_blocks": 300,
+            "max_records": 4096,
+            "max_total_bytes": 13_557_760,
+            "terminal_retention_blocks": 4096,
+        }
+        projections[config_path] = {
+            "genesis": {
+                "file": str(output / "genesis.signed.nrt"),
+                "expected_hash": expected_hash_literal,
+            },
+            "torii": {"privacy_bootle_lantern_issuer": issuer},
+            "nexus": {
+                "registry": {
+                    "manifest_directory": str(output / "rendered" / slug / "manifests"),
+                    "cache_directory": str(output / "rendered" / slug / "manifests"),
+                }
+            },
+        }
+    monkeypatch.setattr(
+        reset_bundle,
+        "_privacy_projection",
+        lambda path: projections[path],
+    )
+
+    hashes = reset_bundle._validate_rendered_configs(
+        output,
+        expected_hash,
+        designated_privacy_issuer_enabled=False,
+    )
+    assert set(hashes) == set(reset_bundle.SLUGS)
+
+    first = output / "rendered" / reset_bundle.SLUGS[0] / "config.toml"
+    projections[first]["torii"]["privacy_bootle_lantern_issuer"]["enabled"] = True
+    with pytest.raises(RuntimeError, match="selected reset mode"):
+        reset_bundle._validate_rendered_configs(
+            output,
+            expected_hash,
+            designated_privacy_issuer_enabled=False,
+        )
 
 
 if __name__ == "__main__":

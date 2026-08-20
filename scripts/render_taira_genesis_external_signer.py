@@ -318,7 +318,7 @@ def main():
     regular(KAGAMI, "pinned Kagami", executable=True)
     if sha256(KAGAMI) != KAGAMI_SHA256:
         die("pinned Kagami SHA-256 mismatch")
-    regular(PRIVATE_KEY, "genesis private key", mode=0o600)
+    key_path_identity = regular(PRIVATE_KEY, "genesis private key", mode=0o600)
     regular(args.unsigned_genesis, "unsigned genesis", mode=0o600)
     regular(args.peer_config, "peer config", mode=0o600)
     if args.bound_manifest_out != args.unsigned_genesis:
@@ -327,6 +327,9 @@ def main():
     private_output(args.expected_hash_out, "expected hash")
 
     key_fd, key_identity = open_private_key(PRIVATE_KEY)
+    if identity(key_path_identity) != identity(key_identity):
+        os.close(key_fd)
+        die("genesis private key changed before signing")
     work = None
     try:
         work = Path(tempfile.mkdtemp(prefix=".taira-genesis-sign-", dir=PRIVATE_KEY.parent))
@@ -337,7 +340,11 @@ def main():
         command = [
             str(kagami_snapshot), "genesis", "sign", str(args.unsigned_genesis),
             "--config", str(args.peer_config),
-            "--private-key-file", f"/dev/fd/{key_fd}",
+            # Kagami's hardened loader deliberately rejects /dev/fd symlink
+            # ancestry.  Pass the already verified owner-private canonical
+            # path while retaining the opened descriptor as a stable identity
+            # witness across the subprocess invocation.
+            "--private-key-file", str(PRIVATE_KEY),
             "--expected-public-key", EXPECTED_PUBLIC_KEY,
             "--bound-manifest-out", str(args.bound_manifest_out),
             "--out-file", str(args.signed_genesis_out),
@@ -352,12 +359,15 @@ def main():
                 env={"HOME": str(work), "LANG": "C", "LC_ALL": "C",
                      "PATH": "/usr/bin:/bin", "TMPDIR": str(work)},
                 umask=0o077,
-                pass_fds=(key_fd,),
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             die(f"Kagami genesis signing could not complete: {error}")
         if identity(key_identity) != identity(os.fstat(key_fd)):
             die("genesis private key changed while signing")
+        if identity(key_identity) != identity(
+            regular(PRIVATE_KEY, "genesis private key", mode=0o600)
+        ):
+            die("genesis private key path changed while signing")
     finally:
         os.close(key_fd)
         if work is not None:
