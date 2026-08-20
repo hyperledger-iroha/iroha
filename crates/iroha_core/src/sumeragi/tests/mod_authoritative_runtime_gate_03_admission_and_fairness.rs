@@ -1271,6 +1271,168 @@ fn retained_vote_does_not_hide_timeout_certificate_that_closes_its_view() {
     assert_eq!(ingress.state.lock().len, 0);
 }
 #[test]
+fn certified_view_cut_admits_the_strict_same_round_timeout_upgrade() {
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+    let roster = validator_peers(4);
+    let first_origin = roster.first().expect("four-peer leader-wire roster").clone();
+    let upgrade_origin = roster.get(1).expect("four-peer leader-wire roster").clone();
+    let stale_origin = roster.get(2).expect("four-peer leader-wire roster").clone();
+    let thin = v2_timeout_certificate(1);
+    let BlockMessage::V2(wire::ConsensusMessageV2 {
+        payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
+        ..
+    }) = &thin
+    else {
+        unreachable!("timeout fixture carries a v2 TimeoutCertificate");
+    };
+    let round = certificate.round;
+    let _directory = bind_test_leader_wire_gate_with_roster(&ingress, &roster, round, 2);
+    let upgrade = v2_locked_timeout_certificate(round.view);
+    assert_ne!(thin.encode(), upgrade.encode());
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(thin, first_origin)),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let certified_view_cut = |durable_view| {
+        super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+            round.context_id,
+            round.height,
+            [0xA6; 32],
+            durable_view,
+            false,
+        )
+    };
+    let opened_view = round.view.checked_add(1).expect("fixture view advances");
+    assert_eq!(
+        ingress
+            .advance_leader_wire_recovery_cut(certified_view_cut(opened_view))
+            .expect("publish the certified view cut that installing TC(V) produces"),
+        0
+    );
+    match ingress.try_push(InboundBlockMessage::from_authenticated_peer(upgrade, upgrade_origin)) {
+        Ok(super::FairV2IngressPushDisposition::Enqueued) => {}
+        Ok(super::FairV2IngressPushDisposition::Coalesced) => {
+            panic!("a distinct upgrade certificate is not an exact retransmission")
+        }
+        Err(super::FairV2IngressPushError::Rejected(rejection)) => panic!(
+            "the strict same-round timeout upgrade was rejected: {:?}",
+            rejection.reason
+        ),
+        Err(super::FairV2IngressPushError::Full(_)) => {
+            panic!("the strict same-round timeout upgrade was refused for capacity")
+        }
+        Err(
+            super::FairV2IngressPushError::Closed(_) | super::FairV2IngressPushError::FailStop(_),
+        ) => panic!("the strict same-round timeout upgrade fail-stopped fair ingress"),
+    }
+    let later_view = opened_view.checked_add(1).expect("fixture view advances");
+    assert_eq!(
+        ingress
+            .advance_leader_wire_recovery_cut(certified_view_cut(later_view))
+            .expect("publish the next certified view cut"),
+        0
+    );
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(v2_timeout_certificate(round.view), stale_origin)),
+        Err(super::FairV2IngressPushError::Rejected(_))
+    ));
+}
+
+#[test]
+fn same_origin_timeout_upgrade_replaces_the_installed_terminal_certificate() {
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+    let validator = PeerId::new(KeyPair::random().public_key().clone());
+    let thin = v2_timeout_certificate(1);
+    let BlockMessage::V2(wire::ConsensusMessageV2 {
+        payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
+        ..
+    }) = &thin
+    else {
+        unreachable!("timeout fixture carries a v2 TimeoutCertificate");
+    };
+    let round = certificate.round;
+    let _directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(thin, validator.clone())),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let mut installed = ingress
+        .try_recv_if(|_| true)
+        .expect("the thin certificate reaches verification");
+    let mut ownership = installed
+        .take_ingress_ownership()
+        .expect("the thin certificate retains ingress ownership");
+    ingress
+        .bind_leader_wire_runtime_ownership(&mut ownership)
+        .expect("bind the thin certificate runtime owner");
+    let runtime = ownership
+        .leader_wire_runtime_receipt()
+        .expect("runtime receipt is installed");
+    ingress
+        .mark_leader_wire_volatile_terminal(runtime)
+        .expect("publish the installed-certificate tombstone");
+    let opened_view = round.view.checked_add(1).expect("fixture view advances");
+    let next = super::serviced_candidate_store::LeaderWireRecoveryAuthority::from_replayed_adapter(
+        round.context_id,
+        round.height,
+        [0xA6; 32],
+        opened_view,
+        false,
+    );
+    assert_eq!(
+        ingress
+            .advance_leader_wire_recovery_cut(next)
+            .expect("publish the certified view cut that installing TC(V) produces"),
+        0
+    );
+    let upgrade = v2_locked_timeout_certificate(round.view);
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(upgrade, validator.clone())),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let state = ingress.state.lock();
+    let replacement = state
+        .leader_wire_lifecycles
+        .values()
+        .next()
+        .expect("the upgrade owns the released timeout slot");
+    assert_eq!(replacement.token.identity.view, round.view);
+    assert_eq!(
+        replacement.status,
+        super::FairV2IngressLeaderWireStatus::Ingress
+    );
+}
+
+#[test]
+fn same_origin_timeout_upgrade_waits_on_the_active_predecessor() {
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+    let validator = PeerId::new(KeyPair::random().public_key().clone());
+    let thin = v2_timeout_certificate(1);
+    let BlockMessage::V2(wire::ConsensusMessageV2 {
+        payload: wire::ConsensusMessageV2Payload::TimeoutCertificate(certificate),
+        ..
+    }) = &thin
+    else {
+        unreachable!("timeout fixture carries a v2 TimeoutCertificate");
+    };
+    let round = certificate.round;
+    let _directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(thin, validator.clone())),
+        Ok(super::FairV2IngressPushDisposition::Enqueued)
+    ));
+    let upgrade = v2_locked_timeout_certificate(round.view);
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(upgrade, validator)),
+        Err(super::FairV2IngressPushError::Full(_))
+    ));
+    assert!(
+        ingress.state.lock().open,
+        "a same-round upgrade must wait without fail-stop"
+    );
+}
+
+#[test]
 fn certified_fence_escape_crosses_retained_control_reservation() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
     let validator = PeerId::new(KeyPair::random().public_key().clone());

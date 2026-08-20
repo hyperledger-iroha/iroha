@@ -3113,7 +3113,10 @@ macro_rules! production_leader_wire_admission_trace_body {
                         == $projection.incoming_admission_ordinal
                     && $projection.stored_scheduler_ordinal
                         == $projection.incoming_scheduler_ordinal
-                    && $projection.incoming_view > $projection.incumbent_view
+                    && ($projection.incoming_view > $projection.incumbent_view
+                        || ($projection.incoming_phase_is_timeout_certificate
+                            && $projection.incumbent_phase_is_timeout_certificate
+                            && $projection.incoming_view == $projection.incumbent_view))
                     && $projection.incoming_admission_ordinal
                         > $projection.incumbent_admission_ordinal
                     && $projection.incoming_scheduler_ordinal
@@ -5831,6 +5834,8 @@ pub(crate) struct ProductionLeaderWireAdmissionTraceProjection {
     pub(crate) runtime_owner_after: bool,
     pub(crate) terminal_evidence_before: bool,
     pub(crate) terminal_evidence_after: bool,
+    pub(crate) incoming_phase_is_timeout_certificate: bool,
+    pub(crate) incumbent_phase_is_timeout_certificate: bool,
 }
 /// Primitive observation of one exact daemon retry across its source-fair
 /// outer queue and source-fair inner Sumeragi ingress.

@@ -3743,6 +3743,8 @@ pub struct ProductionLeaderWireAdmissionTraceProjection {
     pub runtime_owner_after: bool,
     pub terminal_evidence_before: bool,
     pub terminal_evidence_after: bool,
+    pub incoming_phase_is_timeout_certificate: bool,
+    pub incumbent_phase_is_timeout_certificate: bool,
 }
 /// Verus-side primitive two-stage daemon retry trace.
 #[derive(Copy, Clone)]
@@ -4986,7 +4988,10 @@ pub proof fn production_leader_wire_admission_trace_refines_lifecycle_ownership(
             )
             && (
                 projection.operation == LEADER_WIRE_ADMISSION_REPLACE_TERMINAL
-                ==> projection.incoming_view > projection.incumbent_view
+                ==> (projection.incoming_view > projection.incumbent_view
+                        || (projection.incoming_phase_is_timeout_certificate
+                            && projection.incumbent_phase_is_timeout_certificate
+                            && projection.incoming_view == projection.incumbent_view))
                     && projection.incoming_admission_ordinal
                         > projection.incumbent_admission_ordinal
                     && projection.incoming_scheduler_ordinal

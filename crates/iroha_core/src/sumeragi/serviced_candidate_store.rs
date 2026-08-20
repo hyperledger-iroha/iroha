@@ -9,7 +9,7 @@
 //! state can be volatile; restart must permit retransmission to reconstruct
 //! that state.
 use super::{
-    FairV2IngressLeaderWireIdentity, FairV2IngressLeaderWireSlot,
+    FairV2IngressLeaderWireIdentity, FairV2IngressLeaderWirePhase, FairV2IngressLeaderWireSlot,
     FairV2IngressLeaderWireSourceClass, FairV2IngressLeaderWireToken,
     safety_wal::{SafetyWalLeaderWireStoreAuthority, SafetyWalServicedCandidateStoreAuthority},
     v2_body_store::DurableBodyReceipt,
@@ -664,17 +664,29 @@ impl LeaderWireRecoveryAuthority {
             && self.durable_view >= previous.durable_view
             && (!previous.decision_durable || self.decision_durable)
     }
-    /// Return whether this durable cut permanently rejects one lifecycle token.
-    pub(super) fn obsoletes(self, token: &FairV2IngressLeaderWireToken) -> bool {
-        self.obsoletes_identity(&token.identity)
+    /// Return whether this durable cut retires one stored lifecycle owner.
+    pub(super) fn retires(self, token: &FairV2IngressLeaderWireToken) -> bool {
+        self.retires_stored_identity(&token.identity)
     }
-    fn obsoletes_identity(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
+    fn retires_stored_identity(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
+        identity.phase.source_class() == FairV2IngressLeaderWireSourceClass::Control
+            && (self.decision_durable || identity.view < self.durable_view)
+    }
+    /// Return whether this durable cut still admits new ingress of this identity.
+    fn admits_ingress_identity(self, identity: &FairV2IngressLeaderWireIdentity) -> bool {
         // A certified view or Decision closes reducer-producing control, not
         // transport completion. The selected block can still be missing when
         // Decision becomes durable, so its exact chunk/body response must
         // reach the downstream fetch, manifest, request, and subject checks.
-        identity.phase.source_class() == FairV2IngressLeaderWireSourceClass::Control
-            && (self.decision_durable || identity.view < self.durable_view)
+        if identity.phase.source_class() != FairV2IngressLeaderWireSourceClass::Control {
+            return true;
+        }
+        if self.decision_durable {
+            return false;
+        }
+        identity.view >= self.durable_view
+            || (identity.phase == FairV2IngressLeaderWirePhase::TimeoutCertificate
+                && identity.view.saturating_add(1) == self.durable_view)
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
@@ -827,6 +839,11 @@ fn leader_wire_admission_trace_projection(
         terminal_evidence_before,
         terminal_evidence_after: operation == LEADER_WIRE_ADMISSION_COALESCE
             && terminal_evidence_before,
+        incoming_phase_is_timeout_certificate: token.identity.phase
+            == FairV2IngressLeaderWirePhase::TimeoutCertificate,
+        incumbent_phase_is_timeout_certificate: incumbent.is_some_and(|record| {
+            record.token.identity.phase == FairV2IngressLeaderWirePhase::TimeoutCertificate
+        }),
     })
 }
 /// Validated restart image for binding the fair-ingress in-memory owner table.
@@ -1369,7 +1386,7 @@ impl LeaderWireLifecycleStoreGate {
             .state
             .lock()
             .map_err(|_| "leader-wire lifecycle store lock was poisoned".to_owned())?;
-        Ok(state.recovery_authority.obsoletes_identity(identity))
+        Ok(!state.recovery_authority.admits_ingress_identity(identity))
     }
     /// Apply a live, WAL-authorized recovery cut and retire its exact dormant set.
     ///
@@ -1397,9 +1414,8 @@ impl LeaderWireLifecycleStoreGate {
             .records
             .iter()
             .filter_map(|(slot, record)| {
-                (record.status == LeaderWireLifecycleStatus::Dormant
-                    && next.obsoletes(&record.token))
-                .then(|| slot.clone())
+                (record.status == LeaderWireLifecycleStatus::Dormant && next.retires(&record.token))
+                    .then(|| slot.clone())
             })
             .collect::<BTreeSet<_>>();
         if retiring != *expected_dormant_slots || !retiring.is_subset(&state.replay_dormant) {
@@ -1524,7 +1540,10 @@ impl LeaderWireLifecycleStoreGate {
             .state
             .lock()
             .map_err(|_| "leader-wire lifecycle store lock was poisoned".to_owned())?;
-        if state.recovery_authority.obsoletes(&token) {
+        if !state
+            .recovery_authority
+            .admits_ingress_identity(&token.identity)
+        {
             return Err(
                 "leader-wire admission is obsolete under the durable recovery cut".to_owned(),
             );
@@ -1586,7 +1605,12 @@ impl LeaderWireLifecycleStoreGate {
             if incumbent.status.is_active() {
                 return Err("leader-wire slot already has an active predecessor".to_owned());
             }
-            if token.identity.view <= incumbent.token.identity.view
+            let same_round_timeout_upgrade = token.identity.phase
+                == FairV2IngressLeaderWirePhase::TimeoutCertificate
+                && incumbent.token.identity.phase
+                    == FairV2IngressLeaderWirePhase::TimeoutCertificate
+                && token.identity.view == incumbent.token.identity.view;
+            if (token.identity.view <= incumbent.token.identity.view && !same_round_timeout_upgrade)
                 || token.admission_ordinal <= incumbent.token.admission_ordinal
             {
                 return Err(
@@ -1935,7 +1959,7 @@ impl LeaderWireLifecycleStoreGate {
             // reducer can decide before obtaining its exact body. Retire
             // rejected records while preserving both file high-watermarks so
             // subsequent admission cannot reuse an ordinal.
-            if recovery_authority.obsoletes(&record.token) {
+            if recovery_authority.retires(&record.token) {
                 changed = true;
                 continue;
             }

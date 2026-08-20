@@ -678,13 +678,13 @@ _LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal(
         "crates/iroha_core/src/sumeragi/v2_core/refinement.rs",
         "ProductionLeaderWireAdmissionTraceProjection",
-        "ea211b5db207669fe33f0777a4d6b23ba27f2274567f93c05667ba32132b9e80",
+        "dbbf3247268c65631adf19dd72c2db1c0b5f3e48a546106aa52d836843a86306",
         "struct",
     ),
     CrossToolSourceItemSeal(
         "crates/iroha_sumeragi_core/src/verus_proofs.rs",
         "ProductionLeaderWireAdmissionTraceProjection",
-        "f7eb87962b42a18b8ae689b9bff673920ee5734e4d5712f5331a8fa8d1d0a9a0",
+        "e9c5a0c37a8aa7d58167c5643565a4b2d34fcbf2305cc28f893c1f04068c4797",
         "struct",
         (("verus", "!"),),
     ),
@@ -750,7 +750,7 @@ _LEADER_WIRE_ADMISSION_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal(
         "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
         "leader_wire_admission_trace_projection",
-        "aeb0f964af869ae011f3546eb00a70c1bacebbf1160c82ceb88ef9c2ca281755",
+        "28597024f3571c0deae6af6c8daba1bc7cca513d98a8186aa0e9d4c7658284b4",
     ),
     *(
         CrossToolSourceItemSeal(
@@ -1611,7 +1611,7 @@ def _leader_wire_admission_supplemental_total_contract(
         """,
         brace_context=(("impl", "LeaderWireLifecycleStoreGate"),),
         item_token_sha256=(
-            "63fa62149b425ccc550f90aca763b3d978f329347e9d636e1a1791376cb495ee"
+            "d4eea302e2a740ee0821930f843bca551590bce92c78a79231aaaa0cee55b9af"
         ),
         gate_call_count=3,
         gate_arguments=("trace,", "trace", "trace"),
@@ -1663,7 +1663,7 @@ def _leader_wire_admission_supplemental_total_contract(
             ),
             (
                 "production_leader_wire_admission_trace_body",
-                "5ea12af9c322bd6ed26c51b17d884852e3647386c93b4036ba95d0aa3177a3a7",
+                "96099250efa85c1b1e03d3b525c4e60fb0ce00079cc780649534e1b42151038a",
             ),
         ),
         production_call_sites=(call_site,),
@@ -1675,7 +1675,7 @@ def _leader_wire_admission_supplemental_total_contract(
             "projection: ProductionLeaderWireAdmissionTraceProjection,"
         ),
         auxiliary_verus_theorem_item_sha256=(
-            "5bdde2aaa7d01511752aac612a8d4d90a5bd30e15ac238a43cf8b54170ce4e7b"
+            "89a2e3d0267235c4cfcc9620134abac195da514c271540613ee33d7dcf84f639"
         ),
     )
 

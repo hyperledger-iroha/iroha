@@ -1531,7 +1531,10 @@ if !retiring.is_empty()
         paths["store"],
         admit_ingress,
         """
-if state.recovery_authority.obsoletes(&token) {
+if !state
+    .recovery_authority
+    .admits_ingress_identity(&token.identity)
+{
     return Err(
         "leader-wire admission is obsolete under the durable recovery cut".to_owned(),
     );

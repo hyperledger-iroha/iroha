@@ -1290,7 +1290,7 @@ _SERVICED_CANDIDATE_V4_STORE_ITEM_SHA256 = {
         "3e025a26fdd14c00e5664a2d34355169bc7b650de2534939586f3a7b50ebb9d4"
     ),
     "leader_wire_load_and_reconcile": (
-        "56b48215d914a764d9eadf2c4f7d49ba7c380289d9c4c89f9fc2238da7d98f17"
+        "dfdd5e26961ac56d3cdb189d65ddc634a31f0163d125511325cc8a850749e710"
     ),
     "store_open": (
         "a87131cdea8fcf204ab3a04992f93e05fc32400f475abcda450f2636d08b97de"
